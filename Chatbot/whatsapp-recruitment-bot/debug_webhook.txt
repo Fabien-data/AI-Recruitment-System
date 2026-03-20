@@ -1,0 +1,56 @@
+﻿python : Transformers not 
+available, using rule-based 
+sentiment analysis
+At line:1 char:1
++ python -c "
++ ~~~~~~~~~~~
+    + CategoryInfo           
+   : NotSpecified: (Transfo  
+  rmers no...timent analys   
+ is:String) [], RemoteExc    
+eption
+    + FullyQualifiedErrorId  
+   : NativeCommandError
+ 
+python-docx not available, 
+Word document parsing will 
+be limited
+pytesseract/PIL not 
+available, Tesseract OCR 
+will not work
+python-docx not available 
+for Word document parsing
+Failed to mark message 
+wamid.test001 as read: 400 
+Client Error: Bad Request 
+for url: https://graph.facebo
+ok.com/v18.0/900210539852935/
+messages
+2026-02-21 11:31:07,362 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-21 11:31:07,366 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+2026-02-21 11:31:07,366 INFO sqlalchemy.engine.Engine [generated in 0.00027s] ('94765716780', 1, 0)
+2026-02-21 11:31:07,647 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 11:31:07,647 INFO sqlalchemy.engine.Engine [generated in 0.00024s] (1, 'USER', 'Hi', 'si', 0.0, 'neutral', 0, None, None)
+2026-02-21 11:31:07,651 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-21 11:31:07,656 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-21 11:31:07,656 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 11:31:07,657 INFO sqlalchemy.engine.Engine [generated in 0.00011s] (78,)
+2026-02-21 11:31:07,657 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 11:31:07,658 INFO sqlalchemy.engine.Engine [generated in 0.00010s] (1,)
+2026-02-21 11:31:07,658 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 11:31:07,658 INFO sqlalchemy.engine.Engine [cached since 0.01152s ago] (1, 'BOT', 'Hey! ≡ƒÿè Awesome, one last thing! Please upload your CV so we can get your application moving. PDF or Word is best ≡ƒôä', 'si', None, None, 0, None, None)
+2026-02-21 11:31:07,659 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-21 11:31:07,663 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-21 11:31:07,663 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 11:31:07,663 INFO sqlalchemy.engine.Engine [cached since 0.006549s ago] (79,)
+2026-02-21 11:31:08,902 INFO sqlalchemy.engine.Engine COMMIT
+SUCCESS

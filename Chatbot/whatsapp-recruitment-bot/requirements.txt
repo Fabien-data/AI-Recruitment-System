@@ -1,0 +1,47 @@
+# ─── FastAPI & Server ─────────────────────────────────────────────────────────
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic[email]
+pydantic-settings
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+sqlalchemy
+psycopg2-binary>=2.9
+
+# ─── OpenAI (embeddings + chat) ───────────────────────────────────────────────
+# Uses text-embedding-ada-002 for RAG — no local ML models needed (saves ~3 GB)
+openai
+langchain
+langchain-openai
+langchain-community
+
+# ─── Vector Database (Optional — disabled if PINECONE_API_KEY is empty) ───────
+# Pinecone is optional; the system falls back to MySQL FULLTEXT search
+
+# ─── NLP / Language Detection ────────────────────────────────────────────────
+# langdetect is lightweight (~1 MB) — replaces transformers/torch (~2.5 GB)
+langdetect
+
+# ─── CV Parsing ───────────────────────────────────────────────────────────────
+PyMuPDF
+python-docx
+Pillow
+pytesseract
+
+# ─── HTTP Client ──────────────────────────────────────────────────────────────
+requests
+httpx
+
+# ─── Caching & Task Queues ───────────────────────────────────────────────────
+redis
+celery
+
+# ─── Utilities ────────────────────────────────────────────────────────────────
+python-dotenv
+psutil
+
+# ─── Production Server ────────────────────────────────────────────────────────
+gunicorn==21.2.0
+psycopg2-binary>=2.9

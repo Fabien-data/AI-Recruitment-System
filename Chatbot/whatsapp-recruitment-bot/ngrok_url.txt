@@ -1,0 +1,3 @@
+﻿# ngrok is no longer used — deployed on Google Cloud Run
+# Webhook callback URL for Meta Developer Console:
+https://dewan-chatbot-782458551389.us-central1.run.app/webhook/whatsapp

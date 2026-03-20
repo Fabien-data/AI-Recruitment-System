@@ -1,0 +1,472 @@
+﻿2026-02-21 10:58:42,545 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:42,547 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:42,547 INFO sqlalchemy.engine.Engine [generated in 0.00017s] ('test_flow_fresh_002', 1, 0)
+INFO: [generated in 0.00017s] ('test_flow_fresh_002', 1, 0)
+2026-02-21 10:58:42,548 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO: ROLLBACK
+
+============================================================
+FULL FLOW TEST ΓÇö Fresh Candidate
+============================================================
+
+--- Step 1 ΓÇö Greeting ---
+WARNING: Transformers not available, using rule-based sentiment analysis
+WARNING: python-docx not available, Word document parsing will be limited
+WARNING: pytesseract/PIL not available, Tesseract OCR will not work
+WARNING: python-docx not available for Word document parsing
+2026-02-21 10:58:46,960 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:46,960 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:46,960 INFO sqlalchemy.engine.Engine [cached since 4.413s ago] ('test_flow_fresh_002', 1, 0)
+INFO: [cached since 4.413s ago] ('test_flow_fresh_002', 1, 0)
+2026-02-21 10:58:46,962 INFO sqlalchemy.engine.Engine INSERT INTO candidates (phone_number, name, email, highest_qualification, skills, experience_years, notice_period, resume_file_path, language_preference, conversation_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, created_at, updated_at
+INFO: INSERT INTO candidates (phone_number, name, email, highest_qualification, skills, experience_years, notice_period, resume_file_path, language_preference, conversation_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, created_at, updated_at
+2026-02-21 10:58:46,962 INFO sqlalchemy.engine.Engine [generated in 0.00021s] ('test_flow_fresh_002', None, None, None, None, None, None, None, 'ENGLISH', 'initial')
+INFO: [generated in 0.00021s] ('test_flow_fresh_002', None, None, None, None, None, None, None, 'ENGLISH', 'initial')
+2026-02-21 10:58:46,967 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:46,972 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:46,974 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:46,974 INFO sqlalchemy.engine.Engine [generated in 0.00023s] (5,)
+INFO: [generated in 0.00023s] (5,)
+2026-02-21 10:58:47,224 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+INFO: INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 10:58:47,224 INFO sqlalchemy.engine.Engine [generated in 0.00019s] (5, 'USER', 'Hi', 'en', 0.0, 'neutral', 0, None, None)
+INFO: [generated in 0.00019s] (5, 'USER', 'Hi', 'en', 0.0, 'neutral', 0, None, None)
+2026-02-21 10:58:47,229 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,233 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,233 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+INFO: SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 10:58:47,234 INFO sqlalchemy.engine.Engine [generated in 0.00011s] (50,)
+INFO: [generated in 0.00011s] (50,)
+2026-02-21 10:58:47,234 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,234 INFO sqlalchemy.engine.Engine [generated in 0.00011s] (5,)
+INFO: [generated in 0.00011s] (5,)
+2026-02-21 10:58:47,235 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,235 INFO sqlalchemy.engine.Engine [generated in 0.00011s] (5, 1, 0)
+INFO: [generated in 0.00011s] (5, 1, 0)
+2026-02-21 10:58:47,236 INFO sqlalchemy.engine.Engine UPDATE candidates SET conversation_state=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+INFO: UPDATE candidates SET conversation_state=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+2026-02-21 10:58:47,236 INFO sqlalchemy.engine.Engine [generated in 0.00010s] ('awaiting_job_interest', 5)
+INFO: [generated in 0.00010s] ('awaiting_job_interest', 5)
+2026-02-21 10:58:47,237 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,240 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,240 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,240 INFO sqlalchemy.engine.Engine [cached since 0.2667s ago] (5,)
+INFO: [cached since 0.2667s ago] (5,)
+2026-02-21 10:58:47,241 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+INFO: INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 10:58:47,241 INFO sqlalchemy.engine.Engine [cached since 0.01679s ago] (5, 'BOT', 'Hi there! ≡ƒÿè This is Dilan from Dewan Consultants. Great to hear from you! Are you interested in working overseas?\n\nTell me ΓÇö what type of work are you looking for? ≡ƒÆ╝', 'en', None, None, 0, None, None)
+INFO: [cached since 0.01679s ago] (5, 'BOT', 'Hi there! ≡ƒÿè This is Dilan from Dewan Consultants. Great to hear from you! Are you interested in working overseas?\n\nTell me ΓÇö what type of work are you looking for? ≡ƒÆ╝', 'en', None, None, 0, None, None)
+2026-02-21 10:58:47,242 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,247 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,247 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+INFO: SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 10:58:47,247 INFO sqlalchemy.engine.Engine [cached since 0.0136s ago] (51,)
+INFO: [cached since 0.0136s ago] (51,)
+
+≡ƒæñ User: Hi
+≡ƒñû Dilan: Hi there! ≡ƒÿè This is Dilan from Dewan Consultants. Great to hear from you! Are you interested in working overseas?
+
+Tell me ΓÇö what type of work are you looking for? ≡ƒÆ╝
+
+--- Step 2 ΓÇö Job interest ---
+2026-02-21 10:58:47,248 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,248 INFO sqlalchemy.engine.Engine [cached since 4.701s ago] ('test_flow_fresh_002', 1, 0)
+INFO: [cached since 4.701s ago] ('test_flow_fresh_002', 1, 0)
+2026-02-21 10:58:47,250 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,250 INFO sqlalchemy.engine.Engine [cached since 0.01495s ago] (5, 1, 0)
+INFO: [cached since 0.01495s ago] (5, 1, 0)
+2026-02-21 10:58:47,251 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,251 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,251 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,251 INFO sqlalchemy.engine.Engine [cached since 0.2774s ago] (5,)
+INFO: [cached since 0.2774s ago] (5,)
+2026-02-21 10:58:47,252 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+INFO: INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 10:58:47,252 INFO sqlalchemy.engine.Engine [cached since 0.02733s ago] (5, 'USER', 'I want to work as a Mason / Plumber', 'en', 0.0, 'neutral', 0, None, None)
+INFO: [cached since 0.02733s ago] (5, 'USER', 'I want to work as a Mason / Plumber', 'en', 0.0, 'neutral', 0, None, None)
+2026-02-21 10:58:47,252 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,255 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,256 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+INFO: SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 10:58:47,256 INFO sqlalchemy.engine.Engine [cached since 0.02223s ago] (52,)
+INFO: [cached since 0.02223s ago] (52,)
+2026-02-21 10:58:47,256 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,256 INFO sqlalchemy.engine.Engine [cached since 0.02171s ago] (5,)
+INFO: [cached since 0.02171s ago] (5,)
+2026-02-21 10:58:47,257 INFO sqlalchemy.engine.Engine UPDATE candidates SET extracted_data=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+INFO: UPDATE candidates SET extracted_data=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+2026-02-21 10:58:47,257 INFO sqlalchemy.engine.Engine [generated in 0.00011s] ('{"job_interest": "I want to work as a Mason / Plumber"}', 5)
+INFO: [generated in 0.00011s] ('{"job_interest": "I want to work as a Mason / Plumber"}', 5)
+2026-02-21 10:58:47,257 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,261 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,261 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,261 INFO sqlalchemy.engine.Engine [cached since 0.02679s ago] (5,)
+INFO: [cached since 0.02679s ago] (5,)
+2026-02-21 10:58:47,262 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,262 INFO sqlalchemy.engine.Engine [cached since 0.02634s ago] (5, 1, 0)
+INFO: [cached since 0.02634s ago] (5, 1, 0)
+2026-02-21 10:58:47,262 INFO sqlalchemy.engine.Engine UPDATE candidates SET conversation_state=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+INFO: UPDATE candidates SET conversation_state=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+2026-02-21 10:58:47,262 INFO sqlalchemy.engine.Engine [cached since 0.0257s ago] ('awaiting_destination', 5)
+INFO: [cached since 0.0257s ago] ('awaiting_destination', 5)
+2026-02-21 10:58:47,262 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,266 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,266 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,266 INFO sqlalchemy.engine.Engine [cached since 0.2926s ago] (5,)
+INFO: [cached since 0.2926s ago] (5,)
+2026-02-21 10:58:47,267 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+INFO: INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 10:58:47,267 INFO sqlalchemy.engine.Engine [cached since 0.04241s ago] (5, 'BOT', "Excellent! That's a sought-after role. Which country are you interested in working in? ≡ƒîì", 'en', None, None, 0, None, None)
+INFO: [cached since 0.04241s ago] (5, 'BOT', "Excellent! That's a sought-after role. Which country are you interested in working in? ≡ƒîì", 'en', None, None, 0, None, None)
+2026-02-21 10:58:47,267 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,270 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,271 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+INFO: SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 10:58:47,271 INFO sqlalchemy.engine.Engine [cached since 0.03718s ago] (53,)
+INFO: [cached since 0.03718s ago] (53,)
+
+≡ƒæñ User: I want to work as a Mason / Plumber
+≡ƒñû Dilan: Excellent! That's a sought-after role. Which country are you interested in working in? ≡ƒîì
+
+--- Step 3 ΓÇö Destination ---
+2026-02-21 10:58:47,271 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,271 INFO sqlalchemy.engine.Engine [cached since 4.724s ago] ('test_flow_fresh_002', 1, 0)
+INFO: [cached since 4.724s ago] ('test_flow_fresh_002', 1, 0)
+2026-02-21 10:58:47,273 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+INFO: INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 10:58:47,274 INFO sqlalchemy.engine.Engine [cached since 0.04928s ago] (5, 'USER', 'Qatar', 'en', 0.0, 'neutral', 0, None, None)
+INFO: [cached since 0.04928s ago] (5, 'USER', 'Qatar', 'en', 0.0, 'neutral', 0, None, None)
+2026-02-21 10:58:47,274 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,278 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,278 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+INFO: SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 10:58:47,278 INFO sqlalchemy.engine.Engine [cached since 0.04468s ago] (54,)
+INFO: [cached since 0.04468s ago] (54,)
+2026-02-21 10:58:47,278 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,278 INFO sqlalchemy.engine.Engine [cached since 0.04417s ago] (5,)
+INFO: [cached since 0.04417s ago] (5,)
+2026-02-21 10:58:47,279 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,279 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,279 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,279 INFO sqlalchemy.engine.Engine [cached since 0.04489s ago] (5,)
+INFO: [cached since 0.04489s ago] (5,)
+2026-02-21 10:58:47,280 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,280 INFO sqlalchemy.engine.Engine [cached since 0.04441s ago] (5, 1, 0)
+INFO: [cached since 0.04441s ago] (5, 1, 0)
+2026-02-21 10:58:47,280 INFO sqlalchemy.engine.Engine UPDATE candidates SET conversation_state=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+INFO: UPDATE candidates SET conversation_state=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+2026-02-21 10:58:47,280 INFO sqlalchemy.engine.Engine [cached since 0.04378s ago] ('awaiting_experience', 5)
+INFO: [cached since 0.04378s ago] ('awaiting_experience', 5)
+2026-02-21 10:58:47,281 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,284 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,284 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,284 INFO sqlalchemy.engine.Engine [cached since 0.3107s ago] (5,)
+INFO: [cached since 0.3107s ago] (5,)
+2026-02-21 10:58:47,285 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+INFO: INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 10:58:47,285 INFO sqlalchemy.engine.Engine [cached since 0.06043s ago] (5, 'BOT', 'We work with top employers there ΓÇö perfect! Quick question ΓÇö how many years of relevant experience do you have?', 'en', None, None, 0, None, None)
+INFO: [cached since 0.06043s ago] (5, 'BOT', 'We work with top employers there ΓÇö perfect! Quick question ΓÇö how many years of relevant experience do you have?', 'en', None, None, 0, None, None)
+2026-02-21 10:58:47,285 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,289 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,289 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+INFO: SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 10:58:47,289 INFO sqlalchemy.engine.Engine [cached since 0.05569s ago] (55,)
+INFO: [cached since 0.05569s ago] (55,)
+
+≡ƒæñ User: Qatar
+≡ƒñû Dilan: We work with top employers there ΓÇö perfect! Quick question ΓÇö how many years of relevant experience do you have?
+
+--- Step 4 ΓÇö Experience ---
+2026-02-21 10:58:47,289 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,290 INFO sqlalchemy.engine.Engine [cached since 4.743s ago] ('test_flow_fresh_002', 1, 0)
+INFO: [cached since 4.743s ago] ('test_flow_fresh_002', 1, 0)
+2026-02-21 10:58:47,294 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,294 INFO sqlalchemy.engine.Engine [cached since 0.05891s ago] (5, 1, 0)
+INFO: [cached since 0.05891s ago] (5, 1, 0)
+2026-02-21 10:58:47,295 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,295 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,296 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,296 INFO sqlalchemy.engine.Engine [cached since 0.322s ago] (5,)
+INFO: [cached since 0.322s ago] (5,)
+2026-02-21 10:58:47,296 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+INFO: INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 10:58:47,296 INFO sqlalchemy.engine.Engine [cached since 0.07222s ago] (5, 'USER', 'I have 5 years experience', 'en', 0.0, 'neutral', 0, None, None)
+INFO: [cached since 0.07222s ago] (5, 'USER', 'I have 5 years experience', 'en', 0.0, 'neutral', 0, None, None)
+2026-02-21 10:58:47,297 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,301 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,301 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+INFO: SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 10:58:47,301 INFO sqlalchemy.engine.Engine [cached since 0.06773s ago] (56,)
+INFO: [cached since 0.06773s ago] (56,)
+2026-02-21 10:58:47,302 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,302 INFO sqlalchemy.engine.Engine [cached since 0.06726s ago] (5,)
+INFO: [cached since 0.06726s ago] (5,)
+2026-02-21 10:58:47,302 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,302 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,303 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,303 INFO sqlalchemy.engine.Engine [generated in 0.00011s] (5,)
+INFO: [generated in 0.00011s] (5,)
+2026-02-21 10:58:47,304 INFO sqlalchemy.engine.Engine UPDATE candidates SET experience_years=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+INFO: UPDATE candidates SET experience_years=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+2026-02-21 10:58:47,304 INFO sqlalchemy.engine.Engine [generated in 0.00009s] (5, 5)
+INFO: [generated in 0.00009s] (5, 5)
+2026-02-21 10:58:47,304 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,308 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,308 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,308 INFO sqlalchemy.engine.Engine [cached since 0.07378s ago] (5,)
+INFO: [cached since 0.07378s ago] (5,)
+2026-02-21 10:58:47,309 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+INFO: SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+ LIMIT ? OFFSET ?
+2026-02-21 10:58:47,309 INFO sqlalchemy.engine.Engine [cached since 0.07335s ago] (5, 1, 0)
+INFO: [cached since 0.07335s ago] (5, 1, 0)
+2026-02-21 10:58:47,309 INFO sqlalchemy.engine.Engine UPDATE candidates SET conversation_state=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+INFO: UPDATE candidates SET conversation_state=?, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = ?
+2026-02-21 10:58:47,309 INFO sqlalchemy.engine.Engine [cached since 0.073s ago] ('awaiting_cv', 5)
+INFO: [cached since 0.073s ago] ('awaiting_cv', 5)
+2026-02-21 10:58:47,310 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,313 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,314 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+INFO: SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = ?
+2026-02-21 10:58:47,314 INFO sqlalchemy.engine.Engine [cached since 0.34s ago] (5,)
+INFO: [cached since 0.34s ago] (5,)
+2026-02-21 10:58:47,314 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+INFO: INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, timestamp
+2026-02-21 10:58:47,314 INFO sqlalchemy.engine.Engine [cached since 0.08978s ago] (5, 'BOT', "Great, that's a strong background! Great, we're nearly done! Please share your CV ΓÇö PDF or Word is fine ≡ƒôÄ", 'en', None, None, 0, None, None)
+INFO: [cached since 0.08978s ago] (5, 'BOT', "Great, that's a strong background! Great, we're nearly done! Please share your CV ΓÇö PDF or Word is fine ≡ƒôÄ", 'en', None, None, 0, None, None)
+2026-02-21 10:58:47,315 INFO sqlalchemy.engine.Engine COMMIT
+INFO: COMMIT
+2026-02-21 10:58:47,318 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+INFO: BEGIN (implicit)
+2026-02-21 10:58:47,318 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+INFO: SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = ?
+2026-02-21 10:58:47,318 INFO sqlalchemy.engine.Engine [cached since 0.08467s ago] (57,)
+INFO: [cached since 0.08467s ago] (57,)
+
+≡ƒæñ User: I have 5 years experience
+≡ƒñû Dilan: Great, that's a strong background! Great, we're nearly done! Please share your CV ΓÇö PDF or Word is fine ≡ƒôÄ
+2026-02-21 10:58:47,318 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO: ROLLBACK
+
+============================================================
+Γ£à Flow test complete ΓÇö CV step would follow in real WhatsApp
+============================================================

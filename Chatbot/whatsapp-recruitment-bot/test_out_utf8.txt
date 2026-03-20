@@ -1,0 +1,61 @@
+﻿============================================================
+FULL BOT FLOW TEST
+============================================================
+From    : 94776156904
+Message : hello
+
+--- Step 1: chatbot.process_message ---
+2026-03-03 21:10:38,727 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-03-03 21:10:38,728 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-03-03 21:10:38,729 INFO sqlalchemy.engine.Engine select current_schema()
+2026-03-03 21:10:38,729 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-03-03 21:10:38,730 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-03-03 21:10:38,730 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-03-03 21:10:38,731 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-03 21:10:38,734 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.phone_number = %(phone_number_1)s 
+ LIMIT %(param_1)s
+2026-03-03 21:10:38,735 INFO sqlalchemy.engine.Engine [generated in 0.00037s] {'phone_number_1': '94776156904', 'param_1': 1}
+2026-03-03 21:10:38,741 INFO sqlalchemy.engine.Engine INSERT INTO candidates (phone_number, name, email, highest_qualification, skills, experience_years, notice_period, resume_file_path, language_preference, conversation_state) VALUES (%(phone_number)s, %(name)s, %(email)s, %(highest_qualification)s, %(skills)s, %(experience_years)s, %(notice_period)s, %(resume_file_path)s, %(language_preference)s, %(conversation_state)s) RETURNING candidates.id, candidates.created_at, candidates.updated_at
+2026-03-03 21:10:38,742 INFO sqlalchemy.engine.Engine [generated in 0.00033s] {'phone_number': '94776156904', 'name': None, 'email': None, 'highest_qualification': None, 'skills': None, 'experience_years': None, 'notice_period': None, 'resume_file_path': None, 'language_preference': 'ENGLISH', 'conversation_state': 'initial'}
+2026-03-03 21:10:38,743 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-03 21:10:38,745 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-03 21:10:38,746 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = %(pk_1)s
+2026-03-03 21:10:38,747 INFO sqlalchemy.engine.Engine [generated in 0.00029s] {'pk_1': 7}
+2026-03-03 21:10:38,929 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (%(candidate_id)s, %(message_type)s, %(message_text)s, %(detected_language)s, %(sentiment_score)s, %(sentiment_label)s, %(has_profanity)s, %(media_type)s, %(media_url)s) RETURNING conversations.id, conversations.timestamp
+2026-03-03 21:10:38,929 INFO sqlalchemy.engine.Engine [generated in 0.00052s] {'candidate_id': 7, 'message_type': 'USER', 'message_text': 'hello', 'detected_language': 'en', 'sentiment_score': 0.0, 'sentiment_label': 'neutral', 'has_profanity': False, 'media_type': None, 'media_url': None}
+2026-03-03 21:10:38,932 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-03 21:10:38,936 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-03 21:10:38,937 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = %(pk_1)s
+2026-03-03 21:10:38,938 INFO sqlalchemy.engine.Engine [generated in 0.00020s] {'pk_1': 12}
+2026-03-03 21:10:38,942 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = %(pk_1)s
+2026-03-03 21:10:38,942 INFO sqlalchemy.engine.Engine [generated in 0.00040s] {'pk_1': 7}
+2026-03-03 21:10:40,669 INFO sqlalchemy.engine.Engine SELECT candidates.id AS candidates_id, candidates.phone_number AS candidates_phone_number, candidates.name AS candidates_name, candidates.email AS candidates_email, candidates.highest_qualification AS candidates_highest_qualification, candidates.skills AS candidates_skills, candidates.experience_years AS candidates_experience_years, candidates.notice_period AS candidates_notice_period, candidates.resume_file_path AS candidates_resume_file_path, candidates.extracted_data AS candidates_extracted_data, candidates.language_preference AS candidates_language_preference, candidates.conversation_state AS candidates_conversation_state, candidates.created_at AS candidates_created_at, candidates.updated_at AS candidates_updated_at 
+FROM candidates 
+WHERE candidates.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-03-03 21:10:40,670 INFO sqlalchemy.engine.Engine [generated in 0.00128s] {'id_1': 7, 'param_1': 1}
+2026-03-03 21:10:40,674 INFO sqlalchemy.engine.Engine UPDATE candidates SET conversation_state=%(conversation_state)s, updated_at=CURRENT_TIMESTAMP WHERE candidates.id = %(candidates_id)s
+2026-03-03 21:10:40,675 INFO sqlalchemy.engine.Engine [generated in 0.00073s] {'conversation_state': 'awaiting_language_selection', 'candidates_id': 7}
+2026-03-03 21:10:40,677 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-03 21:10:40,681 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-03 21:10:40,684 INFO sqlalchemy.engine.Engine SELECT candidates.id, candidates.phone_number, candidates.name, candidates.email, candidates.highest_qualification, candidates.skills, candidates.experience_years, candidates.notice_period, candidates.resume_file_path, candidates.extracted_data, candidates.language_preference, candidates.conversation_state, candidates.created_at, candidates.updated_at 
+FROM candidates 
+WHERE candidates.id = %(pk_1)s
+2026-03-03 21:10:40,684 INFO sqlalchemy.engine.Engine [cached since 1.938s ago] {'pk_1': 7}
+2026-03-03 21:10:42,075 INFO sqlalchemy.engine.Engine INSERT INTO conversations (candidate_id, message_type, message_text, detected_language, sentiment_score, sentiment_label, has_profanity, media_type, media_url) VALUES (%(candidate_id)s, %(message_type)s, %(message_text)s, %(detected_language)s, %(sentiment_score)s, %(sentiment_label)s, %(has_profanity)s, %(media_type)s, %(media_url)s) RETURNING conversations.id, conversations.timestamp
+2026-03-03 21:10:42,090 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-03 21:10:42,095 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-03 21:10:42,096 INFO sqlalchemy.engine.Engine SELECT conversations.id, conversations.candidate_id, conversations.message_type, conversations.message_text, conversations.detected_language, conversations.sentiment_score, conversations.sentiment_label, conversations.has_profanity, conversations.media_type, conversations.media_url, conversations.timestamp 
+FROM conversations 
+WHERE conversations.id = %(pk_1)s
+2026-03-03 21:10:42,096 INFO sqlalchemy.engine.Engine [cached since 3.159s ago] {'pk_1': 13}
+2026-03-03 21:10:42,097 INFO sqlalchemy.engine.Engine ROLLBACK
+ERROR: 'charmap' codec can't encode character '\U0001f60a' in position 25: character maps to <undefined>

@@ -1,0 +1,28 @@
+node_modules/
+.env
+.DS_Store
+*.log
+uploads/
+temp/
+dist/
+build/
+coverage/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.env.local
+.env.production
+
+# Backend specific
+backend/node_modules/
+backend/.env
+backend/logs/
+backend/uploads/
+
+# Frontend specific
+frontend/node_modules/
+frontend/.env
+frontend/dist/
+frontend/build/

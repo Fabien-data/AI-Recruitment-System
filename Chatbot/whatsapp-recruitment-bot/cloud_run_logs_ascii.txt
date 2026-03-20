@@ -1,0 +1,182 @@
+2026-03-03 10:14:05 INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2026-03-03 10:14:05 INFO:     Started parent process [2]
+2026-03-03 10:14:08 Transformers not available, using rule-based sentiment analysis
+2026-03-03 10:14:08 Transformers not available, using rule-based sentiment analysis
+2026-03-03 10:14:11 Pinecone not available (No module named 'pinecone') ? will use keyword fallback
+2026-03-03 10:14:11 Pinecone not available (No module named 'pinecone') ? will use keyword fallback
+2026-03-03 10:14:11 INFO:     Started server process [4]
+2026-03-03 10:14:11 INFO:     Waiting for application startup.
+2026-03-03 10:14:11 INFO:     Started server process [5]
+2026-03-03 10:14:11 INFO:     Waiting for application startup.
+2026-03-03 10:14:11 2026-03-03 10:14:11,859 - app.main - INFO - Starting Dewan_Chatbot v1.0.0
+2026-03-03 10:14:11 2026-03-03 10:14:11,860 - app.main - INFO - Starting Dewan_Chatbot v1.0.0
+2026-03-03 10:14:11 2026-03-03 10:14:11,868 - app.main - ERROR - Database initialization failed: (psycopg2.OperationalError) connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+2026-03-03 10:14:11 	Is the server running on that host and accepting TCP/IP connections?
+2026-03-03 10:14:11 (Background on this error at: https://sqlalche.me/e/20/e3q8)
+2026-03-03 10:14:11 2026-03-03 10:14:11,868 - app.main - ERROR - Database initialization failed: (psycopg2.OperationalError) connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+2026-03-03 10:14:11 	Is the server running on that host and accepting TCP/IP connections?
+2026-03-03 10:14:11 (Background on this error at: https://sqlalche.me/e/20/e3q8)
+2026-03-03 10:14:11 2026-03-03 10:14:11,891 - app.knowledge - WARNING - Job cache bootstrap: cannot connect to recruitment system at http://localhost:3000 ? starting with empty cache. Jobs will be pushed via /api/knowledge/upsert.
+2026-03-03 10:14:11 2026-03-03 10:14:11,891 - app.knowledge - WARNING - Job cache bootstrap: cannot connect to recruitment system at http://localhost:3000 ? starting with empty cache. Jobs will be pushed via /api/knowledge/upsert.
+2026-03-03 10:14:11 2026-03-03 10:14:11,892 - app.main - WARNING - Job cache empty ? chatbot will work but won't list vacancies until recruitment system pushes jobs
+2026-03-03 10:14:11 2026-03-03 10:14:11,892 - app.main - INFO - Background job-cache refresh task started (interval: 5 min)
+2026-03-03 10:14:11 2026-03-03 10:14:11,892 - app.main - WARNING - Job cache empty ? chatbot will work but won't list vacancies until recruitment system pushes jobs
+2026-03-03 10:14:11 2026-03-03 10:14:11,893 - app.main - INFO - Background job-cache refresh task started (interval: 5 min)
+2026-03-03 10:14:11 2026-03-03 10:14:11,904 - app.services.recruitment_sync - ERROR - retry_pending error: (psycopg2.OperationalError) connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+2026-03-03 10:14:11 	Is the server running on that host and accepting TCP/IP connections?
+2026-03-03 10:14:11 (Background on this error at: https://sqlalche.me/e/20/e3q8)
+2026-03-03 10:14:11 2026-03-03 10:14:11,904 - app.services.recruitment_sync - ERROR - retry_pending error: (psycopg2.OperationalError) connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+2026-03-03 10:14:11 	Is the server running on that host and accepting TCP/IP connections?
+2026-03-03 10:14:11 (Background on this error at: https://sqlalche.me/e/20/e3q8)
+2026-03-03 10:14:11 INFO:     Application startup complete.
+2026-03-03 10:14:11 INFO:     Application startup complete.
+2026-03-03 10:17:20 HEAD 405 https://whatsapp-chatbot-782458551389.us-central1.run.app/health
+2026-03-03 10:17:20 INFO:     169.254.169.126:41624 - "HEAD /health HTTP/1.1" 405 Method Not Allowed
+2026-03-03 10:17:20 GET 200 https://whatsapp-chatbot-782458551389.us-central1.run.app/health
+2026-03-03 10:17:20 2026-03-03 10:17:20,818 - app.database - ERROR - Database connection check failed: (psycopg2.OperationalError) connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+2026-03-03 10:17:20 	Is the server running on that host and accepting TCP/IP connections?
+2026-03-03 10:17:20 (Background on this error at: https://sqlalche.me/e/20/e3q8)
+2026-03-03 10:17:20 INFO:     169.254.169.126:41626 - "GET /health HTTP/1.1" 200 OK
+2026-03-03 10:19:12 2026-03-03 10:19:12,071 - app.knowledge - INFO - Job cache: scheduled background refresh starting?
+2026-03-03 10:19:12 2026-03-03 10:19:12,276 - app.knowledge - INFO - Job cache: scheduled background refresh starting?
+2026-03-03 10:19:21 2026-03-03 10:19:21,071 - app.knowledge - WARNING - Job cache bootstrap: cannot connect to recruitment system at http://localhost:3000 ? starting with empty cache. Jobs will be pushed via /api/knowledge/upsert.
+2026-03-03 10:19:21 2026-03-03 10:19:21,170 - app.knowledge - WARNING - Job cache bootstrap: cannot connect to recruitment system at http://localhost:3000 ? starting with empty cache. Jobs will be pushed via /api/knowledge/upsert.
+2026-03-03 10:19:22 2026-03-03 10:19:22,070 - app.knowledge - INFO - Job cache: background refresh done ? 0 jobs loaded
+2026-03-03 10:19:22 2026-03-03 10:19:21,270 - app.knowledge - INFO - Job cache: background refresh done ? 0 jobs loaded
+2026-03-03 10:23:32 GET 200 https://whatsapp-chatbot-782458551389.us-central1.run.app/webhook/whatsapp?hub.mode=subscribe&hub.challenge=383148491&hub.verify_token=dewan_recruitment_webhook_2024&hub_mode=subscribe&hub_challenge=383148491&hub_verify_token=dewan_recruitment_webhook_2024
+2026-03-03 10:23:32 2026-03-03 10:23:32,404 - app.webhooks - INFO - Webhook verification request ? mode=subscribe, token=dewan_recruitment_webhook_2024, challenge=383148491
+2026-03-03 10:23:32 2026-03-03 10:23:32,405 - app.webhooks - INFO - ? Webhook verification successful
+2026-03-03 10:23:32 INFO:     169.254.169.126:25978 - "GET /webhook/whatsapp?hub.mode=subscribe&hub.challenge=383148491&hub.verify_token=dewan_recruitment_webhook_2024&hub_mode=subscribe&hub_challenge=383148491&hub_verify_token=dewan_recruitment_webhook_2024 HTTP/1.1" 200 OK
+2026-03-03 10:23:50 POST 200 https://whatsapp-chatbot-782458551389.us-central1.run.app/webhook/whatsapp
+2026-03-03 10:23:50 2026-03-03 10:23:50,746 - app.webhooks - INFO - ? Webhook received: object=whatsapp_business_account
+2026-03-03 10:23:50 INFO:     169.254.169.126:22128 - "POST /webhook/whatsapp HTTP/1.1" 200 OK
+2026-03-03 10:23:50 2026-03-03 10:23:50,747 - app.webhooks - INFO - ? Processing message id=wamid.HBgLOTQ3NjU3MTY3ODAVAgASGBYzRUIwNTM2Q0Y0MTIwM0Y2NDUyQjRGAA== from=94765716780 type=text
+2026-03-03 10:23:51 2026-03-03 10:23:51,372 - httpx - INFO - HTTP Request: POST https://graph.facebook.com/v18.0/900210539852935/messages "HTTP/1.1 200 OK"
+2026-03-03 10:23:52 2026-03-03 10:23:52,270 - app.webhooks - INFO - ? Text from 94765716780: 'hi'
+2026-03-03 10:24:00 2026-03-03 10:23:55,571 - app.chatbot - ERROR - Error processing message from 94765716780: (psycopg2.OperationalError) connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+2026-03-03 10:24:00 	Is the server running on that host and accepting TCP/IP connections?
+2026-03-03 10:24:00 (Background on this error at: https://sqlalche.me/e/20/e3q8)
+2026-03-03 10:24:00 Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 143, in __init__
+    self._dbapi_connection = engine.raw_connection()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 3317, in raw_connection
+    return self.pool.connect()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 448, in connect
+    return _ConnectionFairy._checkout(self)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 1272, in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 712, in checkout
+    rec = pool._do_get()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/impl.py", line 177, in _do_get
+    with util.safe_reraise():
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/util/langhelpers.py", line 121, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/impl.py", line 175, in _do_get
+    return self._create_connection()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 389, in _create_connection
+    return _ConnectionRecord(self)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 674, in __init__
+    self.__connect()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 900, in __connect
+    with util.safe_reraise():
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/util/langhelpers.py", line 121, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 896, in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/create.py", line 667, in connect
+    return dialect.connect(*cargs_tup, **cparams)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/default.py", line 630, in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+  File "/usr/local/lib/python3.10/site-packages/psycopg2/__init__.py", line 122, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+psycopg2.OperationalError: connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+2026-03-03 10:24:00 	Is the server running on that host and accepting TCP/IP connections?
+2026-03-03 10:24:00 The above exception was the direct cause of the following exception:
+2026-03-03 10:24:00 Traceback (most recent call last):
+  File "/app/app/chatbot.py", line 204, in process_message
+    candidate = crud.get_or_create_candidate(db, phone_number)
+  File "/app/app/crud.py", line 80, in get_or_create_candidate
+    candidate = get_candidate_by_phone(db, phone_number)
+  File "/app/app/crud.py", line 32, in get_candidate_by_phone
+    ).first()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/orm/query.py", line 2759, in first
+    return self.limit(1)._iter().first()  # type: ignore
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/orm/query.py", line 2857, in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/orm/session.py", line 2351, in execute
+    return self._execute_internal(
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/orm/session.py", line 2239, in _execute_internal
+    conn = self._connection_for_bind(bind)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/orm/session.py", line 2108, in _connection_for_bind
+    return trans._connection_for_bind(engine, execution_options)
+  File "<string>", line 2, in _connection_for_bind
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/orm/session.py", line 1187, in _connection_for_bind
+    conn = bind.connect()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 3293, in connect
+    return self._connection_cls(self)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 145, in __init__
+    Connection._handle_dbapi_exception_noconnection(
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 2448, in _handle_dbapi_exception_noconnection
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 143, in __init__
+    self._dbapi_connection = engine.raw_connection()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/base.py", line 3317, in raw_connection
+    return self.pool.connect()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 448, in connect
+    return _ConnectionFairy._checkout(self)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 1272, in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 712, in checkout
+    rec = pool._do_get()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/impl.py", line 177, in _do_get
+    with util.safe_reraise():
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/util/langhelpers.py", line 121, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/impl.py", line 175, in _do_get
+    return self._create_connection()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 389, in _create_connection
+    return _ConnectionRecord(self)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 674, in __init__
+    self.__connect()
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 900, in __connect
+    with util.safe_reraise():
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/util/langhelpers.py", line 121, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/pool/base.py", line 896, in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/create.py", line 667, in connect
+    return dialect.connect(*cargs_tup, **cparams)
+  File "/usr/local/lib/python3.10/site-packages/sqlalchemy/engine/default.py", line 630, in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+  File "/usr/local/lib/python3.10/site-packages/psycopg2/__init__.py", line 122, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+2026-03-03 10:24:00 	Is the server running on that host and accepting TCP/IP connections?
+2026-03-03 10:24:00 (Background on this error at: https://sqlalche.me/e/20/e3q8)
+2026-03-03 10:24:00 2026-03-03 10:24:00,270 - app.webhooks - INFO - ? Sending reply to 94765716780: Oops, something went wrong on my end. Please try again in a moment ?...
+2026-03-03 10:24:07 2026-03-03 10:24:07,870 - httpx - INFO - HTTP Request: POST https://graph.facebook.com/v18.0/900210539852935/messages "HTTP/1.1 200 OK"
+2026-03-03 10:24:08 2026-03-03 10:24:08,371 - app.utils.meta_client - INFO - Message sent to 94765716780: wamid.HBgLOTQ3NjU3MTY3ODAVAgARGBI3QUJFRjMxMTczQzNEQ0I1NzkA
+2026-03-03 10:24:08 2026-03-03 10:24:08,570 - app.webhooks - INFO - ? Reply sent to 94765716780 ? msg_id=wamid.HBgLOTQ3NjU3MTY3ODAVAgARGBI3QUJFRjMxMTczQzNEQ0I1NzkA
+2026-03-03 10:24:08 POST 200 https://whatsapp-chatbot-782458551389.us-central1.run.app/webhook/whatsapp
+2026-03-03 10:24:08 2026-03-03 10:24:08,943 - app.webhooks - INFO - ? Webhook received: object=whatsapp_business_account
+2026-03-03 10:24:08 INFO:     169.254.169.126:22124 - "POST /webhook/whatsapp HTTP/1.1" 200 OK
+2026-03-03 10:24:09 POST 200 https://whatsapp-chatbot-782458551389.us-central1.run.app/webhook/whatsapp
+2026-03-03 10:24:09 2026-03-03 10:24:09,399 - app.webhooks - INFO - ? Webhook received: object=whatsapp_business_account
+2026-03-03 10:24:09 INFO:     169.254.169.126:31088 - "POST /webhook/whatsapp HTTP/1.1" 200 OK
+2026-03-03 10:24:09 POST 200 https://whatsapp-chatbot-782458551389.us-central1.run.app/webhook/whatsapp
+2026-03-03 10:24:09 2026-03-03 10:24:09,836 - app.webhooks - INFO - ? Webhook received: object=whatsapp_business_account
+2026-03-03 10:24:09 INFO:     169.254.169.126:31094 - "POST /webhook/whatsapp HTTP/1.1" 200 OK
+2026-03-03 10:24:22 2026-03-03 10:24:22,169 - app.knowledge - INFO - Job cache: scheduled background refresh starting?
+2026-03-03 10:24:22 2026-03-03 10:24:22,370 - app.knowledge - INFO - Job cache: scheduled background refresh starting?
+2026-03-03 10:24:27 2026-03-03 10:24:27,170 - app.knowledge - WARNING - Job cache bootstrap: cannot connect to recruitment system at http://localhost:3000 ? starting with empty cache. Jobs will be pushed via /api/knowledge/upsert.
+2026-03-03 10:24:27 2026-03-03 10:24:27,970 - app.knowledge - INFO - Job cache: background refresh done ? 0 jobs loaded
+2026-03-03 10:24:29 2026-03-03 10:24:29,371 - app.knowledge - WARNING - Job cache bootstrap: cannot connect to recruitment system at http://localhost:3000 ? starting with empty cache. Jobs will be pushed via /api/knowledge/upsert.
+2026-03-03 10:24:30 2026-03-03 10:24:30,170 - app.knowledge - INFO - Job cache: background refresh done ? 0 jobs loaded
+2026-03-03 10:29:27 2026-03-03 10:29:27,972 - app.knowledge - INFO - Job cache: scheduled background refresh starting?
+2026-03-03 10:29:30 2026-03-03 10:29:30,270 - app.knowledge - INFO - Job cache: scheduled background refresh starting?
+2026-03-03 10:29:35 2026-03-03 10:29:35,571 - app.knowledge - WARNING - Job cache bootstrap: cannot connect to recruitment system at http://localhost:3000 ? starting with empty cache. Jobs will be pushed via /api/knowledge/upsert.
+2026-03-03 10:29:36 2026-03-03 10:29:36,770 - app.knowledge - WARNING - Job cache bootstrap: cannot connect to recruitment system at http://localhost:3000 ? starting with empty cache. Jobs will be pushed via /api/knowledge/upsert.
+2026-03-03 10:29:37 2026-03-03 10:29:36,470 - app.knowledge - INFO - Job cache: background refresh done ? 0 jobs loaded
+2026-03-03 10:29:37 2026-03-03 10:29:37,371 - app.knowledge - INFO - Job cache: background refresh done ? 0 jobs loaded

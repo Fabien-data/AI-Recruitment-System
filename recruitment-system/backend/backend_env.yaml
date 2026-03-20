@@ -1,0 +1,10 @@
+NODE_ENV: production
+USE_CLOUD_SQL: "true"
+CLOUD_SQL_INSTANCE_CONNECTION_NAME: dewan-chatbot-1234:us-central1:recruitment-db
+CLOUD_SQL_USER: recruitment_user
+CLOUD_SQL_PASSWORD: RecApp2024Secure!
+CLOUD_SQL_DATABASE: recruitment_db
+JWT_SECRET: dewan_jwt_secret_prod_2024
+CHATBOT_API_KEY: dewan_chatbot_secret_2024_change_in_production
+FRONTEND_URL: https://recruitment-frontend-782458551389.us-central1.run.app
+CORS_ORIGIN: https://recruitment.markui.lk

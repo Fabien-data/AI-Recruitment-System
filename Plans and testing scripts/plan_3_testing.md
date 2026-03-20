@@ -1,0 +1,396 @@
+# Plan 3 — Full System Integration Testing
+
+## Background
+
+This plan covers end-to-end testing of the complete system after both Part 1 (Chatbot) and Part 2 (Recruitment System) improvements are implemented. It verifies the entire pipeline from a candidate's first WhatsApp message through to the recruiter's dashboard — including data sync, CV handling, AI matching, and UI correctness.
+
+---
+
+## System Architecture Under Test
+
+```
+WhatsApp Customer Message
+        ↓
+Meta WhatsApp Business API
+        ↓
+[Chatbot] Python/FastAPI (port 8000)
+  - Language detection
+  - State machine (15 states)
+  - RAG Engine (GPT-4o-mini)
+  - CV parser (OCR + LLM)
+        ↓ POST /api/chatbot/intake  (API key auth)
+[Backend] Node.js/Express (port 3000)
+  - Candidate upsert
+  - CV file storage
+  - Application creation
+  - Auto-assign matching
+        ↓ SQL queries
+[Database] PostgreSQL
+        ↓ REST API
+[Frontend] React/Vite (port 5173)
+  - Dashboard
+  - CV Manager
+  - Job Candidates
+  - All 16 pages
+```
+
+---
+
+## Pre-Flight Checklist
+
+Before running any tests, confirm the following:
+
+| Check | How to Verify |
+|---|---|
+| Chatbot running | `GET http://localhost:8000/health` → `{ status: "ok" }` |
+| Backend running | `GET http://localhost:3000/health` → `{ status: "ok" }` |
+| Frontend running | `http://localhost:5173` loads login page |
+| DB connected | Backend health includes DB status |
+| OpenAI key valid | `GET http://localhost:8000/api/health` |
+| Recruitment sync enabled | `RECRUITMENT_SYNC_ENABLED=true` in chatbot `.env` |
+| CHATBOT_API_KEY matches | Same value in chatbot `.env` and backend `.env` |
+| RECRUITMENT_API_URL set | Points to running backend (e.g., `http://localhost:3000`) |
+
+---
+
+## PART A: WhatsApp Chatbot Tests
+
+### A1. Language Flow Tests
+
+**Test each language start-to-finish:**
+
+| # | Test | Input | Expected |
+|---|---|---|---|
+| A1.1 | English start | "Hello" | Welcome in English → language confirm → menu |
+| A1.2 | Sinhala script | "ආයුබෝවන්" | Welcome in Sinhala → menu in Sinhala |
+| A1.3 | Tamil script | "வணக்கம்" | Welcome in Tamil → menu in Tamil |
+| A1.4 | Singlish | "Kohomada bro" | Detected as Singlish → menu in Singlish phrasing |
+| A1.5 | Tanglish | "Vanakkam da" | Detected as Tanglish → menu in Tanglish phrasing |
+| A1.6 | Mid-flow language switch | Speak Sinhala (mid-English apply flow) | Bot acknowledges in Sinhala, continues in Sinhala |
+
+**Pass criteria:** Bot responds in the correct language for entire session after detection.
+
+---
+
+### A2. Apply Flow Test (Happy Path)
+
+Send messages in sequence to the same WhatsApp number:
+
+```
+1. "Hello"                           → Welcome + language prompt
+2. "English please"                  → Confirm English → Show menu
+3. "1"  (Apply)                      → Ask: what job?
+4. "Security guard"                  → Acknowledge → Ask: which country?
+5. "Dubai"                           → Acknowledge → Ask: experience?
+6. "3 years"                         → Acknowledge → Additional questions (if any) → Ask for CV
+7. [Upload PDF CV file]              → "Got your CV! Let me review..." → AI extraction → Application complete msg
+8. → [Automatic sync to recruitment system]
+```
+
+**Pass criteria:**
+- Each step responds in <3 seconds (after optimizations)
+- CV is stored on disk
+- Recruitment sync returns 201/200
+- Candidate appears in recruitment system within 30 seconds
+- Application linked to correct job in recruitment system
+
+---
+
+### A3. Early CV Upload Test
+
+```
+1. "Hello"                           → Welcome in English
+[Upload CV PDF immediately]          → Bot saves CV, acknowledges warmly, asks for name
+2. "Kamal Perera"                    → Confirm name, ask job interest
+3. "I want to work as a driver"      → Continue normal flow with CV already on record
+```
+
+**Pass criteria:**
+- CV saved even though state was `initial`
+- No duplicate CV upload prompt
+- Final sync includes the CV uploaded early
+
+---
+
+### A4. Vacancy Browsing Test
+
+```
+1. "Hi"  →  Language confirm → Menu
+2. "2"   (Vacancies)         → Bot asks: countries/roles preference
+3. "UAE, security jobs"      → Bot displays matching vacancies with urgency tags
+4. [After vacancy display]   → Bot follows up with application CTA
+5. "1"   (Apply)             → Transitions to apply flow
+```
+
+**Pass criteria:**
+- Vacancies pulled from recruitment system (not mock data)
+- Urgency tags (🔥) appear for urgent jobs
+- Application CTA appears after vacancy list
+- Selecting "Apply" from vacancy flow works correctly
+
+---
+
+### A5. Confusion / Hotline Last-Resort Test
+
+```
+1. "Hello"                           → Welcome
+2. "xzsdfgkjhsdf"                    → Bot rephrases / tries to help (1st confusion)
+3. "qwerty 1234 asdf"                → Bot offers to restart or redirect (2nd confusion)
+4. "&&&&###"                         → After 3rd, bot provides hotline number
+```
+
+**Pass criteria:**
+- Hotline NOT provided at confusion 1 or 2
+- At confusion 3: hotline provided along with restart offer
+- Each confusion attempt tries a different recovery strategy
+
+---
+
+### A6. Ask a Question Test
+
+```
+1. "Hi" → menu
+2. "3"  (Ask a question)             → "What would you like to know?"
+3. "What documents do I need?"       → RAG answers from knowledge base
+4. "What is the salary for UAE security?" → RAG answers or gracefully redirects
+5. [Unanswerable question]           → Redirects to apply/vacancy or contact info
+```
+
+**Pass criteria:**
+- General questions answered without hotline
+- Unanswerable redirects to menu options before hotline
+
+---
+
+## PART B: Recruitment System Tests
+
+### B1. Login & Authentication
+
+| # | Test | Expected |
+|---|---|---|
+| B1.1 | Valid login | JWT stored, redirect to dashboard |
+| B1.2 | Invalid credentials | Error message shown |
+| B1.3 | Refresh page logged in | Stays logged in |
+| B1.4 | Logout | Redirect to login, token cleared |
+
+---
+
+### B2. Dashboard Tests
+
+| # | Test | Expected |
+|---|---|---|
+| B2.1 | Dashboard loads | All 4 KPI cards show real data (not 0) |
+| B2.2 | Pipeline funnel | Renders with correct blue gradient, tooltips work |
+| B2.3 | Source donut | Shows actual source breakdown from DB |
+| B2.4 | Trend chart | Shows last 6 months of data |
+| B2.5 | Top jobs chart | Shows top jobs by application count |
+| B2.6 | KPI animation | Numbers count up on page load |
+| B2.7 | Quick actions | "+ Add Candidate" and "+ Add Job" buttons respond |
+| B2.8 | Upcoming interviews | Lists correctly with date/time |
+
+---
+
+### B3. CV Manager Tests
+
+| # | Test | Expected |
+|---|---|---|
+| B3.1 | List loads | All candidates appear with source badge |
+| B3.2 | Search works | Filter by name/phone/email returns correct results |
+| B3.3 | Open candidate modal | Modal opens with candidate details |
+| B3.4 | **PDF viewer** | CV PDF renders in iframe within modal |
+| B3.5 | **Download CV** | Click Download → file downloads to computer |
+| B3.6 | **AI Insights tab** | Match score shown as number/%, mismatches listed in red |
+| B3.7 | Remarks tab | Can add/save a remark type and notes |
+| B3.8 | Allocate tab | Can assign candidate to a job |
+| B3.9 | Applications tab | Shows existing applications for candidate |
+
+---
+
+### B4. Job Candidates Tests
+
+| # | Test | Expected |
+|---|---|---|
+| B4.1 | Job candidate list loads | Candidates listed with match scores |
+| B4.2 | **Critical mismatch badge** | Red badge shown on candidates with critical mismatches |
+| B4.3 | Quick view modal | Click candidate → modal opens with details |
+| B4.4 | **"Also Suitable For" panel** | Shows top 3 alternative jobs with match % and reason |
+| B4.5 | Certify candidate | Certify modal → notification sent → status updates |
+| B4.6 | Reject to pool | Candidate moved to General Pool |
+| B4.7 | Transfer to other job | Transfer modal → candidate reassigned |
+| B4.8 | Batch certify | Select multiple → batch certify works |
+| B4.9 | Score filter | Filter by score threshold updates list |
+
+---
+
+### B5. CRUD Tests (All Entities)
+
+**Candidates:**
+- Create manually via UI → appears in list ✅
+- Edit name/email → saved correctly ✅
+- Delete candidate → removed from list ✅
+- Tags update → persist after page refresh ✅
+
+**Jobs:**
+- Create new job via `CreateJobModal` → linked to a project ✅
+- Edit job requirements → saved ✅
+- Delete job → applications NOT deleted (cascade check) ✅
+
+**Projects:**
+- Create project → appears in list ✅
+- Add job to project → job linked ✅
+- Assign team member → appears in project detail ✅
+- Remove team member → removed ✅
+- Delete project → blocked if has active jobs ✅
+
+**Interviews:**
+- Schedule interview from application → time/location saved ✅
+- Edit interview → updates correctly ✅
+- Delete interview → removed ✅
+- Send reminder → notification dispatched ✅
+
+**Applications:**
+- Create via chatbot (intake) → appears in CV Manager ✅
+- Status update (certify) → status changes in DB ✅
+- Transfer to pool (reject) → moves to General Pool ✅
+
+---
+
+### B6. UI/UX Quality Checks
+
+| # | Check | Criteria |
+|---|---|---|
+| B6.1 | Blue theme consistent | No indigo/purple colors visible on any page |
+| B6.2 | Sidebar gradient | Deep navy-to-blue gradient visible on sidebar |
+| B6.3 | Page animations | Each page fades/slides in on navigate |
+| B6.4 | List stagger | Table rows appear with stagger delay |
+| B6.5 | Button loading | Spinner shows on all async button clicks |
+| B6.6 | Empty states | Friendly empty state on all list pages when empty |
+| B6.7 | Mobile responsive | Sidebar collapses, layout adapts on <1024px |
+| B6.8 | Toast notifications | Success/error toasts appear for all CRUD operations |
+
+---
+
+## PART C: Integration & Sync Tests
+
+### C1. Full End-to-End Sync Test
+
+1. Reset test phone: `POST http://localhost:8000/admin/reset-candidate?phone=94XXXXXXXXX`
+2. Complete full chatbot apply flow (Test A2 above)
+3. Check recruitment system:
+   - `GET /api/candidates?phone=94XXXXXXXXX` → candidate exists ✅
+   - `GET /api/applications?candidate_id=...` → application exists ✅
+   - CV accessible at `candidate.cv_url` ✅
+   - `candidate.metadata.mismatches` populated if mismatches exist ✅
+
+---
+
+### C2. Mismatch Data Flow Verification
+
+1. Apply as a candidate who clearly doesn't meet a job requirement (e.g. age/height)
+2. Complete full flow + CV upload
+3. Check in recruitment system:
+   - `CVManager → AI Insights` tab → mismatches displayed with severity
+   - `JobCandidates` → red mismatch badge visible on candidate row
+
+---
+
+### C3. Job Cache Refresh Test
+
+1. Add a new active job in recruitment system
+2. Chatbot job cache should refresh within the configured interval
+3. Ask the chatbot about vacancies → new job should appear in response
+
+**Check:** `recruitment_sync.py` startup retry mechanism works:
+- Stop chatbot → manually mark a candidate `recruitment_sync_status=pending_retry`
+- Restart chatbot → verify the pending sync is retried on startup
+
+---
+
+### C4. CV File Size Test
+
+1. Upload a large CV (>5MB PDF) via WhatsApp
+2. Verify:
+   - Chatbot processes it without timeout
+   - File stored on disk
+   - Base64 payload sent to recruitment backend within Express body size limit
+   - CV accessible in recruitment system
+
+**Note:** Express default body limit is 1MB for JSON. The `chatbot-intake.js` route may need `express.json({ limit: '20mb' })` for large CVs.
+
+---
+
+### C5. Concurrent user Test
+
+1. Simulate 3 simultaneous WhatsApp conversations (different phone numbers)
+2. Each at a different state (one at CV upload, one browsing vacancies, one in apply flow)
+3. Verify all 3 respond correctly without cross-contamination of state
+
+---
+
+## PART D: Performance & Load
+
+### D1. Chatbot Response Time Benchmarks
+
+After Part 1 optimizations, measure average response time:
+
+| Message Type | Target | How to Measure |
+|---|---|---|
+| Menu digit ("1") | < 500ms | Fast-path, no LLM |
+| Simple yes/no | < 500ms | Fast-path, no LLM |
+| Language intent | < 1.5s | LLM classify |
+| Job title / country | < 2s | LLM classify + validate combined |
+| CV upload processing | < 10s | OCR + LLM extraction |
+
+---
+
+### D2. Frontend Performance
+
+```bash
+# Run in frontend directory
+npm run build
+# Check bundle size output — warn if any single chunk > 500KB
+
+# Run in browser
+# Lighthouse audit → target:
+#   Performance: > 85
+#   Accessibility: > 90
+#   Best Practices: > 90
+```
+
+---
+
+## Test Execution Order
+
+```
+Phase 1: Pre-flight checks → all services running
+Phase 2: Part A — Chatbot tests (A1 → A6)
+Phase 3: Part B — Recruitment UI tests (B1 → B6)
+Phase 4: Part C — Integration tests (C1 → C5)
+Phase 5: Part D — Performance checks
+```
+
+---
+
+## Pass/Fail Summary Tracker
+
+| Area | Tests | Pass | Fail | Fix Required |
+|---|---|---|---|---|
+| A: Chatbot | 24 | — | — | — |
+| B: Recruitment UI | 35 | — | — | — |
+| C: Integration | 10 | — | — | — |
+| D: Performance | 7 | — | — | — |
+| **Total** | **76** | | | |
+
+---
+
+## Estimated Testing Time
+
+| Phase | Time |
+|---|---|
+| Pre-flight & setup | 1h |
+| Part A: Chatbot testing | 3h |
+| Part B: UI/CRUD testing | 4h |
+| Part C: Integration testing | 3h |
+| Part D: Performance | 1h |
+| Bug fixes & retest | 3h |
+| **Total** | **~15h** |

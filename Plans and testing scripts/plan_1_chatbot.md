@@ -1,0 +1,369 @@
+# Plan 1 — WhatsApp Chatbot: Inspection & Improvements
+
+## Background
+
+The Dewan Consultants WhatsApp chatbot is a Python/FastAPI application using GPT-4o-mini and a state-machine to guide candidates through a multi-language recruitment intake. The bot supports **English, Sinhala, Tamil, Singlish, and Tanglish** and must deliver **fast, accurate, and engaging** responses.
+
+---
+
+## Current State Summary
+
+| Component | File | Size | Role |
+|---|---|---|---|
+| Core Engine | [chatbot.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/chatbot.py) | 1849 lines | 15-state FSM |
+| RAG / LLM | [rag_engine.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/llm/rag_engine.py) | 894 lines | GPT-4o-mini calls |
+| Prompts | [prompt_templates.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/llm/prompt_templates.py) | 568 lines | All language templates |
+| Language Detector | [language_detector.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/nlp/language_detector.py) | 339 lines | Script + transliteration detection |
+| Vacancy Service | [vacancy_service.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/services/vacancy_service.py) | 496 lines | Job search + LLM refinement |
+| Recruitment Sync | [recruitment_sync.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/services/recruitment_sync.py) | 403 lines | Push candidate to backend |
+| CV Parser | [cv_parser/](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/cv_parser/) | ~76K total | PDF/image OCR + LLM extraction |
+| Webhooks | [webhooks.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/webhooks.py) | 323 lines | Meta WhatsApp API handler |
+
+### State Machine Flow (Current 15 States)
+```
+initial → language_selection → menu_selection
+  → apply:  job_interest → destination_country → experience → 
+             additional_questions → awaiting_cv → application_complete
+  → vacancies: vacancy_query → push_apply
+  → question: general_question
+  → confused / fallback
+```
+
+---
+
+## Findings & Issues
+
+### 🔴 CRITICAL: Response Time Is Too Slow
+
+**Root Cause Analysis:**
+
+Every incoming message currently triggers **2 serial LLM API calls**:
+
+1. `classify_message()` → 1 full GPT-4o-mini call (`~600–1500ms`)
+2. `validate_intake_answer()` → another GPT-4o-mini call (`~600–1500ms`)
+
+Total worst case per message: **2–4 seconds** — unacceptable for WhatsApp chat.
+
+**Examples of wasteful LLM calls:**
+- User sends `"1"` (selects menu option 1) → still goes through full classification
+- User sends `"yes"` / `"හා"` / `"ஆம்"` → still validated via LLM
+- User sends `"3"` / `"3 years"` for experience → LLM called for a trivial number
+
+**Fix Strategy:**
+
+```
+Message arrives
+     │
+     ├─ Is it a simple menu digit ("1","2","3")? → Fast-path, skip LLM
+     ├─ Is it a known greeting? → Use greeting detector (already exists)
+     ├─ Is it a plain "yes"/"no"? → Regex fast-path
+     ├─ Is it a pure number (age/experience)? → Parse directly
+     │
+     └─ None of the above → LLM classify_message() [single call, unified]
+              │
+              └─ If validation also needed, include in SAME prompt
+```
+
+**Additional optimizations:**
+- Make LLM calls with `max_tokens=150` for classification-only calls (currently may be unrestricted)
+- Use `asyncio.gather()` to run any remaining parallel-safe calls concurrently
+- Reduce `classify_message()` prompt length — remove redundant examples
+
+---
+
+### 🔴 CRITICAL: Language Mode — Incomplete Template Coverage
+
+**Finding:** The `PromptTemplates` class has some template categories with singlish/tanglish variants and others with only `en`/`si`/`ta`. When `_resolve_lang()` falls back to `si` or `ta` for singlish/tanglish users, the messages can feel unnatural.
+
+**Missing singlish/tanglish variants in:**
+- `AWAITING_CV_MESSAGES` — only `en`, `si`, `ta`
+- `APPLICATION_COMPLETE_MESSAGES` — only `en`, `si`, `ta`  
+- `CV_SUMMARY_HEADERS` — only `en`, `si`, `ta`
+- `INTAKE_QUESTIONS` — some fields missing singlish/tanglish
+
+**Fix:** Add proper romanized singlish/tanglish message variants to all template dictionaries.
+
+---
+
+### 🔴 CRITICAL: CV Upload Restricted to One State
+
+**User requirement:** *"Some people will just leave the CV from the beginning or in between the conversation — do not let that CV go in vain"*
+
+**Current behavior:** `_handle_text_message()` only calls `_handle_cv_upload()` if the message contains media. The media IS handled at any state — BUT: if a user uploads a CV in state `initial` or `language_selection`, the chatbot may ignore it or not acknowledge it properly before moving to the right state.
+
+**Fix:** 
+- At any state, if a document is received, immediately save it, send a warm acknowledgment ("Got your CV! Let me also grab a few details..."), and **continue** collecting any missing intake data — do NOT reset the flow.
+- Store the CV file reference early, link it when intake completes and sync happens.
+
+---
+
+### 🟡 IMPORTANT: Missing Engagement & Persuasion
+
+**User requirement:** *"Always try to persuade the customer to make interest and get the customer onboard"*
+
+**Current behavior:** The bot is transactional — it asks questions and collects data without building excitement.
+
+**Fix — 3 areas:**
+
+1. **Welcome/Menu screen**: Add a compelling opening hook with 1–2 current job highlights
+2. **During vacancy browsing**: Add urgency signals ("⚡ 12 positions left!", "🔥 Urgent hire!") pulled from job data
+3. **During apply flow**: Add encouraging micro-messages between questions ("Great choice! {country} has amazing opportunities for {job} right now 🌟")
+
+---
+
+### 🟡 IMPORTANT: Hotline Must Be Last Resort
+
+**User requirement:** *"The hotline is the last resort — try to avoid providing it as much as possible"*
+
+**Current behavior:** The `_default_response()` provides a fallback that likely includes the hotline.
+
+**Fix:**
+- Track consecutive "confused" iterations per conversation per session (e.g., in `extracted_data`)
+- Only provide hotline after **3 consecutive unresolvable** messages in the same session
+- Before hotline: try (1) rephrase the question, (2) offer to restart, (3) offer to connect to human
+- Hotline = absolute last option, not immediate fallback
+
+---
+
+### 🟡 IMPORTANT: Job Vacancies Scenario Needs Enhancement
+
+**User requirement:** *"Give a taste of good jobs and urgent projects → ask countries/roles → provide suitable options → push for easy application"*
+
+**Current behavior:** The `STATE_VACANCY_QUERY` state calls `vacancy_service.search_and_refine()` which searches and LLM-refines the results. This is solid, but the **push for application** and **urgency** are missing.
+
+**Fix:**
+- After displaying vacancies, always follow up with a soft prompt: *"Shall I check if you qualify for any of these? It only takes 2 minutes 😊"*
+- Tag urgent/high-priority jobs visually in the message (🔥 for urgent, ⭐ for featured)
+- If user doesn't respond, send a gentle follow-up (if Meta allows re-engagement)
+
+---
+
+### 🟢 LOW: Ask a Question — Minimal Investment
+
+**User requirement:** *"We have plans for this in future so don't waste time on this"*
+
+**Current behavior:** The RAG engine handles general Q&A via `generate_response()` with knowledge base context.
+
+**Plan:** Keep as-is. Just ensure:
+- It's clearly accessible from the menu
+- If the RAG can't answer, it gracefully offers to redirect to apply/vacancies before hotline
+
+---
+
+## Proposed Changes — File by File
+
+---
+
+### [MODIFY] [chatbot.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/chatbot.py)
+
+**Change 1 — Fast-path trivial input detector** (new helper function, ~40 lines)
+```python
+def _fast_classify(text: str, state: str) -> Optional[Dict]:
+    """
+    Skip LLM for trivial inputs. Returns a minimal classified dict or None.
+    Called BEFORE calling rag_engine.classify_message().
+    """
+    stripped = text.strip().lower()
+    
+    # Numeric menu selections at initial/language/menu states
+    if state in (STATE_INITIAL, STATE_LANGUAGE, STATE_MENU_SELECTION):
+        if stripped in ('1', '2', '3', 'one', 'two', 'three'):
+            intent_map = {'1': 'apply_intent', '2': 'vacancy_query', '3': 'general_question',
+                          'one': 'apply_intent', 'two': 'vacancy_query', 'three': 'general_question'}
+            return {'intent': intent_map.get(stripped, 'unclear'), 
+                    'language': None, 'extracted_value': stripped, 'confidence': 1.0}
+    
+    # Yes/no detection in all languages
+    YES_PATTERNS = {'yes', 'yeah', 'yep', 'ok', 'okay', 'sure', 'හා', 'ඔව්', 'ஆம்', 'ok', 'haan', 'aama'}
+    NO_PATTERNS  = {'no', 'nope', 'nah', 'එපා', 'இல்லை', 'nope', 'na', 'illai', 'epa'}
+    if stripped in YES_PATTERNS:
+        return {'intent': 'affirmative', 'language': None, 'extracted_value': 'yes', 'confidence': 1.0}
+    if stripped in NO_PATTERNS:
+        return {'intent': 'negative', 'language': None, 'extracted_value': 'no', 'confidence': 1.0}
+    
+    # Pure number for experience/age
+    if state in (STATE_EXPERIENCE, STATE_ADDITIONAL_QUESTIONS):
+        if re.match(r'^\d+(\.\d+)?$', stripped):
+            return {'intent': 'experience_years', 'extracted_value': stripped,
+                    'language': None, 'confidence': 1.0}
+    
+    return None  # Fall through to LLM
+```
+
+**Change 2 — Integrate fast-path into `_handle_text_message()`**
+- Before calling `classify_message()`, call `_fast_classify()`
+- If fast-path returns result, use it and skip LLM classification
+- Estimated time savings: **~800–1500ms** for ~40% of messages
+
+**Change 3 — CV at any state**
+```python
+# In process_message(), move the media handling ABOVE the state routing:
+if media_content and media_type in ('document', 'image'):
+    # Store CV immediately regardless of state
+    await self._handle_cv_upload_early(db, candidate, media_content, media_type, media_filename)
+    # Send immediate acknowledgment
+    # Then continue with the normal state flow (don't return early)
+```
+
+**Change 4 — Confusion tracker + hotline gating**
+```python
+# In extracted_data, track: confusion_streak (int)
+# Increment on _default_response() trigger
+# Reset on valid response
+# Only include hotline when confusion_streak >= 3
+```
+
+**Change 5 — Engagement micro-messages**
+- Add random encouraging phrases after job interest confirmed
+- Add urgency signals in vacancy display (read `priority` field from job data)
+- After vacancy list: append soft application prompt
+
+**Change 6 — Vacancy follow-through push**
+```python
+# After STATE_VACANCY_QUERY response, set state to STATE_VACANCY_PUSH
+# STATE_VACANCY_PUSH asks: "Any of these match what you're looking for?
+#   Reply 1 to apply, 2 to see more, 3 back to menu"
+```
+
+---
+
+### [MODIFY] [rag_engine.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/llm/rag_engine.py)
+
+**Change 1 — Combined classify+validate in single LLM call**
+```python
+async def classify_and_validate(self, text: str, state: str, field: str, language: str) -> Dict:
+    """
+    Single LLM call that both classifies intent AND validates the field value.
+    Saves ~800ms vs two separate calls.
+    """
+    # Single prompt asking for both outputs as JSON
+    prompt = f"""
+    State: {state}, Field to validate: {field}, Language: {language}
+    User message: "{text}"
+    
+    Return JSON: {{
+      "intent": "<intent>",
+      "extracted_value": "<value or null>",
+      "is_valid": true/false,
+      "validation_reason": "<why invalid or empty string>",
+      "language": "<detected language code>"
+    }}
+    """
+```
+
+**Change 2 — Reduce token usage**
+- Cap `max_tokens=200` for classification calls (currently may be default ~1000)
+- This reduces both cost and latency
+
+**Change 3 — Temperature tuning**
+- Use `temperature=0.1` for classification/validation (needs determinism)
+- Use `temperature=0.7` for natural language responses (needs variety)
+
+---
+
+### [MODIFY] [prompt_templates.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/llm/prompt_templates.py)
+
+**Change 1 — Add singlish/tanglish variants to all message collections**
+
+```python
+# Example additions needed:
+'singlish': [
+    "Oyata CV ekak thiyanawada? Eka dana danawa😊",
+    "Mata oyage resume eka yawanna puluwanda? Eka important wela thiyanawa!",
+],
+'tanglish': [
+    "Ungalukku CV irukkaa? Adha submit pannunga please✨",
+    "Resume padaichiteenga? Athai anapu panunga, romba helpful aagum!",
+]
+```
+
+Full template categories needing singlish/tanglish:
+- `AWAITING_CV_MESSAGES`
+- `APPLICATION_COMPLETE_MESSAGES`
+- `CV_SUMMARY_HEADERS`
+- `CV_FOLLOWUP_MESSAGES`
+- All `INTAKE_QUESTIONS` fields
+
+**Change 2 — Add engagement/persuasion message pool**
+
+```python
+ENGAGEMENT_HOOKS = {
+    'en': [
+        "🌟 Over 200 candidates placed last month alone! You're in the right place.",
+        "⭐ We've sent workers to UAE, Qatar, Saudi, Oman, and more. Let's find YOUR opportunity!",
+        "🎯 Our success rate is over 85%. Let's make you one of our success stories!",
+    ],
+    'si': [...],  # Sinhala versions
+    'ta': [...],  # Tamil versions
+    'singlish': [...],
+    'tanglish': [...],
+}
+
+URGENCY_TAGS = {
+    'urgent': '🔥 URGENT',
+    'high': '⚡ HIGH DEMAND',
+    'normal': '✅',
+}
+```
+
+---
+
+### [MODIFY] [vacancy_service.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/services/vacancy_service.py)
+
+**Change 1 — Add urgency indicators in LLM prompt**
+```python
+# In _refine_with_llm() → add to system prompt:
+"For urgent jobs (positions_available > 10 or priority='urgent'), 
+ add 🔥 emoji and note urgency. For featured jobs, add ⭐."
+```
+
+**Change 2 — Add application push footer to all vacancy responses**
+```python
+push_footer = {
+    'en': "\n\n💡 *Interested in any of these?* Reply *APPLY* or send *1* to start your application right away — it only takes 2 minutes!",
+    'si': "\n\n💡 *මේවායෙන් කැමතිද?* *APPLY* කියා reply කරන්න — විනාඩි 2ක් ගත වෙනවා!",
+    'ta': "\n\n💡 *இவற்றில் ஆர்வமா?* *APPLY* என்று reply பண்ணுங்க — 2 நிமிஷம்தான்!",
+    ...
+}
+```
+
+---
+
+### [MODIFY] [webhooks.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/webhooks.py)
+
+**Change 1 — Accept documents at any state cleanly**
+- In `process_single_message()`, detect media BEFORE state routing
+- Store document bytes, send immediate acknowledgment
+- Pass a `cv_already_received=True` flag to `process_message()` so it doesn't re-ask for CV
+
+---
+
+## Verification Plan
+
+### Automated
+- Unit test `_fast_classify()` for all menu digits, yes/no in all 5 languages
+- Unit test `classify_and_validate()` combined call
+- Latency benchmark: send 10 test messages, measure avg response time before/after
+
+### Manual (WhatsApp)
+1. **Speed test**: Send "1" → should respond in < 1 second
+2. **Language flow**: Start in English → switch mid-conversation to Sinhala → verify language sticks
+3. **Early CV**: Send a PDF CV as the very first message → verify it's saved and bot continues asking for details
+4. **Vacancy push**: Browse vacancies → verify application CTA appears after results
+5. **Confusion/hotline**: Send garbage 3x → verify hotline only appears on 3rd failure
+6. **Singlish flow**: "Api karayo dannawa" type messages → verify correct routing
+
+---
+
+## Estimated Effort
+
+| Change | Complexity | Time |
+|---|---|---|
+| Fast-path trivial input detector | Medium | 3h |
+| Combined classify+validate LLM call | Medium | 4h |
+| CV at any state | Medium | 3h |
+| Singlish/tanglish template completion | Low | 4h |
+| Engagement/persuasion messages | Low | 2h |
+| Hotline last-resort gating | Low | 2h |
+| Vacancy follow-through push | Medium | 3h |
+| **Total** | | **~21h** |

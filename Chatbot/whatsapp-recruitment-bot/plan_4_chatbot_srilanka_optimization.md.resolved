@@ -1,0 +1,246 @@
+# Plan: Sri Lankan Native Chatbot Optimization (RESOLVED)
+
+## TL;DR
+Enhance the WhatsApp recruitment chatbot to become a best-in-class Sri Lankan native chatbot by fixing 6 confirmed failure modes rooted in weak multilingual NLP, shallow Singlish/Tanglish dictionaries, poor conversation context, and under-engineered LLM prompts. 5-phase rollout, quick wins first.
+
+---
+
+## Root Cause Analysis
+
+| Symptom | Root Cause | Key File |
+|---------|-----------|----------|
+| **Misunderstands Singlish/Tanglish** | Dictionary has ~170 words but Lankan casual speech uses 500+. Spelling variant map has <20 entries. 30% threshold too high for code-mixed messages. | `app/nlp/language_detector.py` |
+| **Responds in wrong language/register** | Requires 2 consecutive messages to "confirm" language — first reply defaults wrong. Backend (Node.js) only has 3 registers (en/si/ta) vs Python bot's 5. | `language_detector.py`, `language-processor.js` |
+| **Doesn't understand job queries** | Fast-classify only has 16 job title tokens. Vacancy keyword list misses informal terms ("AC wadey", "welding", "helper kama"). RAG embeddings (ada-002) are weak for Sinhala/Tamil. | `chatbot.py`, `rag_engine.py` |
+| **Loses context mid-conversation** | LLM classifies each message in ISOLATION — no conversation history passed. "salary kiyadha?" without context = unknown. | `rag_engine.py` → `classify_message()` |
+| **Generic/irrelevant answers** | RAG threshold 0.7 filters out too many relevant docs. KB has limited entries. Response capped at 180 tokens. No fallback when KB misses. | `rag_engine.py`, `knowledge.py` |
+| **Fails to extract data** | Validation prompt says "treat ALL as valid". No NFC normalization before LLM. Experience extraction misses Sinhala/Tamil number words. | `rag_engine.py` → `validate_intake_answer()` |
+
+---
+
+## Phase 1: Language Intelligence Quick Wins ✅ APPROVED
+> **Priority**: HIGH | **Effort**: LOW | **Impact**: Fixes ~40% of failures
+
+### Step 1.1 — Expand Singlish Dictionary (170 → 500+ words)
+- **File**: `Chatbot/whatsapp-recruitment-bot/app/nlp/language_detector.py` → `SINGLISH_WORDS` set
+- **Add 330+ words**:
+  - **Verbs**: `balanna` (look), `arinna` (ask), `denawa` (give), `gannawa` (take), `kiyannako` (tell me), `hadanawa` (make), `hithanawa` (think), `penenawa` (see), `ahanawa` (hear), `liyanawa` (write)
+  - **Connectors**: `nisa` (because), `ekka` (with), `ekata` (for that), `ethakota` (then), `issella` (first), `passe` (after), `athare` (between)
+  - **Modern slang**: `bro`, `pakaya`, `dawasa` (day), `weda` (work), `samanya` (normal), `nikan` (just), `ithin` (so/then), `mokda` (why), `kawda` (who), `kumatada` (for what)
+  - **Recruitment domain**: `interview ekak`, `visa eka`, `passport eka`, `medical eka`, `ticket eka`, `contract eka`, `agency eka`, `training eka`, `experience`, `qualification`
+  - **Short forms/typos**: `khmda` (kohomada), `mchng` (machang), `ow` (yes), `na` (no), `ok da`, `mokd` (mokakda)
+
+### Step 1.2 — Expand Tanglish Dictionary (160 → 500+ words)
+- **File**: Same as 1.1 → `TAMIL_TRANSLITERATED` set
+- **Add 340+ words**:
+  - **Verbs**: `pannunga` (do-respectful), `sollunga` (tell), `kudungga` (give), `paakka` (to see), `kelungga` (ask), `edungga` (take), `padikka` (study), `ezhudhu` (write)
+  - **Lankan Tamil dialect markers**: `da`, `di`, `pa`, `ma` (casual endings unique to SL Tamil vs Indian Tamil)
+  - **Modern terms**: `mudiyuma` (can you), `theriyala` (don't know), `podhum` (enough), `ippo` (now), `appuram` (later), `inga` (here), `anga` (there)
+  - **Recruitment**: `anubavam` (experience), `sambalam` (salary), `contract`, `company`, `training`
+
+### Step 1.3 — Expand Spelling Variant Map (<20 → 100+ entries)
+- **File**: Same → `_SPELLING_VARIANTS` dict
+- **Singlish**: `kohmda→kohomada`, `machng→machang`, `wdema→wadeema`, `oyta→oyata`, `oww→ow`, `mkakda→mokakda`, `giyya→giyaa`, `krnnwa→karanawa`, `blnna→balanna`, `kynwa→kiyanawa`
+- **Tanglish**: `vanakam→vanakkam`, `epdi→eppadi`, `iruku→irukku`, `pannren→panren`, `podu→podhum`, `mudyuma→mudiyuma`, `theryla→theriyala`, `konjm→konjam`
+
+### Step 1.4 — Lower Detection Thresholds for Code-Mixed Input
+- **File**: Same → threshold constants
+- Reduce `_REGISTER_THRESHOLD` from `0.30` → `0.15` for code-mixed messages
+- Reduce `_MIN_DICT_MATCHES` from `2` → `1` when single-word confidence is high (e.g., `kohomada` alone is enough)
+- Add **weighted scoring**: recruitment-domain words (`wadeema`, `velai`, `rakiyawa`) get 2x weight
+
+### Step 1.5 — Instant Language Lock (Remove 2-Message Delay)
+- **File**: Same → language persistence logic
+- If detected with confidence > 0.6 → **immediately set language** on first message
+- Keep 2-message confirmation only for low-confidence detections (< 0.6)
+
+---
+
+## Phase 2: Prompt Engineering Overhaul ✅ APPROVED
+> **Priority**: HIGH | **Effort**: MEDIUM | **Impact**: Fixes ~30% of failures
+> **Can run in parallel with Phase 1**
+
+### Step 2.1 — Add Conversation History to Classification
+- **File**: `Chatbot/whatsapp-recruitment-bot/app/llm/rag_engine.py` → `classify_message()`
+- Pass **last 3-5 messages** as context to classification prompt
+- Example: "salary kiyadha?" + context of previous driver job discussion → correctly classified as salary question about driver jobs
+- **Cost impact**: ~15% increase in token usage (acceptable per budget decision)
+
+### Step 2.2 — Add 20+ Sri Lankan Few-Shot Examples to Classification Prompt
+- **File**: Same → classification system prompt
+- Examples to add:
+  - Code-mixed: `"bro meka apply karanna puluwanda?"` → `apply_intent`
+  - Implicit question: `"salary gana kiyannako"` → `question` (not apply)
+  - Contextual yes: `"ow eka da"` → `confirm` (context-dependent)
+  - Multi-intent: `"driver job tiyenawada, salary kiyadha?"` → `vacancy_query + question`
+  - Abbreviated: `"drv jb uae?"` → `vacancy_query`, entities={job: driver, country: UAE}
+  - Bare country: `"Dubai"` → `country_selection` (not unknown)
+  - Emotion: `"aiyo, kohomada apply karanne?"` → `question` (not frustration)
+
+### Step 2.3 — Fix Validation Prompt (Smart, Not Loose)
+- **File**: Same → `validate_intake_answer()`
+- Replace "treat ALL as valid" with structured validation:
+  - `job_interest`: Must contain recognizable job keyword from exhaustive list (100+ titles × 5 registers)
+  - `destination_country`: Must be real country or "any/anywhere" — provide list in all registers
+  - `experience_years`: Accept numbers, number words in all registers, "fresh"/"no experience"/"aluth"/"pudhusu"
+  - Add explicit **rejection with polite re-ask** in user's register for gibberish
+
+### Step 2.4 — Add Sri Lankan Cultural Context to System Prompt
+- **File**: `Chatbot/whatsapp-recruitment-bot/app/llm/prompt_templates.py` → system prompt
+- Add cultural rules:
+  - `'aney'/'aiyo' = emotion, NOT frustration`
+  - `'kohomada' = greeting, not a question needing factual answer`
+  - `'uncle' = respectful term, don't correct`
+  - `Users reference salary in LKR, AED, SAR, QAR — understand all`
+  - `'gaman karanna'/'pitarata yanna' = wants overseas jobs`
+  - `A bare country name like 'Dubai' = wants jobs IN that country`
+  - `Sri Lankans often add 'no?' at end — it's a tag question, not negation`
+
+### Step 2.5 — Improve Response Generation Quality
+- **File**: Same + `rag_engine.py`
+- Increase `max_tokens` from 180 → 250 (Sinhala/Tamil script needs more characters than English)
+- Add **WhatsApp formatting**: `*bold*` for key info, line breaks, bullet emoji markers
+- Add honest fallback: "I don't have that info, let me connect you with a recruiter"
+- Add negative examples: "DON'T say 'I found some jobs'. DO say 'Dubai la driver job irukku! 45,000 AED salary, food + accommodation free. Apply pannalama?'"
+
+---
+
+## Phase 3: Fast-Classify & Entity Extraction ✅ APPROVED
+> **Priority**: MEDIUM | **Effort**: MEDIUM | **Depends on**: Phase 1 (dictionary expansion)
+
+### Step 3.1 — Expand Fast-Classify Job Titles (16 → 100+ tokens)
+- **File**: `Chatbot/whatsapp-recruitment-bot/app/chatbot.py` → `_fast_classify()` job title tokens
+- Add in all 5 registers: electrician, plumber, AC mechanic, welder, carpenter, mason, helper, cleaner, security guard, waiter, chef/cook, nurse, caregiver, office boy, salesman, accountant, IT, teacher, tailor, painter, heavy driver, light driver, forklift operator
+- Include informal names: `AC wadey` (AC work), `weldim` (welding), `helper kama` (helper job)
+
+### Step 3.2 — Expand Country Tokens (18 → 60+)
+- **File**: Same → country tokens
+- Add: Bahrain, Oman, Jordan, Malaysia, Maldives, Cyprus, Romania, Poland, Japan, Korea, Italy, Croatia, Malta, Seychelles
+- With Lankan informal names: `oman ekata`, `maldives walata`, `japan yanna`, `bahrain la`
+
+### Step 3.3 — Improve Experience Extraction
+- **File**: Same → `_extract_years()`
+- Add Sinhala number words (Unicode): `තුන` (3), `හතර` (4), `පහ` (5), `හය` (6), `හත` (7), `අට` (8)
+- Add Tamil number words (Unicode): `மூன்று` (3), `நான்கு` (4), `ஐந்து` (5), `ஆறு` (6)
+- Add romanized: `thunai` (3), `hathara` (4), `paha` (5), `moonu` (3), `naalu` (4), `anju` (5)
+- Handle "years" in all registers: `warshayen` (si), `varusham` (ta), `avurudu` (singlish)
+- Handle "fresh/new": `aluth`, `pudhusu`, `anubavam nehe`, `experience illa`
+
+### Step 3.4 — Expand Greeting Tokens (10 → 40+)
+- **File**: Same → `_GREETING_TOKENS`
+- Add: `subha dawasak`, `kohomada machang`, `hello bro`, `hi machan`, `vanakkam da`, `hello anna`, `subha udesanak` (good morning), `subha rathiyak` (good night), `aiya`, `akka`, `uncle`
+
+---
+
+## Phase 4: RAG & Knowledge Base Enhancement ✅ APPROVED
+> **Priority**: MEDIUM | **Effort**: HIGH | **Parallel with Phase 3**
+
+### Step 4.1 — Add Singlish/Tanglish Columns to Knowledge Base
+- **File**: `recruitment-system/database/chatbot_knowledge_base.sql` + KB service
+- Add columns: `question_singlish`, `answer_singlish`, `question_tanglish`, `answer_tanglish`
+- Populate with natural Singlish/Tanglish versions of all existing FAQs
+- Update cross-language search to include these columns
+
+### Step 4.2 — Lower RAG Relevance Threshold
+- **File**: `Chatbot/whatsapp-recruitment-bot/app/llm/rag_engine.py` → retrieval config
+- Lower from `0.7` → `0.5`
+- Retrieve top-5 at 0.5, then LLM re-ranks to top-3
+
+### Step 4.3 — Add Query Normalization Before RAG Search
+- **File**: Same → before embedding step
+- Normalize Singlish/Tanglish to English equivalents using Phase 1 dictionaries
+- Example: `"driver wadeema salary kiyadha?"` → `"driver job salary how much?"`
+- Embed BOTH original and normalized queries, take best results
+
+### Step 4.4 — Expand Knowledge Base Content (50+ new FAQ entries)
+- **File**: `recruitment-system/database/chatbot_knowledge_base.sql`
+- Topics: visa process timeline, medical requirements, document checklist, country-specific salary ranges, benefits, working conditions, agency fees, contract terms, interview prep, job-specific requirements
+- All entries in 5 registers (en/si/ta/singlish/tanglish)
+
+---
+
+## Phase 5: Robustness & Error Handling ✅ APPROVED
+> **Priority**: MEDIUM | **Effort**: MEDIUM | **After Phases 1-2**
+
+### Step 5.1 — Expand Profanity & Frustration Detection
+- **File**: `Chatbot/whatsapp-recruitment-bot/app/nlp/sentiment_analyzer.py`
+- Add 50+ Sinhala profanity words (romanized + Unicode)
+- Add 50+ Tamil profanity words (romanized + Unicode)
+- Add Lankan frustration patterns: `bot ekata behe`, `yako mokda meka`, `theriyavey illa`, `waste time`, `useless bot`
+- Add implicit frustration: repeated same question, all caps, excessive punctuation, progressively shorter messages
+
+### Step 5.2 — Multilingual Error/Fallback Responses
+- **File**: `Chatbot/whatsapp-recruitment-bot/app/chatbot.py` → error response handlers
+- Replace English-only error messages with register-matched versions for all 5 registers:
+  - "I didn't understand" / "Let me connect you with a recruiter" / "Could you rephrase?" / CV parse failure / No matching jobs
+
+### Step 5.3 — Mid-Conversation Language Switch
+- **File**: Same + `language_detector.py`
+- Detect explicit switch requests: `"sinhala-n pesu"`, `"English-en katha karanna"`, `"tamil la sollu"`
+- Update `candidate.language_preference` immediately
+- Re-send current state question in new language (don't reset conversation state)
+
+### Step 5.4 — Smart Clarification Instead of Generic Re-Asking
+- **File**: Same + `rag_engine.py`
+- Echo back what was understood: `"oya 'welding' kiyanawada? Welder job ekak thama?"`
+- Offer closest matches: `"Meka wage job tiyenawa: 1. Welder 2. Fabricator 3. AC Technician"`
+- Use WhatsApp interactive list messages for disambiguation
+
+### Step 5.5 — Sync Backend Language Registers
+- **File**: `recruitment-system/backend/src/services/language-processor.js`
+- Add `singlish` and `tanglish` as first-class language codes to match Python bot's 5-register system
+
+---
+
+## Files to Modify (Complete List)
+
+### Python Chatbot (Primary)
+| File | Steps | Changes |
+|------|-------|---------|
+| `Chatbot/whatsapp-recruitment-bot/app/nlp/language_detector.py` | 1.1-1.5, 5.3 | Dictionary expansion, thresholds, instant lock, language switch |
+| `Chatbot/whatsapp-recruitment-bot/app/llm/rag_engine.py` | 2.1-2.3, 4.2-4.3, 5.4 | Context window, classification prompt, validation, RAG threshold, query normalization |
+| `Chatbot/whatsapp-recruitment-bot/app/llm/prompt_templates.py` | 2.4-2.5 | Cultural context, response quality, max_tokens |
+| `Chatbot/whatsapp-recruitment-bot/app/chatbot.py` | 3.1-3.4, 5.2-5.4 | Fast-classify tokens, experience extraction, error responses |
+| `Chatbot/whatsapp-recruitment-bot/app/nlp/sentiment_analyzer.py` | 5.1 | Profanity/frustration expansion |
+
+### Node.js Backend (Secondary)
+| File | Steps | Changes |
+|------|-------|---------|
+| `recruitment-system/backend/src/services/language-processor.js` | 5.5 | Add singlish/tanglish registers |
+| `recruitment-system/backend/src/services/knowledge-base.js` | 4.1 | Cross-language search update |
+
+### Database
+| File | Steps | Changes |
+|------|-------|---------|
+| `recruitment-system/database/chatbot_knowledge_base.sql` | 4.1, 4.4 | Add columns, expand FAQs |
+
+---
+
+## Verification Plan
+
+| # | Test | Target | Method |
+|---|------|--------|--------|
+| 1 | Language Detection Accuracy | >90% (est. current: ~65%) | 200+ messages, 40/register |
+| 2 | Intent Classification Accuracy | >85% (est. current: ~70%) | 100 messages with context |
+| 3 | E2E Conversation Quality | Avg >4.0/5.0 | 10 convos × 5 registers = 50 total |
+| 4 | Regression | All existing tests pass | `test_rag.py`, `scripts/test_full_flow.py` |
+| 5 | A/B Test | Higher completion rate | Phase 1+2 to 10% of users |
+| 6 | Latency | <3s per response | After adding conversation history |
+| 7 | API Cost | <15% increase | Monitor OpenAI dashboard |
+
+---
+
+## Key Decisions
+
+- ✅ **Quick wins first** — Phases 1-2 ship first, fix ~70% of issues with code-only changes
+- ✅ **No translation layer** — Continue using native LLM multilingual capability (preserves natural register)
+- ✅ **Stay on GPT-5-mini** — Budget-conscious. Consider GPT-4o only if Phase 2 doesn't hit accuracy targets
+- ✅ **~15% cost increase acceptable** — From conversation history addition
+- ✅ **Tanglish as first-class register** — Throughout entire stack, not just Python bot
+- ✅ **Moderate budget** — Fast-classify expansion keeps LLM calls down
+
+## Future Considerations (Out of Scope for Now)
+
+1. **WhatsApp Interactive Messages** — Button/list messages for language, job, country selection bypass NLP entirely. Implement after Phase 3.
+2. **Voice Message Optimization** — Whisper language hints + post-transcription normalization for Sinhala/Tamil voice notes.
+3. **Analytics Dashboard** — Track per-language metrics, drop-off points, misclassification rates for ongoing improvement.

@@ -1,0 +1,22 @@
+{
+  "name": "google-cloud-sql-app",
+  "version": "1.0.0",
+  "description": "A Node.js application that integrates with Google Cloud SQL.",
+  "main": "src/app.ts",
+  "scripts": {
+    "start": "ts-node src/app.ts",
+    "build": "tsc",
+    "dev": "ts-node-dev src/app.ts"
+  },
+  "dependencies": {
+    "express": "^4.17.1",
+    "mysql2": "^2.3.3",
+    "dotenv": "^10.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^4.4.4",
+    "ts-node": "^10.4.0",
+    "ts-node-dev": "^1.1.8"
+  },
+  "license": "MIT"
+}

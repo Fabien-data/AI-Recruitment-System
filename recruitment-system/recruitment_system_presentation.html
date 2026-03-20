@@ -1,0 +1,1394 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Powered Recruitment System - Visual Presentation</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap"
+        rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        :root {
+            --primary: #0A2463;
+            --secondary: #3E92CC;
+            --accent: #FB8500;
+            --success: #06D6A0;
+            --bg: #FAFAFA;
+            --text: #1A1A2E;
+            --text-light: #666;
+            --card-bg: #FFFFFF;
+            --gradient-1: linear-gradient(135deg, #0A2463 0%, #3E92CC 100%);
+            --gradient-2: linear-gradient(135deg, #FB8500 0%, #FFB703 100%);
+        }
+
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+            perspective: 2000px;
+        }
+
+        .mono {
+            font-family: 'Space Mono', monospace;
+        }
+
+        /* Hero Section */
+        .hero {
+            min-height: 100vh;
+            background: var(--gradient-1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            width: 150%;
+            height: 150%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: grid-flow 20s linear infinite;
+        }
+
+        @keyframes grid-flow {
+            0% {
+                transform: translate(0, 0);
+            }
+
+            100% {
+                transform: translate(50px, 50px);
+            }
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            color: white;
+            max-width: 900px;
+            padding: 2rem;
+        }
+
+        .hero h1 {
+            font-size: clamp(2.5rem, 8vw, 5rem);
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            line-height: 1.1;
+            animation: fade-in-up 0.8s ease-out;
+        }
+
+        .hero p {
+            font-size: clamp(1rem, 3vw, 1.5rem);
+            opacity: 0.9;
+            margin-bottom: 2rem;
+            animation: fade-in-up 0.8s ease-out 0.2s backwards;
+        }
+
+        .hero-stats {
+            display: flex;
+            gap: 3rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 3rem;
+            animation: fade-in-up 0.8s ease-out 0.4s backwards;
+        }
+
+        .stat {
+            text-align: center;
+            transition: transform 0.3s ease;
+            cursor: pointer;
+        }
+
+        .stat:hover {
+            transform: translateY(-10px);
+        }
+
+        .stat-number {
+            font-size: 3rem;
+            font-weight: 700;
+            display: block;
+            color: var(--accent);
+            animation: pulse 2s ease-in-out infinite;
+            text-shadow: 0 0 30px rgba(251, 133, 0, 0.5);
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.8;
+        }
+
+        @keyframes fade-in-up {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Container */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 6rem 2rem;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .section-title {
+            font-size: clamp(2rem, 5vw, 3.5rem);
+            margin-bottom: 1rem;
+            color: var(--primary);
+        }
+
+        .section-subtitle {
+            font-size: 1.2rem;
+            color: var(--text-light);
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        /* System Architecture */
+        .architecture {
+            background: white;
+            border-radius: 20px;
+            padding: 3rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
+            margin-bottom: 3rem;
+            transition: all 0.3s ease;
+        }
+
+        .architecture:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 25px 70px rgba(0, 0, 0, 0.12);
+        }
+
+        .architecture-diagram {
+            position: relative;
+            padding: 2rem 0;
+        }
+
+        .layer {
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .layer:hover {
+            transform: translateX(10px);
+            box-shadow: -5px 5px 20px rgba(0, 0, 0, 0.1);
+            border-color: var(--secondary);
+        }
+
+        .layer-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .layer-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--gradient-2);
+            background-size: 200% 200%;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            animation: gradient-shift 3s ease infinite, pulse 2s ease-in-out infinite;
+            transition: all 0.3s ease;
+        }
+
+        .layer-icon:hover {
+            transform: rotate(360deg) scale(1.2);
+        }
+
+        .layer-items {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .layer-item {
+            background: white;
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            border: 1px solid #e0e0e0;
+            font-size: 0.95rem;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            position: relative;
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        .layer-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--accent);
+            transform: translateX(-4px);
+            transition: transform 0.3s ease;
+        }
+
+        .layer-item:hover::before {
+            transform: translateX(0);
+        }
+
+        .layer-item:hover {
+            border-color: var(--accent);
+            transform: translateX(5px) translateY(-3px) scale(1.02);
+            box-shadow: 0 10px 25px rgba(251, 133, 0, 0.2);
+        }
+
+        .flow-arrow {
+            text-align: center;
+            color: var(--secondary);
+            font-size: 2rem;
+            margin: 1rem 0;
+            animation: bounce 2s infinite;
+        }
+
+        @keyframes bounce {
+
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translateY(0px);
+            }
+
+            50% {
+                transform: translateY(-20px);
+            }
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.05);
+            }
+        }
+
+        @keyframes gradient-shift {
+
+            0%,
+            100% {
+                background-position: 0% 50%;
+            }
+
+            50% {
+                background-position: 100% 50%;
+            }
+        }
+
+        @keyframes glow {
+
+            0%,
+            100% {
+                box-shadow: 0 0 20px rgba(251, 133, 0, 0.3);
+            }
+
+            50% {
+                box-shadow: 0 0 40px rgba(251, 133, 0, 0.6);
+            }
+        }
+
+
+        /* User Journey Section */
+        .user-journey {
+            background: var(--primary);
+            color: white;
+            padding: 6rem 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .user-journey::before {
+            content: '';
+            position: absolute;
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, rgba(62, 146, 204, 0.2) 0%, transparent 70%);
+            border-radius: 50%;
+            top: -250px;
+            right: -250px;
+        }
+
+        .journey-container {
+            max-width: 900px;
+            margin: 0 auto;
+            position: relative;
+            padding: 2rem 0;
+        }
+
+        /* Vertical timeline line */
+        .journey-container::before {
+            content: '';
+            position: absolute;
+            left: 45px;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: linear-gradient(to bottom,
+                    rgba(251, 133, 0, 0.8) 0%,
+                    rgba(251, 133, 0, 0.5) 50%,
+                    rgba(251, 133, 0, 0.3) 100%);
+        }
+
+        .journey-card {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 3rem;
+            position: relative;
+            opacity: 0;
+            transform: translateX(-50px);
+            transition: all 0.6s ease;
+        }
+
+        .journey-card.active {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        .journey-card-icon {
+            flex-shrink: 0;
+            width: 90px;
+            height: 90px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .icon-circle {
+            width: 90px;
+            height: 90px;
+            background: var(--gradient-2);
+            background-size: 200% 200%;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5rem;
+            box-shadow: 0 15px 40px rgba(251, 133, 0, 0.4);
+            border: 5px solid var(--primary);
+            animation: float 4s ease-in-out infinite, gradient-shift 4s ease infinite;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            cursor: pointer;
+        }
+
+        .journey-card:hover .icon-circle {
+            transform: scale(1.15) rotate(10deg);
+            box-shadow: 0 20px 50px rgba(251, 133, 0, 0.6);
+        }
+
+        .journey-card-content {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(15px);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            padding: 2.5rem;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .journey-card-content::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 5px;
+            height: 100%;
+            background: var(--gradient-2);
+            transform: scaleY(0);
+            transform-origin: bottom;
+            transition: transform 0.4s ease;
+        }
+
+        .journey-card:hover .journey-card-content::before {
+            transform: scaleY(1);
+            transform-origin: top;
+        }
+
+        .journey-card:hover .journey-card-content {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateX(10px);
+            border-color: var(--accent);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+        }
+
+        .journey-card-badge {
+            display: inline-block;
+            padding: 0.5rem 1.2rem;
+            background: var(--gradient-2);
+            background-size: 200% 200%;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 2px;
+            margin-bottom: 1rem;
+            animation: gradient-shift 3s ease infinite;
+            box-shadow: 0 5px 15px rgba(251, 133, 0, 0.3);
+        }
+
+        .journey-card-title {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: white;
+            line-height: 1.2;
+        }
+
+        .journey-card-text {
+            font-size: 1.05rem;
+            line-height: 1.7;
+            color: rgba(255, 255, 255, 0.9);
+            margin: 0;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        /* Features Grid */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
+        }
+
+        .feature-card {
+            background: white;
+            border-radius: 20px;
+            padding: 2.5rem;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            position: relative;
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 5px;
+            background: var(--gradient-2);
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform 0.3s ease;
+        }
+
+        .feature-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-15px) scale(1.03) rotateX(2deg);
+            box-shadow: 0 25px 70px rgba(0, 0, 0, 0.2);
+        }
+
+        .feature-icon {
+            width: 70px;
+            height: 70px;
+            background: var(--gradient-1);
+            background-size: 200% 200%;
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            animation: gradient-shift 3s ease infinite;
+            transition: all 0.3s ease;
+        }
+
+        .feature-card:hover .feature-icon {
+            transform: scale(1.1) rotate(5deg);
+            animation: pulse 0.6s ease-in-out;
+        }
+
+        .feature-title {
+            font-size: 1.4rem;
+            margin-bottom: 1rem;
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        .feature-desc {
+            color: var(--text-light);
+            line-height: 1.7;
+        }
+
+        /* Tech Stack */
+        .tech-stack {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            padding: 6rem 2rem;
+        }
+
+        .tech-categories {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
+        }
+
+        .tech-category {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        }
+
+        .tech-category-title {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .tech-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin: 0.3rem;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: default;
+        }
+
+        .tech-badge:hover {
+            background: var(--gradient-1);
+            color: white;
+            border-color: transparent;
+            transform: translateY(-2px);
+        }
+
+        /* Timeline */
+        .implementation-timeline {
+            padding: 6rem 2rem;
+            background: white;
+        }
+
+        .timeline {
+            position: relative;
+            max-width: 1000px;
+            margin: 3rem auto 0;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            width: 4px;
+            background: var(--gradient-1);
+            top: 0;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-2px);
+        }
+
+        .timeline-item {
+            position: relative;
+            margin-bottom: 3rem;
+            width: calc(50% - 40px);
+        }
+
+        .timeline-item:nth-child(odd) {
+            left: 0;
+            text-align: right;
+        }
+
+        .timeline-item:nth-child(even) {
+            left: calc(50% + 40px);
+        }
+
+        .timeline-content {
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            border: 2px solid #e0e0e0;
+            transition: all 0.3s ease;
+        }
+
+        .timeline-content:hover {
+            border-color: var(--secondary);
+            transform: scale(1.08) translateY(-5px);
+            box-shadow: 0 15px 45px rgba(62, 146, 204, 0.3);
+        }
+
+        .timeline-marker {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background: var(--accent);
+            border: 4px solid white;
+            border-radius: 50%;
+            top: 0;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            animation: pulse 2s ease-in-out infinite;
+            transition: all 0.3s ease;
+        }
+
+        .timeline-marker:hover {
+            transform: scale(1.3);
+            animation: none;
+        }
+
+        .timeline-item:nth-child(odd) .timeline-marker {
+            right: -55px;
+        }
+
+        .timeline-item:nth-child(even) .timeline-marker {
+            left: -55px;
+        }
+
+        .timeline-week {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 0.5rem;
+        }
+
+        .timeline-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .timeline-desc {
+            color: var(--text-light);
+            font-size: 0.95rem;
+        }
+
+        /* ROI Section */
+        .roi-section {
+            background: var(--gradient-1);
+            color: white;
+            padding: 6rem 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .roi-section::after {
+            content: '';
+            position: absolute;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(251, 133, 0, 0.2) 0%, transparent 70%);
+            border-radius: 50%;
+            bottom: -300px;
+            left: -300px;
+        }
+
+        .roi-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .roi-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            padding: 2.5rem;
+            text-align: center;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            cursor: pointer;
+        }
+
+        .roi-card:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-15px) scale(1.05) rotateY(5deg);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+        }
+
+        .roi-number {
+            font-size: 3.5rem;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+            animation: pulse 2.5s ease-in-out infinite;
+            text-shadow: 0 0 40px rgba(251, 133, 0, 0.6);
+        }
+
+        .roi-label {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        /* CTA Section */
+        .cta-section {
+            background: white;
+            padding: 6rem 2rem;
+            text-align: center;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background: var(--gradient-2);
+            background-size: 200% 200%;
+            color: white;
+            padding: 1.5rem 4rem;
+            border-radius: 50px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            text-decoration: none;
+            box-shadow: 0 10px 30px rgba(251, 133, 0, 0.3);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            border: none;
+            cursor: pointer;
+            animation: gradient-shift 3s ease infinite, pulse 3s ease-in-out infinite;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cta-button:hover {
+            transform: translateY(-8px) scale(1.05);
+            box-shadow: 0 20px 50px rgba(251, 133, 0, 0.5);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .journey-container::before {
+                left: 20px;
+            }
+
+            .journey-card {
+                gap: 1.5rem;
+            }
+
+            .journey-card-icon,
+            .icon-circle {
+                width: 60px;
+                height: 60px;
+                font-size: 1.8rem;
+            }
+
+            .journey-card-content {
+                padding: 1.5rem;
+            }
+
+            .journey-card-title {
+                font-size: 1.4rem;
+            }
+
+            .journey-card-text {
+                font-size: 0.95rem;
+            }
+
+            .timeline::before {
+                left: 20px;
+            }
+
+            .timeline-item {
+                width: calc(100% - 80px);
+                left: 60px !important;
+                text-align: left !important;
+            }
+
+            .timeline-marker {
+                left: -55px !important;
+                right: auto !important;
+            }
+        }
+
+        /* Scroll animations */
+        .scroll-reveal {
+            opacity: 0;
+            transform: translateY(50px);
+            transition: all 0.8s ease;
+        }
+
+        .scroll-reveal.active {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <h1>AI-Powered Recruitment System</h1>
+            <p>Transforming Recruitment Through Intelligent Automation & Multilingual AI</p>
+            <div class="hero-stats">
+                <div class="stat">
+                    <span class="stat-number">24/7</span>
+                    <span class="stat-label">Availability</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-number">90%</span>
+                    <span class="stat-label">Time Saved</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-number">3x</span>
+                    <span class="stat-label">More Placements</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- System Architecture -->
+    <section class="container">
+        <div class="section-header scroll-reveal">
+            <h2 class="section-title">System Architecture</h2>
+            <p class="section-subtitle">A unified platform integrating multiple channels into one intelligent ecosystem
+            </p>
+        </div>
+
+        <div class="architecture scroll-reveal">
+            <div class="architecture-diagram">
+                <!-- Layer 1: Entry Points -->
+                <div class="layer">
+                    <div class="layer-title">
+                        <div class="layer-icon">1</div>
+                        Candidate Entry Points
+                    </div>
+                    <div class="layer-items">
+                        <div class="layer-item">📱 Instagram Ads → WhatsApp</div>
+                        <div class="layer-item">💬 Facebook Ads → Messenger</div>
+                        <div class="layer-item">📧 15 Email Accounts</div>
+                        <div class="layer-item">📞 Phone Calls (AI Receptionist)</div>
+                        <div class="layer-item">🚶 Walk-in CVs (Mobile Scanner)</div>
+                        <div class="layer-item">🌐 Online Application Portal</div>
+                    </div>
+                </div>
+
+                <div class="flow-arrow">↓</div>
+
+                <!-- Layer 2: Processing -->
+                <div class="layer">
+                    <div class="layer-title">
+                        <div class="layer-icon">2</div>
+                        Centralized Processing Layer
+                    </div>
+                    <div class="layer-items">
+                        <div class="layer-item">🗄️ Unified Database (PostgreSQL)</div>
+                        <div class="layer-item">🤖 AI Chatbots (EN/SI/TA)</div>
+                        <div class="layer-item">🎙️ AI Voice Receptionist (3CX)</div>
+                        <div class="layer-item">📄 OCR & CV Parser (GPT-4)</div>
+                        <div class="layer-item">✉️ Auto Email Acknowledgment</div>
+                        <div class="layer-item">💾 Cloud File Storage</div>
+                    </div>
+                </div>
+
+                <div class="flow-arrow">↓</div>
+
+                <!-- Layer 3: Intelligence -->
+                <div class="layer">
+                    <div class="layer-title">
+                        <div class="layer-icon">3</div>
+                        Intelligent Screening & Matching
+                    </div>
+                    <div class="layer-items">
+                        <div class="layer-item">🎯 Fuzzy Logic Matching</div>
+                        <div class="layer-item">🔍 Multi-Job Comparison</div>
+                        <div class="layer-item">💡 Alternative Suggestions</div>
+                        <div class="layer-item">⚖️ "Wiggle Room" Tolerance</div>
+                        <div class="layer-item">📊 Automated Scoring</div>
+                        <div class="layer-item">🏷️ Future Pool Tagging</div>
+                    </div>
+                </div>
+
+                <div class="flow-arrow">↓</div>
+
+                <!-- Layer 4: Management -->
+                <div class="layer">
+                    <div class="layer-title">
+                        <div class="layer-icon">4</div>
+                        Recruiter Dashboard & Workflow
+                    </div>
+                    <div class="layer-items">
+                        <div class="layer-item">📋 Kanban Pipeline View</div>
+                        <div class="layer-item">✅ Certification Workflow</div>
+                        <div class="layer-item">🔄 Project Transfer System</div>
+                        <div class="layer-item">📞 Click-to-Call (3CX)</div>
+                        <div class="layer-item">💬 WhatsApp Integration</div>
+                        <div class="layer-item">📈 Analytics Dashboard</div>
+                    </div>
+                </div>
+
+                <div class="flow-arrow">↓</div>
+
+                <!-- Layer 5: Automation -->
+                <div class="layer">
+                    <div class="layer-title">
+                        <div class="layer-icon">5</div>
+                        Interview & Placement Automation
+                    </div>
+                    <div class="layer-items">
+                        <div class="layer-item">📅 Auto Interview Scheduling</div>
+                        <div class="layer-item">📲 WhatsApp/SMS Notifications</div>
+                        <div class="layer-item">⏰ Reminder System</div>
+                        <div class="layer-item">📝 Feedback Collection</div>
+                        <div class="layer-item">🔄 Remarketing Campaigns</div>
+                        <div class="layer-item">📊 Performance Tracking</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Candidate Journey -->
+    <section class="user-journey">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title" style="color: white;">Candidate Journey</h2>
+                <p class="section-subtitle" style="color: rgba(255,255,255,0.8);">From first contact to successful
+                    placement - fully automated and empathetic</p>
+            </div>
+
+            <div class="journey-container">
+                <!-- Step 01 -->
+                <div class="journey-card scroll-reveal">
+                    <div class="journey-card-icon">
+                        <span class="icon-circle">🎯</span>
+                    </div>
+                    <div class="journey-card-content">
+                        <div class="journey-card-badge">STEP 01</div>
+                        <h3 class="journey-card-title">First Contact</h3>
+                        <p class="journey-card-text">Candidate clicks Instagram/Facebook ad and is instantly greeted by
+                            multilingual AI chatbot (EN/SI/TA) via WhatsApp or Messenger</p>
+                    </div>
+                </div>
+
+                <!-- Step 02 -->
+                <div class="journey-card scroll-reveal">
+                    <div class="journey-card-icon">
+                        <span class="icon-circle">📝</span>
+                    </div>
+                    <div class="journey-card-content">
+                        <div class="journey-card-badge">STEP 02</div>
+                        <h3 class="journey-card-title">Pre-Screening</h3>
+                        <p class="journey-card-text">AI conducts friendly conversation to collect key info: height,
+                            language skills, experience, and requests CV upload - all in candidate's preferred language
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Step 03 -->
+                <div class="journey-card scroll-reveal">
+                    <div class="journey-card-icon">
+                        <span class="icon-circle">⚡</span>
+                    </div>
+                    <div class="journey-card-content">
+                        <div class="journey-card-badge">STEP 03</div>
+                        <h3 class="journey-card-title">Instant Processing</h3>
+                        <p class="journey-card-text">CV uploaded → OCR extracts text → GPT-4 parser structures data →
+                            Auto-acknowledgment sent → Profile created in database (all within 60 seconds)</p>
+                    </div>
+                </div>
+
+                <!-- Step 04 -->
+                <div class="journey-card scroll-reveal">
+                    <div class="journey-card-icon">
+                        <span class="icon-circle">🤖</span>
+                    </div>
+                    <div class="journey-card-content">
+                        <div class="journey-card-badge">STEP 04</div>
+                        <h3 class="journey-card-title">Intelligent Matching</h3>
+                        <p class="journey-card-text">Fuzzy logic engine matches candidate to jobs with "wiggle room" -
+                            if not perfect fit, suggests alternative positions automatically</p>
+                    </div>
+                </div>
+
+                <!-- Step 05 -->
+                <div class="journey-card scroll-reveal">
+                    <div class="journey-card-icon">
+                        <span class="icon-circle">✅</span>
+                    </div>
+                    <div class="journey-card-content">
+                        <div class="journey-card-badge">STEP 05</div>
+                        <h3 class="journey-card-title">Recruiter Review</h3>
+                        <p class="journey-card-text">Project handler reviews AI-screened candidate on dashboard,
+                            certifies for interview, or transfers to better-fitting project with one click</p>
+                    </div>
+                </div>
+
+                <!-- Step 06 -->
+                <div class="journey-card scroll-reveal">
+                    <div class="journey-card-icon">
+                        <span class="icon-circle">📅</span>
+                    </div>
+                    <div class="journey-card-content">
+                        <div class="journey-card-badge">STEP 06</div>
+                        <h3 class="journey-card-title">Interview Scheduled</h3>
+                        <p class="journey-card-text">System auto-schedules interview → Sends trilingual WhatsApp/SMS
+                            invite → Candidate confirms → Reminder sent 24hrs before → No-shows minimized</p>
+                    </div>
+                </div>
+
+                <!-- Step 07 -->
+                <div class="journey-card scroll-reveal">
+                    <div class="journey-card-icon">
+                        <span class="icon-circle">🎉</span>
+                    </div>
+                    <div class="journey-card-content">
+                        <div class="journey-card-badge">STEP 07</div>
+                        <h3 class="journey-card-title">Post-Interview</h3>
+                        <p class="journey-card-text">Recruiter updates status → If hired: onboarding begins | If not
+                            selected: moved to Future Pool with reason → Auto-remarketing when new jobs match</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Key Features -->
+    <section class="container">
+        <div class="section-header scroll-reveal">
+            <h2 class="section-title">Key Features</h2>
+            <p class="section-subtitle">Comprehensive automation that solves every recruitment challenge</p>
+        </div>
+
+        <div class="features-grid">
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">🌐</div>
+                <h3 class="feature-title">Trilingual AI</h3>
+                <p class="feature-desc">Native support for English, Sinhala, and Tamil across all touchpoints -
+                    chatbots, voice calls, notifications, and forms. Automatic language detection and switching.</p>
+            </div>
+
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">📞</div>
+                <h3 class="feature-title">AI Voice Receptionist</h3>
+                <p class="feature-desc">3CX-powered AI answers every call 24/7 in any language. Natural conversations,
+                    sentiment detection, and seamless handoff to humans when needed.</p>
+            </div>
+
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">🤖</div>
+                <h3 class="feature-title">Smart CV Parsing</h3>
+                <p class="feature-desc">GPT-4 powered OCR extracts 20+ fields from any CV format (PDF, image, scanned
+                    docs). Handles multilingual resumes with 95%+ accuracy.</p>
+            </div>
+
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">🎯</div>
+                <h3 class="feature-title">Fuzzy Matching</h3>
+                <p class="feature-desc">Intelligent matching with configurable "wiggle room" - finds candidates who are
+                    95% fit instead of rejecting at 99%. Maximizes placement potential.</p>
+            </div>
+
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">🔄</div>
+                <h3 class="feature-title">Auto Alternative Suggestions</h3>
+                <p class="feature-desc">If candidate doesn't fit Job A, system automatically searches all active
+                    positions and suggests Job B, C, or D. No candidate left behind.</p>
+            </div>
+
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">📊</div>
+                <h3 class="feature-title">Unified Dashboard</h3>
+                <p class="feature-desc">30 recruiters work in one system. Kanban pipeline, certification workflow,
+                    click-to-call, WhatsApp messaging, and full conversation history - all in one place.</p>
+            </div>
+
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">📧</div>
+                <h3 class="feature-title">15 Email Integration</h3>
+                <p class="feature-desc">All 15 Gmail accounts (Helpers, Workers, Drivers, etc.) automatically monitored.
+                    CVs extracted, acknowledged, and routed to correct project - zero manual sorting.</p>
+            </div>
+
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">💬</div>
+                <h3 class="feature-title">Social Media Automation</h3>
+                <p class="feature-desc">Instagram/Facebook ads redirect to WhatsApp/Messenger bots. Automated screening,
+                    CV collection, and database entry - converts leads while you sleep.</p>
+            </div>
+
+            <div class="feature-card scroll-reveal">
+                <div class="feature-icon">🏷️</div>
+                <h3 class="feature-title">Future Pool Management</h3>
+                <p class="feature-desc">Candidates not currently placed are tagged with skills and reasons.
+                    Auto-remarketing when new jobs match. Your CV database becomes a goldmine.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tech Stack -->
+    <section class="tech-stack">
+        <div class="container">
+            <div class="section-header scroll-reveal">
+                <h2 class="section-title">Technology Stack</h2>
+                <p class="section-subtitle">Modern, scalable, and cost-effective technologies powering your system</p>
+            </div>
+
+            <div class="tech-categories">
+                <div class="tech-category scroll-reveal">
+                    <div class="tech-category-title">🖥️ Backend</div>
+                    <div class="tech-badge">Node.js</div>
+                    <div class="tech-badge">Express</div>
+                    <div class="tech-badge">PostgreSQL</div>
+                    <div class="tech-badge">Supabase</div>
+                    <div class="tech-badge">REST API</div>
+                </div>
+
+                <div class="tech-category scroll-reveal">
+                    <div class="tech-category-title">🤖 AI & NLP</div>
+                    <div class="tech-badge">OpenAI GPT-4o</div>
+                    <div class="tech-badge">Whisper STT</div>
+                    <div class="tech-badge">Camb.ai TTS</div>
+                    <div class="tech-badge">ElevenLabs</div>
+                    <div class="tech-badge">Google Vision OCR</div>
+                </div>
+
+                <div class="tech-category scroll-reveal">
+                    <div class="tech-category-title">💬 Communication</div>
+                    <div class="tech-badge">3CX PBX</div>
+                    <div class="tech-badge">WhatsApp Cloud API</div>
+                    <div class="tech-badge">Messenger Platform</div>
+                    <div class="tech-badge">Gmail API</div>
+                    <div class="tech-badge">Notify.lk SMS</div>
+                </div>
+
+                <div class="tech-category scroll-reveal">
+                    <div class="tech-category-title">🎨 Frontend</div>
+                    <div class="tech-badge">React.js</div>
+                    <div class="tech-badge">shadcn/ui</div>
+                    <div class="tech-badge">Tailwind CSS</div>
+                    <div class="tech-badge">React Hook Form</div>
+                    <div class="tech-badge">Zod Validation</div>
+                </div>
+
+                <div class="tech-category scroll-reveal">
+                    <div class="tech-category-title">📱 Mobile</div>
+                    <div class="tech-badge">React Native</div>
+                    <div class="tech-badge">Expo</div>
+                    <div class="tech-badge">Push Notifications</div>
+                    <div class="tech-badge">Camera/File Upload</div>
+                </div>
+
+                <div class="tech-category scroll-reveal">
+                    <div class="tech-category-title">☁️ Infrastructure</div>
+                    <div class="tech-badge">Railway.app</div>
+                    <div class="tech-badge">Cloudflare R2</div>
+                    <div class="tech-badge">Docker</div>
+                    <div class="tech-badge">GitHub Actions</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Implementation Timeline -->
+    <section class="implementation-timeline">
+        <div class="container">
+            <div class="section-header scroll-reveal">
+                <h2 class="section-title">Implementation Timeline</h2>
+                <p class="section-subtitle">Fast-track deployment in just 6 weeks with phased rollout</p>
+            </div>
+
+            <div class="timeline">
+                <div class="timeline-item scroll-reveal">
+                    <div class="timeline-content">
+                        <div class="timeline-week">Week 1-2</div>
+                        <div class="timeline-title">Foundation</div>
+                        <div class="timeline-desc">Database setup, 15 Gmail integration, auto-acknowledgment system.
+                            <strong>Stop losing CVs immediately.</strong>
+                        </div>
+                    </div>
+                    <div class="timeline-marker"></div>
+                </div>
+
+                <div class="timeline-item scroll-reveal">
+                    <div class="timeline-content">
+                        <div class="timeline-week">Week 3-4</div>
+                        <div class="timeline-title">AI Chatbots</div>
+                        <div class="timeline-desc">WhatsApp & Messenger bots with GPT-4, multilingual support, CV
+                            upload. <strong>24/7 social media lead capture.</strong></div>
+                    </div>
+                    <div class="timeline-marker"></div>
+                </div>
+
+                <div class="timeline-item scroll-reveal">
+                    <div class="timeline-content">
+                        <div class="timeline-week">Week 5</div>
+                        <div class="timeline-title">Voice AI</div>
+                        <div class="timeline-desc">3CX integration, OpenAI Realtime API, trilingual voice receptionist.
+                            <strong>Never miss a call again.</strong>
+                        </div>
+                    </div>
+                    <div class="timeline-marker"></div>
+                </div>
+
+                <div class="timeline-item scroll-reveal">
+                    <div class="timeline-content">
+                        <div class="timeline-week">Week 6</div>
+                        <div class="timeline-title">Intelligence & Dashboard</div>
+                        <div class="timeline-desc">OCR parser, fuzzy matching engine, recruiter dashboard MVP.
+                            <strong>Full automation live.</strong>
+                        </div>
+                    </div>
+                    <div class="timeline-marker"></div>
+                </div>
+
+                <div class="timeline-item scroll-reveal">
+                    <div class="timeline-content">
+                        <div class="timeline-week">Week 7-8</div>
+                        <div class="timeline-title">Polish & Scale</div>
+                        <div class="timeline-desc">Interview automation, analytics, mobile app, staff training.
+                            <strong>Production-ready system.</strong>
+                        </div>
+                    </div>
+                    <div class="timeline-marker"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ROI Section -->
+    <section class="roi-section">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title" style="color: white;">Return on Investment</h2>
+                <p class="section-subtitle" style="color: rgba(255,255,255,0.8);">Transformational impact on your
+                    recruitment operations</p>
+            </div>
+
+            <div class="roi-cards">
+                <div class="roi-card scroll-reveal">
+                    <div class="roi-number">90%</div>
+                    <div class="roi-label">Reduction in Manual Data Entry</div>
+                </div>
+
+                <div class="roi-card scroll-reveal">
+                    <div class="roi-number">24/7</div>
+                    <div class="roi-label">Candidate Engagement</div>
+                </div>
+
+                <div class="roi-card scroll-reveal">
+                    <div class="roi-number">0%</div>
+                    <div class="roi-label">Lost CVs or Missed Calls</div>
+                </div>
+
+                <div class="roi-card scroll-reveal">
+                    <div class="roi-number">3x</div>
+                    <div class="roi-label">Increase in Placements</div>
+                </div>
+
+                <div class="roi-card scroll-reveal">
+                    <div class="roi-number">60 sec</div>
+                    <div class="roi-label">CV Processing Time</div>
+                </div>
+
+                <div class="roi-card scroll-reveal">
+                    <div class="roi-number">39x</div>
+                    <div class="roi-label">Monthly ROI</div>
+                </div>
+            </div>
+
+            <div style="text-align: center; margin-top: 4rem; position: relative; z-index: 1;">
+                <h3 style="font-size: 2rem; margin-bottom: 1rem;">Cost Analysis</h3>
+                <p style="font-size: 1.2rem; opacity: 0.9;">
+                    <strong>Monthly Cost:</strong> LKR 20,000-25,000 (~$60-75)<br>
+                    <strong>Current Lost Revenue:</strong> LKR 1,000,000/month (20% lead loss)<br>
+                    <strong>Net Gain:</strong> LKR 975,000/month
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta-section">
+        <div class="container scroll-reveal">
+            <h2 class="section-title">Ready to Transform Your Recruitment?</h2>
+            <p class="section-subtitle" style="margin-bottom: 3rem;">Let's implement this system and start seeing
+                results in 6 weeks</p>
+            <button class="cta-button" onclick="alert('Contact us to begin implementation!')">Get Started Now</button>
+            <p style="margin-top: 2rem; color: var(--text-light);">
+                <strong>Next Steps:</strong> Requirements review → Tech setup → Week 1 deployment begins
+            </p>
+        </div>
+    </section>
+
+    <script>
+        // Scroll reveal animation
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -100px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('active');
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.scroll-reveal').forEach(el => {
+            observer.observe(el);
+        });
+    </script>
+</body>
+
+</html>

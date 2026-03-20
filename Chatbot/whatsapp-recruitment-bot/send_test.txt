@@ -1,0 +1,2 @@
+﻿Token (first 40): EAATO48lKM1YBQyjDOvbWam07sU4ibhT3cR7ypll
+Result: {'messaging_product': 'whatsapp', 'contacts': [{'input': '94765716780', 'wa_id': '94765716780'}], 'messages': [{'id': 'wamid.HBgLOTQ3NjU3MTY3ODAVAgARGBI3OEY2QzFGMjZDRDVGOUJBRTcA'}]}

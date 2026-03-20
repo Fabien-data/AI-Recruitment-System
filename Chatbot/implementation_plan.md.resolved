@@ -1,0 +1,152 @@
+# WhatsApp Recruitment Chatbot — Major Upgrade
+
+The chatbot currently has several critical issues identified from live WhatsApp conversation testing:
+
+1. **Empty job cache** — The bot doesn't know about existing jobs/vacancies because the in-memory job cache is never populated on startup
+2. **Shallow conversation flow** — Bot asks only job preference + country, then jumps straight to CV without gathering qualifying info
+3. **CV not attached** — The CV file isn't properly reaching the recruitment system's CV manager (`cv_files` table)
+4. **Post-completion spam** — After application is "complete", the bot keeps generating RAG responses on every message
+5. **Message deduplication** — No protection against processing the same webhook message twice, causing repeated bot replies
+6. **No vacancy awareness** — When user asks "What are vacancies?", bot can't answer because it has no job data
+
+## Proposed Changes
+
+### Component 1: Job Cache Bootstrap (Chatbot + Recruitment Backend)
+
+The in-memory [job_cache](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/knowledge.py#135-142) in [knowledge.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/knowledge.py) is only populated when the recruitment system pushes via `/api/knowledge/upsert`. On chatbot restart, the cache is empty. We need to fetch active jobs from the recruitment system on startup.
+
+---
+
+#### [NEW] New endpoint in recruitment backend for chatbot job fetch
+
+Add a lightweight public endpoint (`GET /api/chatbot/jobs`) that returns all active jobs with their requirements, requiring only the chatbot API key. This avoids needing JWT auth.
+
+#### [MODIFY] [chatbot-intake.js](file:///d:/Dewan%20Project/recruitment-system/backend/src/routes/chatbot-intake.js)
+
+Add the new `GET /` route that returns active jobs (authenticated via `x-chatbot-api-key`).
+
+#### [MODIFY] [server.js](file:///d:/Dewan%20Project/recruitment-system/backend/src/server.js)
+
+Ensure the new endpoint is accessible.
+
+#### [MODIFY] [main.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/main.py)
+
+In the [lifespan](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/main.py#29-49) startup, call the recruitment system API to fetch all active jobs and populate [knowledge.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/knowledge.py)'s [job_cache](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/knowledge.py#135-142).
+
+#### [MODIFY] [knowledge.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/knowledge.py)
+
+Add a `bootstrap_job_cache()` function that fetches jobs from the recruitment system API and populates the in-memory cache.
+
+---
+
+### Component 2: Enhanced Conversation Flow (Chatbot)
+
+The bot currently goes: Language → Job Interest → Country → Experience → CV. This is too shallow. We need to:
+- Show available vacancies when user asks
+- Ask job-specific qualifying questions (from job requirements: age, height, licenses, etc.)
+- Handle "What are vacancies?" at any point in the conversation
+
+---
+
+#### [MODIFY] [chatbot.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/chatbot.py)
+
+1. **Vacancy awareness at all states**: Before the state machine routes, add a check — if the user asks about vacancies/jobs at any state, respond with available roles from [job_cache](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/knowledge.py#135-142) and guide them back to the flow.
+
+2. **After country → collect job-specific requirements**: When a job is matched and has requirements (e.g., `min_age`, `min_height_cm`, `licenses`), auto-generate questions for those fields BEFORE asking for CV. Currently the `STATE_COLLECTING_JOB_REQS` exists but is only triggered if `specific_info_to_ask` is in requirements. We need to auto-detect required fields from the matched job's requirements JSON.
+
+3. **Better no-match handling**: When user's job interest doesn't match any job in cache, instead of silently proceeding, show available roles and ask if they'd like to apply for one of those or continue with their stated preference.
+
+4. **Limit greet-spam**: After `STATE_APPLICATION_COMPLETE`, if user sends more greetings, respond once with a brief "your application is on file" message instead of regenerating long RAG responses each time.
+
+---
+
+### Component 3: CV File Attachment Fix (Chatbot Sync)
+
+The [recruitment_sync.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/services/recruitment_sync.py) already encodes the CV file to base64 and sends it. The [chatbot-intake.js](file:///d:/Dewan%20Project/recruitment-system/backend/src/routes/chatbot-intake.js) does save it. However, looking at the user's experience, the CV may not be reaching the system because:
+- The [push()](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/services/recruitment_sync.py#40-159) is fired as `asyncio.create_task()` and may fail silently
+- The CV file path may not be readable at push time
+
+---
+
+#### [MODIFY] [recruitment_sync.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/services/recruitment_sync.py)
+
+1. **Better error logging** for CV file read failures
+2. **Fallback**: If file path doesn't exist, try reading from the `uploads/` directory with the candidate's phone number as lookup
+3. **Send `destination_country` and `job_interest`** more reliably (ensure they aren't empty strings that fail validation)
+
+#### [MODIFY] [chatbot.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/chatbot.py)
+
+- Move the `recruitment_sync.push()` call to ALSO trigger during `STATE_COLLECTING_INFO` completion (not just when CV upload sets state to APPLICATION_COMPLETE). Currently if a candidate reaches APPLICATION_COMPLETE via the info collection path, the sync might not fire.
+
+---
+
+### Component 4: Post-Completion Spam Prevention (Chatbot)
+
+After the application is complete, every user message triggers a RAG response. The bot should:
+- Reply once with a brief "already registered" message
+- Not keep generating long AI responses for every follow-up
+
+---
+
+#### [MODIFY] [chatbot.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/chatbot.py)
+
+In the `STATE_APPLICATION_COMPLETE` handler:
+1. Add a counter or timestamp check: if the candidate has already received a completion message, subsequent messages get a short canned reply instead of a full RAG generation
+2. Only generate a RAG response if the message looks like a genuine question (contains `?` or question keywords)
+3. For greetings and general messages, respond with a brief static message
+
+---
+
+### Component 5: Webhook Message Deduplication (Chatbot)
+
+Meta can send the same webhook payload multiple times. We need to deduplicate.
+
+---
+
+#### [MODIFY] [webhooks.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/webhooks.py)
+
+Add an in-memory set (with TTL) of recently processed message IDs. Before processing a message, check if its ID was already processed. Skip if duplicate.
+
+---
+
+### Component 6: Auto-Generate Job Requirement Questions
+
+When a matched job has requirements like `min_age`, `min_height_cm`, `licenses`, `required_languages`, these should be auto-converted to questions for the candidate.
+
+---
+
+#### [MODIFY] [chatbot.py](file:///d:/Dewan%20Project/Chatbot/whatsapp-recruitment-bot/app/chatbot.py)
+
+After experience is collected and before CV, check the matched job's requirements. For each field that has a value, generate a question:
+- `min_age`/`max_age` → "How old are you?"
+- `min_height_cm` → "What is your height in centimeters?"
+- `licenses` → "Do you have any of these licenses: [list]?"
+- `required_languages` → "Can you speak these languages: [list]?"
+
+Use the existing `STATE_COLLECTING_JOB_REQS` state which already handles a queue of pending questions.
+
+---
+
+## Verification Plan
+
+### Manual Verification (User Testing on WhatsApp)
+
+Since this is a live WhatsApp chatbot integration, the best verification is for the user to test the conversation flow:
+
+1. **Reset candidate state**: Call `POST /admin/reset-candidate?phone=<your-phone>` on the chatbot API
+2. **Start fresh conversation** on WhatsApp:
+   - Send "Hi" → Bot should show language selection
+   - Choose language → Bot should ask about job interest AND show available vacancies
+   - Type a job title (e.g. "Security job") → Bot should confirm and ask about country
+   - Ask "What are vacancies?" → Bot should list available jobs
+   - Give country → Bot should ask experience
+   - Give experience → Bot should ask job-specific questions (age, height, etc.) if the matched job has requirements
+   - Send CV → Bot should process and show summary with all collected details
+   - Verify the bot doesn't spam after completion
+3. **Check recruitment system**: Log into the recruitment system frontend and verify:
+   - Candidate appears with full details (name, email, phone, skills, qualification, experience)
+   - CV file is attached in the CV manager
+   - Application is created linking candidate to the job
+
+> [!IMPORTANT]
+> The chatbot needs to be running locally or deployed. User should verify the fix by chatting with the bot on WhatsApp after deployment.

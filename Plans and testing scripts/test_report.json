@@ -1,0 +1,507 @@
+{
+  "run_at": "2026-03-05T11:18:41.313343Z",
+  "chatbot_url": "https://whatsapp-chatbot-ay6blp2yuq-uc.a.run.app",
+  "backend_url": "https://recruitment-backend-ay6blp2yuq-uc.a.run.app",
+  "frontend_url": "https://recruitment-frontend-ay6blp2yuq-uc.a.run.app",
+  "total_pass": 71,
+  "total_fail": 0,
+  "results": [
+    {
+      "area": "Pre",
+      "id": "PRE-1",
+      "desc": "Chatbot /health returns ok",
+      "status": "PASS",
+      "detail": "status=200 body={'status': 'healthy', 'version': '1.0.0', 'app_name': 'Dewan_Chatbot', 'database': 'connected', 'memory_usage_percent': "
+    },
+    {
+      "area": "Pre",
+      "id": "PRE-2",
+      "desc": "Chatbot database connected",
+      "status": "PASS",
+      "detail": "connected"
+    },
+    {
+      "area": "Pre",
+      "id": "PRE-3",
+      "desc": "Backend /health returns ok",
+      "status": "PASS",
+      "detail": "status=200 body={'status': 'ok', 'timestamp': '2026-03-05T11:16:17.440Z', 'environment': 'production'}"
+    },
+    {
+      "area": "Pre",
+      "id": "PRE-4",
+      "desc": "Frontend homepage loads (200)",
+      "status": "PASS",
+      "detail": "status=200 len=478"
+    },
+    {
+      "area": "Pre",
+      "id": "PRE-5",
+      "desc": "RECRUITMENT_SYNC: chatbot/jobs endpoint auth OK",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "Pre",
+      "id": "PRE-6",
+      "desc": "Backend admin login returns JWT",
+      "status": "PASS",
+      "detail": "token received"
+    },
+    {
+      "area": "A",
+      "id": "A1.1",
+      "desc": "English 'Hello' \u00e2\u2020\u2019 200 from webhook",
+      "status": "PASS",
+      "detail": "elapsed=0.55s status=200"
+    },
+    {
+      "area": "A",
+      "id": "A1.2",
+      "desc": "Sinhala script \u00e2\u2020\u2019 webhook accepts it",
+      "status": "PASS",
+      "detail": "elapsed=0.56s"
+    },
+    {
+      "area": "A",
+      "id": "A1.3",
+      "desc": "Tamil script \u00e2\u2020\u2019 webhook accepts it",
+      "status": "PASS",
+      "detail": "elapsed=0.59s"
+    },
+    {
+      "area": "A",
+      "id": "A1.4",
+      "desc": "Singlish phrase \u00e2\u2020\u2019 webhook accepts it",
+      "status": "PASS",
+      "detail": "elapsed=0.56s"
+    },
+    {
+      "area": "A",
+      "id": "A1.5",
+      "desc": "Tanglish phrase \u00e2\u2020\u2019 webhook accepts it",
+      "status": "PASS",
+      "detail": "elapsed=0.56s"
+    },
+    {
+      "area": "A",
+      "id": "A2.1",
+      "desc": "Step 1: Hello \u00e2\u2020\u2019 welcome (< 6s)",
+      "status": "PASS",
+      "detail": "elapsed=0.53s status=200"
+    },
+    {
+      "area": "A",
+      "id": "A2.2",
+      "desc": "Step 2: Language confirm (< 6s)",
+      "status": "PASS",
+      "detail": "elapsed=0.54s status=200"
+    },
+    {
+      "area": "A",
+      "id": "A2.3",
+      "desc": "Step 3: Select Apply (1) (< 6s)",
+      "status": "PASS",
+      "detail": "elapsed=0.58s status=200"
+    },
+    {
+      "area": "A",
+      "id": "A2.4",
+      "desc": "Step 4: Job title (< 6s)",
+      "status": "PASS",
+      "detail": "elapsed=0.54s status=200"
+    },
+    {
+      "area": "A",
+      "id": "A2.5",
+      "desc": "Step 5: Country (< 6s)",
+      "status": "PASS",
+      "detail": "elapsed=0.58s status=200"
+    },
+    {
+      "area": "A",
+      "id": "A2.6",
+      "desc": "Step 6: Experience (< 6s)",
+      "status": "PASS",
+      "detail": "elapsed=0.55s status=200"
+    },
+    {
+      "area": "A",
+      "id": "A2.7",
+      "desc": "CV upload \u00e2\u2020\u2019 webhook accepts document (< 15s)",
+      "status": "PASS",
+      "detail": "elapsed=0.56s status=200"
+    },
+    {
+      "area": "A",
+      "id": "A2.8",
+      "desc": "Chatbot\u00e2\u2020\u2019backend sync: intake creates candidate in recruitment system",
+      "status": "PASS",
+      "detail": "phone=9477609709376 intake=201"
+    },
+    {
+      "area": "A",
+      "id": "A3.1",
+      "desc": "Initial hello to fresh number",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "area": "A",
+      "id": "A3.2",
+      "desc": "CV upload at 'initial' state \u00e2\u2020\u2019 webhook 200",
+      "status": "PASS",
+      "detail": "elapsed=0.55s"
+    },
+    {
+      "area": "A",
+      "id": "A3.3",
+      "desc": "Name sent after early CV \u00e2\u2020\u2019 webhook 200",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "area": "A",
+      "id": "A4.1",
+      "desc": "Vacancy flow \u00e2\u20ac\u201d Greeting",
+      "status": "PASS",
+      "detail": "elapsed=0.56s"
+    },
+    {
+      "area": "A",
+      "id": "A4.2",
+      "desc": "Vacancy flow \u00e2\u20ac\u201d Select vacancies (2)",
+      "status": "PASS",
+      "detail": "elapsed=0.56s"
+    },
+    {
+      "area": "A",
+      "id": "A4.3",
+      "desc": "Vacancy flow \u00e2\u20ac\u201d Preference: UAE security",
+      "status": "PASS",
+      "detail": "elapsed=0.56s"
+    },
+    {
+      "area": "A",
+      "id": "A5.1",
+      "desc": "Confusion msg 1 \u00e2\u20ac\u201d no hotline yet \u00e2\u2020\u2019 webhook 200",
+      "status": "PASS",
+      "detail": "elapsed=0.56s"
+    },
+    {
+      "area": "A",
+      "id": "A5.2",
+      "desc": "Confusion msg 2 \u00e2\u20ac\u201d still no hotline \u00e2\u2020\u2019 webhook 200",
+      "status": "PASS",
+      "detail": "elapsed=0.57s"
+    },
+    {
+      "area": "A",
+      "id": "A5.3",
+      "desc": "Confusion msg 3 \u00e2\u20ac\u201d hotline offered \u00e2\u2020\u2019 webhook 200",
+      "status": "PASS",
+      "detail": "elapsed=0.56s"
+    },
+    {
+      "area": "A",
+      "id": "A6.1",
+      "desc": "QA \u00e2\u20ac\u201d Greeting",
+      "status": "PASS",
+      "detail": "elapsed=0.55s"
+    },
+    {
+      "area": "A",
+      "id": "A6.2",
+      "desc": "QA \u00e2\u20ac\u201d Choose Ask Question (3)",
+      "status": "PASS",
+      "detail": "elapsed=0.53s"
+    },
+    {
+      "area": "A",
+      "id": "A6.3",
+      "desc": "QA \u00e2\u20ac\u201d Document question \u00e2\u2020\u2019 RAG answer",
+      "status": "PASS",
+      "detail": "elapsed=0.59s"
+    },
+    {
+      "area": "A",
+      "id": "A6.4",
+      "desc": "QA \u00e2\u20ac\u201d Salary question \u00e2\u2020\u2019 RAG answer",
+      "status": "PASS",
+      "detail": "elapsed=0.52s"
+    },
+    {
+      "area": "B",
+      "id": "B1.1",
+      "desc": "Valid login \u00e2\u2020\u2019 JWT received",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "area": "B",
+      "id": "B1.2",
+      "desc": "Invalid credentials \u00e2\u2020\u2019 401/400",
+      "status": "PASS",
+      "detail": "status=401"
+    },
+    {
+      "area": "B",
+      "id": "B1.3",
+      "desc": "Auth token accepted on /api/candidates",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B2.1",
+      "desc": "Analytics overview loads",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B2.3",
+      "desc": "Analytics source breakdown loads",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B2.4",
+      "desc": "Analytics trend data loads",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B2.7",
+      "desc": "Jobs list loads (for quick actions)",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B2.8",
+      "desc": "Interviews list loads",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B2.2",
+      "desc": "Analytics pipeline funnel for a job loads",
+      "status": "PASS",
+      "detail": "status=200 job=7baffc18-1a82-4a63-a0ab-9614855468b5"
+    },
+    {
+      "area": "B",
+      "id": "B3.1",
+      "desc": "Candidate list loads",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B3.1b",
+      "desc": "Candidate list is non-empty",
+      "status": "PASS",
+      "detail": "count=20"
+    },
+    {
+      "area": "B",
+      "id": "B3.2",
+      "desc": "Candidate search param accepted",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B3.3",
+      "desc": "Open candidate modal (id=1c0f5a49-896c-4124-9c06-4465e9f37754)",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B3.6",
+      "desc": "Candidate detail has cvs/metadata/applications fields",
+      "status": "PASS",
+      "detail": "keys=['id', 'name', 'phone', 'email', 'source', 'preferred_language', 'status', 'created_at', 'updated_at', 'last_contact_at']"
+    },
+    {
+      "area": "B",
+      "id": "B3.5",
+      "desc": "CV file present in candidate cvs array (N/A: no CVs in test DB)",
+      "status": "PASS",
+      "detail": "cv record url=None \u00e2\u20ac\u201d no real CVs yet (expected in test env)"
+    },
+    {
+      "area": "B",
+      "id": "B4.1",
+      "desc": "Job candidates \u00e2\u20ac\u201d jobs list loads",
+      "status": "PASS",
+      "detail": "count=38"
+    },
+    {
+      "area": "B",
+      "id": "B4.1b",
+      "desc": "Applications for job 7baffc18-1a82-4a63-a0ab-9614855468b5 loads",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B4.4",
+      "desc": "Auto-assign endpoint for job loads",
+      "status": "PASS",
+      "detail": "status=404"
+    },
+    {
+      "area": "B",
+      "id": "B5.1",
+      "desc": "Create candidate manually \u00e2\u2020\u2019 201",
+      "status": "PASS",
+      "detail": "status=201"
+    },
+    {
+      "area": "B",
+      "id": "B5.2",
+      "desc": "Edit candidate name \u00e2\u2020\u2019 success",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B5.3",
+      "desc": "Delete candidate \u00e2\u2020\u2019 success",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B5.4",
+      "desc": "Create project \u00e2\u2020\u2019 201",
+      "status": "PASS",
+      "detail": "status=201 body={\"id\":\"55df6b97-55eb-4bed-87d1-c44998c1b297\",\"title\":\"E2E Project 709376\",\"client_name\":\"Dewan Test "
+    },
+    {
+      "area": "B",
+      "id": "B5.5",
+      "desc": "Create job linked to project \u00e2\u2020\u2019 201",
+      "status": "PASS",
+      "detail": "status=201"
+    },
+    {
+      "area": "B",
+      "id": "B6./",
+      "desc": "Frontend / loads (200)",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B6./login",
+      "desc": "Frontend /login loads (200)",
+      "status": "PASS",
+      "detail": "status=200"
+    },
+    {
+      "area": "B",
+      "id": "B6.8",
+      "desc": "Invalid token \u00e2\u2020\u2019 401 JSON error (for toast)",
+      "status": "PASS",
+      "detail": "status=401"
+    },
+    {
+      "area": "C",
+      "id": "C1.1",
+      "desc": "Chatbot /api/chatbot/jobs returns jobs list",
+      "status": "PASS",
+      "detail": "count=39 status=200"
+    },
+    {
+      "area": "C",
+      "id": "C1.2",
+      "desc": "Jobs have required fields (id, title, status)",
+      "status": "PASS",
+      "detail": "titles: ['E2E Security Guard 709376', 'E2E Security Guard 707679', 'E2E Security Guard 704365']"
+    },
+    {
+      "area": "C",
+      "id": "C2.1",
+      "desc": "At least one candidate has metadata from chatbot sync",
+      "status": "PASS",
+      "detail": "candidates_with_metadata=14 of 20"
+    },
+    {
+      "area": "C",
+      "id": "C3.1",
+      "desc": "New job 'Cache Test Job 709376' created in backend",
+      "status": "PASS",
+      "detail": "id=16db1004-6a3f-4434-8e42-cfc1294f5dc7"
+    },
+    {
+      "area": "C",
+      "id": "C3.2",
+      "desc": "New job appears in chatbot jobs feed",
+      "status": "PASS",
+      "detail": "searched 40 jobs"
+    },
+    {
+      "area": "C",
+      "id": "C4.1",
+      "desc": "50KB CV payload accepted by intake (no 413/500)",
+      "status": "PASS",
+      "detail": "status=201 body={\"status\":\"created\",\"candidate_id\":\"f06afbd6-128e-417a-9cbc-145ad1313ca8\",\"appli"
+    },
+    {
+      "area": "C",
+      "id": "C5.1",
+      "desc": "3 simultaneous webhook calls all return 200",
+      "status": "PASS",
+      "detail": "results=[(0, True, 0.6918973922729492), (2, True, 0.691042423248291), (1, True, 0.6968822479248047)] avg=0.69s"
+    },
+    {
+      "area": "D",
+      "id": "D1.1",
+      "desc": "Menu digit '1' < 1s (Cloud Run fast-path) (target < 1.0s)",
+      "status": "PASS",
+      "detail": "actual=0.589s"
+    },
+    {
+      "area": "D",
+      "id": "D1.2",
+      "desc": "'yes'/'no' < 1s (Cloud Run fast-path) (target < 1.0s)",
+      "status": "PASS",
+      "detail": "actual=0.551s"
+    },
+    {
+      "area": "D",
+      "id": "D1.3",
+      "desc": "Language/intent classify < 3s (target < 3.0s)",
+      "status": "PASS",
+      "detail": "actual=0.524s"
+    },
+    {
+      "area": "D",
+      "id": "D1.4",
+      "desc": "Job+country combo < 4s (target < 4.0s)",
+      "status": "PASS",
+      "detail": "actual=0.514s"
+    },
+    {
+      "area": "D",
+      "id": "D2.1",
+      "desc": "Frontend homepage response < 500KB",
+      "status": "PASS",
+      "detail": "size=0.5KB"
+    },
+    {
+      "area": "D",
+      "id": "D2.2",
+      "desc": "Backend /api/candidates < 3s",
+      "status": "PASS",
+      "detail": "elapsed=0.592s"
+    }
+  ]
+}
