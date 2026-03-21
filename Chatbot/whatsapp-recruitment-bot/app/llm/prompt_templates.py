@@ -775,7 +775,8 @@ Question:"""
     @classmethod
     def get_language_selection(cls) -> str:
         """Get the multilingual message prompting for language selection."""
-        return random.choice(cls.LANGUAGE_SELECTION)
+        # Return a special flag that webhooks.py will intercept to send the clickable interactive language selector
+        return "__INTERACTIVE_LANGUAGE_SELECTOR__"
 
     @classmethod
     def get_greeting(

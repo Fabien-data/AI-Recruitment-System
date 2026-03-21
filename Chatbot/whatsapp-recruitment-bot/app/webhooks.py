@@ -22,10 +22,12 @@ from starlette import status as http_status
 from pydantic import BaseModel
 
 from app.database import SessionLocal
+from app import crud
 from app.utils.meta_client import meta_client
 from app.chatbot import chatbot
 from app.services.voice_service import voice_service
 from app.config import settings
+from app.nlp.language_detector import is_greeting
 
 logger = logging.getLogger(__name__)
 
@@ -107,20 +109,15 @@ async def handle_webhook(
         logger.info(f"📨 Webhook received: object={data.get('object', 'unknown')}")
         logger.debug(f"Webhook payload: {data}")
 
-        # Queue each message for background processing via Celery
-        from app.tasks import process_webhook_task
+        # Queue each message for background processing via FastAPI BackgroundTasks
         
         entries = data.get("entry", [])
         for entry in entries:
             for change in entry.get("changes", []):
                 if change.get("field") == "messages":
                     value = change.get("value", {})
-                    # Fallback to FastAPI background task if Celery is down
-                    try:
-                        process_webhook_task.delay(value)
-                    except Exception as e:
-                        logger.warning(f"Celery task queueing failed ({e}), falling back to FastAPI BackgroundTasks")
-                        background_tasks.add_task(process_webhook_value, value)
+                    background_tasks.add_task(process_webhook_value, value)
+                    logger.info("Background task queued via FastAPI BackgroundTasks")
 
         return {"status": "ok"}
 
@@ -236,6 +233,16 @@ async def _sync_chat_message(
 async def process_single_message(message: dict, contacts: list, db):
     """Process a single incoming WhatsApp message."""
 
+    async def _safe_process_message(**kwargs):
+        try:
+            return await asyncio.wait_for(chatbot.process_message(**kwargs), timeout=45)
+        except asyncio.TimeoutError:
+            logger.error("chatbot.process_message timed out after 45s")
+            return "Sorry, I'm taking too long to respond right now. Please try again in a moment."
+        except Exception as exc:
+            logger.error(f"chatbot.process_message failed: {exc}")
+            return "Oops, something went wrong on my end. Please try again."
+
     message_id   = message.get("id")
     from_number  = message.get("from")
     message_type = message.get("type")
@@ -266,7 +273,29 @@ async def process_single_message(message: dict, contacts: list, db):
         text_body = message.get("text", {}).get("body", "")
         logger.info(f"💬 Text from {from_number}: {text_body!r}")
 
-        response_text = await chatbot.process_message(
+        # Fast-path: for simple greetings in early onboarding states, send language selector
+        # immediately and skip heavy chatbot orchestration.
+        try:
+            greet, _ = is_greeting(text_body)
+            if greet:
+                candidate = crud.get_or_create_candidate(db, from_number)
+                if candidate.conversation_state in ("initial", "awaiting_language_selection"):
+                    sel = await meta_client.send_language_selector(from_number)
+                    if sel and "error" not in sel:
+                        logger.info(f"Fast-path language selector sent to {from_number}")
+                        return
+                    fallback_text = (
+                        "Welcome! Please choose your preferred language.\n"
+                        "1) English\n2) සිංහල\n3) தமிழ்"
+                    )
+                    send_res = await meta_client.send_message(from_number, fallback_text)
+                    if send_res and "error" not in send_res:
+                        logger.info(f"Fast-path language fallback sent to {from_number}")
+                        return
+        except Exception as fast_path_err:
+            logger.warning(f"Greeting fast-path failed: {fast_path_err}")
+
+        response_text = await _safe_process_message(
             db=db,
             phone_number=from_number,
             message_text=text_body
@@ -290,7 +319,7 @@ async def process_single_message(message: dict, contacts: list, db):
         if mime_type in allowed_types or filename.lower().endswith((".pdf", ".doc", ".docx")):
             file_content = await meta_client.download_media(media_id)
             if file_content:
-                response_text = await chatbot.process_message(
+                response_text = await _safe_process_message(
                     db=db,
                     phone_number=from_number,
                     media_content=file_content,
@@ -315,7 +344,7 @@ async def process_single_message(message: dict, contacts: list, db):
 
         file_content = await meta_client.download_media(media_id)
         if file_content:
-            response_text = await chatbot.process_message(
+            response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
                 media_content=file_content,
@@ -345,7 +374,6 @@ async def process_single_message(message: dict, contacts: list, db):
             audio_bytes = await meta_client.download_media(media_id)
             if audio_bytes:
                 # Determine language hint from candidate's stored preference
-                from app import crud
                 cand = crud.get_or_create_candidate(db, from_number)
                 lang_hint = cand.language_preference.value
 
@@ -358,7 +386,7 @@ async def process_single_message(message: dict, contacts: list, db):
                 )
                 if transcribed:
                     logger.info(f"🎤→💬 Transcribed: {transcribed[:80]!r}")
-                    response_text = await chatbot.process_message(
+                    response_text = await _safe_process_message(
                         db=db, phone_number=from_number, message_text=transcribed
                     )
                 else:
@@ -394,19 +422,19 @@ async def process_single_message(message: dict, contacts: list, db):
                 f"🔘 Button reply from {from_number}: id={btn_id!r} title={btn_title!r} "
                 f"→ routing as: {text_to_send!r}"
             )
-            response_text = await chatbot.process_message(
+            response_text = await _safe_process_message(
                 db=db, phone_number=from_number, message_text=text_to_send
             )
 
         elif interactive_type == "list_reply":
             list_id    = interactive.get("list_reply", {}).get("id", "")
             list_title = interactive.get("list_reply", {}).get("title", "")
-            # Use the title for list replies (job titles, etc.) — it's human-readable
-            text_to_send = list_title or list_id
+            # Use exact list_id for structured tracking, otherwise fallback to title
+            text_to_send = list_id if list_id.startswith("job_") or list_id == "skip" else (list_title or list_id)
             logger.info(
                 f"📋 List reply from {from_number}: id={list_id!r} title={list_title!r}"
             )
-            response_text = await chatbot.process_message(
+            response_text = await _safe_process_message(
                 db=db, phone_number=from_number, message_text=text_to_send
             )
 
@@ -420,12 +448,61 @@ async def process_single_message(message: dict, contacts: list, db):
 
     # ── Send reply ────────────────────────────────────────────────────────────
     if response_text:
-        logger.info(f"📤 Sending reply to {from_number}: {response_text[:80]}...")
-        result = await meta_client.send_message(from_number, response_text)
-        if "error" in result:
+        if isinstance(response_text, dict):
+            msg_type = response_text.get("type")
+            if msg_type == "list":
+                logger.info(f"📤 Sending interactive list to {from_number}")
+                result = await meta_client.send_list_message(
+                    to_number=from_number,
+                    body_text=response_text.get("body_text", ""),
+                    button_label=response_text.get("button_label", "Options"),
+                    sections=response_text.get("sections", []),
+                    header_text=response_text.get("header_text"),
+                    footer_text=response_text.get("footer_text")
+                )
+                response_text = "[Interactive List]"  # for sync logging
+            elif msg_type == "buttons":
+                logger.info(f"📤 Sending interactive buttons to {from_number}")
+                result = await meta_client.send_interactive_buttons(
+                    to_number=from_number,
+                    body_text=response_text.get("body_text", ""),
+                    buttons=response_text.get("buttons", []),
+                    header_text=response_text.get("header_text"),
+                    footer_text=response_text.get("footer_text")
+                )
+                response_text = "[Interactive Buttons]"
+            else:
+                logger.error(f"Unknown structured message type: {msg_type}")
+                result = None
+                response_text = "[Unrecognized Format Error]"
+        elif "__INTERACTIVE_LANGUAGE_SELECTOR__" in response_text:
+            parts = response_text.split("__INTERACTIVE_LANGUAGE_SELECTOR__")
+            prefix_text = parts[0].strip()
+            
+            # Send the prefix message if it exists (e.g. "Hey User! 😊")
+            if prefix_text:
+                await meta_client.send_message(from_number, prefix_text)
+                await asyncio.sleep(0.5)  # slight delay to ensure correct order
+                
+            logger.info(f"📤 Sending interactive language selector to {from_number}")
+            result = await meta_client.send_language_selector(from_number)
+            
+            # Remove the flag so the sync doesn't have the ugly token
+            response_text = response_text.replace("__INTERACTIVE_LANGUAGE_SELECTOR__", "[Interactive Language Selector]")
+        else:
+            logger.info(f"📤 Sending reply to {from_number}: {response_text[:80]}...")
+            result = await meta_client.send_message(from_number, response_text)
+
+        if result and "error" in result:
             logger.error(f"❌ Failed to send message to {from_number}: {result}")
         else:
-            logger.info(f"✅ Reply sent to {from_number} — msg_id={result.get('messages', [{}])[0].get('id', 'N/A')}")
+            # Safely handle dict or missing 'messages' key
+            msg_id_sent = "N/A"
+            if isinstance(result, dict):
+                msgs = result.get('messages', [])
+                if msgs and isinstance(msgs, list) and isinstance(msgs[0], dict):
+                    msg_id_sent = msgs[0].get('id', 'N/A')
+            logger.info(f"✅ Reply sent to {from_number} — msg_id={msg_id_sent}")
 
         # ── Sync both messages to recruitment system communications table ──────
         # Runs concurrently after the reply is sent. Failures are swallowed.

@@ -95,6 +95,56 @@ class VacancyService:
             candidate_info=candidate_info,
         )
 
+    async def get_ranked_jobs(
+        self,
+        entities: Optional[Dict[str, Any]] = None,
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return top ranked active jobs for deterministic selection flows.
+        This bypasses LLM formatting and returns structured rows.
+        """
+        entities = entities or {}
+        raw_jobs = await self._fetch_jobs(entities)
+        if raw_jobs:
+            raw_jobs = self._rank_jobs(raw_jobs, entities)
+        return raw_jobs[: max(1, min(limit, 10))]
+
+    async def get_matching_jobs(
+        self,
+        job_interest: str,
+        country: str,
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """
+        Compatibility helper for state-machine selection flow.
+        Returns a lightweight list of dicts with id/title/salary/description/country.
+        """
+        entities = {
+            "job_roles": [job_interest] if job_interest else [],
+            "countries": [country] if country else [],
+            "skills": [],
+        }
+        ranked = await self.get_ranked_jobs(entities=entities, limit=limit)
+        out: List[Dict[str, Any]] = []
+        for job in ranked:
+            requirements = job.get("requirements") if isinstance(job.get("requirements"), dict) else {}
+            countries = [str(c) for c in (job.get("countries") or [])]
+            out.append({
+                "id": str(job.get("job_id") or ""),
+                "title": str(job.get("title") or "").strip(),
+                "salary": str(job.get("salary_range") or "").strip() or "TBD",
+                "description": str(
+                    requirements.get("summary")
+                    or requirements.get("short_description")
+                    or requirements.get("note")
+                    or "Click to learn more."
+                )[:120],
+                "country": countries[0] if countries else country,
+                "requirements": requirements,
+            })
+        return out
+
     # ─────────────────────────────────────────────────────────────────────────
     # Job fetching (3-layer: cache → REST API → PostgreSQL)
     # ─────────────────────────────────────────────────────────────────────────

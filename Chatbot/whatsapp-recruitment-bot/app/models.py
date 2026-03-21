@@ -9,6 +9,7 @@ from sqlalchemy import (
     Column, Integer, String, Text, Float, Boolean,
     Enum, JSON, TIMESTAMP, ForeignKey, Index
 )
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -61,7 +62,7 @@ class Candidate(Base):
     experience_years = Column(Integer, nullable=True)
     notice_period = Column(String(50), nullable=True)
     resume_file_path = Column(String(500), nullable=True)
-    extracted_data = Column(JSON, nullable=True)  # Full CV data as JSON
+    extracted_data = Column(MutableDict.as_mutable(JSON), nullable=True)  # Full CV data as JSON
     language_preference = Column(
         Enum(LanguagePreference),
         default=LanguagePreference.ENGLISH

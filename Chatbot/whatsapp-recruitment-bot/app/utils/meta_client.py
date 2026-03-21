@@ -121,7 +121,7 @@ class MetaWhatsAppClient:
         
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                response = await client.post(url, json=payload, headers=headers, timeout=12.0)
                 response.raise_for_status()
                 
                 result = response.json()
@@ -336,6 +336,7 @@ class MetaWhatsAppClient:
         buttons: list,
         header_text: Optional[str] = None,
         footer_text: Optional[str] = None,
+        allow_text_fallback: bool = True,
     ) -> Dict[str, Any]:
         """
         Send a WhatsApp interactive button message (max 3 buttons).
@@ -387,7 +388,7 @@ class MetaWhatsAppClient:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    url, json=payload, headers=headers, timeout=30.0
+                    url, json=payload, headers=headers, timeout=8.0
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -395,6 +396,8 @@ class MetaWhatsAppClient:
                 return result
         except httpx.HTTPError as e:
             logger.error(f"Failed to send interactive buttons to {to_number}: {e}")
+            if not allow_text_fallback:
+                return {"error": str(e)}
             # Fallback: send as plain text
             fallback = body_text + "\n\n" + "\n".join(
                 f"{i+1}. {b.get('title','')}" for i, b in enumerate(buttons)
@@ -505,6 +508,7 @@ class MetaWhatsAppClient:
             body_text=body,
             buttons=buttons,
             header_text="Dewan Consultants",
+            allow_text_fallback=False,
         )
 
     async def send_next_step_buttons(

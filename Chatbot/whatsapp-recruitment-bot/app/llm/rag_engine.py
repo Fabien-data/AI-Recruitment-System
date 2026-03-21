@@ -861,7 +861,12 @@ Respond ONLY with valid JSON (no markdown):
         self, field: str, text: str, language: str = "en"
     ) -> Dict[str, Any]:
         """True async validate — uses AsyncOpenAI directly."""
-        _fallback = {"is_valid": len(text) > 2, "extracted_value": text, "clarification_message": None}
+        # NEW FAIL-CLOSED FALLBACK
+        _fallback = {
+            "is_valid": False,
+            "extracted_value": None,
+            "clarification_message": None # Let chatbot.py use its default fallback templates
+        }
         # Check cache — common answers like "Dubai", "driver", "2 years" are frequent
         _vkey = f"{field}|{text[:120]}|{language}"
         _vcached = _cache_get(_VALIDATE_CACHE, _vkey, _VALIDATE_CACHE_TTL)
@@ -879,29 +884,20 @@ Respond ONLY with valid JSON (no markdown):
                 'The user may write in English, Sinhala script, Tamil script, Singlish (Romanized Sinhala),\n'
                 'Tanglish (Romanized Tamil), or abbreviations. All are valid.\n\n'
                 '=== FIELD RULES ===\n'
-                'job_interest: ANY job title, role, category, or industry → VALID.\n'
+                'job_interest: MUST be a distinct job title, professional role, or industry.\n'
+                '  CRITICAL: REJECT conversational filler, greetings, gibberish, or vague answers like "I don\'t know", "anything", "yes", "no".\n'
+                '  If it does NOT contain a clear professional role, mark as INVALID.\n'
                 '  Tanglish examples (→ extracted_value):\n'
-                '  "driver paniyidam"→"driver", "nurse velai"→"nurse", "security paniyidam"→"security guard",\n'
-                '  "cook paniyidam"→"cook", "electrician velai"→"electrician", "weld pannum"→"welder",\n'
-                '  "factory la work"→"factory worker", "helper paniyidam"→"helper", "drv"→"driver",\n'
-                '  "sec grd"→"security guard", "நர்ஸ்"→"nurse", "ஓட்டுநர்"→"driver"\n'
-                '  Singlish examples:\n'
-                '  "driver karanna"→"driver", "nurse wadeema"→"nurse", "security wadeema"→"security guard",\n'
-                '  "cook karanna"→"cook", "riyaduru"→"driver", "hediya"→"nurse",\n'
-                '  "රියදුරු"→"driver", "හෙදිය"→"nurse"\n'
+                '  "driver paniyidam"→"driver", "nurse velai"→"nurse"\n'
                 '\n'
-                'destination_country: ANY country name, city, or region → VALID.\n'
-                '  Map: "Dubai"/"dubai la"/"dubai yanna"→"UAE", "Saudi"/"Saudi la"→"Saudi Arabia",\n'
-                '  "Qatar"/"Qatar la"→"Qatar", "Middle East"→"Middle East", "Gulf"→"Gulf",\n'
-                '  "කතාර්"→"Qatar", "දුබායි"→"UAE", "துபாய்"→"UAE", "சவுதி"→"Saudi Arabia"\n'
+                'destination_country: MUST be a specific country name, city, or recognized region.\n'
+                '  CRITICAL: REJECT answers like "anywhere", "abroad", "outside", or gibberish.\n'
                 '\n'
-                'experience_years: ANY number, word description, or time period → VALID.\n'
-                '  "3 varusham"→"3", "3 அவருஷம்"→"3", "avurudu 5"→"5", "5 warsham"→"5",\n'
-                '  "fresh"/"aluth"/"new"→"0", "no experience"→"0", "2.5 years"→"2",\n'
-                '  "නැ"/zero/none→"0", "ten"→"10"\n'
+                'experience_years: MUST be a number, word description of a number, or time period.\n'
+                '  "3 varusham"→"3", "fresh"/"new"→"0", "no experience"→"0"\n'
+                '  REJECT off-topic text.\n'
                 '\n'
-                'NOT valid: a pure question ("how much salary?", "what visa?"), fully off-topic text\n'
-                '  with zero job/country/experience content, random gibberish.\n\n'
+                'NOT valid: a pure question ("how much salary?"), fully off-topic text, conversational filler, or random gibberish.\n\n'
                 f'If invalid, write a short polite clarification in {lang_name} asking for the {field}.\n\n'
                 'JSON only (no markdown):\n'
                 '{"is_valid":true/false,"extracted_value":"normalized English value or null",'
@@ -981,7 +977,7 @@ Respond ONLY with valid JSON (no markdown):
             "intent": "other", "language": language, "confidence": 0.5,
             "entities": {"job_roles": [], "countries": [], "skills": [], "experience_years": None},
         }
-        _default_v = {"is_valid": len(text) > 2, "extracted_value": text, "clarification_message": None}
+        _default_v = {"is_valid": False, "extracted_value": None, "clarification_message": None}
 
         lang_name = {"en": "English", "si": "Sinhala", "ta": "Tamil",
                      "tanglish": "Tanglish", "singlish": "Singlish"}.get(language, language)
@@ -998,8 +994,10 @@ Respond ONLY with valid JSON (no markdown):
                 'Few-shot: "enna job irriki"→vacancy_query,tanglish | "dubai poganum"→country,tanglish,UAE\n'
                 '"aama"→apply_intent,tanglish | "mokakda job"→vacancy_query,singlish\n\n'
                 f'PART 2 — VALIDATE for field "{field}":\n'
-                'job_interest=any job title is valid | destination_country=any country is valid\n'
-                'experience_years=any number/period is valid | pure question/off-topic=NOT valid\n'
+                'job_interest: MUST be a distinct job title/role. REJECT conversational filler, greetings, gibberish ("anything", "yes").\n'
+                'destination_country: MUST be country/city. REJECT "anywhere", "abroad", gibberish.\n'
+                'experience_years: MUST be number/period. REJECT off-topic.\n'
+                'pure question/off-topic/gibberish = NOT valid\n'
                 f'If invalid, short clarification in {lang_name}.\n\n'
                 'JSON only (no extra keys):\n'
                 '{"classify":{"intent":"<>","language":"<>","confidence":<0-1>,'

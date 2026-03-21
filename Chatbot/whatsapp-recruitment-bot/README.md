@@ -130,6 +130,21 @@ docker-compose logs -f chatbot
 docker-compose down
 ```
 
+### Celery verification and performance mode
+
+For webhook decoupling + low latency under concurrent load, run Celery with an I/O-optimized pool:
+
+```bash
+celery -A app.celery_app worker --pool=gevent --concurrency=100 --loglevel=info
+```
+
+Quick verification checklist:
+
+- Start Redis, Celery worker, and FastAPI in separate terminals.
+- Send a WhatsApp message and confirm Celery logs show a received task.
+- Confirm app logs show `Celery task queued: task_id=...`.
+- Confirm app logs do not show `falling back to FastAPI BackgroundTasks`.
+
 ---
 
 ## Project structure

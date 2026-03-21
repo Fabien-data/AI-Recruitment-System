@@ -28,7 +28,7 @@ services:
     build: .
     container_name: chatbot-celery
     restart: unless-stopped
-    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=INFO"]
+    command: ["celery", "-A", "app.celery_app", "worker", "--pool=gevent", "--concurrency=100", "--loglevel=INFO"]
     environment:
       - DEBUG=false
       - LOG_LEVEL=INFO

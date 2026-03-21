@@ -101,7 +101,7 @@ class RecruitmentSyncService:
             # as a separate intake field — resolve it from the job cache.
             if not extracted.get("job_interest"):
                 from app.knowledge import get_job_cache
-                matched_id = extracted.get("matched_job_id") or extracted.get("ad_job_id")
+                matched_id = extracted.get("selected_job_id") or extracted.get("matched_job_id") or extracted.get("ad_job_id")
                 if matched_id:
                     job_info = get_job_cache().get(str(matched_id))
                     if job_info and job_info.get("title"):
@@ -387,7 +387,7 @@ class RecruitmentSyncService:
             "destination_country": extracted.get("destination_country", ""),
 
             # Job assignment (from job-aware match or ad)
-            "job_id": extracted.get("matched_job_id") or extracted.get("ad_job_id"),
+            "job_id": extracted.get("selected_job_id") or extracted.get("matched_job_id") or extracted.get("ad_job_id"),
             "ad_ref": extracted.get("ad_ref"),
 
             # CV data (base64 excluded — sent via multipart when possible)
@@ -403,6 +403,7 @@ class RecruitmentSyncService:
                         "ad_ref", "ad_job_id", "ad_project_id", "ad_context",
                         "recruitment_candidate_id", "recruitment_application_id",
                         "recruitment_sync_status",
+                        "selected_job_id", "selected_job_title",
                         "matched_job_id", "job_requirements",
                     }
                 },
