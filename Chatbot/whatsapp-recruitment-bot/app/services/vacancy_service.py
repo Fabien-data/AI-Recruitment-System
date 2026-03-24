@@ -122,7 +122,7 @@ class VacancyService:
         """
         entities = {
             "job_roles": [job_interest] if job_interest else [],
-            "countries": [country] if country else [],
+            "countries": [] if country == 'ANY' else ([country] if country else []),
             "skills": [],
         }
         ranked = await self.get_ranked_jobs(entities=entities, limit=limit)
@@ -486,6 +486,21 @@ class VacancyService:
 
         name_part = f"The candidate's first name is {candidate_name}. " if candidate_name else ""
 
+        cv_context = ""
+        if candidate_info:
+            exp = candidate_info.get("experience_years")
+            skills = candidate_info.get("skills")
+            extracted = candidate_info.get("extracted_data") or {}
+            job_interest = extracted.get("job_interest")
+            
+            c_parts = []
+            if job_interest: c_parts.append(f"Interested in: {job_interest}")
+            if exp: c_parts.append(f"Experience: {exp} years")
+            if skills: c_parts.append(f"Skills: {skills}")
+            
+            if c_parts:
+                cv_context = "Candidate Profile:\n- " + "\n- ".join(c_parts) + "\n"
+
         # Build a compact job summary for the prompt (avoid token overuse)
         if raw_jobs:
             job_summary_lines = []
@@ -528,6 +543,7 @@ class VacancyService:
 
         prompt = f"""You are Dilan — the warm, professional recruitment receptionist at {company}.
 {name_part}
+{cv_context}
 The candidate sent this message (in {lang_name}): "{user_message}"
 {entities_str}
 
@@ -559,8 +575,6 @@ CRITICAL LANGUAGE RULES:
                 rag_engine.openai_client.chat.completions.create,
                 model=rag_engine.chat_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=400,
-                temperature=0.7,
             )
             llm_text = response.choices[0].message.content.strip()
             footer = PromptTemplates.get_vacancy_push_footer(language)

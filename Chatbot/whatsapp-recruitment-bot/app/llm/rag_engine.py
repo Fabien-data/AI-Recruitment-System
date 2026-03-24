@@ -150,8 +150,6 @@ class RAGEngine:
                 model=selected_model,
                 messages=messages,
                 # Optimize for extreme brevity to reduce backend latency
-                max_completion_tokens=150 if language not in ('en',) else 100,
-                temperature=0.7
             )
             
             return response.choices[0].message.content.strip()
@@ -401,8 +399,6 @@ Understand intent regardless of script. Keep replies short — WhatsApp messages
                     {"role": "system", "content": "You are a professional HR assistant analyzing CVs."},
                     {"role": "user", "content": prompt}
                 ],
-                max_completion_tokens=200,
-                temperature=0.3
             )
             
             return response.choices[0].message.content.strip()
@@ -442,8 +438,6 @@ Understand intent regardless of script. Keep replies short — WhatsApp messages
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
-                max_completion_tokens=60,
-                temperature=0.7
             )
             
             return response.choices[0].message.content.strip()
@@ -476,9 +470,11 @@ IMPORTANT: The response may be in:
 - Mixed English and local language (code-switching)
 Treat ALL of these as valid language use. Do NOT mark a response as invalid just because it uses transliterated words.
 
+You are a Sri Lankan recruitment data extractor. Users will speak in English, Sinhala, Tamil, Singlish (Romanized Sinhala), or Tanglish (Romanized Tamil). You must aggressively extract the underlying meaning. If a user says 'Mata dubai yanna one', the destination_country is 'United Arab Emirates'. If they say 'Driver wedak', the job_interest is 'Driver'. Do not return null if a conversational intent is reasonably clear. Guess the standard English translation for the database.
+
 Analyze the response to determine if it provides a valid answer for the '{field}':
 - "job_interest": Any job title, role name, category or industry mentioned — VALID. Romanized Tamil/Sinhala job names are valid ("nurse paniyidam" = nurse job, "driver wadeema" = driver job).
-- "destination_country": Any country, region or destination mentioned — VALID.
+- "destination_country": Any country, region or destination mentioned — VALID. If the user expresses flexibility, such as "anywhere", "open to anything", "any", "nothing specific", "onama ratak" (Sinhala), or "entha nadum" (Tamil), you MUST output exactly "ANY". If the user says "Dubai", output "United Arab Emirates". Do not return null if they express flexibility.
 - "experience_years": Any number or time period mentioned — VALID.
 - If it is a pure question, off-topic, or completely irrelevant with no job/country/year info → NOT valid.
 - If it is NOT valid, write a polite, short clarification message in {lang_name} asking them to provide the correct information.
@@ -493,13 +489,16 @@ Respond ONLY with a valid JSON object in exactly this format:
             response = self.openai_client.chat.completions.create(
                 model=self.chat_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=100,
-                temperature=0.0,
                 response_format={"type": "json_object"}
             )
             
             import json
-            return json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content.strip()
+            if content.startswith('```json'): content = content[7:]
+            elif content.startswith('```'): content = content[3:]
+            if content.endswith('```'): content = content[:-3]
+            content = content.strip()
+            return json.loads(content)
             
         except Exception as e:
             logger.error(f"Error validating intake answer: {e}")
@@ -598,13 +597,16 @@ Respond ONLY with valid JSON (no markdown, no extra keys):
             response = self.openai_client.chat.completions.create(
                 model=self.classify_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=150,
-                temperature=0.0,
                 response_format={"type": "json_object"},
             )
 
             import json
-            result = json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content.strip()
+            if content.startswith('```json'): content = content[7:]
+            elif content.startswith('```'): content = content[3:]
+            if content.endswith('```'): content = content[:-3]
+            content = content.strip()
+            result = json.loads(content)
             logger.info(
                 f"classify_message: '{text[:60]}' → "
                 f"intent={result.get('intent')} lang={result.get('language')} "
@@ -673,13 +675,16 @@ Respond ONLY with valid JSON (no markdown):
             response = self.openai_client.chat.completions.create(
                 model=self.classify_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=120,
-                temperature=0.0,
                 response_format={"type": "json_object"}
             )
 
             import json
-            result = json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content.strip()
+            if content.startswith('```json'): content = content[7:]
+            elif content.startswith('```'): content = content[3:]
+            if content.endswith('```'): content = content[:-3]
+            content = content.strip()
+            result = json.loads(content)
             logger.info(f"LLM intent classification: '{text[:50]}' → {result.get('intent')} ({result.get('confidence', '?')})")
             return result
 
@@ -795,13 +800,16 @@ Respond ONLY with valid JSON (no markdown):
             response = await self.async_openai_client.chat.completions.create(
                 model=self.classify_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=180,
-                temperature=0.0,
                 response_format={"type": "json_object"},
                 timeout=8,
             )
             import json
-            result = json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content.strip()
+            if content.startswith('```json'): content = content[7:]
+            elif content.startswith('```'): content = content[3:]
+            if content.endswith('```'): content = content[:-3]
+            content = content.strip()
+            result = json.loads(content)
             logger.info(
                 f"classify_message_async: '{text[:60]}' → "
                 f"intent={result.get('intent')} lang={result.get('language')} "
@@ -848,8 +856,6 @@ Respond ONLY with valid JSON (no markdown):
                 model=selected_model,
                 messages=messages,
                 # Optimize for extreme brevity to reduce backend latency
-                max_completion_tokens=150 if language not in ('en',) else 100,
-                temperature=0.6,
                 timeout=10,
             )
             return response.choices[0].message.content.strip()
@@ -890,8 +896,8 @@ Respond ONLY with valid JSON (no markdown):
                 '  Tanglish examples (→ extracted_value):\n'
                 '  "driver paniyidam"→"driver", "nurse velai"→"nurse"\n'
                 '\n'
-                'destination_country: MUST be a specific country name, city, or recognized region.\n'
-                '  CRITICAL: REJECT answers like "anywhere", "abroad", "outside", or gibberish.\n'
+                'destination_country: MUST be a specific country name, city, or recognized region. If the user expresses flexibility, such as "anywhere", "open to anything", "any", "nothing specific", "onama ratak" (Sinhala), or "entha nadum" (Tamil), you MUST output exactly "ANY". If the user says "Dubai", output "United Arab Emirates". Do not return null if they express flexibility.\n'
+                '  CRITICAL: REJECT answers like "abroad", "outside", or gibberish unless it clearly means flexibility.\n'
                 '\n'
                 'experience_years: MUST be a number, word description of a number, or time period.\n'
                 '  "3 varusham"→"3", "fresh"/"new"→"0", "no experience"→"0"\n'
@@ -906,13 +912,16 @@ Respond ONLY with valid JSON (no markdown):
             response = await self.async_openai_client.chat.completions.create(
                 model=self.classify_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=100,
-                temperature=0.0,
                 response_format={"type": "json_object"},
                 timeout=8,
             )
             import json
-            result = json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content.strip()
+            if content.startswith('```json'): content = content[7:]
+            elif content.startswith('```'): content = content[3:]
+            if content.endswith('```'): content = content[:-3]
+            content = content.strip()
+            result = json.loads(content)
             _cache_set(_VALIDATE_CACHE, _vkey, result)
             return result
         except Exception as e:
@@ -933,8 +942,6 @@ Respond ONLY with valid JSON (no markdown):
             response = await self.async_openai_client.chat.completions.create(
                 model=self.classify_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=60,
-                temperature=0.7,
                 timeout=8,
             )
             return response.choices[0].message.content.strip()
@@ -995,7 +1002,7 @@ Respond ONLY with valid JSON (no markdown):
                 '"aama"→apply_intent,tanglish | "mokakda job"→vacancy_query,singlish\n\n'
                 f'PART 2 — VALIDATE for field "{field}":\n'
                 'job_interest: MUST be a distinct job title/role. REJECT conversational filler, greetings, gibberish ("anything", "yes").\n'
-                'destination_country: MUST be country/city. REJECT "anywhere", "abroad", gibberish.\n'
+                'destination_country: MUST be country/city. If user expresses flexibility ("anywhere", "open to anything", "any", "onama ratak", "entha nadum"), MUST output "ANY". REJECT "abroad", gibberish.\n'
                 'experience_years: MUST be number/period. REJECT off-topic.\n'
                 'pure question/off-topic/gibberish = NOT valid\n'
                 f'If invalid, short clarification in {lang_name}.\n\n'
@@ -1009,8 +1016,6 @@ Respond ONLY with valid JSON (no markdown):
             response = await self.async_openai_client.chat.completions.create(
                 model=self.classify_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=200,
-                temperature=0.0,
                 response_format={"type": "json_object"},
                 timeout=9,
             )

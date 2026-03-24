@@ -98,6 +98,12 @@ class ExtractedCVData:
     linkedin_url: Optional[str] = None
     portfolio_url: Optional[str] = None
     
+    # AI Insights
+    candidate_summary: Optional[str] = None
+    candidate_match_score: Optional[int] = None
+    ai_insights: List[str] = field(default_factory=list)
+    suggested_roles: List[str] = field(default_factory=list)
+    
     # Metadata
     raw_text: Optional[str] = None
     extraction_method: str = "llm"
@@ -212,6 +218,12 @@ Return ONLY a valid JSON object with this exact structure:
             "contact": "string or null"
         }}
     ],
+    "ai_insights": {{
+        "candidate_summary": "string (A short, compelling summarizing paragraph of candidate profile for recruiters)",
+        "candidate_match_score": "number 0-100 indicating general resume and profile quality",
+        "strengths_and_weaknesses": ["string (bullet points of insights including risks or strengths)"],
+        "suggested_roles": ["string (job titles this candidate is highly suited for)"]
+    }},
     "missing_critical_information": ["List of missing essential facts: e.g., 'full_name', 'email', 'phone', 'highest_qualification', 'years_experience' if not found"],
     "extraction_warnings": ["Any issues or unclear information found"]
 }}
@@ -259,8 +271,6 @@ Remember: Return ONLY the JSON object, no other text.'''
                         "content": self.EXTRACTION_PROMPT.format(cv_text=cv_text[:15000])  # Limit text
                     }
                 ],
-                temperature=0,  # Deterministic output
-                max_completion_tokens=4096,
                 response_format={"type": "json_object"}
             )
             
@@ -290,6 +300,7 @@ Remember: Return ONLY the JSON object, no other text.'''
             professional = json_data.get('professional_info', {})
             education = json_data.get('education', {})
             skills = json_data.get('skills', {})
+            ai_insights = json_data.get('ai_insights', {})
             
             data = ExtractedCVData(
                 # Personal Info
@@ -344,6 +355,12 @@ Remember: Return ONLY the JSON object, no other text.'''
                 certifications=json_data.get('certifications', []),
                 achievements=json_data.get('achievements', []),
                 references=json_data.get('references', []),
+                
+                # AI Insights
+                candidate_summary=ai_insights.get('candidate_summary'),
+                candidate_match_score=ai_insights.get('candidate_match_score'),
+                ai_insights=ai_insights.get('strengths_and_weaknesses', []),
+                suggested_roles=ai_insights.get('suggested_roles', []),
                 
                 # Metadata
                 raw_text=raw_text,

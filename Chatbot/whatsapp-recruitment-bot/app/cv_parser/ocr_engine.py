@@ -212,8 +212,6 @@ Return ONLY the extracted text, no commentary or explanations."""
                         ]
                     }
                 ],
-                max_completion_tokens=4096,
-                temperature=0
             )
             
             extracted_text = response.choices[0].message.content.strip()

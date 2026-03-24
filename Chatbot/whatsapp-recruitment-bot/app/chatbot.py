@@ -16,6 +16,7 @@ import logging
 import re
 import random
 import asyncio
+import json
 from typing import Optional, Dict, Any, Union
 
 from sqlalchemy.orm import Session
@@ -187,6 +188,17 @@ def _extract_years(text: str) -> Optional[int]:
 
 
 # ─── Main Engine ─────────────────────────────────────────────────────────────
+
+_COUNTRY_MASTER_MAP = {
+    'dubai': 'United Arab Emirates', 'uae': 'United Arab Emirates', 'abu dhabi': 'United Arab Emirates', 'sharjah': 'United Arab Emirates',
+    'kuwait': 'Kuwait', 'kuwet': 'Kuwait', 'kuwit': 'Kuwait', 'කුවේට්': 'Kuwait', 'குவைத்': 'Kuwait',
+    'qatar': 'Qatar', 'doha': 'Qatar', 'කටාර්': 'Qatar', 'கத்தார்': 'Qatar',
+    'saudi': 'Saudi Arabia', 'ksa': 'Saudi Arabia', 'riyadh': 'Saudi Arabia', 'සෞදි': 'Saudi Arabia', 'சவுதி': 'Saudi Arabia',
+    'malaysia': 'Malaysia', 'malasiya': 'Malaysia', 'மலேஷியா': 'Malaysia', 'මැලේසියා': 'Malaysia',
+    'singapore': 'Singapore', 'singappuru': 'Singapore', 'சிங்கப்பூர்': 'Singapore',
+    'romania': 'Romania', 'poland': 'Poland', 'maldives': 'Maldives', 'japan': 'Japan',
+    'anywhere': 'ANY', 'any': 'ANY', 'open to anything': 'ANY', 'nothing specific': 'ANY', 'onama ratak': 'ANY', 'entha nadum': 'ANY', 'any country': 'ANY', 'i dont mind': 'ANY'
+}
 
 class ChatbotEngine:
     """
@@ -1364,8 +1376,20 @@ class ChatbotEngine:
                     return f"{rag_resp}\n\n{clarify}"
 
                 # Not a question, just invalid input
-                clarify = validation.get('clarification_message') or PromptTemplates.get_intake_question('job_interest', language)
-                return clarify
+                cache = get_job_cache()
+                active_jobs = list({job.get('title') for job in cache.values() if job.get('title')})
+                random.shuffle(active_jobs)
+                suggestions = ", ".join(active_jobs[:5]) if active_jobs else "Driver, Nurse, Security Guard"
+
+                invalid_msgs = {
+                    'en': f"We don't have that exact role, but here are some popular open positions right now:\n{suggestions}\nWhich one interests you?",
+                    'si': f"අපි ළඟ එම තනතුර නැහැ, නමුත් මේ දිනවල ජනප්‍රිය රැකියා මෙන්න:\n{suggestions}\nමේවායින් කුමකටද ඔබ කැමති?",
+                    'ta': f"அந்த வேலை இப்போது இல்லை, ஆனால் தற்போதைய பிரபலமான வேலைகள்:\n{suggestions}\nஇதில் எது உங்களுக்கு வேண்டும்?",
+                    'singlish': f"Ape langa e role eka naha, but danata thiyena popular jobs menna:\n{suggestions}\nOya kamathi monawatada?",
+                    'tanglish': f"Andha role enga kitta illa, aana ippo irukka popular jobs idho:\n{suggestions}\nIdhula edhu ungalukku venum?"
+                }
+                
+                return invalid_msgs.get(language, invalid_msgs['en'])
 
             # Valid job interest — the LLM already extracted the key value; trust it
             # regardless of how many words the original sentence had.
@@ -1433,32 +1457,80 @@ class ChatbotEngine:
         elif state == self.STATE_AWAITING_COUNTRY:
             text_norm = _normalize_text(text)
 
-            # Use pre-fetched validation if available (ran in parallel with classify)
-            if prefetched_validation is not None:
-                validation = prefetched_validation
-            else:
-                validation = await rag_engine.validate_intake_answer_async('destination_country', text, language)
-            
-            # Fallback for LLM failure
-            if not validation.get('is_valid'):
-                if len(text_norm) >= 2 and not _is_question(text) and text_norm not in ["yes", "no", "anything", "nothing", "anywhere"]:
-                    validation = {"is_valid": True, "extracted_value": text_norm.title()}
+            validation = None
+            extracted_country = None
 
+            # Layer 1: Dictionary Check
+            for key, val in _COUNTRY_MASTER_MAP.items():
+                if key in text_norm:
+                    extracted_country = val
+                    validation = {"is_valid": True, "extracted_value": extracted_country}
+                    break
+
+            # Layer 2: Live DB Check
+            if not validation:
+                cache = get_job_cache()
+                active_countries = {str(job.get('country') or '').strip().lower(): str(job.get('country') or '').strip() for job in cache.values() if job.get('country')}
+                if text_norm in active_countries:
+                    extracted_country = active_countries[text_norm]
+                    validation = {"is_valid": True, "extracted_value": extracted_country}
+                else:
+                    # check if any active country name is fully contained in the user text
+                    for ac_low, ac_real in active_countries.items():
+                        if ac_low and ac_low in text_norm:
+                            extracted_country = ac_real
+                            validation = {"is_valid": True, "extracted_value": extracted_country}
+                            break
+
+            # Layer 3: LLM Fallback
+            if not validation:
+                # Use pre-fetched validation if available (ran in parallel with classify)
+                if prefetched_validation is not None:
+                    validation = prefetched_validation
+                else:
+                    validation = await rag_engine.validate_intake_answer_async('destination_country', text, language)
+
+            was_loop_broken = False
             if not validation.get('is_valid'):
-                if _is_question(text):
-                    rag_resp = await rag_engine.generate_response_async(
-                        user_message=text,
-                        language=language,
-                        candidate_info=self._candidate_info_dict(candidate)
-                    )
-                    clarify = validation.get('clarification_message') or PromptTemplates.get_intake_question('destination_country', language)
-                    return f"{rag_resp}\n\n{clarify}"
-                
-                # Too short or invalid
-                clarify = validation.get('clarification_message') or PromptTemplates.get_intake_question('destination_country', language)
-                return clarify
+                # Loop breaker logic
+                _edata = candidate.extracted_data or {}
+                country_retries = _edata.get('country_retries', 0) + 1
+                _edata['country_retries'] = country_retries
+                candidate.extracted_data = _edata
+                db.commit()
+
+                if country_retries >= 2:
+                    was_loop_broken = True
+                    validation = {"is_valid": True, "extracted_value": "ANY"}
+                else:
+                    cache = get_job_cache()
+                    active_countries = list({job.get('country') for job in cache.values() if job.get('country')})
+                    random.shuffle(active_countries)
+                    suggestions = ", ".join(active_countries[:5]) if active_countries else "UAE, Qatar, Saudi Arabia"
+                    
+                    invalid_msgs = {
+                        'en': f"I didn't recognize that country. Here are the countries we are currently hiring for:\n{suggestions}\nWhich one are you interested in?",
+                        'si': f"මට එම රට හඳුනාගන්න බැරි වුණා. දැනට අපි බඳවා ගන්නා රටවල් මෙන්න:\n{suggestions}\nඔබ කැමති කුමන රටකටද?",
+                        'ta': f"அந்த நாடு எனக்குப் புரியவில்லை. இப்போது நாங்கள் ஆட்களைத் தேடும் நாடுகள்:\n{suggestions}\nஉங்களுக்கு எந்த நாடு வேண்டும்?",
+                        'singlish': f"Mata e country eka therenne na. Api danata hire karana countries menna:\n{suggestions}\nOyata mona country ekada oni?",
+                        'tanglish': f"Andha country enaku puriyala. Ippo naanga hiring panra countries idho:\n{suggestions}\nUngalukku endha country venum?"
+                    }
+
+                    if _is_question(text):
+                        rag_resp = await rag_engine.generate_response_async(
+                            user_message=text,
+                            language=language,
+                            candidate_info=self._candidate_info_dict(candidate)
+                        )
+                        return f"{rag_resp}\n\n{invalid_msgs.get(language, invalid_msgs['en'])}"
+                    
+                    # Too short or invalid
+                    return invalid_msgs.get(language, invalid_msgs['en'])
 
             extracted_country = validation.get('extracted_value') or text_norm
+            if not extracted_country:
+                return PromptTemplates.get_retry_question('country', language)
+
             self._save_intake(db, candidate, 'destination_country', str(extracted_country))
 
             # Reset confusion streak on valid answer
@@ -1468,34 +1540,52 @@ class ChatbotEngine:
 
             data = candidate.extracted_data or {}
             job_interest = str(data.get('job_interest') or '').strip()
-            entities_for_search = {
-                'job_roles': [job_interest] if job_interest else [],
-                'countries': [str(extracted_country)],
-                'skills': [],
-            }
             matching_jobs = await vacancy_service.get_matching_jobs(
                 job_interest=job_interest,
                 country=str(extracted_country),
                 limit=3,
             )
 
+            fallback_msg_str = ""
+            if was_loop_broken:
+                fallback_msgs = {
+                    'en': "It seems we're having trouble matching a specific country. No worries! I'll set your preference to 'Global/Anywhere' for now so we can move forward.\n\n",
+                    'si': "රටක් තෝරාගැනීමේදී ගැටලුවක් ඇති බව පෙනේ. කමක් නැහැ! අපි ඔබේ කැමැත්ත 'ඕනෑම රටක්' ලෙස සකසා ඉදිරියට යමු.\n\n",
+                    'ta': "நாட்டைத் தேர்ந்தெடுப்பதில் சிக்கல் உள்ளதாகத் தெரிகிறது. பரவாயில்லை! நாம் 'எந்த நாடும்' என அமைத்து தொடரலாம்.\n\n",
+                    'singlish': "Country eka match karanna podi awulak wage. Awulak na! Mama 'Glocal/Anywhere' kiyala dala idiriyata yannam.\n\n",
+                    'tanglish': "Country select panradhula problem irukku pola. Paravailla! Naan 'Anywhere' nu set pannidren, namma continue panlam.\n\n"
+                }
+                fallback_msg_str = fallback_msgs.get(language, fallback_msgs['en'])
+
             if matching_jobs:
-                data['presented_jobs'] = matching_jobs[:3]
+                data['presented_jobs'] = [str(job.get('id') or '') for job in matching_jobs[:3] if str(job.get('id') or '').strip()]
+                data['presented_job_cards'] = matching_jobs[:3]
                 candidate.extracted_data = data
                 db.commit()
 
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB_SELECTION)
                 ack = self._build_country_ack(str(extracted_country), language)
-                list_intro = {
-                    'en': "I found some matching jobs for you 🎯",
-                    'si': "ඔබට ගැලපෙන රැකියා කිහිපයක් මට හමු වුණා 🎯",
-                    'ta': "உங்களுக்கு பொருந்தும் சில வேலைகள் கிடைத்தன 🎯",
-                    'singlish': "Oyata match wena jobs tika hambuna 🎯",
-                    'tanglish': "Ungalukku match aagura jobs sila kidaichirukku 🎯",
-                }.get(language, "I found some matching jobs for you 🎯")
+                jobs_count = len(matching_jobs)
+                
+                if extracted_country == 'ANY':
+                    list_intro = {
+                        'en': f"Great! Since you are flexible, I looked at all our global locations and found {jobs_count} vacancies for {job_interest or 'your role'}.",
+                        'si': f"නියමයි! ඔබ ඕනෑම රටකට කැමති නිසා ලොව පුරා {job_interest or 'ඔබගේ රැකියා භූමිකාව'} සඳහා පුරප්පාඩු {jobs_count} ක් මට හමුවුණා.",
+                        'ta': "சிறப்பு! நீங்கள் எந்த நாடானாலும் சரி என்று கூறியதால், உலகம் முழுவதும் " + (job_interest or 'உங்கள் வேலை') + f"-க்காக {jobs_count} வேலைவாய்ப்புகளை நாடியுள்ளோம்.",
+                        'singlish': f"Niyamai! Oya flexible nisa mama loke wate balala {job_interest or 'oya balana role eka'} vacancies {jobs_count} k hoyagaththa.",
+                        'tanglish': f"Super! Neenga flexible nu sonnadhala, global-a thedi {job_interest or 'neenga paakura role'} kku {jobs_count} vacancies kandu pudichiruken.",
+                    }.get(language, f"Great! Since you are flexible, I looked at all our global locations and found {jobs_count} vacancies for {job_interest or 'your role'}.")
+                else:
+                    list_intro = {
+                        'en': f"Congratulations! 🎉 I found {jobs_count} vacancies for {job_interest or 'your role'} in {extracted_country}.",
+                        'si': f"සුබ පැතුම්! 🎉 {extracted_country} හි {job_interest or 'ඔබගේ රැකියා භූමිකාව'} සඳහා පුරප්පාඩු {jobs_count} ක් මට හමුවුණා.",
+                        'ta': f"வாழ்த்துக்கள்! 🎉 {extracted_country}-ல் {job_interest or 'உங்கள் வேலை பங்கு'} பணிக்கான {jobs_count} வேலைவாய்ப்புகள் உள்ளன.",
+                        'singlish': f"Niyamai! 🎉 {extracted_country} wala {job_interest or 'oya balana role eka'} vacancies {jobs_count} k thiyenawa.",
+                        'tanglish': f"Super! 🎉 {extracted_country}-la {job_interest or 'neenga paakura role'} kku {jobs_count} vacancies irukku.",
+                    }.get(language, f"Congratulations! 🎉 I found {jobs_count} vacancies for {job_interest or 'your role'} in {extracted_country}.")
 
                 rows = []
-                for i, job in enumerate(data['presented_jobs'][:3]):
+                for i, job in enumerate(data.get('presented_job_cards', [])[:3]):
                     title = job.get('title') or 'Job'
                     location = str(job.get('country') or extracted_country)
                     salary = job.get('salary') or ''
@@ -1531,7 +1621,7 @@ class ChatbotEngine:
 
                 return {
                     "type": "list",
-                    "body_text": f"{ack}{list_intro}",
+                    "body_text": f"{fallback_msg_str}{list_intro}\n\n{ack}",
                     "button_label": button_label,
                     "sections": [
                         {
@@ -1541,34 +1631,36 @@ class ChatbotEngine:
                     ]
                 }
 
-            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
+            has_exp = candidate.experience_years or data.get('experience_years_stated')
+            next_state = self.STATE_AWAITING_CV if has_exp else self.STATE_AWAITING_EXPERIENCE
+            crud.update_candidate_state(db, candidate.id, next_state)
 
-            # Personalised acknowledgment that echoes back the country name
-            ack = self._build_country_ack(str(extracted_country), language)
-            exp_q = PromptTemplates.get_intake_question('experience_years', language)
-            no_match_note = {
-                'en': "I couldn’t find an exact opening right now, so I’ll add you to our general pool.",
-                'si': "දැන්ම හොඳ ගැලපෙන vacancy එකක් හමු නොවුණ නිසා, ඔබව general pool එකට එකතු කරනවා.",
-                'ta': "இப்போதைக்கு சரியான வேலை பொருத்தம் இல்லை, அதனால் உங்களை general pool-ல் சேர்க்கிறேன்.",
-                'singlish': "Dan exact vacancy ekak hambune naha, e nisa oyawa general pool ekata add karanawa.",
-                'tanglish': "Ippo exact vacancy kidaikkala, athanala ungala general pool-la add panren.",
+            pool_msg = {
+                'en': f"Currently, we don't have open positions for {job_interest or 'that role'} in {extracted_country}, but we frequently get new openings! Let's get your profile ready so we can contact you immediately when one opens up.",
+                'si': f"දැනට {extracted_country} හි {job_interest or 'එම රැකියා භූමිකාව'} සඳහා පුරප්පාඩු නොමැත, නමුත් අනාගතයේදී පැමිණිය හැක! ඔබගේ තොරතුරු ලබා දෙන්න.",
+                'ta': f"தற்போது {extracted_country}-ல் {job_interest or 'அந்த வேலை பங்கு'} வேலைகள் இல்லை, ஆனால் விரைவில் வரலாம்! உங்கள் விபரங்களை பதிவு செய்வோம்.",
+                'singlish': f"Danata {extracted_country} wala {job_interest or 'e role eka'} vacancies naha, eth aluth ewa enawa! Api profile eka hadala thiyagamu.",
+                'tanglish': f"Ippo {extracted_country}-la {job_interest or 'andha role'} vacancies illa, aana future-la varum! Profile-a ready pannuvom.",
             }
-            req = (candidate.extracted_data or {}).get("job_requirements") or {}
-            exp_req = req.get("experience_years")
-            if isinstance(exp_req, (int, float)) and exp_req >= 0:
-                hints = {
-                    "en": f" (This role typically looks for {int(exp_req)}+ years.)",
-                    "si": f" (මේ role එකට සාමාන්‍යයෙන් අවුරුදු {int(exp_req)}+ ඕන.)",
-                    "ta": f" (இந்த பதவிக்கு பொதுவாக {int(exp_req)}+ ஆண்டுகள் தேவை.)",
+            
+            if extracted_country == 'ANY':
+                pool_msg = {
+                    'en': f"Currently, we don't have open positions for {job_interest or 'that role'} anywhere, but we frequently get new openings! Let's get your profile ready so we can contact you immediately when one opens up.",
+                    'si': f"දැනට {job_interest or 'එම රැකියා භූමිකාව'} සඳහා ලොව පුරා පුරප්පාඩු නොමැත, නමුත් අනාගතයේදී පැමිණිය හැක! ඔබගේ තොරතුරු ලබා දෙන්න.",
+                    'ta': f"தற்போது {job_interest or 'அந்த வேலை பங்கு'} எங்கும் இல்லை, ஆனால் விரைவில் வரலாம்! உங்கள் விபரங்களை பதிவு செய்வோம்.",
+                    'singlish': f"Danata {job_interest or 'e role eka'} global vacancies naha, eth aluth ewa enawa! Api profile eka hadala thiyagamu.",
+                    'tanglish': f"Ippo {job_interest or 'andha role'} global vacancies illa, aana future-la varum! Profile-a ready pannuvom.",
                 }
-                exp_q = exp_q + hints.get(language, hints["en"])
-            return f"{ack}{no_match_note.get(language, no_match_note['en'])}\n\n{exp_q}"
+
+            next_q = PromptTemplates.get_intake_question('cv_upload' if has_exp else 'experience_years', language)
+            reply_text = f"{pool_msg.get(language, pool_msg['en'])}\n\n{next_q}"
+            return f"{fallback_msg_str}{reply_text}"
 
         # ── AWAITING JOB SELECTION ───────────────────────────────────────────
         elif state == self.STATE_AWAITING_JOB_SELECTION:
             text_norm = _normalize_text(text).lower()
             data = candidate.extracted_data or {}
-            presented_jobs = data.get('presented_jobs') or []
+            presented_jobs = data.get('presented_job_cards') or data.get('presented_jobs') or []
 
             skip_words = {
                 'skip', 'general pool', 'pool', 'later', 'none', 'no',
@@ -1576,12 +1668,15 @@ class ChatbotEngine:
             }
             if text_norm in skip_words or _is_no_intent(text):
                 data.pop('presented_jobs', None)
+                data.pop('presented_job_cards', None)
                 data['selected_job_id'] = None
                 data['selected_job_context'] = None
                 candidate.extracted_data = data
                 db.commit()
-                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
-                exp_q = PromptTemplates.get_intake_question('experience_years', language)
+
+                # Check if we already have their experience
+                has_exp = candidate.experience_years or data.get('experience_years_stated')
+
                 msg = {
                     'en': "No problem — I’ll keep you in our general pool for matching roles.",
                     'si': "ප්‍රශ්නයක් නැහැ — ඔබව general pool එකේ තබාගෙන match වෙන roles බලමු.",
@@ -1589,7 +1684,17 @@ class ChatbotEngine:
                     'singlish': "Hari, awlak naha — oyawa general pool eke thiyagannam.",
                     'tanglish': "Parava illa — ungala general pool-la vechitu matching jobs paapom.",
                 }
-                return f"{msg.get(language, msg['en'])}\n\n{exp_q}"
+
+                if has_exp:
+                    # Skip experience question, go straight to CV
+                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
+                    next_q = PromptTemplates.get_intake_question('cv_upload', language)
+                else:
+                    # Ask for experience
+                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
+                    next_q = PromptTemplates.get_intake_question('experience_years', language)
+
+                return f"{msg.get(language, msg['en'])}\n\n{next_q}"
 
             idx = None
             if text_norm.startswith("job_"):
@@ -1598,9 +1703,9 @@ class ChatbotEngine:
                 except ValueError:
                     pass
             else:
-                m = re.search(r'\b([1-3])\b', text_norm)
-                if m:
-                    idx = int(m.group(1)) - 1
+                if any(x in text_norm for x in ['1', '1️⃣', 'one']): idx = 0
+                elif any(x in text_norm for x in ['2', '2️⃣', 'two']): idx = 1
+                elif any(x in text_norm for x in ['3', '3️⃣', 'three']): idx = 2
 
             if idx is None:
                 reprompt = {
@@ -1651,16 +1756,49 @@ class ChatbotEngine:
             candidate.extracted_data = data
             db.commit()
 
-            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
-            exp_q = PromptTemplates.get_intake_question('experience_years', language)
-            confirm = {
-                'en': f"Great choice — *{selected_context['title']}* selected ✅",
-                'si': f"හොඳ තේරීමක් — *{selected_context['title']}* තෝරාගත්තා ✅",
-                'ta': f"சிறந்த தேர்வு — *{selected_context['title']}* தேர்ந்தெடுக்கப்பட்டது ✅",
-                'singlish': f"Hari choice ekak — *{selected_context['title']}* select kala ✅",
-                'tanglish': f"Super choice — *{selected_context['title']}* select pannitinga ✅",
-            }
-            return f"{confirm.get(language, confirm['en'])}\n\n{exp_q}"
+            has_cv = bool(candidate.resume_file_path)
+            has_exp = bool(candidate.experience_years) or bool(data.get('experience_years_stated'))
+
+            if has_cv:
+                confirm = {
+                    'en': f"Excellent choice! Your application for *{selected_context['title']}* is complete with your CV.",
+                    'si': f"විශිෂ්ට තේරීමක්! *{selected_context['title']}* සඳහා ඔබගේ අයදුම්පත CV එකත් සමග සම්පූර්ණයි.",
+                    'ta': f"சிறந்த தேர்வு! *{selected_context['title']}* பணிக்கான உங்கள் விண்ணப்பம் CV உடன் முழுமையடைந்தது.",
+                    'singlish': f"Niyamai! CV ekath ekka *{selected_context['title']}* application eka complete.",
+                    'tanglish': f"Super choice! *{selected_context['title']}* ku unga application CV yoda complete aaiduchu.",
+                }
+                
+                missing_queue = list(dict.fromkeys(data.get('missing_critical_fields', [])))
+                if missing_queue:
+                    crud.update_candidate_state(db, candidate.id, self.STATE_COLLECTING_INFO)
+                    intake_field_alias = {'job_interest': 'job_interest', 'destination_country': 'destination_country', 'experience_years_stated': 'experience_years'}
+                    next_field = missing_queue[0]
+                    if next_field in intake_field_alias:
+                        next_question = PromptTemplates.get_intake_question(intake_field_alias[next_field], language)
+                    else:
+                        next_question = text_extractor.get_missing_field_question(next_field, language)
+                    return f"{confirm.get(language, confirm['en'])}\n\nI just need a little more information:\n{next_question}"
+                else:
+                    crud.update_candidate_state(db, candidate.id, self.STATE_APPLICATION_COMPLETE)
+                    complete_msg = PromptTemplates.get_application_complete_message(language, self.company_name, candidate.name or "")
+                    return f"{confirm.get(language, confirm['en'])}\n\n{complete_msg}"
+            else:
+                confirm = {
+                    'en': f"Great choice — *{selected_context['title']}* selected ✅",
+                    'si': f"හොඳ තේරීමක් — *{selected_context['title']}* තෝරාගත්තා ✅",
+                    'ta': f"சிறந்த தேர்வு — *{selected_context['title']}* தேர்ந்தெடுக்கப்பட்டது ✅",
+                    'singlish': f"Hari choice ekak — *{selected_context['title']}* select kala ✅",
+                    'tanglish': f"Super choice — *{selected_context['title']}* select pannitinga ✅",
+                }
+                
+                if has_exp:
+                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
+                    cv_q = PromptTemplates.get_intake_question('cv_upload', language)
+                    return f"{confirm.get(language, confirm['en'])}\n\n{cv_q}"
+                else:
+                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
+                    exp_q = PromptTemplates.get_intake_question('experience_years', language)
+                    return f"{confirm.get(language, confirm['en'])}\n\n{exp_q}"
 
         # ── AWAITING EXPERIENCE ───────────────────────────────────────────────
         elif state == self.STATE_AWAITING_EXPERIENCE:
@@ -1980,7 +2118,7 @@ class ChatbotEngine:
         language = candidate.preferred_language or 'en'
         try:
             # 1. Save file
-            file_path = file_manager.save_cv(media_content, candidate.phone_number, filename)
+            file_path, _ = file_manager.save_cv(media_content, filename, candidate.phone_number)
             
             # 2. Update local state
             extracted = candidate.extracted_data or {}
@@ -1998,7 +2136,7 @@ class ChatbotEngine:
                 'si': ["ලිපිගොනුව ලැබුණා, ස්තූතියි! 📄", "සාර්ථකව save කළා! ✅"],
                 'ta': ["ஆவணம் பெறப்பட்டது, நன்றி! 📄", "வெற்றிகரமாக சேமிக்கப்பட்டது! ✅"]
             }.get(language, ["Got the document, thanks! 📄"]))
-            
+
             self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, language)
             
             # 4. Sync immediately with the new document
@@ -2037,6 +2175,19 @@ class ChatbotEngine:
                 file_content, filename, candidate.phone_number
             )
 
+            # KEEP IN MEMORY so background task finds it if needed
+            candidate.resume_file_path = file_path
+            db.commit()
+
+            # IMMEDIATE PORTAL PUSH: Even before AI extraction, guarantee the CV
+            # reaches the recruiter!
+            self._dispatch_recruitment_sync_background(
+                candidate_id=candidate.id,
+                cv_bytes=file_content,
+                cv_filename=filename,
+                reason="cv-upload-immediate",
+            )
+
             # Intelligent extraction
             document_processor = get_document_processor()
             result = document_processor.process_document(
@@ -2053,7 +2204,7 @@ class ChatbotEngine:
                 extracted_data = None
             else:
                 extracted_data = result.extracted_data
-                cv_data = self._to_cv_data(extracted_data)
+                cv_data = None
 
             # Merge intake fields into extracted_data for storage
             existing_intake = candidate.extracted_data or {}
@@ -2133,18 +2284,14 @@ class ChatbotEngine:
                     merged_data['experience_years_stated'] = str(inferred_exp)
 
             # Keep CV-required fields in queue for later collection if needed
-            merged_data['missing_critical_fields'] = list(missing_fields or [])
+            filtered_missing_fields = [
+                field
+                for field in list(missing_fields or [])
+                if not merged_data.get(field)
+            ]
+            merged_data['missing_critical_fields'] = list(dict.fromkeys(filtered_missing_fields))
             candidate.extracted_data = merged_data
             db.commit()
-
-            # Immediate partial sync (non-blocking): push CV + current inferred data
-            # now, before gap-fill answers are collected.
-            self._dispatch_recruitment_sync_background(
-                candidate_id=candidate.id,
-                cv_bytes=file_content,
-                cv_filename=filename,
-                reason="cv-upload-partial-sync",
-            )
 
             candidate_name = (
                 (extracted_data.full_name if extracted_data else None)
@@ -2163,91 +2310,107 @@ class ChatbotEngine:
             # Build intake recap (what we collected before CV)
             recap = self._build_intake_recap(intake_fields, language)
 
-            # Gap-fill routing for CV-first applicants
-            role_name = (merged_data.get('job_interest') or '').strip()
-            country_name = (merged_data.get('destination_country') or '').strip()
-
-            if not country_name:
-                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
-                candidate.conversation_state = self.STATE_AWAITING_COUNTRY
-                short_name = _first_name(candidate_name)
-                role_label = role_name or "professional"
-                if merged_data.get('experience_years_stated'):
-                    exp_label = f"{merged_data.get('experience_years_stated')} years"
-                    personalized = {
-                        'en': f"Thanks for sharing your CV{', ' + short_name if short_name else ''}! 📄✅ I see your background as *{role_label}* with around {exp_label} experience. Which country are you looking to work in?",
-                        'si': f"ඔබගේ CV එවලා දීපු එකට ස්තූතියි{', ' + short_name if short_name else ''}! 📄✅ ඔබ *{role_label}* පසුබිමක් සහ {exp_label} පළපුරුද්දක් තියෙනවා වගේ. ඔබ වැඩ කරන්න කැමති රට කුමක්ද?",
-                        'ta': f"உங்கள் CV அனுப்பியதற்கு நன்றி{', ' + short_name if short_name else ''}! 📄✅ உங்கள் *{role_label}* பின்னணி மற்றும் சுமார் {exp_label} அனுபவம் தெரியுது. நீங்கள் எந்த நாட்டில் வேலை பார்க்க விரும்புகிறீர்கள்?",
-                        'singlish': f"CV eka share karata thanks{', ' + short_name if short_name else ''}! 📄✅ Oya *{role_label}* background ekak saha around {exp_label} experience thiyenawa wage. Oya work karanna kemathi rata monada?",
-                        'tanglish': f"CV anuppinathukku thanks{', ' + short_name if short_name else ''}! 📄✅ Unga *{role_label}* background-um around {exp_label} experience-um theriyuthu. Neenga endha naatula velai paakanum?",
-                    }
-                    response = f"{recap}{summary}\n\n{personalized.get(language, personalized['en'])}"
-                else:
-                    personalized = {
-                        'en': f"Thanks for sharing your CV{', ' + short_name if short_name else ''}! 📄✅ I see your background as *{role_label}*. Which country are you looking to work in?",
-                        'si': f"ඔබගේ CV එවලා දීපු එකට ස්තූතියි{', ' + short_name if short_name else ''}! 📄✅ ඔබ *{role_label}* පසුබිමක් තියෙනවා වගේ. ඔබ වැඩ කරන්න කැමති රට කුමක්ද?",
-                        'ta': f"உங்கள் CV அனுப்பியதற்கு நன்றி{', ' + short_name if short_name else ''}! 📄✅ உங்கள் *{role_label}* பின்னணி தெரிகிறது. நீங்கள் எந்த நாட்டில் வேலை பார்க்க விரும்புகிறீர்கள்?",
-                        'singlish': f"CV eka share karata thanks{', ' + short_name if short_name else ''}! 📄✅ Oya *{role_label}* background ekak thiyenawa wage. Oya work karanna kemathi rata monada?",
-                        'tanglish': f"CV anuppinathukku thanks{', ' + short_name if short_name else ''}! 📄✅ Unga *{role_label}* background theriyuthu. Neenga endha naatula velai paakanum?",
-                    }
-                    response = f"{recap}{summary}\n\n{personalized.get(language, personalized['en'])}"
-
-            elif not role_name:
-                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB)
-                candidate.conversation_state = self.STATE_AWAITING_JOB
-                ask_role = {
-                    'en': "Thanks for the CV! 📄✅ I've saved your details. What specific job role are you looking for right now?",
-                    'si': "CV එකට ස්තූතියි! 📄✅ ඔබගේ විස්තර save කළා. දැන් ඔබ සොයන විශේෂ රැකියා භූමිකාව කුමක්ද?",
-                    'ta': "CVக்கு நன்றி! 📄✅ உங்கள் விவரங்கள் சேமிக்கப்பட்டது. இப்போது நீங்கள் தேடும் குறிப்பிட்ட வேலை பதவி என்ன?",
-                    'singlish': "CV ekata thanks! 📄✅ Details save kala. Dan oyata ona specific job role eka mokadda?",
-                    'tanglish': "CV-ku thanks! 📄✅ Details save panniten. Ippo neenga thedura specific job role enna?",
-                }
-                response = f"{recap}{summary}\n\n{ask_role.get(language, ask_role['en'])}"
-
+            # SEMANTIC MATCHING FOR JOBS POST-CV
+            cv_title = (extracted_data.current_job_title if extracted_data else cv_data.current_position) or ""
+            
+            if extracted_data:
+                cv_skills = " ".join(extracted_data.technical_skills or [])
             else:
+                cv_skills = cv_data.skills or ""
+            search_query = f"{cv_title} {cv_skills}".strip() or merged_data.get('job_interest', '')
+            
+            if not merged_data.get('selected_job_id') and search_query:
                 matching_jobs = await vacancy_service.get_matching_jobs(
-                    job_interest=role_name,
-                    country=country_name,
+                    job_interest=search_query,
+                    country=merged_data.get('destination_country', ''),
                     limit=3,
                 )
                 if matching_jobs:
-                    merged_data['presented_jobs'] = matching_jobs[:3]
+                    merged_data['presented_jobs'] = [str(j.get('id') or '') for j in matching_jobs[:3] if str(j.get('id') or '').strip()]
+                    merged_data['presented_job_cards'] = matching_jobs[:3]
                     candidate.extracted_data = merged_data
                     db.commit()
+
                     crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB_SELECTION)
-                    candidate.conversation_state = self.STATE_AWAITING_JOB_SELECTION
-                    lines = []
-                    for idx, job in enumerate(merged_data['presented_jobs'], 1):
-                        lines.append(
-                            f"{idx}️⃣ *{job.get('title', 'Job')}*\n"
-                            f"💰 Salary: {job.get('salary', 'TBD')}\n"
-                            f"📝 {job.get('description', 'Click to learn more.')}"
-                        )
-                    choose = {
-                        'en': "Reply with the number (e.g., 1) to select a job, or type *Skip*.",
-                        'si': "රැකියාව තෝරාගැනීමට අංකය reply කරන්න (උදා: 1), නැත්නම් *Skip* කියන්න.",
-                        'ta': "வேலை தேர்வு செய்ய எண்ணை அனுப்பவும் (உதா: 1), இல்லை என்றால் *Skip* என்று எழுதவும்.",
-                        'singlish': "Job select karanna number eka reply karanna (eg: 1), nathnam *Skip* kiyanna.",
-                        'tanglish': "Job select panna number anuppunga (eg: 1), illa na *Skip* sollunga.",
+                    
+                    list_intro = {
+                        'en': f"Thanks for your CV! 📄✅ Based on your skills, I found {len(matching_jobs)} perfect job matches.",
+                        'si': f"ඔබගේ CV එකට ස්තූතියි! 📄✅ ඔබගේ කුසලතා මත, මට {len(matching_jobs)} ගැලපෙන රැකියා හමුවුණා.",
+                        'ta': f"உங்கள் CVக்கு நன்றி! 📄✅ உங்கள் திறமைகளின் அடிப்படையில், நான் {len(matching_jobs)} சரியான வேலைகளைக் கண்டேன்.",
+                        'singlish': f"CV ekata thanks! 📄✅ Oyage skills walata match wena jobs {len(matching_jobs)} k thiyenawa.",
+                        'tanglish': f"CV-ku thanks! 📄✅ Unga skills vachu, {len(matching_jobs)} perfect jobs kandupudichiruken.",
+                    }.get(language, f"Thanks for your CV! 📄✅ Based on your skills, I found {len(matching_jobs)} perfect job matches.")
+
+                    rows = []
+                    for i, job in enumerate(matching_jobs[:3]):
+                        title = job.get('title') or 'Job'
+                        loc = str(job.get('country') or 'Location')
+                        salary = job.get('salary') or ''
+                        rows.append({
+                            "id": f"job_{i}",
+                            "title": f"{title} ({loc})"[:24],
+                            "description": (salary if salary else job.get('description', ''))[:72]
+                        })
+
+                    skip_title = {
+                        'en': "Skip & Complete", 'si': "Skip කර අවසන් කරන්න", 'ta': "Skip செந்து முடி",
+                        'singlish': "Skip & Complete", 'tanglish': "Skip & Complete"
+                    }.get(language, "Skip & Complete")[:24]
+
+                    rows.append({
+                        "id": "skip",
+                        "title": skip_title,
+                        "description": "Just complete my application"[:72]
+                    })
+                    btn_label = {
+                        'en': "View Jobs", 'si': "රැකියා බලන්න", 'ta': "வேலைகளைப் பார்",
+                        'singlish': "Jobs Balanna", 'tanglish': "Jobs Paarkavum"
+                    }.get(language, "View Jobs")[:20]
+
+                    return {
+                        "type": "list",
+                        "body_text": f"{recap}{summary}\n\n{list_intro}",
+                        "button_label": btn_label,
+                        "sections": [{"title": "Recommended Jobs"[:24], "rows": rows}]
                     }
-                    response = (
-                        f"{recap}{summary}\n\n"
-                        f"Thanks for your CV! 📄✅ I have what I need and found matching jobs in {country_name}.\n\n"
-                        + "\n\n".join(lines)
-                        + f"\n\n{choose.get(language, choose['en'])}"
-                    )
+
+            # Gap-fill routing for post-CV flow (never regress to earlier linear states)
+            missing_queue = list(dict.fromkeys(merged_data.get('missing_critical_fields', [])))
+
+            if missing_queue:
+                crud.update_candidate_state(db, candidate.id, self.STATE_COLLECTING_INFO)
+                candidate.conversation_state = self.STATE_COLLECTING_INFO
+                merged_data['missing_critical_fields'] = missing_queue
+                candidate.extracted_data = merged_data
+                db.commit()
+
+                intake_field_alias = {
+                    'job_interest': 'job_interest',
+                    'destination_country': 'destination_country',
+                    'experience_years_stated': 'experience_years',
+                }
+                next_field = missing_queue[0]
+                if next_field in intake_field_alias:
+                    next_question = PromptTemplates.get_intake_question(intake_field_alias[next_field], language)
                 else:
-                    crud.update_candidate_state(db, candidate.id, self.STATE_APPLICATION_COMPLETE)
-                    candidate.conversation_state = self.STATE_APPLICATION_COMPLETE
-                    done = {
-                        'en': "Thanks for your CV! 📄✅ I have all key details. I’ll keep you in our active pool and notify you when matching roles open.",
-                        'si': "ඔබගේ CV එකට ස්තූතියි! 📄✅ අවශ්‍ය මූලික විස්තර සියල්ල ඇත. ගැලපෙන රැකියා ආවම දැනුම් දෙනවා.",
-                        'ta': "உங்கள் CVக்கு நன்றி! 📄✅ முக்கிய விவரங்கள் அனைத்தும் கிடைத்தது. பொருத்தமான வேலை வந்தவுடன் தெரிவிப்போம்.",
-                        'singlish': "CV ekata thanks! 📄✅ Moolika details okkoma thiyenawa. Match wena jobs awama danawannam.",
-                        'tanglish': "CV-ku thanks! 📄✅ Mukkiya details ellam irukku. Match aagura jobs vandha udane solluren.",
-                    }
-                    response = f"{recap}{summary}\n\n{done.get(language, done['en'])}"
-                
+                    next_question = text_extractor.get_missing_field_question(next_field, language)
+
+                ack = {
+                    'en': "Thanks for your CV! 📄✅ I’ve saved your details. I just need a little more information.",
+                    'si': "ඔබගේ CV එකට ස්තූතියි! 📄✅ ඔබගේ විස්තර save කළා. තව ටිකක් තොරතුරු ඕන.",
+                    'ta': "உங்கள் CVக்கு நன்றி! 📄✅ உங்கள் விவரங்கள் சேமிக்கப்பட்டது. இன்னும் சிறிய தகவல் வேண்டும்.",
+                    'singlish': "CV ekata thanks! 📄✅ Oyage details save kala. Thawa poddak information one.",
+                    'tanglish': "CV-ku thanks! 📄✅ Unga details save panniten. Innum konjam information venum.",
+                }
+                response = f"{recap}{summary}\n\n{ack.get(language, ack['en'])}\n\n{next_question}"
+            else:
+                crud.update_candidate_state(db, candidate.id, self.STATE_APPLICATION_COMPLETE)
+                candidate.conversation_state = self.STATE_APPLICATION_COMPLETE
+                complete_msg = PromptTemplates.get_application_complete_message(
+                    language, self.company_name, candidate.name or ""
+                )
+                response = f"{recap}{summary}\n\n{complete_msg}"
+
             self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, language)
 
             return response
@@ -2260,6 +2423,18 @@ class ChatbotEngine:
                 'ta': "CV செயலாக்குவதில் சிறு பிரச்சனை. மீண்டும் upload முயற்சிக்கவும்? 🙏",
             }
             return errs.get(language, errs['en'])
+
+    async def _build_vacancy_list(self, language: str, candidate_ctx: Dict[str, Any]) -> str:
+        """
+        Generates a beautifully formatted job list directly when intent is vacancy_query.
+        """
+        from app.services.vacancy_service import vacancy_service
+        return await vacancy_service.search_and_refine(
+            user_message="Provide me a list of job opportunities suitable for me.",
+            entities={},
+            language=language,
+            candidate_info=candidate_ctx
+        )
 
     # ─── Intake helpers ───────────────────────────────────────────────────────
 
@@ -2678,6 +2853,20 @@ class ChatbotEngine:
         extracted_data = candidate.extracted_data or {}
         missing_fields = extracted_data.get('missing_critical_fields', extracted_data.get('missing_fields', []))
 
+        def _has_field_value(field_name: str) -> bool:
+            value = extracted_data.get(field_name)
+            if value:
+                return True
+            if field_name == 'experience_years_stated' and extracted_data.get('experience_years'):
+                return True
+            return False
+
+        pruned_missing = [field for field in list(missing_fields or []) if not _has_field_value(field)]
+        if pruned_missing != list(missing_fields or []):
+            extracted_data['missing_critical_fields'] = pruned_missing
+            crud.update_candidate(db, candidate.id, CandidateUpdate(extracted_data=extracted_data))
+        missing_fields = pruned_missing
+
         intake_field_alias = {
             'job_interest': 'job_interest',
             'destination_country': 'destination_country',
@@ -2700,7 +2889,8 @@ class ChatbotEngine:
 
         if extracted_value:
             extracted_data[current_field] = extracted_value
-            missing_fields.remove(current_field)
+            while current_field in missing_fields:
+                missing_fields.remove(current_field)
             extracted_data['missing_critical_fields'] = missing_fields
 
             if current_field == 'experience_years_stated':
