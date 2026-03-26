@@ -665,6 +665,140 @@ Cultural & linguistic rules for Sri Lankan users:
         'application_complete': 'Application completed',
     }
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # MULTILINGUAL ENTITY EXTRACTION — Specialized for Sri Lankan code-switching
+    # ─────────────────────────────────────────────────────────────────────────
+    SRI_LANKAN_ENTITY_EXTRACTION_PROMPT = """\
+You are a multilingual entity extractor for a Sri Lankan overseas recruitment chatbot.
+The user may write in English, Sinhala script (ශ, ක), Tamil script (க, ந), Singlish \
+(Romanized Sinhala), Tanglish (Romanized Tamil), or any mix. Your task is to identify \
+the job role and destination country they are expressing interest in.
+
+=== FEW-SHOT EXAMPLES ===
+Input: "mata kuwait yanna one"         → {{"job_role": null, "country": "Kuwait", "confidence": 0.92}}
+Input: "ennaku oman ra job irukuza"     → {{"job_role": null, "country": "Oman",  "confidence": 0.88}}
+Input: "sowdi driver job"              → {{"job_role": "driver", "country": "Saudi Arabia", "confidence": 0.95}}
+Input: "dubei wala security kenek wenna" → {{"job_role": "security guard", "country": "United Arab Emirates", "confidence": 0.91}}
+Input: "maleshiya factory"             → {{"job_role": "factory worker", "country": "Malaysia", "confidence": 0.93}}
+Input: "kuwet la wadeema karanna"      → {{"job_role": null, "country": "Kuwait", "confidence": 0.85}}
+Input: "dubai driver"                  → {{"job_role": "driver", "country": "United Arab Emirates", "confidence": 0.98}}
+Input: "oman nurse job"                → {{"job_role": "nurse", "country": "Oman", "confidence": 0.97}}
+Input: "qatar la security job ekak"    → {{"job_role": "security guard", "country": "Qatar", "confidence": 0.94}}
+Input: "malesia factory worker"        → {{"job_role": "factory worker", "country": "Malaysia", "confidence": 0.89}}
+Input: "dubayi cook job wanna"         → {{"job_role": "cook", "country": "United Arab Emirates", "confidence": 0.90}}
+
+=== COLLOQUIAL COUNTRY SPELLINGS ===
+UAE / Dubai: dubai, dubei, dubayi, dubay, di bai, uae
+Saudi Arabia: sowdi, sowdiya, saudi, saudia, ksa, riyadh
+Kuwait: kuwait, kuwet, kuwit, kuweiti, kuwethi
+Oman: oman, ommaan, omman
+Qatar: qatar, katar, qathar
+Malaysia: malaysia, maleshiya, malasia, malesia, melesia
+Bahrain: bahrain, barain, bahren
+Jordan: jordan, urdon
+Singapore: singapore, singapura
+
+=== ACTIVE CRM COUNTRIES ===
+{active_countries_list}
+
+=== ACTIVE CRM JOB TITLES ===
+{active_jobs_list}
+
+=== USER INPUT ===
+"{text}"
+
+=== INSTRUCTIONS ===
+1. Extract job_role and country as normalized English values.
+2. Try to match country against the ACTIVE CRM COUNTRIES list above and output \
+the matched_crm_country field (exact string from the list, or null if no match).
+3. Try to match job_role against ACTIVE CRM JOB TITLES list and output matched_crm_job.
+4. Set confidence 0.0–1.0 based on how certain you are.
+5. Output null for any field you cannot extract — do NOT hallucinate.
+
+JSON only (no markdown):
+{{"job_role": "<English name or null>", "country": "<English name or null>", \
+"matched_crm_country": "<exact CRM value or null>", "matched_crm_job": "<exact CRM value or null>", \
+"confidence": <0.0-1.0>}}"""
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # GIBBERISH FALLBACK — Multilingual (replaces the single Singlish hardcode)
+    # ─────────────────────────────────────────────────────────────────────────
+    GIBBERISH_FALLBACK = {
+        'en':       "I didn't quite catch that 😅 Could you tell me a bit more clearly?",
+        'si':       "ඒක හරියට therune nehe ayye/nangi 😅. Apita me details tika complete karanna puluwanda?",
+        'ta':       "அது சரியாகப் புரியவில்லை 😅 கொஞ்சம் தெளிவாகச் சொல்லுங்களா?",
+        'singlish': "Mata eka hariyata therenne na ayye/nangi 😅. Apita me details tika complete karanna puluwanda? (I didn't quite catch that. Can we complete these details?)",
+        'tanglish': "Adhu sariya puriyala da 😅. Konjam theliva solluveengala? (I didn't quite understand that.)",
+    }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # AGENTIC HANDOFF — LLM-powered contextual steering for out-of-bounds replies
+    # Used when a user gives an off-topic / unclear answer during intake flow.
+    # The LLM acknowledges their message naturally, then gently guides them back.
+    # ─────────────────────────────────────────────────────────────────────────
+    AGENTIC_TAKEOVER_PROMPT = """\
+You are Dilan, a friendly recruitment assistant for a Sri Lankan overseas recruitment agency.
+The candidate's message is off-topic or unclear. Do NOT ignore what they said — acknowledge it naturally, \
+then gently steer them back to the current goal.
+
+Current recruitment goal: {current_goal}
+Candidate's message: "{user_message}"
+Language/register to respond in: {language}
+
+Rules:
+- Acknowledge their message warmly (1 sentence) — do NOT say "I understand" robotically.
+- Gently redirect to the current goal (1 sentence) — rephrase the question in a new way, never repeat word-for-word.
+- Max 2 sentences + 1-2 emojis. WhatsApp brevity required.
+- Respond ONLY in the {language} register (Singlish → casual Romanized Sinhala+English, Tanglish → casual Romanized Tamil+English, si → Sinhala script, ta → Tamil script, en → English).
+- NEVER use the words "Invalid", "Error", "I can't", "Unfortunately I don't understand" as first words.
+- Be warm, empathetic, and human — not robotic.
+
+FEW-SHOT EXAMPLES:
+Goal="Find out their job role" | Message="I like to go someplace amazing" | en →
+"Sounds like you're ready for an adventure! 🌟 What type of job are you hoping to find abroad?"
+
+Goal="Find out their destination country" | Message="I lost my passport yesterday" | singlish →
+"Aiyoo, that's stressful da! 😥 Anyway, which country are you hoping to work in?"
+
+Goal="Find out years of experience" | Message="My wife is angry at me" | tanglish →
+"Seri seri, home-la situation-a handle pandrom la! 😄 Ippo sollunga — evvalo varudam experience irukku ungalukku?"
+
+Goal="Find out their job role" | Message="aney mokada karanne mama" | singlish →
+"Haha machang, relax! 😄 Etha hadanna job eka mokakda, kiyannako?"
+
+Response (raw text, no quotes):"""
+
+    # Maps chatbot state names → human-readable goal descriptions passed to the agentic prompt.
+    CURRENT_GOAL_MAP: dict = {
+        'awaiting_job': 'Find out their job role (what type of job they want abroad)',
+        'awaiting_job_interest': 'Find out their job role (what type of job they want abroad)',
+        'awaiting_country': 'Find out their destination country (which country they want to work in)',
+        'awaiting_destination_country': 'Find out their destination country (which country they want to work in)',
+        'awaiting_experience': 'Find out years of work experience they have',
+        'awaiting_cv': 'Get them to send their CV (PDF or Word)',
+        'collecting_info': 'Collect missing profile information from the candidate',
+        'awaiting_language_selection': 'Help them choose their preferred language (English / Sinhala / Tamil)',
+    }
+
+    @classmethod
+    def get_gibberish_fallback(cls, language: str) -> str:
+        """Return a multilingual gibberish fallback message matched to the user's register."""
+        return cls.GIBBERISH_FALLBACK.get(language, cls.GIBBERISH_FALLBACK['en'])
+
+    @classmethod
+    def get_agentic_takeover_prompt(cls, user_message: str, current_goal: str, language: str) -> str:
+        """Format the agentic takeover prompt with the given context."""
+        lang_names = {
+            'en': 'English', 'si': 'Sinhala script (Unicode)',
+            'ta': 'Tamil script (Unicode)', 'singlish': 'Singlish (casual Romanized Sinhala+English)',
+            'tanglish': 'Tanglish (casual Romanized Tamil+English)',
+        }
+        return cls.AGENTIC_TAKEOVER_PROMPT.format(
+            current_goal=current_goal,
+            user_message=user_message,
+            language=lang_names.get(language, language),
+        )
+
     RAG_PROMPT = """You are Dilan — friendly receptionist at {company_name}, overseas recruitment.
 Answer naturally from the knowledge base. If not there: "I don't have that specific info right now, but I can find out."
 

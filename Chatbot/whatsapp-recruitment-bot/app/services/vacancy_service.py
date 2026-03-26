@@ -451,6 +451,34 @@ class VacancyService:
         nonzero = [j for j in scored if score(j) > 0]
         return (nonzero[:15] if nonzero else scored[:15])
 
+    def get_active_countries(self) -> list:
+        """Return deduplicated sorted list of countries with active vacancies."""
+        cache = get_job_cache()
+        seen = set()
+        result = []
+        for job in cache.values():
+            if job.get("status") != "active":
+                continue
+            for c in (job.get("countries") or []):
+                val = str(c).strip()
+                if val and val.lower() not in seen:
+                    seen.add(val.lower())
+                    result.append(val)
+        return sorted(result)
+
+    def get_active_job_titles(self) -> list:
+        """Return deduplicated sorted list of job titles with active vacancies."""
+        cache = get_job_cache()
+        seen = set()
+        result = []
+        for job in cache.values():
+            if job.get("status") != "active":
+                continue
+            title = str(job.get("title") or "").strip()
+            if title and title.lower() not in seen:
+                seen.add(title.lower())
+                result.append(title)
+        return sorted(result)
 
 
     # ─────────────────────────────────────────────────────────────────────────

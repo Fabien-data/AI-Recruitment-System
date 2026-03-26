@@ -237,9 +237,17 @@ async def process_single_message(message: dict, contacts: list, db):
         try:
             return await asyncio.wait_for(chatbot.process_message(**kwargs), timeout=45)
         except asyncio.TimeoutError:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             logger.error("chatbot.process_message timed out after 45s")
             return "Sorry, I'm taking too long to respond right now. Please try again in a moment."
         except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             logger.error(f"chatbot.process_message failed: {exc}")
             return "Oops, something went wrong on my end. Please try again."
 
@@ -293,6 +301,10 @@ async def process_single_message(message: dict, contacts: list, db):
                         logger.info(f"Fast-path language fallback sent to {from_number}")
                         return
         except Exception as fast_path_err:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             logger.warning(f"Greeting fast-path failed: {fast_path_err}")
 
         response_text = await _safe_process_message(

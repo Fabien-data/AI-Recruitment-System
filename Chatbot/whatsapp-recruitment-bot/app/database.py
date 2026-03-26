@@ -5,7 +5,7 @@ SQLAlchemy setup for PostgreSQL on Google Cloud SQL.
 Optimized for Cloud Run with connection pooling.
 """
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager
@@ -84,6 +84,40 @@ def init_db():
     """
     from app import models  # Import models to register them
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight schema self-heal for deployments where legacy DB schema
+    # is behind the SQLAlchemy model (prevents UndefinedColumn runtime errors).
+    try:
+        with engine.begin() as conn:
+            if _is_sqlite:
+                cols = {
+                    row[1]
+                    for row in conn.execute(text("PRAGMA table_info(candidates)"))
+                }
+                if "status" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN status VARCHAR(50) DEFAULT 'active'"))
+                if "confusion_streak" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN confusion_streak INTEGER DEFAULT 0"))
+                if "question_retries" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN question_retries INTEGER DEFAULT 0"))
+            else:
+                cols = {
+                    row[0]
+                    for row in conn.execute(text("""
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'candidates'
+                    """))
+                }
+                if "status" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN status VARCHAR(50) DEFAULT 'active'"))
+                if "confusion_streak" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN confusion_streak INTEGER DEFAULT 0"))
+                if "question_retries" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN question_retries INTEGER DEFAULT 0"))
+    except Exception as schema_err:
+        logger.warning(f"Schema self-heal skipped/failed: {schema_err}")
+
     logger.info("Database tables created successfully")
 
 

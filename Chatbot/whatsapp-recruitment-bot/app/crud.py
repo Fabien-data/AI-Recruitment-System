@@ -6,6 +6,7 @@ Database operations for all models.
 
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.exc import IntegrityError
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
@@ -78,12 +79,20 @@ def update_candidate(
 def get_or_create_candidate(db: Session, phone_number: str) -> Candidate:
     """Get existing candidate or create new one."""
     candidate = get_candidate_by_phone(db, phone_number)
-    if not candidate:
-        candidate = create_candidate(
+    if candidate:
+        return candidate
+
+    try:
+        return create_candidate(
             db,
             CandidateCreate(phone_number=phone_number)
         )
-    return candidate
+    except IntegrityError:
+        db.rollback()
+        candidate = get_candidate_by_phone(db, phone_number)
+        if candidate:
+            return candidate
+        raise
 
 
 def update_candidate_cv_data(

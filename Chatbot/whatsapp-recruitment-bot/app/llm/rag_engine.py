@@ -1040,6 +1040,145 @@ Respond ONLY with valid JSON (no markdown):
             validate_result = _cached_v if _cached_v else await self.validate_intake_answer_async(field, text, language)
             return classify_result, validate_result
 
+    async def generate_agentic_response(
+        self,
+        user_message: str,
+        current_goal: str,
+        language: str = "en",
+    ) -> str:
+        """
+        Generate an agentic, contextual steering response when a candidate's message
+        is off-topic or unclear during the intake flow.
+
+        Instead of a static robotic fallback, the LLM:
+          - Acknowledges the user's message warmly in their register
+          - Rephrases the current goal question naturally
+          - Stays concise (WhatsApp brevity: 2 sentences + emojis)
+
+        Args:
+            user_message:  The raw off-topic message from the candidate.
+            current_goal:  Human-readable description of what we need from them
+                           (e.g. from PromptTemplates.CURRENT_GOAL_MAP).
+            language:      Candidate's language register (en/si/ta/singlish/tanglish).
+
+        Returns:
+            A natural, warm steering response string.
+        """
+        # Multilingual static fallbacks (used on API error)
+        _fallbacks = {
+            'en':       "Got it! 😊 To help you best, could you let me know — " + current_goal + "?",
+            'si':       "හරිද! 😊 ඔබව හොඳින් help කිරීමට — " + current_goal + " ගැන කෙටියෙන් කියන්නෙ?",
+            'ta':       "சரி! 😊 உங்களுக்கு சிறப்பாக உதவ — " + current_goal + " பற்றி சொல்லுங்க?",
+            'singlish': "Ok da! 😊 Onga sariyata help karanna — " + current_goal + " kiyannako?",
+            'tanglish': "Seri da! 😊 Ungalukku nallaa help panna — " + current_goal + " pathi sollunga?",
+        }
+
+        if not self.async_openai_client:
+            return _fallbacks.get(language, _fallbacks['en'])
+
+        try:
+            prompt = PromptTemplates.get_agentic_takeover_prompt(
+                user_message=user_message,
+                current_goal=current_goal,
+                language=language,
+            )
+            response = await self.async_openai_client.chat.completions.create(
+                model=self.chat_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=150,
+                timeout=8,
+            )
+            text = response.choices[0].message.content.strip()
+            # Safety: strip stray quote wrappers the model might include
+            if text.startswith('"') and text.endswith('"'):
+                text = text[1:-1]
+            logger.info(
+                f"generate_agentic_response: goal='{current_goal[:40]}' "
+                f"lang={language} → '{text[:80]}'"
+            )
+            return text
+        except Exception as e:
+            logger.error(f"generate_agentic_response error: {e}")
+            return _fallbacks.get(language, _fallbacks['en'])
+
+    async def extract_entities_multilingual(
+        self,
+        text: str,
+        language: str,
+        active_countries: list = None,
+        active_jobs: list = None,
+    ) -> dict:
+        """
+        Specialized multilingual entity extractor for Sri Lankan code-switched input.
+
+        Uses SRI_LANKAN_ENTITY_EXTRACTION_PROMPT with CRM-aware fuzzy matching.
+        Results are cached in _CLASSIFY_CACHE for performance.
+        Falls back gracefully to {"job_role": None, "country": None} on errors.
+
+        Args:
+            text:             The raw user message (any language/script).
+            language:         Detected language code.
+            active_countries: List of country names currently active in CRM.
+            active_jobs:      List of job titles currently active in CRM.
+
+        Returns:
+            dict with keys: job_role, country, matched_crm_country, matched_crm_job, confidence
+        """
+        import json as _json
+
+        _fallback = {
+            "job_role": None, "country": None,
+            "matched_crm_country": None, "matched_crm_job": None, "confidence": 0.0,
+        }
+
+        # Cache key includes CRM lists so different CRM states stay independent
+        _countries_str = ",".join(sorted(active_countries or []))[:200]
+        _jobs_str = ",".join(sorted(active_jobs or []))[:200]
+        _ckey = f"entity_ml|{text[:120]}|{language}|{_countries_str}|{_jobs_str}"
+        _cached = _cache_get(_CLASSIFY_CACHE, _ckey, _CLASSIFY_CACHE_TTL)
+        if _cached is not None:
+            return _cached
+
+        if not self.async_openai_client:
+            return _fallback
+
+        try:
+            countries_list = "\n".join(f"- {c}" for c in (active_countries or [])) or "(none)"
+            jobs_list = "\n".join(f"- {j}" for j in (active_jobs or [])) or "(none)"
+
+            prompt = PromptTemplates.SRI_LANKAN_ENTITY_EXTRACTION_PROMPT.format(
+                active_countries_list=countries_list,
+                active_jobs_list=jobs_list,
+                text=text,
+            )
+
+            response = await self.async_openai_client.chat.completions.create(
+                model=self.classify_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                timeout=8,
+            )
+
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```json"): content = content[7:]
+            elif content.startswith("```"): content = content[3:]
+            if content.endswith("```"): content = content[:-3]
+            content = content.strip()
+
+            result = _json.loads(content)
+            logger.info(
+                f"extract_entities_multilingual: '{text[:60]}' → "
+                f"job={result.get('job_role')} country={result.get('country')} "
+                f"crm_country={result.get('matched_crm_country')} conf={result.get('confidence')}"
+            )
+            _cache_set(_CLASSIFY_CACHE, _ckey, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"extract_entities_multilingual error: {e}")
+            return _fallback
+
 
 # Singleton instance
 rag_engine = RAGEngine()
