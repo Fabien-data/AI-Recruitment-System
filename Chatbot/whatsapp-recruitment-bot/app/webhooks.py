@@ -11,6 +11,7 @@ FIX: Background tasks now create their OWN database session
 
 import asyncio
 import logging
+import re
 import traceback
 import time
 from typing import Optional
@@ -242,14 +243,14 @@ async def process_single_message(message: dict, contacts: list, db):
             except Exception:
                 pass
             logger.error("chatbot.process_message timed out after 45s")
-            return "Sorry, I'm taking too long to respond right now. Please try again in a moment."
+            return "Thanks for your patience 🙏 Let me help you continue — please send your answer again in the same language."
         except Exception as exc:
             try:
                 db.rollback()
             except Exception:
                 pass
             logger.error(f"chatbot.process_message failed: {exc}")
-            return "Oops, something went wrong on my end. Please try again."
+            return "I’m here to help — could you send that once more? I’ll continue from where we left off."
 
     message_id   = message.get("id")
     from_number  = message.get("from")
@@ -454,8 +455,9 @@ async def process_single_message(message: dict, contacts: list, db):
         elif interactive_type == "list_reply":
             list_id    = interactive.get("list_reply", {}).get("id", "")
             list_title = interactive.get("list_reply", {}).get("title", "")
-            # Use exact list_id for structured tracking, otherwise fallback to title
-            text_to_send = list_id if list_id.startswith("job_") or list_id == "skip" else (list_title or list_id)
+            # Use canonical structured IDs whenever available
+            is_structured = bool(re.match(r"^(job_\d+|skip|ctr_\d+|country_[a-z_]+|exp_[a-z0-9_]+)$", str(list_id), re.IGNORECASE))
+            text_to_send = list_id if is_structured else (list_title or list_id)
             logger.info(
                 f"📋 List reply from {from_number}: id={list_id!r} title={list_title!r}"
             )

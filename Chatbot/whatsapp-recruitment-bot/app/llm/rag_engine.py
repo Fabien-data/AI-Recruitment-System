@@ -1066,11 +1066,11 @@ Respond ONLY with valid JSON (no markdown):
         """
         # Multilingual static fallbacks (used on API error)
         _fallbacks = {
-            'en':       "Got it! 😊 To help you best, could you let me know — " + current_goal + "?",
-            'si':       "හරිද! 😊 ඔබව හොඳින් help කිරීමට — " + current_goal + " ගැන කෙටියෙන් කියන්නෙ?",
-            'ta':       "சரி! 😊 உங்களுக்கு சிறப்பாக உதவ — " + current_goal + " பற்றி சொல்லுங்க?",
-            'singlish': "Ok da! 😊 Onga sariyata help karanna — " + current_goal + " kiyannako?",
-            'tanglish': "Seri da! 😊 Ungalukku nallaa help panna — " + current_goal + " pathi sollunga?",
+            'en':       "Got it! 😊 Please share your answer to the current step so I can continue.",
+            'si':       "හරි! 😊 ඉදිරියට යන්න, දැනට අහන ප්‍රශ්නයට පිළිතුරක් දෙන්න.",
+            'ta':       "சரி! 😊 தொடர, இப்போது கேட்கும் கேள்விக்கு பதில் சொல்லுங்கள்.",
+            'singlish': "Hari da! 😊 Continue karanna, dan ahana prashneta answer eka denna.",
+            'tanglish': "Seri da! 😊 Continue panna, ippo kekkura kelvikku answer sollunga.",
         }
 
         if not self.async_openai_client:

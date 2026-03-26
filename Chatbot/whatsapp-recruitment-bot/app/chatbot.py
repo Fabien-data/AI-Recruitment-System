@@ -113,6 +113,20 @@ _NO_CV_RE = re.compile(
     re.IGNORECASE,
 )
 
+_INTERACTIVE_TOKEN_RE = re.compile(
+    r"^(job_\d+|skip|ctr_\d+|country_[a-z_]+|exp_[a-z0-9_]+)$",
+    re.IGNORECASE,
+)
+
+_LANG_REJECT_RE = re.compile(
+    r"(dont\s+understand|don't\s+understand|do\s+not\s+understand|"
+    r"i\s+cant\s+understand|i\s+can't\s+understand|no\s+sinhala|no\s+tamil|"
+    r"i\s+dont\s+know\s+sinhala|i\s+don't\s+know\s+sinhala|"
+    r"මට\s+සිංහල\s+තේරෙන්නෙ\s+නැ|සිංහල\s+තේරෙන්නෙ\s+නැ|"
+    r"எனக்கு\s+சிங்களம்\s+புரியாது|சிங்களம்\s+புரியாது)",
+    re.IGNORECASE,
+)
+
 
 def _is_apply_intent(text: str) -> bool:
     return bool(_APPLY_RE.search(text))
@@ -128,6 +142,23 @@ def _is_question(text: str) -> bool:
 
 def _is_no_cv_message(text: str) -> bool:
     return bool(_NO_CV_RE.search(text))
+
+
+def _is_structured_interactive_token(text: str) -> bool:
+    return bool(_INTERACTIVE_TOKEN_RE.match((text or "").strip()))
+
+
+def _extract_rejected_language(text: str) -> Optional[str]:
+    low = (text or "").lower()
+    if not _LANG_REJECT_RE.search(low):
+        return None
+    if "sinhala" in low or "සිංහල" in text:
+        return "si"
+    if "tamil" in low or "தமிழ்" in text:
+        return "ta"
+    if "english" in low:
+        return "en"
+    return None
 
 
 def _is_vacancy_question(text: str) -> bool:
@@ -323,18 +354,128 @@ class ChatbotEngine:
             PromptTemplates.CURRENT_GOAL_MAP.get('awaiting_job_interest', 'Collect the required intake detail from the candidate')
         )
 
-    def _country_buttons_payload(self, language: str, body_prefix: str = "") -> Dict[str, Any]:
+    def _country_buttons_payload(self, language: str, body_prefix: str = "") -> str:
         country_q = PromptTemplates.get_intake_question('destination_country', language)
-        body = f"{body_prefix}\n\n{country_q}".strip() if body_prefix else country_q
-        return {
-            "type": "buttons",
-            "body_text": body,
-            "buttons": [
-                {"id": "country_uae", "title": "UAE 🇦🇪"},
-                {"id": "country_saudi", "title": "Saudi 🇸🇦"},
-                {"id": "country_other", "title": "Other 🌍"},
-            ],
+        active_countries = vacancy_service.get_active_countries() or []
+        country_line = ""
+        if active_countries:
+            preview = ", ".join(active_countries)
+            labels = {
+                'en': "Available countries:",
+                'si': "පවතින රටවල්:",
+                'ta': "கிடைக்கும் நாடுகள்:",
+                'singlish': "Available countries:",
+                'tanglish': "Available countries:",
+            }
+            country_line = f"{labels.get(language, labels['en'])} {preview}."
+
+        anywhere_hint = {
+            'en': "You can also type 'Anywhere'.",
+            'si': "ඔබට 'Anywhere' කියලත් type කරන්න පුළුවන්.",
+            'ta': "நீங்கள் 'Anywhere' என்றும் type செய்யலாம்.",
+            'singlish': "'Anywhere' kiyala type karannath puluwan.",
+            'tanglish': "'Anywhere' nu type pannalaam.",
+        }.get(language, "You can also type 'Anywhere'.")
+
+        parts = [p for p in [body_prefix.strip(), country_q, country_line, anywhere_hint] if p]
+        return "\n\n".join(parts)
+
+    async def _escalate_to_human_handoff(self, db: Session, candidate, language: str, reason: str) -> str:
+        data = candidate.extracted_data or {}
+        data['is_human_handoff'] = True
+        candidate.extracted_data = data
+        crud.update_candidate_state(db, candidate.id, self.STATE_HUMAN_HANDOFF)
+        candidate.conversation_state = self.STATE_HUMAN_HANDOFF
+        if hasattr(candidate, "status"):
+            candidate.status = self.STATE_HUMAN_HANDOFF
+        db.commit()
+        await self._notify_human_handoff(candidate, reason=reason)
+        msg = {
+            'en': "I’m bringing in a human recruiter so you get the best help quickly. Please wait a moment. 🙏",
+            'si': "ඔබට හොඳම සහය ඉක්මනින් ලැබෙන්න මම human recruiter කෙනෙක් add කරනවා. ටිකක් ඉන්න. 🙏",
+            'ta': "உங்களுக்கு சிறந்த உதவி விரைவாக கிடைக்க நான் human recruiter-ஐ இணைக்கிறேன். கொஞ்சம் காத்திருக்கவும். 🙏",
+            'singlish': "Oyata hodata help karanna human recruiter kenek connect karanawa. Tikak inna. 🙏",
+            'tanglish': "Ungalukku best help kudukka human recruiter-ah connect panren. Konjam wait pannunga. 🙏",
         }
+        return msg.get(language, msg['en'])
+
+    def _build_presented_jobs_list_payload(
+        self,
+        language: str,
+        presented_jobs: list,
+        body_prefix: str = "",
+    ) -> Dict[str, Any]:
+        rows = []
+        for i, job in enumerate((presented_jobs or [])[:3]):
+            title = str(job.get('title') or 'Job')
+            location = str(job.get('country') or '')
+            salary = str(job.get('salary') or '')
+            row_title = (f"{title} ({location})" if location else title)[:24]
+            row_desc = (salary if salary else str(job.get('description') or ''))[:72]
+            rows.append({
+                "id": f"job_{i}",
+                "title": row_title,
+                "description": row_desc,
+            })
+
+        skip_title = {
+            'en': "Skip & Join Pool",
+            'si': "Skip කර Pool එකට යන්න",
+            'ta': "Skip செந்து Pool-ல் சேர்",
+            'singlish': "Skip - General Pool",
+            'tanglish': "Skip - General Pool",
+        }.get(language, "Skip & Join Pool")[:24]
+
+        rows.append({
+            "id": "skip",
+            "title": skip_title,
+            "description": "Don't select any specific job"[:72],
+        })
+
+        button_label = {
+            'en': "View Jobs",
+            'si': "රැකියා බලන්න",
+            'ta': "வேலைகளைப் பார்",
+            'singlish': "Jobs Balanna",
+            'tanglish': "Jobs Paarkavum"
+        }.get(language, "View Jobs")[:20]
+
+        default_body = {
+            'en': "Please select a job from the list below, or choose Skip.",
+            'si': "කරුණාකර පහත ලැයිස්තුවෙන් රැකියාවක් තෝරන්න, නැත්නම් Skip තෝරන්න.",
+            'ta': "கீழே உள்ள பட்டியலில் இருந்து வேலை ஒன்றைத் தேர்வு செய்யவும், இல்லை என்றால் Skip தேர்வு செய்யவும்.",
+            'singlish': "Pahatha list eken job ekak select karanna, nathnam Skip karanna.",
+            'tanglish': "Kizha irukka list-la job ah select pannunga, illa na Skip pannunga.",
+        }.get(language, "Please select a job from the list below, or choose Skip.")
+
+        body_text = f"{body_prefix}\n\n{default_body}".strip() if body_prefix else default_body
+        return {
+            "type": "list",
+            "body_text": body_text,
+            "button_label": button_label,
+            "sections": [{"title": "Available Vacancies"[:24], "rows": rows}],
+        }
+
+    def _finalize_no_cv_continue(self, db: Session, candidate, language: str) -> str:
+        data = candidate.extracted_data or {}
+        data['cv_status'] = 'pending'
+        candidate.extracted_data = data
+        db.commit()
+        self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
+        crud.update_candidate_state(db, candidate.id, self.STATE_APPLICATION_COMPLETE)
+        candidate.conversation_state = self.STATE_APPLICATION_COMPLETE
+        self._dispatch_recruitment_sync_background(
+            candidate_id=candidate.id,
+            reason="cv-auto-skipped",
+        )
+        done_msgs = {
+            'en': "No worries 👍 I submitted your basic profile for now. You can send your CV later anytime as PDF or Word.",
+            'si': "ගැටලුවක් නැහැ 👍 ඔබගේ මූලික තොරතුරු යොමු කළා. CV එක පසුව PDF හෝ Word එකක් ලෙස ඕන වෙලාවක යවන්න.",
+            'ta': "பரவாயில்லை 👍 உங்கள் அடிப்படை விபரங்கள் சமர்ப்பிக்கப்பட்டது. CV-ஐ பின்னர் எப்போது வேண்டுமானாலும் PDF அல்லது Word ஆக அனுப்பலாம்.",
+            'singlish': "Awlak naha 👍 Oyage basic profile eka submit kala. Passe oni welawakadi CV eka PDF/Word ekak widiyata ewanna.",
+            'tanglish': "Parava illa 👍 Unga basic profile submit pannitten. Apram eppo venumnaalum CV-ah PDF/Word-a anuppunga.",
+        }
+        return done_msgs.get(language, done_msgs['en'])
 
     async def _apply_two_strike_auto_advance(self, db: Session, candidate, state: str, language: str) -> Optional[Union[str, Dict[str, Any]]]:
         retries = self._increment_state_question_retry_count(db, candidate, state)
@@ -1140,6 +1281,7 @@ class ChatbotEngine:
         if switch_lang:
             crud.update_candidate_language(db, candidate.id, switch_lang)
             self._set_language_lock(db, candidate, True)
+            self._remove_rejected_language(db, candidate, switch_lang)
             current_state = candidate.conversation_state
             if current_state == self.STATE_AWAITING_LANGUAGE_SELECTION:
                 # Fall through so the state handler also advances to STATE_AWAITING_JOB.
@@ -1160,7 +1302,31 @@ class ChatbotEngine:
                 self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, switch_lang)
                 return response
 
+        rejected_language = _extract_rejected_language(message_text)
+        if rejected_language:
+            self._add_rejected_language(db, candidate, rejected_language)
+            current_lang = self._effective_language(candidate)
+            if current_lang == rejected_language:
+                fallback_lang = "en" if rejected_language != "en" else "ta"
+                if fallback_lang in self._get_rejected_languages(candidate):
+                    fallback_lang = "en"
+                crud.update_candidate_language(db, candidate.id, fallback_lang)
+                self._set_language_lock(db, candidate, True)
+            info = {
+                'en': "Understood. I won’t use that language in this chat. Please continue in your preferred language.",
+                'si': "හරි. මේ chat එකේ එම භාෂාව මම භාවිතා කරන්නෙ නැහැ. ඔබ කැමති භාෂාවෙන් දිගටම කියන්න.",
+                'ta': "புரிந்தது. இந்த chat-ல் அந்த மொழியை நான் பயன்படுத்த மாட்டேன். உங்கள் விருப்ப மொழியில் தொடருங்கள்.",
+                'singlish': "Hari, e language eka me chat eke use karanne ne. Oyage prefer language eken continue karanna.",
+                'tanglish': "Purinjiduchu, andha language inga use panna maatten. Unga preferred language-la continue pannunga.",
+            }
+            language = self._effective_language(candidate)
+            self._log_msg(db, candidate.id, MessageTypeEnum.USER, message_text, language)
+            response = info.get(language, info['en'])
+            self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, language)
+            return response
+
         # 2. Detect language — with sliding-window adaptation
+        interactive_token = source_message_type == "interactive" and _is_structured_interactive_token(message_text)
         det_lang, det_conf = detect_language(message_text, phone_number)
         
         # Proactive adaptation: if the language detector has seen 2+ consecutive
@@ -1171,7 +1337,8 @@ class ChatbotEngine:
         stored_lang = self._effective_language(candidate)
         language_locked = self._is_language_locked(candidate)
 
-        if (not language_locked) and confirmed and confirmed != stored_lang and det_conf > 0.3:
+        rejected_languages = self._get_rejected_languages(candidate)
+        if (not interactive_token) and (not language_locked) and confirmed and confirmed != stored_lang and det_conf > 0.85 and confirmed not in rejected_languages:
             # User has been speaking in a different register for 2+ messages
             crud.update_candidate_language(db, candidate.id, confirmed)
             language = confirmed
@@ -1181,12 +1348,15 @@ class ChatbotEngine:
                 data["language_register"] = confirmed
                 candidate.extracted_data = data
                 db.commit()
-        elif (not language_locked) and det_conf > 0.85 and len(message_text.split()) >= 3:
+        elif (not interactive_token) and (not language_locked) and det_conf > 0.9 and len(message_text.split()) >= 3 and det_lang not in rejected_languages:
             # High-confidence single-message detection (original logic)
             crud.update_candidate_language(db, candidate.id, det_lang)
             language = det_lang
         else:
             language = stored_lang
+
+        if language in rejected_languages:
+            language = stored_lang if stored_lang not in rejected_languages else "en"
 
         # 3. Sentiment / profanity check
         sentiment = analyze_sentiment(message_text)
@@ -1230,7 +1400,7 @@ class ChatbotEngine:
                 )
                 # Phase 5: propagate detected language so response uses correct register
                 _fp_lang = fast_result.get('language')
-                if (not language_locked) and _fp_lang and _fp_lang != 'en' and _fp_lang != language:
+                if (not language_locked) and _fp_lang and _fp_lang != 'en' and _fp_lang != language and _fp_lang not in rejected_languages:
                     crud.update_candidate_language(db, candidate.id, _fp_lang)
                     language = _fp_lang
             elif state in _intake_field_map:
@@ -1265,27 +1435,17 @@ class ChatbotEngine:
         # Promote to singlish/tanglish even when stored language is already si/ta,
         # so response templates are register-appropriate (casual vs formal).
         llm_lang = classified.get("language", language)
-        if llm_lang in ("tanglish", "singlish", "ta", "si", "en") and llm_lang != language:
+        if (not interactive_token) and (not language_locked) and llm_lang in ("tanglish", "singlish", "ta", "si", "en") and llm_lang != language and llm_lang not in rejected_languages:
             llm_conf = float(classified.get("confidence", 0))
-            
-            # Allow "Register Sliding" between related language families even if locked
-            is_valid_shift = False
-            if language in ("si", "singlish") and llm_lang in ("si", "singlish"):
-                is_valid_shift = True
-            elif language in ("ta", "tanglish") and llm_lang in ("ta", "tanglish"):
-                is_valid_shift = True
 
-            # Promote only when the LLM is confident enough
-            if (not language_locked or is_valid_shift) and llm_conf >= 0.65:
+            # Promote only when the LLM is very confident
+            if llm_conf >= 0.85:
                 language = llm_lang
                 crud.update_candidate_language(db, candidate.id, llm_lang)
-                
-                # Persist the register shift in extracted_data
-                if is_valid_shift:
-                    data = candidate.extracted_data or {}
-                    data["language_register"] = llm_lang
-                    candidate.extracted_data = data
-                    db.commit()
+                data = candidate.extracted_data or {}
+                data["language_register"] = llm_lang
+                candidate.extracted_data = data
+                db.commit()
 
 
         # ── Smart entity pre-population: skip intake states when LLM extracted ──
@@ -1354,11 +1514,25 @@ class ChatbotEngine:
             self.STATE_AWAITING_COUNTRY,
             self.STATE_AWAITING_EXPERIENCE,
         }
+        text_norm = _normalize_text(text).lower()
+        likely_valid_for_state = False
+        if state == self.STATE_AWAITING_COUNTRY:
+            if any(k in text_norm for k in _COUNTRY_MASTER_MAP.keys()):
+                likely_valid_for_state = True
+            else:
+                active_countries = {str(c).strip().lower() for c in (vacancy_service.get_active_countries() or []) if str(c).strip()}
+                if text_norm in active_countries:
+                    likely_valid_for_state = True
+        elif state == self.STATE_AWAITING_EXPERIENCE:
+            likely_valid_for_state = _extract_years(text) is not None
+        elif state == self.STATE_AWAITING_JOB:
+            likely_valid_for_state = self._match_job_from_text(text) is not None
+
         is_gibberish_or_low_conf = (
             _intent == "gibberish"
             or (_intent in ("other", "unclear") and _llm_conf < 0.55)
         )
-        if state in guided_states and is_gibberish_or_low_conf and not _is_question(text):
+        if state in guided_states and is_gibberish_or_low_conf and not likely_valid_for_state and not _is_question(text):
             _current_goal = self._current_goal_for_state(state)
 
             retries = self._get_state_question_retry_count(candidate, state)
@@ -1390,11 +1564,13 @@ class ChatbotEngine:
 
                 return agentic_msg
 
-            # Strike 3: auto-advance (same as previous 2-strike logic)
-            auto_advanced = await self._apply_two_strike_auto_advance(db, candidate, state, language)
-            if auto_advanced is not None:
-                return auto_advanced
-            return PromptTemplates.get_gibberish_fallback(language)
+            # Strike 3: escalate to human handoff instead of forced auto-advance
+            return await self._escalate_to_human_handoff(
+                db,
+                candidate,
+                language,
+                reason=f"out_of_bound_{state}",
+            )
 
 
         # ── TOP-LEVEL: greetings at ANY state → warm re-welcome ───────────────
@@ -1405,7 +1581,22 @@ class ChatbotEngine:
             self.STATE_INITIAL,
             self.STATE_APPLICATION_COMPLETE
         ):
-            # Returning user said hi mid-flow → remind them where we left off
+            agentic_states = {
+                self.STATE_AWAITING_JOB,
+                self.STATE_AWAITING_COUNTRY,
+                self.STATE_AWAITING_JOB_SELECTION,
+                self.STATE_AWAITING_EXPERIENCE,
+                self.STATE_COLLECTING_JOB_REQS,
+                self.STATE_AWAITING_CV,
+                self.STATE_COLLECTING_INFO,
+            }
+            if state in agentic_states:
+                current_goal = self._current_goal_for_state(state)
+                return await rag_engine.generate_agentic_response(
+                    user_message=text,
+                    current_goal=current_goal,
+                    language=lang,
+                )
             return self._resume_prompt(candidate, lang)
 
         # ── TOP-LEVEL: LLM-detected VACANCY QUERY (any state, any language) ─────
@@ -1493,6 +1684,7 @@ class ChatbotEngine:
             if new_lang:
                 crud.update_candidate_language(db, candidate.id, new_lang)
                 self._set_language_lock(db, candidate, True)
+                self._remove_rejected_language(db, candidate, new_lang)
                 language = new_lang
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB)
                 ack = self._lang_switch_ack(new_lang, candidate.name)
@@ -1547,72 +1739,98 @@ class ChatbotEngine:
 
             # ── Normal first message ───────────────────────────────────────────
             # Skip language menu for returning users with a confirmed language
-            from app.nlp.language_detector import language_detector as _ld
-            confirmed_lang = _ld.get_confirmed_language(phone_number) if phone_number else None
-            if confirmed_lang and (is_greet or _is_apply_intent(text) or _intent in ('greeting', 'apply_intent', 'other')):
-                # Returning user — skip language selection, go straight to job question
-                crud.update_candidate_language(db, candidate.id, confirmed_lang)
-                self._set_language_lock(db, candidate, True)
-                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB)
-                welcome = PromptTemplates.get_greeting('welcome', confirmed_lang, self.company_name)
-                job_q = PromptTemplates.get_intake_question('job_interest', confirmed_lang)
-                response = f"{welcome}\n\n{job_q}"
-                self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, confirmed_lang)
-                return response
+                data = candidate.extracted_data or {}
 
-            # If it's a greeting or apply intent → send interactive language selector
-            if is_greet or _is_apply_intent(text) or _intent in ('greeting', 'apply_intent', 'other'):
-                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_LANGUAGE_SELECTION)
-                welcome = PromptTemplates.get_greeting('welcome', lang, self.company_name)
-                # Send interactive language selector button message directly
-                if phone_number:
-                    try:
-                        res = await meta_client.send_language_selector(to_number=phone_number)
-                        if res and "error" not in res:
-                            return ""  # Successfully sent by meta_client, let webhook skip sending text
-                    except Exception as _ie:
-                        logger.warning(f"Interactive lang selector failed ({_ie}), falling back to text")
-                # Fallback: plain text
-                lang_sel = PromptTemplates.get_language_selection()
-                return f"{welcome}\n\n{lang_sel}"
+                if data.get('awaiting_no_cv_confirmation'):
+                    if _is_apply_intent(text):
+                        data['awaiting_no_cv_confirmation'] = False
+                        data['cv_status'] = 'pending'
+                        candidate.extracted_data = data
+                        db.commit()
+                        self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
 
-            # If they ask a question right away → answer via RAG then guide
-            if _is_question(text):
-                rag_resp = await rag_engine.generate_response_async(
+                        missing_queue = list(dict.fromkeys(data.get('missing_critical_fields', [])))
+                        if missing_queue:
+                            crud.update_candidate_state(db, candidate.id, self.STATE_COLLECTING_INFO)
+                            intake_field_alias = {
+                                'job_interest': 'job_interest',
+                                'destination_country': 'destination_country',
+                                'experience_years_stated': 'experience_years',
+                            }
+                            next_field = missing_queue[0]
+                            if next_field in intake_field_alias:
+                                next_question = PromptTemplates.get_intake_question(intake_field_alias[next_field], language)
+                            else:
+                                next_question = text_extractor.get_missing_field_question(next_field, language)
+                            proceed_msgs = {
+                                'en': "Okay, we’ll continue without a CV for now 👍",
+                                'si': "හරි, දැන්ට CV නැතුව අපි ඉදිරියට යමු 👍",
+                                'ta': "சரி, இப்போது CV இல்லாமல் முன்னேறலாம் 👍",
+                                'singlish': "Hari, danata CV nathuwa continue karamu 👍",
+                                'tanglish': "Seri, ippo CV illama continue pannalaam 👍",
+                            }
+                            return f"{proceed_msgs.get(language, proceed_msgs['en'])}\n\n{next_question}"
+
+                        return self._finalize_no_cv_continue(db, candidate, language)
+
+                    if _is_no_intent(text):
+                        data['awaiting_no_cv_confirmation'] = False
+                        candidate.extracted_data = data
+                        db.commit()
+                        self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
+                        return PromptTemplates.get_awaiting_cv_message(language, self.company_name)
+
+                    current_goal = "confirm whether they want to continue without a CV"
+                    agentic_msg = await rag_engine.generate_agentic_response(
+                        user_message=text,
+                        current_goal=current_goal,
+                        language=language,
+                    )
+                    confirm_help = {
+                        'en': "Reply Yes to continue without CV, or No to send CV now.",
+                        'si': "CV නැතුව යන්න Yes කියන්න, දැන් CV යවන්න No කියන්න.",
+                        'ta': "CV இல்லாமல் தொடர Yes; இப்போது CV அனுப்ப No சொல்லுங்கள்.",
+                        'singlish': "CV nathuwa yanna Yes, dan CV yawanna No kiyanna.",
+                        'tanglish': "CV illama continue panna Yes, ippo CV anuppa No sollunga.",
+                    }
+                    return f"{agentic_msg}\n\n{confirm_help.get(language, confirm_help['en'])}"
+
+                if _is_no_cv_message(text):
+                    data['awaiting_no_cv_confirmation'] = True
+                    data['cv_pending_reason'] = text[:200]
+                    candidate.extracted_data = data
+                    db.commit()
+                    self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
+                    confirm_msgs = {
+                        'en': "I can continue without your CV, but please confirm first. Reply Yes to continue, or No and send your CV now.",
+                        'si': "CV නැතුව ඉදිරියට යන්න පුළුවන්, නමුත් පළමුව තහවුරු කරන්න. Yes කියලා continue කරන්න, නැත්නම් No කියලා CV යවන්න.",
+                        'ta': "CV இல்லாமலும் தொடரலாம், ஆனால் முதலில் உறுதிப்படுத்துங்கள். தொடர Yes, இல்லையெனில் No சொல்லி CV அனுப்புங்கள்.",
+                        'singlish': "CV nathuwa continue karanna puluwan, habai confirm karanna one. Yes kiyala continue karanna, nathnam No kiyala CV ewanna.",
+                        'tanglish': "CV illama continue pannalaam, aana mudhala confirm pannunga. Yes solli continue pannunga, illaina No solli CV anuppunga.",
+                    }
+                    return confirm_msgs.get(language, confirm_msgs['en'])
+
+                retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
+                current_goal = self._current_goal_for_state(self.STATE_AWAITING_CV)
+                agentic_msg = await rag_engine.generate_agentic_response(
                     user_message=text,
+                    current_goal=current_goal,
                     language=language,
-                    candidate_info=self._candidate_info_dict(candidate)
                 )
-                guide = self._guide_to_apply(language)
-                return f"{rag_resp}\n\n{guide}"
 
-            # Anything else → polite opening with interactive language selector
-            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_LANGUAGE_SELECTION)
-            welcome = PromptTemplates.get_greeting('welcome', language, self.company_name)
-            if phone_number:
-                try:
-                    await meta_client.send_language_selector(to_number=phone_number)
-                    return welcome
-                except Exception:
-                    pass
-            lang_sel = PromptTemplates.get_language_selection()
-            return f"{welcome}\n\n{lang_sel}"
+                if retries >= 3:
+                    return await self._escalate_to_human_handoff(
+                        db,
+                        candidate,
+                        language,
+                        reason="out_of_bound_awaiting_cv",
+                    )
 
-        # ── AWAITING LANGUAGE SELECTION ───────────────────────────────────────
-        elif state == self.STATE_AWAITING_LANGUAGE_SELECTION:
-            text_norm = _normalize_text(text).lower()
-            new_lang = None
-            
-            # Extended keyword matching — covers scripts, romanized names, common spellings,
-            # and the Singlish/Tanglish code-switch registers.
-            if any(w in text_norm for w in ["1", "1️⃣", "english", " en ", "eng"]):
-                new_lang = "en"
-            elif text_norm.strip() in ("en",):
-                new_lang = "en"
-            elif any(w in text_norm for w in [
-                "2", "2️⃣", "sinhala", "sinhalese", "sinhalen", "si ", "සිංහල"
-            ]):
-                new_lang = "si"
+                if retries >= 2:
+                    cv_nudge = PromptTemplates.get_awaiting_cv_message(language, self.company_name)
+                    return f"{agentic_msg}\n\n{cv_nudge}"
+
+                return agentic_msg
             elif any(w in text_norm for w in [
                 "3", "3️⃣", "tamil", "thamil", "tamizh", "thamizh", "ta ", "தமிழ்", "tamila"
             ]):
@@ -1654,6 +1872,7 @@ class ChatbotEngine:
             # Update candidate's chosen language (also writes language_register to extracted_data)
             crud.update_candidate_language(db, candidate.id, new_lang)
             self._set_language_lock(db, candidate, True)
+            self._remove_rejected_language(db, candidate, new_lang)
             language = new_lang
 
             # Move to job interest
@@ -1723,9 +1942,12 @@ class ChatbotEngine:
                     )
 
                     if retries >= 3:
-                        auto_advanced = await self._apply_two_strike_auto_advance(db, candidate, self.STATE_AWAITING_JOB, language)
-                        if auto_advanced is not None:
-                            return auto_advanced
+                        return await self._escalate_to_human_handoff(
+                            db,
+                            candidate,
+                            language,
+                            reason="out_of_bound_awaiting_job",
+                        )
 
                     if retries >= 2:
                         list_payload = self._build_job_picker_list_message(language)
@@ -1851,40 +2073,26 @@ class ChatbotEngine:
                     else:
                         validation = await rag_engine.validate_intake_answer_async('destination_country', text, language)
 
-            was_loop_broken = False
             if not validation.get('is_valid'):
                 country_retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_COUNTRY)
 
                 if country_retries >= 3:
-                    was_loop_broken = True
-                    self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_COUNTRY)
-                    validation = {"is_valid": True, "extracted_value": "ANY"}
-                else:
-                    current_goal = self._current_goal_for_state(self.STATE_AWAITING_COUNTRY)
-                    agentic_msg = await rag_engine.generate_agentic_response(
-                        user_message=text,
-                        current_goal=current_goal,
-                        language=language,
+                    return await self._escalate_to_human_handoff(
+                        db,
+                        candidate,
+                        language,
+                        reason="out_of_bound_awaiting_country",
                     )
 
-                    # Second failed attempt: send visual aid alongside agentic response
-                    if country_retries >= 2:
-                        active_ctrs = vacancy_service.get_active_countries()
-                        if active_ctrs:
-                            country_rows = [
-                                {"id": f"ctr_{i}", "title": c[:24]}
-                                for i, c in enumerate(active_ctrs[:9])
-                            ] + [{"id": "country_other", "title": "Other 🌍"}]
-                            logger.info("STATE_AWAITING_COUNTRY: Agentic + interactive country list sent")
-                            return {
-                                "type": "list",
-                                "body_text": agentic_msg,
-                                "button_label": "Choose Country",
-                                "sections": [{"title": "Active Destinations", "rows": country_rows}],
-                            }
-                        return self._country_buttons_payload(language, body_prefix=agentic_msg)
-
-                    return agentic_msg
+                current_goal = self._current_goal_for_state(self.STATE_AWAITING_COUNTRY)
+                agentic_msg = await rag_engine.generate_agentic_response(
+                    user_message=text,
+                    current_goal=current_goal,
+                    language=language,
+                )
+                if country_retries >= 2:
+                    return self._country_buttons_payload(language, body_prefix=agentic_msg)
+                return agentic_msg
 
             extracted_country = validation.get('extracted_value') or text_norm
             if not extracted_country:
@@ -1907,15 +2115,6 @@ class ChatbotEngine:
             )
 
             fallback_msg_str = ""
-            if was_loop_broken:
-                fallback_msgs = {
-                    'en': "It seems we're having trouble matching a specific country. No worries! I'll set your preference to 'Global/Anywhere' for now so we can move forward.\n\n",
-                    'si': "රටක් තෝරාගැනීමේදී ගැටලුවක් ඇති බව පෙනේ. කමක් නැහැ! අපි ඔබේ කැමැත්ත 'ඕනෑම රටක්' ලෙස සකසා ඉදිරියට යමු.\n\n",
-                    'ta': "நாட்டைத் தேர்ந்தெடுப்பதில் சிக்கல் உள்ளதாகத் தெரிகிறது. பரவாயில்லை! நாம் 'எந்த நாடும்' என அமைத்து தொடரலாம்.\n\n",
-                    'singlish': "Country eka match karanna podi awulak wage. Awulak na! Mama 'Glocal/Anywhere' kiyala dala idiriyata yannam.\n\n",
-                    'tanglish': "Country select panradhula problem irukku pola. Paravailla! Naan 'Anywhere' nu set pannidren, namma continue panlam.\n\n"
-                }
-                fallback_msg_str = fallback_msgs.get(language, fallback_msgs['en'])
 
             if matching_jobs:
                 data['presented_jobs'] = [str(job.get('id') or '') for job in matching_jobs[:3] if str(job.get('id') or '').strip()]
@@ -2026,6 +2225,32 @@ class ChatbotEngine:
             data = candidate.extracted_data or {}
             presented_jobs = data.get('presented_job_cards') or data.get('presented_jobs') or []
 
+            if not presented_jobs:
+                job_interest = str(data.get('job_interest') or '').strip()
+                destination_country = str(data.get('destination_country') or '').strip()
+                if job_interest:
+                    recovered_jobs = await vacancy_service.get_matching_jobs(
+                        job_interest=job_interest,
+                        country=destination_country,
+                        limit=3,
+                    )
+                    if recovered_jobs:
+                        data['presented_jobs'] = [str(job.get('id') or '') for job in recovered_jobs[:3] if str(job.get('id') or '').strip()]
+                        data['presented_job_cards'] = recovered_jobs[:3]
+                        candidate.extracted_data = data
+                        db.commit()
+                        presented_jobs = data.get('presented_job_cards') or []
+
+            if not presented_jobs:
+                current_goal = self._current_goal_for_state(self.STATE_AWAITING_JOB_SELECTION)
+                agentic_msg = await rag_engine.generate_agentic_response(
+                    user_message=text,
+                    current_goal=current_goal,
+                    language=language,
+                )
+                role_q = PromptTemplates.get_intake_question('job_interest', language)
+                return f"{agentic_msg}\n\n{role_q}"
+
             skip_words = {
                 'skip', 'general pool', 'pool', 'later', 'none', 'no',
                 'එපා', 'නැ', 'பிறகு', 'வேண்டாம்', 'illai', 'nehe',
@@ -2037,6 +2262,7 @@ class ChatbotEngine:
                 data['selected_job_context'] = None
                 candidate.extracted_data = data
                 db.commit()
+                self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB_SELECTION)
 
                 # Check if we already have their experience
                 has_exp = candidate.experience_years or data.get('experience_years_stated')
@@ -2062,7 +2288,10 @@ class ChatbotEngine:
                     return button_payload
 
             idx = None
-            if text_norm.startswith("job_"):
+            job_pick = re.search(r"\bjob_(\d+)\b", text_norm)
+            if job_pick:
+                idx = int(job_pick.group(1))
+            elif text_norm.startswith("job_"):
                 try:
                     idx = int(text_norm.split("_")[1])
                 except ValueError:
@@ -2073,33 +2302,29 @@ class ChatbotEngine:
                 elif any(x in text_norm for x in ['3', '3️⃣', 'three']): idx = 2
 
             if idx is None:
-                reprompt = {
-                    'en': "Please select a job from the list, or type Skip.",
-                    'si': "කරුණාකර ලැයිස්තුවෙන් රැකියාවක් තෝරන්න, නැත්නම් Skip කියන්න.",
-                    'ta': "பட்டியலிலிருந்து ஒரு வேலையைத் தேர்ந்தெடுக்கவும், இல்லை என்றால் Skip எழுதவும்.",
-                    'singlish': "List eken job ekak select karanna, nathnam Skip kiyanna.",
-                    'tanglish': "List-la irunthu job ah select pannunga, illa na Skip sollunga.",
-                }
-                button_label = {
-                    'en': "View Jobs",
-                    'si': "රැකියා බලන්න",
-                    'ta': "வேலைகளைப் பார்",
-                    'singlish': "Jobs Balanna",
-                    'tanglish': "Jobs Paarkavum"
-                }.get(language, "View Jobs")[:20]
-
-                # We can construct the structure and fallback on plain text if we had reconstructed it, 
-                # but simply returning text with instruction is usually sufficient for a fallback.
-                return reprompt.get(language, reprompt['en'])
+                retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB_SELECTION)
+                current_goal = self._current_goal_for_state(self.STATE_AWAITING_JOB_SELECTION)
+                agentic_msg = await rag_engine.generate_agentic_response(
+                    user_message=text,
+                    current_goal=current_goal,
+                    language=language,
+                )
+                if retries >= 2:
+                    return self._build_presented_jobs_list_payload(language, presented_jobs, body_prefix=agentic_msg)
+                return agentic_msg
 
             if idx < 0 or idx >= len(presented_jobs):
-                return {
-                    'en': "That selection is invalid. Please select from the list.",
-                    'si': "එම තේරීම වැරදියි. කරුණාකර ලැයිස්තුවෙන් තෝරන්න.",
-                    'ta': "அந்த தேர்வு தவறானது. பட்டியலிலிருந்து தேர்ந்தெடுக்கவும்.",
-                    'singlish': "E selection eka waradi. Karunakara list eken ganna.",
-                    'tanglish': "Andha selection thappu. List-la onnu select pannunga.",
-                }.get(language, "That selection is invalid. Please select from the list.")
+                retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB_SELECTION)
+                invalid_pick_msg = {
+                    'en': "That selection doesn't look right.",
+                    'si': "එම තේරීම නිවැරදි නැහැ.",
+                    'ta': "அந்த தேர்வு சரியாக இல்லை.",
+                    'singlish': "E selection eka hari nemei.",
+                    'tanglish': "Andha selection sari illa.",
+                }.get(language, "That selection doesn't look right.")
+                if retries >= 2:
+                    return self._build_presented_jobs_list_payload(language, presented_jobs, body_prefix=invalid_pick_msg)
+                return invalid_pick_msg
 
             selected = presented_jobs[idx]
             selected_job_id = str(selected.get('id') or selected.get('job_id') or '')
@@ -2118,8 +2343,10 @@ class ChatbotEngine:
             data['matched_job_id'] = selected_job_id
             data['job_requirements'] = selected_context['requirements'] if isinstance(selected_context['requirements'], dict) else {}
             data.pop('presented_jobs', None)
+            data.pop('presented_job_cards', None)
             candidate.extracted_data = data
             db.commit()
+            self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB_SELECTION)
 
             has_cv = bool(candidate.resume_file_path)
             has_exp = bool(candidate.experience_years) or bool(data.get('experience_years_stated'))
@@ -2387,16 +2614,6 @@ class ChatbotEngine:
                 }
                 return done_msgs.get(language, done_msgs['en'])
 
-            # They said something instead of sending CV
-            if _is_question(text):
-                rag_resp = await rag_engine.generate_response_async(
-                    user_message=text,
-                    language=language,
-                    candidate_info=self._candidate_info_dict(candidate)
-                )
-                cv_nudge = PromptTemplates.get_awaiting_cv_message(language, self.company_name)
-                return f"{rag_resp}\n\n{cv_nudge}"
-
             retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
             current_goal = self._current_goal_for_state(self.STATE_AWAITING_CV)
             agentic_msg = await rag_engine.generate_agentic_response(
@@ -2404,6 +2621,9 @@ class ChatbotEngine:
                 current_goal=current_goal,
                 language=language,
             )
+
+            if retries >= 3:
+                return self._finalize_no_cv_continue(db, candidate, language)
 
             if retries >= 2:
                 cv_nudge = PromptTemplates.get_awaiting_cv_message(language, self.company_name)
@@ -2903,10 +3123,16 @@ class ChatbotEngine:
             return hi + PromptTemplates.get_intake_question('job_interest', language)
         elif state == self.STATE_AWAITING_COUNTRY:
             return hi + PromptTemplates.get_intake_question('destination_country', language)
+        elif state == self.STATE_AWAITING_JOB_SELECTION:
+            return hi + self._get_next_intake_question(candidate, language)
         elif state == self.STATE_AWAITING_EXPERIENCE:
             return hi + PromptTemplates.get_intake_question('experience_years', language)
+        elif state == self.STATE_COLLECTING_JOB_REQS:
+            return hi + self._get_next_intake_question(candidate, language)
         elif state == self.STATE_AWAITING_CV:
             return hi + PromptTemplates.get_awaiting_cv_message(language, self.company_name)
+        elif state == self.STATE_COLLECTING_INFO:
+            return hi + self._get_next_intake_question(candidate, language)
         else:
             return hi + PromptTemplates.get_greeting('welcome', language, self.company_name)
 
@@ -3055,8 +3281,13 @@ class ChatbotEngine:
     def _looks_like_job_title(text: str) -> bool:
         """Heuristic: short text with no question mark is probably a job title."""
         # Avoid common negative phrases
-        negatives = ["don't know", "not sure", "no", "none", "nothing"]
+        negatives = [
+            "don't know", "not sure", "no", "none", "nothing",
+            "hmm", "hmmm", "ok", "okay", "hi", "hello", "hey", "wtf",
+        ]
         if any(n in text.lower() for n in negatives):
+            return False
+        if len(text.strip()) < 4:
             return False
         return len(text) < 50 and '?' not in text and len(text.split()) < 6
 
@@ -3565,6 +3796,41 @@ class ChatbotEngine:
         data["language_locked"] = bool(locked)
         candidate.extracted_data = data
         db.commit()
+
+    def _get_rejected_languages(self, candidate) -> set:
+        data = candidate.extracted_data or {}
+        values = data.get("rejected_languages") or []
+        if not isinstance(values, list):
+            return set()
+        return {str(v).strip().lower() for v in values if str(v).strip()}
+
+    def _add_rejected_language(self, db: Session, candidate, language_code: str) -> None:
+        code = (language_code or "").strip().lower()
+        if not code:
+            return
+        data = candidate.extracted_data or {}
+        rejected = data.get("rejected_languages") or []
+        if not isinstance(rejected, list):
+            rejected = []
+        if code not in [str(v).strip().lower() for v in rejected]:
+            rejected.append(code)
+            data["rejected_languages"] = rejected
+            candidate.extracted_data = data
+            db.commit()
+
+    def _remove_rejected_language(self, db: Session, candidate, language_code: str) -> None:
+        code = (language_code or "").strip().lower()
+        if not code:
+            return
+        data = candidate.extracted_data or {}
+        rejected = data.get("rejected_languages") or []
+        if not isinstance(rejected, list):
+            return
+        updated = [v for v in rejected if str(v).strip().lower() != code]
+        if len(updated) != len(rejected):
+            data["rejected_languages"] = updated
+            candidate.extracted_data = data
+            db.commit()
 
     def _log_msg(
         self,

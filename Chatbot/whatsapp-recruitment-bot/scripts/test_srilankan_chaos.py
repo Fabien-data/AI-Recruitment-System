@@ -372,6 +372,133 @@ def run_duplicate_probe(
     return [r1, r2]
 
 
+def run_phase_3_loop_guards(
+    *, webhook_url: str, base_phone: str, delay_seconds: float, timeout: float
+) -> list[StepResult]:
+    print("\n" + "=" * 72)
+    print("PHASE 3: LOOP-GUARD REGRESSIONS")
+    print("=" * 72)
+
+    results: list[StepResult] = []
+    base = int(re.sub(r"\D", "", base_phone) or "94770000000")
+
+    # Scenario A: Tamil flow + interactive job selection should not re-ask preferred role
+    phone_jobs = str(base + 701)
+    profile_jobs = "LoopGuard-TamilJobs"
+    print("\n--- TEST A: Tamil job selection list path ---")
+    results.append(
+        send_message(
+            webhook_url=webhook_url,
+            phone=phone_jobs,
+            message_type="text",
+            content={"body": "Hi"},
+            label="A1 greet",
+            delay_seconds=delay_seconds,
+            timeout=timeout,
+            profile_name=profile_jobs,
+        )
+    )
+    results.append(
+        send_message(
+            webhook_url=webhook_url,
+            phone=phone_jobs,
+            message_type="text",
+            content={"body": "Tamil"},
+            label="A2 language tamil",
+            delay_seconds=delay_seconds,
+            timeout=timeout,
+            profile_name=profile_jobs,
+        )
+    )
+    results.append(
+        send_message(
+            webhook_url=webhook_url,
+            phone=phone_jobs,
+            message_type="text",
+            content={"body": "House keeper"},
+            label="A3 job role",
+            delay_seconds=delay_seconds,
+            timeout=timeout,
+            profile_name=profile_jobs,
+        )
+    )
+    results.append(
+        send_message(
+            webhook_url=webhook_url,
+            phone=phone_jobs,
+            message_type="text",
+            content={"body": "UAE"},
+            label="A4 country",
+            delay_seconds=max(delay_seconds, 1.5),
+            timeout=timeout,
+            profile_name=profile_jobs,
+        )
+    )
+    # simulate interactive list click and quick repeat
+    results.append(
+        send_message(
+            webhook_url=webhook_url,
+            phone=phone_jobs,
+            message_type="interactive",
+            content={
+                "type": "list_reply",
+                "list_reply": {"id": "job_0", "title": "Security Operator"},
+            },
+            label="A5 list select job_0",
+            delay_seconds=max(delay_seconds, 1.5),
+            timeout=timeout,
+            profile_name=profile_jobs,
+        )
+    )
+    results.append(
+        send_message(
+            webhook_url=webhook_url,
+            phone=phone_jobs,
+            message_type="interactive",
+            content={
+                "type": "list_reply",
+                "list_reply": {"id": "job_0", "title": "Security Operator"},
+            },
+            label="A6 duplicate list select job_0",
+            delay_seconds=max(delay_seconds, 1.5),
+            timeout=timeout,
+            profile_name=profile_jobs,
+        )
+    )
+
+    # Scenario B: CV out-of-bound questions should trigger takeover, not infinite static loop
+    phone_cv = str(base + 702)
+    profile_cv = "LoopGuard-CV"
+    print("\n--- TEST B: CV out-of-bound takeover path ---")
+    for label, body in [
+        ("B1 greet", "Hi"),
+        ("B2 language english", "English"),
+        ("B3 job role", "Driver"),
+        ("B4 country", "UAE"),
+        ("B5 experience", "3 years"),
+        ("B6 ask cv meaning #1", "what is a cv?"),
+        ("B7 ask cv meaning #2", "what is cv??"),
+        ("B8 out-of-bound #3", "I dont understand this"),
+    ]:
+        results.append(
+            send_message(
+                webhook_url=webhook_url,
+                phone=phone_cv,
+                message_type="text",
+                content={"body": body},
+                label=label,
+                delay_seconds=max(delay_seconds, 1.5),
+                timeout=timeout,
+                profile_name=profile_cv,
+            )
+        )
+
+    print("Expected:")
+    print("- Job list selection should progress flow without re-asking preferred job role.")
+    print("- CV questions/out-of-bound turns should be handled by LLM steering and loop guard.")
+    return results
+
+
 def print_go_live_checklist() -> None:
     print("\n" + "=" * 72)
     print("GO-LIVE CHECKLIST (MANUAL LOG OBSERVATION)")
@@ -463,6 +590,16 @@ def main() -> int:
                 timeout=args.timeout,
             )
         )
+
+    # Phase 3: loop-guard regression checks for job list + CV out-of-bound
+    all_results.extend(
+        run_phase_3_loop_guards(
+            webhook_url=args.webhook_url,
+            base_phone=args.base_phone,
+            delay_seconds=max(1.5, args.delay),
+            timeout=args.timeout,
+        )
+    )
 
     return print_summary(all_results)
 

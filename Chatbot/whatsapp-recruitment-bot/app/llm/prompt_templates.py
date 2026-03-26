@@ -590,11 +590,11 @@ Cultural & linguistic rules for Sri Lankan users:
 
     ERROR_TEMPLATES = {
         "error_generic": {
-            "en": ["Oops, something went wrong on my end. Let me try again!", "Sorry about that — I hit a small bump. Can you try again?"],
-            "si": ["අපොයි, මේකේ ටිකක් ගැටලුවක් ආවා. නැවත උත්සාහ කරමු!", "සමාවෙන්න — පොඩි ගැටලුවක්. නැවත try කරන්න!"],
-            "ta": ["அய்யோ, ஒரு சிறிய சிக்கல் ஏற்பட்டது. மீண்டும் முயற்சிக்கலாம்!", "மன்னிக்கவும் — சிறிய பிரச்சனை. மீண்டும் try பண்ணுங்க!"],
-            "singlish": ["Aiyoo, mokakhari wenawa. Ayeth try karamu da!", "Sorry machan — podi issue ekak. Ayeth try karanna!"],
-            "tanglish": ["Aiyoo, konjam problem vanhdhuchu. Again try pannunga da!", "Sorry-nga — sinna issue. Meendum try pannunga!"],
+            "en": ["Thanks — let’s continue. Please send your answer again and I’ll guide you.", "I’m here to help. Share that once more and we’ll continue from this step."],
+            "si": ["ස්තූතියි — අපි ඉදිරියට යමු. ඔබගේ පිළිතුර නැවත එවන්න.", "මම උදව් කරන්න මෙතනයි. ඒක තවත් වරක් එවන්න, අපි මේ පියවරෙන්ම දිගටම යමු."],
+            "ta": ["நன்றி — தொடரலாம். உங்கள் பதிலை மீண்டும் அனுப்புங்கள்.", "உதவ நான் இருக்கிறேன். அதையே இன்னொரு முறை அனுப்புங்கள்; இதே படியில் தொடரலாம்."],
+            "singlish": ["Thanks da — api continue karamu. Oyage answer eka ayeth ewanna.", "Mama help karanna inne. Eka thawa parak ewanna, me step eken continue karamu."],
+            "tanglish": ["Thanks da — namma continue pannalaam. Unga answer-a marubadi anuppunga.", "Naan help panna ready. Adha innum oru thadava anuppunga; indha step-la continue pannalaam."],
         },
         "error_validation": {
             "en": ["Hmm, that doesn't look quite right. Could you check and try again?", "I couldn't process that. Can you rephrase or provide it in a different format?"],
