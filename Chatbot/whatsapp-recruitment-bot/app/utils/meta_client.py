@@ -332,18 +332,19 @@ class MetaWhatsAppClient:
     async def send_interactive_buttons(
         self,
         to_number: str,
-        body_text: str,
-        buttons: list,
+        text: str = "",
+        buttons: Optional[list] = None,
         header_text: Optional[str] = None,
         footer_text: Optional[str] = None,
         allow_text_fallback: bool = True,
+        body_text: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send a WhatsApp interactive button message (max 3 buttons).
 
         Args:
             to_number:   Recipient phone number.
-            body_text:   Main message body.
+            text:        Main message body.
             buttons:     List of dicts: [{'id': 'btn_1', 'title': 'English'}]
                          — max 3 items, title max 20 chars.
             header_text: Optional header string (plain text only).
@@ -355,21 +356,40 @@ class MetaWhatsAppClient:
             "Content-Type": "application/json",
         }
 
+        body_text_value = (body_text or text or "").strip()
+        if not body_text_value:
+            return {"error": "Interactive button text cannot be empty"}
+
+        if not isinstance(buttons, list) or not buttons:
+            return {"error": "Interactive buttons payload requires a non-empty list"}
+
         # Build button reply objects
-        action_buttons = [
-            {
-                "type": "reply",
-                "reply": {
-                    "id": str(b.get("id", i)),
-                    "title": str(b.get("title", ""))[:20],
-                },
-            }
-            for i, b in enumerate(buttons[:3])
-        ]
+        action_buttons = []
+        for i, b in enumerate(buttons[:3]):
+            if isinstance(b, dict):
+                button_id = str(b.get("id", i))
+                title = str(b.get("title", "")).strip()
+            else:
+                button_id = f"btn_{i+1}"
+                title = str(b).strip()
+            if not title:
+                continue
+            action_buttons.append(
+                {
+                    "type": "reply",
+                    "reply": {
+                        "id": button_id,
+                        "title": title[:20],
+                    },
+                }
+            )
+
+        if not action_buttons:
+            return {"error": "Interactive buttons payload does not contain valid button titles"}
 
         interactive: Dict[str, Any] = {
             "type": "button",
-            "body": {"text": body_text},
+            "body": {"text": body_text_value},
             "action": {"buttons": action_buttons},
         }
         if header_text:
@@ -399,31 +419,33 @@ class MetaWhatsAppClient:
             if not allow_text_fallback:
                 return {"error": str(e)}
             # Fallback: send as plain text
-            fallback = body_text + "\n\n" + "\n".join(
-                f"{i+1}. {b.get('title','')}" for i, b in enumerate(buttons)
+            def _btn_title(btn: Any) -> str:
+                if isinstance(btn, dict):
+                    return str(btn.get("title", ""))
+                return str(btn)
+            fallback = body_text_value + "\n\n" + "\n".join(
+                f"{i+1}. {_btn_title(b)}" for i, b in enumerate(buttons)
             )
             return await self.send_message(to_number, fallback)
 
-    async def send_list_message(
+    async def send_interactive_list(
         self,
         to_number: str,
-        body_text: str,
-        button_label: str,
+        text: str,
+        button_text: str,
         sections: list,
         header_text: Optional[str] = None,
         footer_text: Optional[str] = None,
+        allow_text_fallback: bool = True,
     ) -> Dict[str, Any]:
         """
         Send a WhatsApp interactive list message.
 
         Args:
-            to_number:    Recipient phone number.
-            body_text:    Main message body.
-            button_label: Label shown on the list-open button (max 20 chars).
-            sections:     List of section dicts:
-                          [{'title': 'Section', 'rows': [{'id': 'r1', 'title': 'Row title', 'description': 'optional'}]}]
-            header_text:  Optional header string.
-            footer_text:  Optional footer string.
+            to_number:   Recipient phone number.
+            text:        Main body text.
+            button_text: Label shown on the list-open button (max 20 chars).
+            sections:    List of section dicts with rows.
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
         headers = {
@@ -431,27 +453,36 @@ class MetaWhatsAppClient:
             "Content-Type": "application/json",
         }
 
-        # Enforce WhatsApp limits: max 10 sections, max 10 rows per section
+        body_text = (text or "").strip()
+        if not body_text:
+            return {"error": "Interactive list text cannot be empty"}
+        if not isinstance(sections, list) or not sections:
+            return {"error": "Interactive list sections must be a non-empty list"}
+
         capped_sections = []
         for sec in sections[:10]:
             rows = [
                 {
-                    "id": str(r.get("id", "")),
-                    "title": str(r.get("title", ""))[:24],
-                    **({
-                        "description": str(r["description"])[:72]
-                    } if r.get("description") else {}),
+                    "id": str(r.get("id", ""))[:200],
+                    "title": str(r.get("title", "")).strip()[:24],
+                    **({"description": str(r["description"])[:72]} if r.get("description") else {}),
                 }
                 for r in sec.get("rows", [])[:10]
+                if str(r.get("title", "")).strip()
             ]
             if rows:
-                capped_sections.append({"title": sec.get("title", "")[:24], "rows": rows})
+                capped_sections.append(
+                    {"title": str(sec.get("title", "Options"))[:24], "rows": rows}
+                )
+
+        if not capped_sections:
+            return {"error": "Interactive list has no valid rows"}
 
         interactive: Dict[str, Any] = {
             "type": "list",
             "body": {"text": body_text},
             "action": {
-                "button": button_label[:20],
+                "button": (button_text or "Options")[:20],
                 "sections": capped_sections,
             },
         }
@@ -475,16 +506,47 @@ class MetaWhatsAppClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info(f"List message sent to {to_number}")
+                logger.info(f"Interactive list sent to {to_number}")
                 return result
         except httpx.HTTPError as e:
-            logger.error(f"Failed to send list message to {to_number}: {e}")
-            # Fallback: send as plain text
+            logger.error(f"Failed to send interactive list to {to_number}: {e}")
+            if not allow_text_fallback:
+                return {"error": str(e)}
             lines = [body_text]
             for sec in sections:
                 for r in sec.get("rows", []):
                     lines.append(f"• {r.get('title', '')}")
             return await self.send_message(to_number, "\n".join(lines))
+
+    async def send_list_message(
+        self,
+        to_number: str,
+        body_text: str,
+        button_label: str,
+        sections: list,
+        header_text: Optional[str] = None,
+        footer_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send a WhatsApp interactive list message.
+
+        Args:
+            to_number:    Recipient phone number.
+            body_text:    Main message body.
+            button_label: Label shown on the list-open button (max 20 chars).
+            sections:     List of section dicts:
+                          [{'title': 'Section', 'rows': [{'id': 'r1', 'title': 'Row title', 'description': 'optional'}]}]
+            header_text:  Optional header string.
+            footer_text:  Optional footer string.
+        """
+        return await self.send_interactive_list(
+            to_number=to_number,
+            text=body_text,
+            button_text=button_label,
+            sections=sections,
+            header_text=header_text,
+            footer_text=footer_text,
+        )
 
     async def send_language_selector(
         self, to_number: str
@@ -505,7 +567,7 @@ class MetaWhatsAppClient:
         ]
         return await self.send_interactive_buttons(
             to_number=to_number,
-            body_text=body,
+            text=body,
             buttons=buttons,
             header_text="Dewan Consultants",
             allow_text_fallback=False,

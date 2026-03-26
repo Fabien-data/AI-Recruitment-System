@@ -17,6 +17,8 @@ import re
 import random
 import asyncio
 import json
+import base64
+import httpx
 from typing import Optional, Dict, Any, Union
 
 from sqlalchemy.orm import Session
@@ -197,7 +199,8 @@ _COUNTRY_MASTER_MAP = {
     'malaysia': 'Malaysia', 'malasiya': 'Malaysia', 'மலேஷியா': 'Malaysia', 'මැලේසියා': 'Malaysia',
     'singapore': 'Singapore', 'singappuru': 'Singapore', 'சிங்கப்பூர்': 'Singapore',
     'romania': 'Romania', 'poland': 'Poland', 'maldives': 'Maldives', 'japan': 'Japan',
-    'anywhere': 'ANY', 'any': 'ANY', 'open to anything': 'ANY', 'nothing specific': 'ANY', 'onama ratak': 'ANY', 'entha nadum': 'ANY', 'any country': 'ANY', 'i dont mind': 'ANY'
+    'anywhere': 'ANY', 'any': 'ANY', 'open to anything': 'ANY', 'nothing specific': 'ANY', 'onama ratak': 'ANY', 'entha nadum': 'ANY', 'any country': 'ANY', 'i dont mind': 'ANY',
+    'other': 'ANY', 'other 🌍': 'ANY', 'country_other': 'ANY', 'country_uae': 'United Arab Emirates', 'country_saudi': 'Saudi Arabia'
 }
 
 class ChatbotEngine:
@@ -221,9 +224,200 @@ class ChatbotEngine:
     STATE_COLLECTING_INFO     = "collecting_info"
     STATE_ANSWERING_QUESTIONS = "answering_questions"
     STATE_APPLICATION_COMPLETE = "application_complete"
+    STATE_HUMAN_HANDOFF       = "human_handoff"
+    GIBBERISH_FALLBACK_MESSAGE = "Mata eka hariyata therenne na ayye/nangi 😅. Apita me details tika complete karanna puluwanda? (I didn't quite catch that. Can we complete these details?)"
 
     def __init__(self):
         self.company_name = settings.company_name
+
+    def _get_state_question_retry_count(self, candidate, state: str) -> int:
+        data = candidate.extracted_data or {}
+        retry_map = data.get("question_retry_count", {})
+        if isinstance(retry_map, dict):
+            return int(retry_map.get(state, 0) or 0)
+        return 0
+
+    def _set_state_question_retry_count(self, db: Session, candidate, state: str, value: int) -> None:
+        data = candidate.extracted_data or {}
+        retry_map = data.get("question_retry_count", {})
+        if not isinstance(retry_map, dict):
+            retry_map = {}
+        retry_map[state] = max(0, int(value))
+        data["question_retry_count"] = retry_map
+        data["question_retries"] = max(0, int(value))
+        candidate.extracted_data = data
+        if hasattr(candidate, "question_retries"):
+            candidate.question_retries = max(0, int(value))
+        db.commit()
+
+    def _increment_state_question_retry_count(self, db: Session, candidate, state: str) -> int:
+        retries = self._get_state_question_retry_count(candidate, state) + 1
+        self._set_state_question_retry_count(db, candidate, state, retries)
+        return retries
+
+    def _reset_state_question_retry_count(self, db: Session, candidate, state: str) -> None:
+        self._set_state_question_retry_count(db, candidate, state, 0)
+
+    def _get_question_retries(self, candidate) -> int:
+        return self._get_state_question_retry_count(candidate, candidate.conversation_state)
+
+    def _set_question_retries(self, db: Session, candidate, value: int) -> None:
+        self._set_state_question_retry_count(db, candidate, candidate.conversation_state, value)
+
+    def _increment_question_retries(self, db: Session, candidate) -> int:
+        return self._increment_state_question_retry_count(db, candidate, candidate.conversation_state)
+
+    def _reset_question_retries(self, db: Session, candidate) -> None:
+        self._reset_state_question_retry_count(db, candidate, candidate.conversation_state)
+
+    def _country_buttons_payload(self, language: str, body_prefix: str = "") -> Dict[str, Any]:
+        country_q = PromptTemplates.get_intake_question('destination_country', language)
+        body = f"{body_prefix}\n\n{country_q}".strip() if body_prefix else country_q
+        return {
+            "type": "buttons",
+            "body_text": body,
+            "buttons": [
+                {"id": "country_uae", "title": "UAE 🇦🇪"},
+                {"id": "country_saudi", "title": "Saudi 🇸🇦"},
+                {"id": "country_other", "title": "Other 🌍"},
+            ],
+        }
+
+    async def _apply_two_strike_auto_advance(self, db: Session, candidate, state: str, language: str) -> Optional[Union[str, Dict[str, Any]]]:
+        retries = self._increment_state_question_retry_count(db, candidate, state)
+        if retries < 2:
+            return None
+
+        data = candidate.extracted_data or {}
+        self._reset_state_question_retry_count(db, candidate, state)
+
+        if state == self.STATE_AWAITING_JOB:
+            data['job_interest'] = "Unknown"
+            candidate.extracted_data = data
+            db.commit()
+            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
+            return self._country_buttons_payload(language)
+
+        if state == self.STATE_AWAITING_COUNTRY:
+            data['destination_country'] = "Unknown"
+            candidate.extracted_data = data
+            db.commit()
+            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
+            return self._experience_buttons_payload(language)
+
+        if state == self.STATE_AWAITING_EXPERIENCE:
+            data['experience_years_stated'] = "Unknown"
+            candidate.extracted_data = data
+            if hasattr(candidate, "experience_years"):
+                candidate.experience_years = None
+            db.commit()
+            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
+            return PromptTemplates.get_intake_question('cv_upload', language)
+
+        return None
+
+    def _experience_buttons_payload(self, language: str) -> Dict[str, Any]:
+        body = PromptTemplates.get_intake_question('experience_years', language)
+        return {
+            "type": "buttons",
+            "body_text": body,
+            "buttons": [
+                {"id": "exp_1_2", "title": "1-2 Years"},
+                {"id": "exp_3_5", "title": "3-5 Years"},
+                {"id": "exp_5_plus", "title": "Over 5 Years"},
+            ],
+        }
+
+    def _build_job_picker_list_message(self, language: str) -> Optional[Dict[str, Any]]:
+        cache = get_job_cache() or {}
+        active_jobs = [job for job in cache.values() if job.get("status") == "active"]
+        if not active_jobs:
+            return None
+
+        category_display = {
+            "construction": "👷‍♂️ Construction",
+            "cleaning": "🧹 Cleaning",
+            "driver": "🚗 Driver",
+            "healthcare": "🏥 Healthcare",
+            "factory": "🏭 Factory",
+            "hospitality": "🍽️ Hospitality",
+            "security": "🛡️ Security",
+        }
+
+        sections_by_category: Dict[str, list] = {}
+        total_rows = 0
+        for job in active_jobs:
+            if total_rows >= 10:
+                break
+            title = str(job.get("title") or "").strip()
+            if not title:
+                continue
+            raw_category = str(job.get("category") or "Other Jobs").strip() or "Other Jobs"
+            category = category_display.get(raw_category.lower(), raw_category)
+            row_id = str(job.get("id") or f"job_{total_rows}")
+            location = str(job.get("country") or "")
+            salary = str(job.get("salary") or "")
+            desc_parts = [p for p in (location, salary) if p]
+            row = {
+                "id": row_id,
+                "title": title[:24],
+                "description": " | ".join(desc_parts)[:72],
+            }
+            sections_by_category.setdefault(category, []).append(row)
+            total_rows += 1
+
+        if not sections_by_category:
+            return None
+
+        sections = [
+            {"title": category[:24], "rows": rows[:10]}
+            for category, rows in sections_by_category.items()
+        ][:10]
+
+        body_text = {
+            "en": "Please pick a vacancy from the list below 👇",
+            "si": "කරුණාකර පහත ලැයිස්තුවෙන් රැකියාවක් තෝරන්න 👇",
+            "ta": "தயவு செய்து கீழே உள்ள பட்டியலில் ஒரு வேலை தேர்ந்தெடுக்கவும் 👇",
+            "singlish": "Pahalin list eken vacancy ekak select karanna 👇",
+            "tanglish": "Kizha irukka list-la oru vacancy select pannunga 👇",
+        }.get(language, "Please pick a vacancy from the list below 👇")
+
+        return {
+            "type": "list",
+            "body_text": body_text,
+            "button_label": "View Jobs",
+            "sections": sections,
+        }
+
+    def _with_audio_ack(self, response: Union[str, Dict[str, Any]], is_audio: bool) -> Union[str, Dict[str, Any]]:
+        if not is_audio:
+            return response
+        prefix = "🎧 I listened to your voice message! "
+        if isinstance(response, dict):
+            payload = dict(response)
+            body_text = str(payload.get("body_text") or "")
+            payload["body_text"] = f"{prefix}{body_text}" if body_text else prefix.strip()
+            return payload
+        if isinstance(response, str) and response.strip():
+            return f"{prefix}{response}"
+        return response
+
+    async def _notify_human_handoff(self, candidate, reason: str = "confusion_streak") -> None:
+        webhook_url = getattr(settings, "human_handoff_webhook_url", None)
+        if not webhook_url:
+            return
+        payload = {
+            "candidate_id": candidate.id,
+            "phone": candidate.phone_number,
+            "name": candidate.name,
+            "reason": reason,
+            "state": self.STATE_HUMAN_HANDOFF,
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(webhook_url, json=payload, timeout=8.0)
+        except Exception as exc:
+            logger.warning(f"Human handoff webhook failed: {exc}")
 
     def _dispatch_recruitment_sync_background(
         self,
@@ -315,7 +509,9 @@ class ChatbotEngine:
         message_text: Optional[str] = None,
         media_content: Optional[bytes] = None,
         media_type: Optional[str] = None,
-        media_filename: Optional[str] = None
+        media_filename: Optional[str] = None,
+        media_url: Optional[str] = None,
+        source_message_type: Optional[str] = None,
     ) -> Union[str, Dict[str, Any]]:
         language = "en"
         try:
@@ -348,12 +544,45 @@ class ChatbotEngine:
                 # Otherwise, if they provide a CV at ANY point during onboarding, 
                 # process it immediately to extract what we can, instead of forcing manual Q&A.
                 else:
+                    fallback_filename = media_filename or (
+                        f"upload_{candidate.id}.jpg" if media_type == "image" else f"upload_{candidate.id}.pdf"
+                    )
                     return await self._handle_cv_upload(
-                        db, candidate, media_content, media_filename or f"upload_{candidate.id}.pdf"
+                        db, candidate, media_content, fallback_filename, media_url=media_url
                     )
 
             if message_text:
-                return await self._handle_text_message(db, candidate, message_text, phone_number)
+                is_audio = source_message_type == "audio"
+                if message_text == "AUDIO_UNREADABLE_FALLBACK":
+                    noisy_audio_msg = (
+                        "It's a bit noisy on your end and I couldn't catch that clearly! 😅 "
+                        "Could you click one of the buttons below or type a short reply?"
+                    )
+                    state_prompt: Union[str, Dict[str, Any]]
+                    if candidate.conversation_state == self.STATE_AWAITING_EXPERIENCE:
+                        state_prompt = self._experience_buttons_payload(language)
+                    elif candidate.conversation_state == self.STATE_AWAITING_JOB:
+                        state_prompt = self._build_job_picker_list_message(language) or self._get_next_intake_question(candidate, language)
+                    elif candidate.conversation_state == self.STATE_AWAITING_COUNTRY:
+                        state_prompt = self._country_buttons_payload(language)
+                    else:
+                        state_prompt = self._get_next_intake_question(candidate, language)
+
+                    if isinstance(state_prompt, dict):
+                        state_prompt = dict(state_prompt)
+                        reprompt_text = str(state_prompt.get("body_text") or "")
+                        state_prompt["body_text"] = f"{noisy_audio_msg}\n\n{reprompt_text}" if reprompt_text else noisy_audio_msg
+                        return state_prompt
+                    return f"{noisy_audio_msg}\n\n{state_prompt}" if state_prompt else noisy_audio_msg
+
+                response = await self._handle_text_message(
+                    db,
+                    candidate,
+                    message_text,
+                    phone_number,
+                    source_message_type=source_message_type,
+                )
+                return self._with_audio_ack(response, is_audio)
 
             return self._default_response(db, candidate)
 
@@ -508,10 +737,9 @@ class ChatbotEngine:
 
         if not has_country_now:
             crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
-            country_q = PromptTemplates.get_intake_question("destination_country", language)
             job_name  = data.get("job_interest", "")
             ack = self._build_job_ack(job_name, language) if job_name else ""
-            return f"{ack}{country_q}"
+            return self._country_buttons_payload(language, body_prefix=ack.strip())
 
         if not has_exp_now:
             crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
@@ -841,7 +1069,14 @@ class ChatbotEngine:
 
     # ─── Text message router ──────────────────────────────────────────────────
 
-    async def _handle_text_message(self, db: Session, candidate, message_text: str, phone_number: str = "") -> str:
+    async def _handle_text_message(
+        self,
+        db: Session,
+        candidate,
+        message_text: str,
+        phone_number: str = "",
+        source_message_type: Optional[str] = None,
+    ) -> Union[str, Dict[str, Any]]:
 
         # 1. Explicit language switch
         switch_lang = detect_language_switch_request(message_text)
@@ -1023,6 +1258,7 @@ class ChatbotEngine:
         # 5. Route by conversation state
         response = await self._route_by_state(
             db, candidate, message_text, language, state, classified, phone_number,
+            source_message_type=source_message_type,
             prefetched_validation=prefetched_validation,
         )
 
@@ -1042,6 +1278,7 @@ class ChatbotEngine:
         state: str,
         classified: Optional[Dict[str, Any]] = None,
         phone_number: str = "",
+        source_message_type: Optional[str] = None,
         prefetched_validation: Optional[Dict[str, Any]] = None,
     ) -> Union[str, Dict[str, Any]]:
         # Unpack pre-classified intent/entities (from classify_message in _handle_text_message)
@@ -1051,6 +1288,24 @@ class ChatbotEngine:
         _entities  = classified.get("entities") or {}
         _llm_lang  = classified.get("language", language)
         _llm_conf  = float(classified.get("confidence", 0.5))
+
+        if state == self.STATE_HUMAN_HANDOFF:
+            return ""
+
+        guided_states = {
+            self.STATE_AWAITING_JOB,
+            self.STATE_AWAITING_COUNTRY,
+            self.STATE_AWAITING_EXPERIENCE,
+        }
+        is_gibberish_or_low_conf = (
+            _intent == "gibberish"
+            or (_intent in ("other", "unclear") and _llm_conf < 0.55)
+        )
+        if state in guided_states and is_gibberish_or_low_conf and not _is_question(text):
+            auto_advanced = await self._apply_two_strike_auto_advance(db, candidate, state, language)
+            if auto_advanced is not None:
+                return auto_advanced
+            return self.GIBBERISH_FALLBACK_MESSAGE
 
         # ── TOP-LEVEL: greetings at ANY state → warm re-welcome ───────────────
         is_greet, greet_lang = is_greeting(text)
@@ -1082,15 +1337,7 @@ class ChatbotEngine:
             if state in (self.STATE_INITIAL, self.STATE_AWAITING_LANGUAGE_SELECTION, self.STATE_AWAITING_JOB):
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB)
                 candidate.conversation_state = self.STATE_AWAITING_JOB
-                job_q = PromptTemplates.get_intake_question('job_interest', language)
-                prompt_prefix = {
-                    'en': "👉 Next:",
-                    'si': "👉 ඊළඟට:",
-                    'ta': "👉 அடுத்தது:",
-                    'singlish': "👉 Next eka:",
-                    'tanglish': "👉 Next:",
-                }.get(language, "👉 Next:")
-                return f"{vacancies_msg}\n\n{prompt_prefix} {job_q}"
+                return self._build_job_picker_list_message(language) or vacancies_msg
 
             elif state == self.STATE_APPLICATION_COMPLETE:
                 suffix = {
@@ -1323,6 +1570,12 @@ class ChatbotEngine:
             crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB)
             # Engagement hook shown right after language chosen
             hook = PromptTemplates.get_engagement_hook(language)
+            list_payload = self._build_job_picker_list_message(language)
+            if list_payload:
+                if hook:
+                    list_payload = dict(list_payload)
+                    list_payload["body_text"] = f"{hook}\n\n{list_payload.get('body_text', '')}".strip()
+                return list_payload
             job_q = PromptTemplates.get_intake_question('job_interest', language)
             parts = [p for p in [hook, job_q] if p]
             return "\n\n".join(parts) if parts else job_q
@@ -1334,7 +1587,7 @@ class ChatbotEngine:
             # If user just clicked "Apply for a Job" or sent a standalone apply word, re-prompt directly
             clean_text = _APPLY_RE.sub('', text_norm).strip()
             if _is_apply_intent(text) and len(clean_text) < 3:
-                return PromptTemplates.get_intake_question('job_interest', language)
+                return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
 
             # Use pre-fetched validation if available (ran in parallel with classify)
             if prefetched_validation is not None:
@@ -1352,18 +1605,11 @@ class ChatbotEngine:
             if not validation.get('is_valid'):
                 # Short filler words / apply-intent → re-ask the question without extra fluff
                 if _is_apply_intent(text) or len(text_norm) < 3:
-                    return PromptTemplates.get_intake_question('job_interest', language)
+                    return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
 
                 # If they explicitly ask about vacancies, list them (THIS IS THE ONLY TIME WE SHOW JOBS)
                 if _is_vacancy_question(text) or _intent == "vacancy_query":
-                    vacancy_msg = await vacancy_service.search_and_refine(
-                        user_message=text,
-                        entities=_entities,
-                        language=_llm_lang,
-                        candidate_info=self._candidate_info_dict(candidate),
-                    )
-                    job_q = PromptTemplates.get_intake_question('job_interest', language)
-                    return f"{vacancy_msg}\n\n{job_q}" if vacancy_msg else job_q
+                    return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
 
                 # If they ask a question
                 if _is_question(text) and not self._looks_like_job_title(text):
@@ -1373,6 +1619,11 @@ class ChatbotEngine:
                         candidate_info=self._candidate_info_dict(candidate)
                     )
                     clarify = validation.get('clarification_message') or PromptTemplates.get_intake_question('job_interest', language)
+                    list_payload = self._build_job_picker_list_message(language)
+                    if list_payload:
+                        list_payload = dict(list_payload)
+                        list_payload["body_text"] = f"{rag_resp}\n\n{clarify}\n\n{list_payload.get('body_text', '')}".strip()
+                        return list_payload
                     return f"{rag_resp}\n\n{clarify}"
 
                 # Not a question, just invalid input
@@ -1389,6 +1640,11 @@ class ChatbotEngine:
                     'tanglish': f"Andha role enga kitta illa, aana ippo irukka popular jobs idho:\n{suggestions}\nIdhula edhu ungalukku venum?"
                 }
                 
+                list_payload = self._build_job_picker_list_message(language)
+                if list_payload:
+                    list_payload = dict(list_payload)
+                    list_payload["body_text"] = f"{invalid_msgs.get(language, invalid_msgs['en'])}\n\n{list_payload.get('body_text', '')}".strip()
+                    return list_payload
                 return invalid_msgs.get(language, invalid_msgs['en'])
 
             # Valid job interest — the LLM already extracted the key value; trust it
@@ -1419,7 +1675,6 @@ class ChatbotEngine:
 
             # Advance state
             crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
-            country_q = PromptTemplates.get_intake_question('destination_country', language)
 
             # If no exact match found but cache has active jobs, be honest about availability
             # and register the candidate for future consideration (future pool)
@@ -1451,7 +1706,7 @@ class ChatbotEngine:
 
             # Matched role — standard positive ack
             ack = self._build_job_ack(job_interest_value, language)
-            return f"{ack}{country_q}"
+            return self._country_buttons_payload(language, body_prefix=ack.strip())
 
         # ── AWAITING DESTINATION COUNTRY ──────────────────────────────────────
         elif state == self.STATE_AWAITING_COUNTRY:
@@ -1492,15 +1747,11 @@ class ChatbotEngine:
 
             was_loop_broken = False
             if not validation.get('is_valid'):
-                # Loop breaker logic
-                _edata = candidate.extracted_data or {}
-                country_retries = _edata.get('country_retries', 0) + 1
-                _edata['country_retries'] = country_retries
-                candidate.extracted_data = _edata
-                db.commit()
+                country_retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_COUNTRY)
 
                 if country_retries >= 2:
                     was_loop_broken = True
+                    self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_COUNTRY)
                     validation = {"is_valid": True, "extracted_value": "ANY"}
                 else:
                     cache = get_job_cache()
@@ -1522,16 +1773,18 @@ class ChatbotEngine:
                             language=language,
                             candidate_info=self._candidate_info_dict(candidate)
                         )
-                        return f"{rag_resp}\n\n{invalid_msgs.get(language, invalid_msgs['en'])}"
+                        msg = f"{rag_resp}\n\n{invalid_msgs.get(language, invalid_msgs['en'])}"
+                        return self._country_buttons_payload(language, body_prefix=msg)
                     
                     # Too short or invalid
-                    return invalid_msgs.get(language, invalid_msgs['en'])
+                    return self._country_buttons_payload(language, body_prefix=invalid_msgs.get(language, invalid_msgs['en']))
 
             extracted_country = validation.get('extracted_value') or text_norm
             if not extracted_country:
-                return PromptTemplates.get_retry_question('country', language)
+                return self._country_buttons_payload(language)
 
             self._save_intake(db, candidate, 'destination_country', str(extracted_country))
+            self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_COUNTRY)
 
             # Reset confusion streak on valid answer
             _edata = candidate.extracted_data or {}
@@ -1654,7 +1907,11 @@ class ChatbotEngine:
 
             next_q = PromptTemplates.get_intake_question('cv_upload' if has_exp else 'experience_years', language)
             reply_text = f"{pool_msg.get(language, pool_msg['en'])}\n\n{next_q}"
-            return f"{fallback_msg_str}{reply_text}"
+            if has_exp:
+                return f"{fallback_msg_str}{reply_text}"
+            button_payload = self._experience_buttons_payload(language)
+            button_payload["body_text"] = f"{fallback_msg_str}{pool_msg.get(language, pool_msg['en'])}\n\n{button_payload.get('body_text', '')}".strip()
+            return button_payload
 
         # ── AWAITING JOB SELECTION ───────────────────────────────────────────
         elif state == self.STATE_AWAITING_JOB_SELECTION:
@@ -1689,12 +1946,13 @@ class ChatbotEngine:
                     # Skip experience question, go straight to CV
                     crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
                     next_q = PromptTemplates.get_intake_question('cv_upload', language)
+                    return f"{msg.get(language, msg['en'])}\n\n{next_q}"
                 else:
                     # Ask for experience
                     crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
-                    next_q = PromptTemplates.get_intake_question('experience_years', language)
-
-                return f"{msg.get(language, msg['en'])}\n\n{next_q}"
+                    button_payload = self._experience_buttons_payload(language)
+                    button_payload["body_text"] = f"{msg.get(language, msg['en'])}\n\n{button_payload.get('body_text', '')}".strip()
+                    return button_payload
 
             idx = None
             if text_norm.startswith("job_"):
@@ -1797,8 +2055,9 @@ class ChatbotEngine:
                     return f"{confirm.get(language, confirm['en'])}\n\n{cv_q}"
                 else:
                     crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
-                    exp_q = PromptTemplates.get_intake_question('experience_years', language)
-                    return f"{confirm.get(language, confirm['en'])}\n\n{exp_q}"
+                    button_payload = self._experience_buttons_payload(language)
+                    button_payload["body_text"] = f"{confirm.get(language, confirm['en'])}\n\n{button_payload.get('body_text', '')}".strip()
+                    return button_payload
 
         # ── AWAITING EXPERIENCE ───────────────────────────────────────────────
         elif state == self.STATE_AWAITING_EXPERIENCE:
@@ -1820,26 +2079,56 @@ class ChatbotEngine:
                     validation = {"is_valid": True, "extracted_value": text_norm}
 
             if not validation.get('is_valid'):
+                retries = self._increment_question_retries(db, candidate)
+                if retries >= 2:
+                    self._save_intake(db, candidate, 'experience_years_stated', "Unknown - Skipped")
+                    if hasattr(candidate, "experience_years"):
+                        candidate.experience_years = None
+                    self._reset_question_retries(db, candidate)
+
+                    ack = {
+                        'en': "No worries — I’ll mark experience as unknown for now.",
+                        'si': "කමක් නැහැ — පළපුරුද්ද දැනට නොදන්නා ලෙස සටහන් කරමු.",
+                        'ta': "பரவாயில்லை — அனுபவத்தை இப்போது தெரியவில்லை என்று பதிவு செய்கிறேன்.",
+                        'singlish': "Awlak naha — experience eka danata unknown kiyala dānnam.",
+                        'tanglish': "Parava illa — experience ippo unknown nu mark pannaren.",
+                    }.get(language, "No worries — I’ll mark experience as unknown for now.")
+
+                    early_result = await self._process_early_cv(db, candidate, f"{ack}\n\n")
+                    if early_result:
+                        return early_result
+                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
+                    cv_q = PromptTemplates.get_intake_question('cv_upload', language)
+                    return f"{ack}\n\n{cv_q}"
+
                 if _is_question(text):
                     rag_resp = await rag_engine.generate_response_async(
                         user_message=text,
                         language=language,
                         candidate_info=self._candidate_info_dict(candidate)
                     )
-                    clarify = validation.get('clarification_message') or PromptTemplates.get_intake_question('experience_years', language)
-                    return f"{rag_resp}\n\n{clarify}"
-                return validation.get('clarification_message') or PromptTemplates.get_intake_question('experience_years', language)
+                    clarify = validation.get('clarification_message') or ""
+                    button_payload = self._experience_buttons_payload(language)
+                    button_payload["body_text"] = f"{rag_resp}\n\n{clarify}".strip()
+                    return button_payload
+                button_payload = self._experience_buttons_payload(language)
+                if validation.get('clarification_message'):
+                    button_payload["body_text"] = validation.get('clarification_message')
+                return button_payload
 
             extracted_exp = validation.get('extracted_value') or text_norm
             years = _extract_years(str(extracted_exp))
 
             value = str(years) if years is not None else str(extracted_exp)
             self._save_intake(db, candidate, 'experience_years_stated', value)
+            self._reset_question_retries(db, candidate)
 
             # Reset confusion streak on valid answer
             _edata = candidate.extracted_data or {}
             _edata['confusion_streak'] = 0
             candidate.extracted_data = _edata
+            if hasattr(candidate, "confusion_streak"):
+                candidate.confusion_streak = 0
             if years is not None:
                 candidate.experience_years = years
                 db.commit()
@@ -2048,13 +2337,12 @@ class ChatbotEngine:
                     new_data['job_requirements'] = dict(req) if isinstance(req, dict) else {}
                 crud.update_candidate(db, candidate.id, CandidateUpdate(extracted_data=new_data))
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
-                country_q = PromptTemplates.get_intake_question('destination_country', language)
                 new_app_msgs = {
-                    'en': f"Starting a new application for *{job_title}*! 🎉\n\n{country_q}",
-                    'si': f"*{job_title}* සඳහා නව ඉල්ලුම්පත්‍රයක් ආරම්භ කළා! 🎉\n\n{country_q}",
-                    'ta': f"*{job_title}* க்காக புதிய விண்ணப்பம் தொடங்கினோம்! 🎉\n\n{country_q}",
+                    'en': f"Starting a new application for *{job_title}*! 🎉",
+                    'si': f"*{job_title}* සඳහා නව ඉල්ලුම්පත්‍රයක් ආරම්භ කළා! 🎉",
+                    'ta': f"*{job_title}* க்காக புதிய விண்ணப்பம் தொடங்கினோம்! 🎉",
                 }
-                return new_app_msgs.get(language, new_app_msgs['en'])
+                return self._country_buttons_payload(language, body_prefix=new_app_msgs.get(language, new_app_msgs['en']))
             # For anything else: brief static reply
             done = {'en': "Your application is already submitted! ✅ We'll contact you soon.",
                     'si': "ඔබේ ඉල්ලුම්පත්‍රය ඉදිරිපත් කර ඇත! ✅ ඉක්මනින් අමතන්නෙමු.",
@@ -2163,7 +2451,8 @@ class ChatbotEngine:
         db: Session,
         candidate,
         file_content: bytes,
-        filename: str
+        filename: str,
+        media_url: Optional[str] = None,
     ) -> str:
         language = candidate.language_preference.value
 
@@ -2189,13 +2478,28 @@ class ChatbotEngine:
             )
 
             # Intelligent extraction
+            ext = (filename.rsplit('.', 1)[-1].lower() if '.' in filename else '')
+            image_ext_to_mime = {
+                'jpg': 'image/jpeg',
+                'jpeg': 'image/jpeg',
+                'png': 'image/png',
+                'webp': 'image/webp',
+                'bmp': 'image/bmp',
+                'tiff': 'image/tiff',
+            }
+            vision_image_url = media_url
+            if not vision_image_url and ext in image_ext_to_mime:
+                b64 = base64.b64encode(file_content).decode('utf-8')
+                vision_image_url = f"data:{image_ext_to_mime[ext]};base64,{b64}"
+
             document_processor = get_document_processor()
             result = document_processor.process_document(
                 file_content=file_content,
                 filename=filename,
                 use_intelligent_extraction=True,
                 use_openai_ocr=True,
-                expected_language=language
+                expected_language=language,
+                image_url=vision_image_url,
             )
 
             if not result.success:
@@ -2393,7 +2697,7 @@ class ChatbotEngine:
                 if next_field in intake_field_alias:
                     next_question = PromptTemplates.get_intake_question(intake_field_alias[next_field], language)
                 else:
-                    next_question = text_extractor.get_missing_field_question(next_field, language)
+                    next_question = PromptTemplates.get_gap_filling_prompt(next_field)
 
                 ack = {
                     'en': "Thanks for your CV! 📄✅ I’ve saved your details. I just need a little more information.",
@@ -2892,6 +3196,9 @@ class ChatbotEngine:
             while current_field in missing_fields:
                 missing_fields.remove(current_field)
             extracted_data['missing_critical_fields'] = missing_fields
+            extracted_data['question_retries'] = 0
+            if hasattr(candidate, "question_retries"):
+                candidate.question_retries = 0
 
             if current_field == 'experience_years_stated':
                 try:
@@ -2914,7 +3221,7 @@ class ChatbotEngine:
                 if next_field in intake_field_alias:
                     question = PromptTemplates.get_intake_question(intake_field_alias[next_field], language)
                 else:
-                    question = text_extractor.get_missing_field_question(next_field, language)
+                    question = PromptTemplates.get_gap_filling_prompt(next_field)
                 thanks = _pick({
                     'en': ["Got it! ", "Perfect! ", "Great, thanks! "],
                     'si': ["හරි! ", "ස්තූතියි! "],
@@ -2924,6 +3231,32 @@ class ChatbotEngine:
             else:
                 crud.update_candidate_state(db, candidate.id, self.STATE_APPLICATION_COMPLETE)
                 candidate.conversation_state = self.STATE_APPLICATION_COMPLETE  # keep in-memory object in sync
+                return PromptTemplates.get_application_complete_message(
+                    language, self.company_name, candidate.name or ""
+                )
+
+            retries = self._increment_question_retries(db, candidate)
+            if retries >= 2:
+                extracted_data[current_field] = "Unknown - Skipped"
+                while current_field in missing_fields:
+                    missing_fields.remove(current_field)
+                extracted_data['missing_critical_fields'] = missing_fields
+                extracted_data['question_retries'] = 0
+                if hasattr(candidate, "question_retries"):
+                    candidate.question_retries = 0
+
+                crud.update_candidate(db, candidate.id, CandidateUpdate(extracted_data=extracted_data))
+
+                if missing_fields:
+                    next_field = missing_fields[0]
+                    if next_field in intake_field_alias:
+                        question = PromptTemplates.get_intake_question(intake_field_alias[next_field], language)
+                    else:
+                        question = PromptTemplates.get_gap_filling_prompt(next_field)
+                    return f"Noted — I'll mark this as unknown for now.\n\n{question}"
+
+                crud.update_candidate_state(db, candidate.id, self.STATE_APPLICATION_COMPLETE)
+                candidate.conversation_state = self.STATE_APPLICATION_COMPLETE
                 return PromptTemplates.get_application_complete_message(
                     language, self.company_name, candidate.name or ""
                 )
@@ -3211,12 +3544,39 @@ class ChatbotEngine:
             )
             # If RAG produced a meaningful response (>15 chars), return it
             if rag_resp and len(rag_resp.strip()) > 15:
+                data = candidate.extracted_data or {}
+                data['confusion_streak'] = 0
+                candidate.extracted_data = data
+                if hasattr(candidate, "confusion_streak"):
+                    candidate.confusion_streak = 0
+                db.commit()
                 return rag_resp
         except Exception as _e:
             logger.warning(f"_handle_confused_message RAG failed: {_e}")
 
+        data = candidate.extracted_data or {}
+        confusion = int(data.get('confusion_streak', getattr(candidate, 'confusion_streak', 0) or 0)) + 1
+        data['confusion_streak'] = confusion
+        data['is_human_handoff'] = confusion >= 3
+        candidate.extracted_data = data
+        if hasattr(candidate, "confusion_streak"):
+            candidate.confusion_streak = confusion
+
+        if confusion >= 3:
+            crud.update_candidate_state(db, candidate.id, self.STATE_HUMAN_HANDOFF)
+            candidate.conversation_state = self.STATE_HUMAN_HANDOFF
+            if hasattr(candidate, "status"):
+                candidate.status = self.STATE_HUMAN_HANDOFF
+            db.commit()
+            await self._notify_human_handoff(candidate, reason="confusion_streak>=3")
+            return (
+                "It seems like we are getting a bit stuck! 🛑 I am going to notify one of our human "
+                "agents to message you right here. Please wait a moment."
+            )
+
+        db.commit()
         # RAG had nothing useful — return register-matched fallback
-        return PromptTemplates.get_i_didnt_understand(language)
+        return self.GIBBERISH_FALLBACK_MESSAGE
 
 
 # Singleton

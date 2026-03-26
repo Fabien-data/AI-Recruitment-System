@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     recruitment_api_url: str = "http://localhost:3000"
     chatbot_api_key: str = ""
     recruitment_sync_enabled: bool = True
+    human_handoff_webhook_url: Optional[str] = None
     # Direct PostgreSQL fallback (read-only) — used when REST API is unavailable.
     # Format: postgresql://user:password@host:port/dbname
     recruitment_db_url: Optional[str] = None

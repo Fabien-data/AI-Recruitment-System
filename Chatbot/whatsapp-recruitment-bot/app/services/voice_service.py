@@ -34,6 +34,11 @@ class VoiceService:
         "tanglish": "ta", # Romanized Tamil — hint Whisper to Tamil
     }
 
+    _WHISPER_LOCALIZED_PROMPT = (
+        "This is a WhatsApp voice note from a Sri Lankan user talking about jobs, CV, passport, "
+        "Dubai, Qatar, driver, mason, cleaning. They might speak in Sinhala, Tamil, Singlish, or Tanglish."
+    )
+
     def __init__(self):
         self._client: Optional[AsyncOpenAI] = None
         if OPENAI_AVAILABLE and settings.openai_api_key:
@@ -49,7 +54,7 @@ class VoiceService:
         audio_bytes: bytes,
         language_hint: str = "en",
         filename: str = "voice.ogg",
-    ) -> Optional[str]:
+    ) -> str:
         """
         Transcribe audio bytes to text via Whisper API.
 
@@ -59,11 +64,11 @@ class VoiceService:
             filename: original filename (used by Whisper for format detection)
 
         Returns:
-            Transcribed text, or None on failure.
+            Transcribed text, or AUDIO_UNREADABLE_FALLBACK when transcription fails.
         """
         if not self._client:
             logger.warning("VoiceService: Whisper not available, cannot transcribe")
-            return None
+            return "AUDIO_UNREADABLE_FALLBACK"
 
         whisper_lang = self._WHISPER_LANG_MAP.get(language_hint, "en")
 
@@ -75,17 +80,32 @@ class VoiceService:
                 model="whisper-1",
                 file=audio_file,
                 language=whisper_lang,
+                prompt=self._WHISPER_LOCALIZED_PROMPT,
             )
             text = response.text.strip()
             logger.info(
                 f"VoiceService: Transcribed {len(audio_bytes)} bytes "
                 f"(lang_hint={whisper_lang}) → {len(text)} chars"
             )
-            return text if text else None
+            if len(text.split()) < 2:
+                return "AUDIO_UNREADABLE_FALLBACK"
+            return text
 
         except Exception as e:
             logger.error(f"VoiceService: Whisper transcription failed: {e}", exc_info=True)
-            return None
+            return "AUDIO_UNREADABLE_FALLBACK"
+
+    async def transcribe_audio(
+        self,
+        audio_bytes: bytes,
+        language_hint: str = "en",
+        filename: str = "voice.ogg",
+    ) -> str:
+        return await self.transcribe(
+            audio_bytes=audio_bytes,
+            language_hint=language_hint,
+            filename=filename,
+        )
 
 
 # Singleton

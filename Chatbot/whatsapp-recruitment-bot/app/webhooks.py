@@ -298,7 +298,8 @@ async def process_single_message(message: dict, contacts: list, db):
         response_text = await _safe_process_message(
             db=db,
             phone_number=from_number,
-            message_text=text_body
+            message_text=text_body,
+            source_message_type=message_type,
         )
 
     # ── Document (CV upload) ──────────────────────────────────────────────────
@@ -324,7 +325,8 @@ async def process_single_message(message: dict, contacts: list, db):
                     phone_number=from_number,
                     media_content=file_content,
                     media_type="document",
-                    media_filename=filename
+                    media_filename=filename,
+                    source_message_type=message_type,
                 )
             else:
                 response_text = "I couldn't download your document. Please try sending it again."
@@ -342,14 +344,17 @@ async def process_single_message(message: dict, contacts: list, db):
         ext_map  = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
         filename = f"cv_image{ext_map.get(mime_type, '.jpg')}"
 
+        media_url = await meta_client.get_media_url(media_id) if media_id else None
         file_content = await meta_client.download_media(media_id)
         if file_content:
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
                 media_content=file_content,
-                media_type="document",
-                media_filename=filename
+                media_type="image",
+                media_filename=filename,
+                media_url=media_url,
+                source_message_type=message_type,
             )
         else:
             response_text = (
@@ -384,15 +389,20 @@ async def process_single_message(message: dict, contacts: list, db):
                 transcribed = await voice_service.transcribe(
                     audio_bytes, language_hint=lang_hint, filename=fname
                 )
-                if transcribed:
+                if transcribed and transcribed != "AUDIO_UNREADABLE_FALLBACK":
                     logger.info(f"🎤→💬 Transcribed: {transcribed[:80]!r}")
                     response_text = await _safe_process_message(
-                        db=db, phone_number=from_number, message_text=transcribed
+                        db=db,
+                        phone_number=from_number,
+                        message_text=transcribed,
+                        source_message_type="audio",
                     )
                 else:
-                    response_text = (
-                        "I couldn't understand that voice message. "
-                        "Could you try again or type your message? 🙏"
+                    response_text = await _safe_process_message(
+                        db=db,
+                        phone_number=from_number,
+                        message_text="AUDIO_UNREADABLE_FALLBACK",
+                        source_message_type="audio",
                     )
             else:
                 response_text = (
@@ -423,7 +433,10 @@ async def process_single_message(message: dict, contacts: list, db):
                 f"→ routing as: {text_to_send!r}"
             )
             response_text = await _safe_process_message(
-                db=db, phone_number=from_number, message_text=text_to_send
+                db=db,
+                phone_number=from_number,
+                message_text=text_to_send,
+                source_message_type=message_type,
             )
 
         elif interactive_type == "list_reply":
@@ -435,7 +448,10 @@ async def process_single_message(message: dict, contacts: list, db):
                 f"📋 List reply from {from_number}: id={list_id!r} title={list_title!r}"
             )
             response_text = await _safe_process_message(
-                db=db, phone_number=from_number, message_text=text_to_send
+                db=db,
+                phone_number=from_number,
+                message_text=text_to_send,
+                source_message_type=message_type,
             )
 
     # ── Unsupported type ──────────────────────────────────────────────────────
@@ -452,10 +468,10 @@ async def process_single_message(message: dict, contacts: list, db):
             msg_type = response_text.get("type")
             if msg_type == "list":
                 logger.info(f"📤 Sending interactive list to {from_number}")
-                result = await meta_client.send_list_message(
+                result = await meta_client.send_interactive_list(
                     to_number=from_number,
-                    body_text=response_text.get("body_text", ""),
-                    button_label=response_text.get("button_label", "Options"),
+                    text=response_text.get("body_text", ""),
+                    button_text=response_text.get("button_label", "Options"),
                     sections=response_text.get("sections", []),
                     header_text=response_text.get("header_text"),
                     footer_text=response_text.get("footer_text")
@@ -465,7 +481,7 @@ async def process_single_message(message: dict, contacts: list, db):
                 logger.info(f"📤 Sending interactive buttons to {from_number}")
                 result = await meta_client.send_interactive_buttons(
                     to_number=from_number,
-                    body_text=response_text.get("body_text", ""),
+                    text=response_text.get("body_text", ""),
                     buttons=response_text.get("buttons", []),
                     header_text=response_text.get("header_text"),
                     footer_text=response_text.get("footer_text")

@@ -1,7 +1,7 @@
 """
 RAG Engine
 ==========
-Retrieval-Augmented Generation engine using OpenAI GPT-5-mini.
+Retrieval-Augmented Generation engine using OpenAI gpt-5.4-mini.
 Integrates with Pinecone for vector storage and retrieval.
 """
 
@@ -66,7 +66,7 @@ from app.llm.prompt_templates import PromptTemplates
 class RAGEngine:
     """
     Retrieval-Augmented Generation engine.
-    Uses OpenAI GPT-5-mini for classification and generation, and Pinecone for retrieval.
+    Uses OpenAI gpt-5.4-mini for classification and generation, and Pinecone for retrieval.
     """
     
     def __init__(self):
@@ -75,10 +75,10 @@ class RAGEngine:
         self.pinecone_index = None
         self.embedding_model = "text-embedding-ada-002"
         # Classification: fast model for intent/entity extraction (low latency)
-        self.classify_model = "gpt-5-mini"
-        # RAG / complex generation: higher-quality model for nuanced responses
-        self.chat_model = "gpt-5-mini"
-        self.complex_chat_model = "gpt-4o"
+        self.classify_model = "gpt-5.4-mini"
+        # RAG / conversational generation model
+        self.chat_model = "gpt-5.4-mini"
+        self.complex_chat_model = "gpt-5.4-mini"
 
         # Initialize OpenAI (sync for embeddings / index operations)
         if OPENAI_AVAILABLE:
@@ -112,7 +112,7 @@ class RAGEngine:
         use_rag: bool = True
     ) -> str:
         """
-        Generate a response using GPT-5-mini with optional RAG.
+        Generate a response using gpt-5.4-mini with optional RAG.
         
         Args:
             user_message: The user's message
@@ -142,7 +142,7 @@ class RAGEngine:
                 language=language
             )
 
-            # Route code-mixed languages to the more capable model (GPT-4o)
+            # Route code-mixed languages to conversational model (same target here)
             selected_model = self.complex_chat_model if language in ('singlish', 'tanglish') else self.chat_model
             
             # Generate response
@@ -849,7 +849,7 @@ Respond ONLY with valid JSON (no markdown):
                 language=language,
             )
 
-            # Route code-mixed languages to the more capable model (GPT-4o)
+            # Route code-mixed languages to conversational model (same target here)
             selected_model = self.complex_chat_model if language in ('singlish', 'tanglish') else self.chat_model
             
             response = await self.async_openai_client.chat.completions.create(

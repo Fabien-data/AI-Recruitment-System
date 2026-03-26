@@ -7,9 +7,11 @@ for maximum accuracy in CV/Resume processing.
 
 import logging
 import base64
+import json
 from typing import Optional, Dict, Any, Tuple, Union
 from pathlib import Path
 from dataclasses import dataclass, asdict
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,8 @@ class DocumentProcessor:
         filename: str,
         use_intelligent_extraction: bool = True,
         use_openai_ocr: bool = True,
-        expected_language: str = 'en'
+        expected_language: str = 'en',
+        image_url: Optional[str] = None,
     ) -> ProcessingResult:
         """
         Process a CV/Resume document with maximum accuracy.
@@ -120,6 +123,24 @@ class DocumentProcessor:
         ext = Path(filename).suffix.lower()
         
         try:
+            if ext in self.SUPPORTED_IMAGE and use_intelligent_extraction and image_url:
+                vision_extracted = self._extract_structured_from_image_url(image_url)
+                if vision_extracted:
+                    warnings = vision_extracted.warnings.copy()
+                    if vision_extracted.missing_critical_fields:
+                        warnings.append(
+                            f"Missing required fields: {', '.join(vision_extracted.missing_critical_fields)}"
+                        )
+                    return ProcessingResult(
+                        success=True,
+                        extracted_data=vision_extracted,
+                        raw_text=vision_extracted.raw_text,
+                        text_source="vision_gpt4o_json",
+                        text_confidence=0.92,
+                        extraction_confidence=vision_extracted.overall_confidence,
+                        warnings=warnings,
+                    )
+
             # Step 1: Extract raw text based on file type
             if ext in self.SUPPORTED_PDF:
                 text, text_source, text_confidence = self._process_pdf(
@@ -184,6 +205,93 @@ class DocumentProcessor:
                 success=False,
                 error_message=f"Processing error: {str(e)}"
             )
+
+    def _extract_structured_from_image_url(self, image_url: str) -> Optional[ExtractedCVData]:
+        """
+        Route CV photos directly to GPT-4o Vision and request structured JSON.
+        """
+        if not self.intelligent_extractor or not getattr(self.intelligent_extractor, "openai_client", None):
+            return None
+
+        try:
+            response = self.intelligent_extractor.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert CV parser for recruitment workflows. Return valid JSON only.",
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Extract all recruitment data (Name, Phone, Passport, Experience, Skills) "
+                                    "from this image of a CV. The text may be blurry or poorly lit. "
+                                    "Be highly tolerant of typos. Return JSON with keys: "
+                                    "name, phone, passport, experience, skills, raw_text, confidence, missing_critical_fields."
+                                ),
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": image_url,
+                                    "detail": "high",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                response_format={"type": "json_object"},
+            )
+
+            payload = json.loads(response.choices[0].message.content or "{}")
+            name = (payload.get("name") or "").strip() or None
+            phone = (payload.get("phone") or "").strip() or None
+            passport = (payload.get("passport") or "").strip() or None
+            experience = payload.get("experience")
+            skills = payload.get("skills")
+            if isinstance(skills, str):
+                skills = [s.strip() for s in skills.split(",") if s.strip()]
+            if not isinstance(skills, list):
+                skills = []
+
+            confidence = float(payload.get("confidence", 0.8) or 0.8)
+            missing_critical_fields = payload.get("missing_critical_fields")
+            if not isinstance(missing_critical_fields, list):
+                missing_critical_fields = []
+            if not phone:
+                missing_critical_fields.append("phone")
+            missing_critical_fields = list(dict.fromkeys(missing_critical_fields))
+
+            total_exp = None
+            try:
+                if experience is not None:
+                    total_exp = float(experience)
+            except Exception:
+                total_exp = None
+
+            return ExtractedCVData(
+                full_name=name,
+                full_name_confidence=confidence if name else 0.0,
+                phone=phone,
+                phone_confidence=confidence if phone else 0.0,
+                expected_salary=passport,
+                expected_salary_confidence=confidence if passport else 0.0,
+                total_experience_years=total_exp,
+                total_experience_years_confidence=confidence if total_exp is not None else 0.0,
+                technical_skills=skills,
+                raw_text=(payload.get("raw_text") or "").strip() or None,
+                extraction_method="vision_gpt4o_json",
+                extraction_timestamp=datetime.utcnow().isoformat(),
+                overall_confidence=max(0.0, min(confidence, 1.0)),
+                missing_critical_fields=missing_critical_fields,
+                warnings=["Vision extraction used for image CV input"],
+            )
+        except Exception as exc:
+            logger.warning(f"Vision structured extraction failed, falling back to OCR path: {exc}")
+            return None
     
     def _process_pdf(
         self,
@@ -362,7 +470,8 @@ class DocumentProcessor:
     def process_whatsapp_image(
         self,
         image_bytes: bytes,
-        expected_language: str = 'en'
+        expected_language: str = 'en',
+        image_url: Optional[str] = None,
     ) -> ProcessingResult:
         """
         Process an image received from WhatsApp (photo of CV).
@@ -380,7 +489,8 @@ class DocumentProcessor:
             filename="whatsapp_image.jpg",
             use_intelligent_extraction=True,
             use_openai_ocr=True,  # Always use best OCR for WhatsApp images
-            expected_language=expected_language
+            expected_language=expected_language,
+            image_url=image_url,
         )
 
 
