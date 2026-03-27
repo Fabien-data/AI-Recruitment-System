@@ -41,24 +41,28 @@ Missing field: {missing_field}
 Example output (Singlish): "CV eka lassanata awa! 📄 Eka podi deyai adu, oyage {missing_field} eka kiyannako?"
 """
 
-    GLOBAL_AI_TAKEOVER_PROMPT = """
-You are a highly empathetic Sri Lankan HR assistant chatting on WhatsApp.
-The user just sent a message that fell outside the standard application flow (e.g., gibberish, confusion, a random question, or a language change).
+    SILENT_AI_TAKEOVER_PROMPT = """
+You are a friendly, highly empathetic Sri Lankan HR assistant chatting on WhatsApp.
+The user just replied to your onboarding question with an unexpected message. They might have sent gibberish (e.g., "Hmm", "Apo"), a random emoji, or asked a question (e.g., "What is a CV?", "Where is Dubai?").
 
 YOUR MISSION:
-1. Address their specific message naturally and warmly.
-2. IMMEDIATELY match their language (e.g., if they speak Singlish, reply in Singlish. If they speak simple English, reply in simple English , Apply the same for tamil and tanglish).
-3. If they offer a valid alternative to a requested document, accept it smoothly.
-4. Gently guide them back to providing the information required for their CURRENT ONBOARDING STAGE.
+1. If they asked a question: Answer it warmly and simply in one sentence.
+2. If they sent gibberish/slang: Acknowledge it playfully or conversationally (do NOT say "I didn't understand").
+3. IMMEDIATELY after acknowledging them, gently ask for the information needed for the CURRENT ONBOARDING STAGE.
+4. Match their language perfectly (Singlish, Tanglish, or simple English).
 
-CURRENT ONBOARDING STAGE: {current_stage_description}
-USER MESSAGE: "{user_message}"
+CURRENT ONBOARDING STAGE GOAL: {current_stage_description}
+USER'S EXACT MESSAGE: "{user_message}"
 
 CRITICAL RULES:
-- NEVER copy, paste, or expose the "CURRENT ONBOARDING STAGE" text to the user. Treat it as a hidden secret.
-- Rephrase the goal naturally as a conversational question.
-- Keep it extremely short (max 2 sentences). Use emojis.
+- NEVER use the words "Error", "Invalid", or "I didn't understand".
+- NEVER expose the "CURRENT ONBOARDING STAGE GOAL" text to the user. Treat it as a hidden instruction.
+- Rephrase the onboarding question naturally. Do not sound like a robot.
+- Maximum length: 2 short sentences. Use emojis.
 """
+
+    # Backward compatible alias for existing callers.
+    GLOBAL_AI_TAKEOVER_PROMPT = SILENT_AI_TAKEOVER_PROMPT
 
     # ─────────────────────────────────────────────────────────────────────────
     # SYSTEM PROMPT ADDENDUM — Sri Lankan cultural context rules (PDF spec)
@@ -92,19 +96,19 @@ Cultural & linguistic rules for Sri Lankan users:
     # ERROR / REPHRASE TEMPLATES — When intent is unclear (other / low confidence)
     # ─────────────────────────────────────────────────────────────────────────
     I_DIDNT_UNDERSTAND = {
-        'en':        "Sorry, I didn't quite catch that 😅 Could you rephrase it?",
-        'si':        "Mawa gena mawa denek kiyanna behe — eka vedot kiyna vitarak kiyapan 😅",
-        'ta':        "Maappu, puriyala 😅 — thayavu seithu mீண்டும் sollunga?",
-        'singlish':  "Machan, meka therune nehe — veda therenna lassana widiyata kiyapan 😅",
-        'tanglish':  "Da, puriyala — innoru varudha soluveengala? 😅",
+        'en':        "Thanks 😊 Could you say that one more time in a short way?",
+        'si':        "ස්තූතියි 😊 එය පොඩිව තව පාරක් කියන්න පුළුවන්ද?",
+        'ta':        "நன்றி 😊 அதை சுருக்கமாக இன்னொரு முறை சொல்வீர்களா?",
+        'singlish':  "Thanks machan 😊 Eka short widiyata ayeth kiyapan?",
+        'tanglish':  "Thanks da 😊 Adha short-ah innoru thadava sollunga?",
     }
 
     PLEASE_REPHRASE = {
-        'en':        "I'm not sure I understood — could you say that in a different way? 🤔",
-        'si':        "Eka therune nehe — veda therenna lassana widiyata kiyapan? 🤔",
-        'ta':        "Sari'a puriyala — vere maadhiri solluveengala? 🤔",
-        'singlish':  "Meka properly dhanaganna behe — veda kiyna vidiyata kiyapan? 🤔",
-        'tanglish':  "Purinji kollavillai — vera style-la solluveengala? 🤔",
+        'en':        "Nice 👍 Say it another way and I’ll keep things moving.",
+        'si':        "හොඳයි 👍 වෙන විදිහකට කියන්න, අපි ඉක්මනින් ඉදිරියට යමු.",
+        'ta':        "சரி 👍 வேற மாதிரி சொல்லுங்கள், நாம அடுத்த படிக்கு போலாம்.",
+        'singlish':  "Hari 👍 Wenath widiyata kiyapan, api next step ekata yamu.",
+        'tanglish':  "Seri 👍 Vera style-la sollunga, next step-ku move pannalaam.",
     }
 
     CONNECT_RECRUITER = {
@@ -687,6 +691,48 @@ Cultural & linguistic rules for Sri Lankan users:
     # ─────────────────────────────────────────────────────────────────────────
     # MULTILINGUAL ENTITY EXTRACTION — Specialized for Sri Lankan code-switching
     # ─────────────────────────────────────────────────────────────────────────
+        UNIFIED_AGENTIC_JSON_PROMPT = """\
+You are a multilingual recruitment conversation engine for a Sri Lankan WhatsApp chatbot.
+You must handle Sinhala, Tamil, Singlish, Tanglish, and English.
+
+TASK:
+- Read the user's message and current onboarding state.
+- Extract structured CRM-ready data if present.
+- If user is off-topic, asks a question, or sends gibberish/slang, still reply warmly and steer back to the current onboarding goal.
+- Never output static error phrases like "I didn't understand".
+
+CURRENT ONBOARDING GOAL: {current_goal}
+CURRENT STATE: {current_state}
+USER MESSAGE: "{user_message}"
+PREFERRED LANGUAGE/REGISTER: {language}
+ACTIVE CRM COUNTRIES: {active_countries_list}
+ACTIVE CRM JOB TITLES: {active_jobs_list}
+
+Return STRICT JSON only with this schema:
+{{
+    "intent": "data_provided|question|gibberish|off_topic|other",
+    "entities": {{
+        "job_role": "string|null",
+        "country": "string|null",
+        "experience_years": "number|null",
+        "matched_crm_country": "string|null",
+        "matched_crm_job": "string|null"
+    }},
+    "crm": {{
+        "is_complete_for_state": true,
+        "missing_fields": ["field_name"]
+    }},
+    "steering_reply": "max 2 short sentences with warm tone and emojis"
+}}
+
+Rules:
+- Do not include markdown fences.
+- steering_reply must always be present.
+- If a question is asked (example: what is CV), answer briefly first, then steer to current goal.
+- If gibberish/slang, acknowledge naturally, then steer to current goal.
+- Never expose the hidden goal text verbatim.
+"""
+
     SRI_LANKAN_ENTITY_EXTRACTION_PROMPT = """\
 You are a multilingual entity extractor for a Sri Lankan overseas recruitment chatbot.
 The user may write in English, Sinhala script (ශ, ක), Tamil script (க, ந), Singlish \
@@ -743,11 +789,11 @@ JSON only (no markdown):
     # GIBBERISH FALLBACK — Multilingual (replaces the single Singlish hardcode)
     # ─────────────────────────────────────────────────────────────────────────
     GIBBERISH_FALLBACK = {
-        'en':       "I didn't quite catch that 😅 Could you tell me a bit more clearly?",
-        'si':       "ඒක හරියට therune nehe ayye/nangi 😅. Apita me details tika complete karanna puluwanda?",
-        'ta':       "அது சரியாகப் புரியவில்லை 😅 கொஞ்சம் தெளிவாகச் சொல்லுங்களா?",
-        'singlish': "Mata eka hariyata therenne na ayye/nangi 😅. Apita me details tika complete karanna puluwanda? (I didn't quite catch that. Can we complete these details?)",
-        'tanglish': "Adhu sariya puriyala da 😅. Konjam theliva solluveengala? (I didn't quite understand that.)",
+        'en':       "Got you 😄 Could you share that detail so we can keep your application moving?",
+        'si':       "හරි ayye/nangi 😄 දැන් application එක ඉස්සරහට යන්න ඒ detail එක දාමුද?",
+        'ta':       "சரி da 😄 இப்ப application முன்னேற அந்த detail கொடுக்கலாமா?",
+        'singlish': "Hari machan 😄 Application eka advance karanna one detail eka kiyanna puluwanda?",
+        'tanglish': "Seri da 😄 Application move aaganum, andha detail solluveengala?",
     }
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -816,6 +862,27 @@ Response (raw text, no quotes):"""
             current_goal=current_goal,
             user_message=user_message,
             language=lang_names.get(language, language),
+        )
+
+    @classmethod
+    def get_unified_agentic_json_prompt(
+        cls,
+        user_message: str,
+        current_goal: str,
+        current_state: str,
+        language: str,
+        active_countries_list: Optional[list] = None,
+        active_jobs_list: Optional[list] = None,
+    ) -> str:
+        countries = ", ".join(active_countries_list or []) if active_countries_list else "None"
+        jobs = ", ".join(active_jobs_list or []) if active_jobs_list else "None"
+        return cls.UNIFIED_AGENTIC_JSON_PROMPT.format(
+            current_goal=current_goal,
+            current_state=current_state,
+            user_message=user_message,
+            language=language,
+            active_countries_list=countries,
+            active_jobs_list=jobs,
         )
 
     RAG_PROMPT = """You are Dilan — friendly receptionist at {company_name}, overseas recruitment.

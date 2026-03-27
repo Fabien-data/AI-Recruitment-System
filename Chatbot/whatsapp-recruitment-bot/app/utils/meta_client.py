@@ -198,32 +198,46 @@ class MetaWhatsAppClient:
         Returns:
             Media file content as bytes, or None if failed
         """
-        # First, get the media URL
+        if not media_id:
+            logger.error("Cannot download media: missing media_id")
+            return None
+
         url = f"{self.base_url}/{media_id}"
         headers = {"Authorization": f"Bearer {self.access_token}"}
-        
+
         try:
             async with httpx.AsyncClient() as client:
-                # Get media URL
-                response = await client.get(url, headers=headers, timeout=30.0)
-                response.raise_for_status()
-                
-                media_data = response.json()
-                media_url = media_data.get('url')
-                
+                # Step 1: Resolve the signed media URL from Meta Graph API.
+                url_response = await client.get(url, headers=headers, timeout=30.0)
+                url_response.raise_for_status()
+
+                media_data = url_response.json()
+                media_url = media_data.get("url")
                 if not media_url:
-                    logger.error(f"No URL found for media {media_id}")
+                    logger.error(f"Meta API did not return a media URL for media_id={media_id}")
                     return None
-                
-                # Download the actual media
+
+                # Step 2: Download the binary using the same Bearer token.
                 media_response = await client.get(media_url, headers=headers, timeout=60.0)
                 media_response.raise_for_status()
-                
-                logger.info(f"Downloaded media {media_id}: {len(media_response.content)} bytes")
-                return media_response.content
-            
+
+                content = media_response.content
+                if not content:
+                    logger.error(f"Meta media download returned empty content for media_id={media_id}")
+                    return None
+
+                logger.info(f"Downloaded media {media_id}: {len(content)} bytes")
+                return content
+
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else "unknown"
+            logger.error(f"Failed to download media {media_id}: HTTP {status}")
+            return None
         except httpx.HTTPError as e:
             logger.error(f"Failed to download media {media_id}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error downloading media {media_id}: {e}", exc_info=True)
             return None
     
     async def get_media_url(self, media_id: str) -> Optional[str]:

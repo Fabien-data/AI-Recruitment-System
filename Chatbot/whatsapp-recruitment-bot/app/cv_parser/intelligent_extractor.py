@@ -7,6 +7,7 @@ This provides much better accuracy than regex-based extraction.
 
 import logging
 import json
+import re
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
@@ -242,6 +243,44 @@ Remember: Return ONLY the JSON object, no other text.'''
             self.openai_client = openai.OpenAI(api_key=openai_api_key)
         else:
             self.openai_client = None
+
+    def _clean_and_parse_json(self, raw_text: str) -> Dict[str, Any]:
+        """Strip markdown/prose wrappers and parse strict JSON with safe fallback."""
+        try:
+            clean_text = (raw_text or "").strip()
+
+            if clean_text.startswith("```json"):
+                clean_text = clean_text[7:]
+            elif clean_text.startswith("```"):
+                clean_text = clean_text[3:]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3]
+            clean_text = clean_text.strip()
+
+            match = re.search(r"\{.*\}", clean_text, re.DOTALL)
+            if match:
+                clean_text = match.group(0)
+
+            return json.loads(clean_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse LLM response as JSON: {e}. Raw content: {raw_text!r}")
+            return {
+                "personal_info": {
+                    "full_name": {"value": "Unknown", "confidence": 0.0},
+                    "phone": {"value": None, "confidence": 0.0},
+                },
+                "professional_info": {
+                    "total_experience_years": {"value": None, "confidence": 0.0},
+                },
+                "skills": {
+                    "technical": [],
+                    "soft": [],
+                    "languages_spoken": [],
+                },
+                "missing_critical_information": ["full_name", "phone"],
+                "extraction_warnings": ["json_parse_failed"],
+                "extraction_failed": True,
+            }
     
     def extract_from_text(self, cv_text: str) -> ExtractedCVData:
         """
@@ -274,16 +313,13 @@ Remember: Return ONLY the JSON object, no other text.'''
                 response_format={"type": "json_object"}
             )
             
-            # Parse the response
+            # Parse the response with markdown/prose stripping safeguards.
             json_str = response.choices[0].message.content
-            extracted_json = json.loads(json_str)
+            extracted_json = self._clean_and_parse_json(json_str)
             
             # Convert to ExtractedCVData
             return self._json_to_extracted_data(extracted_json, cv_text)
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response as JSON: {e}")
-            return self._fallback_extraction(cv_text)
         except Exception as e:
             logger.error(f"Intelligent extraction failed: {e}")
             return self._fallback_extraction(cv_text)

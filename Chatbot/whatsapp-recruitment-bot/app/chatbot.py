@@ -613,6 +613,35 @@ class ChatbotEngine:
         except Exception as exc:
             logger.warning(f"Human handoff webhook failed: {exc}")
 
+    async def _send_unified_takeover_reply(
+        self,
+        text: str,
+        language: str,
+        state: str,
+        phone_number: str,
+        active_countries: Optional[list] = None,
+        active_jobs: Optional[list] = None,
+    ) -> str:
+        """Use the unified processor to generate steering text for off-track onboarding turns."""
+        unified = await rag_engine.process_unified_onboarding_turn(
+            user_message=text,
+            current_state=state,
+            language=language,
+            active_countries=active_countries,
+            active_jobs=active_jobs,
+        )
+        reply = (unified.get("steering_reply") or "").strip()
+        if not reply:
+            reply = await rag_engine.execute_silent_takeover(
+                user_message=text,
+                current_state=state,
+            )
+
+        if phone_number and reply:
+            await meta_client.send_message(phone_number, reply)
+            return ""
+        return reply
+
     def _dispatch_recruitment_sync_background(
         self,
         candidate_id: int,
@@ -730,6 +759,16 @@ class ChatbotEngine:
 
             if media_content and media_type in ("document", "image"):
                 current_state = candidate.conversation_state
+
+                if current_state == self.STATE_AWAITING_CV:
+                    try:
+                        await meta_client.send_message(
+                            phone_number,
+                            "I received your file. Please give me a few seconds to read it..."
+                        )
+                    except Exception as ack_err:
+                        logger.warning(f"Failed to send awaiting-CV media ack: {ack_err}")
+
                 # If the application is already complete, this is an additional document
                 if current_state == self.STATE_APPLICATION_COMPLETE:
                     return await self._handle_additional_document(
@@ -778,7 +817,7 @@ class ChatbotEngine:
                 )
                 return self._with_audio_ack(response, is_audio)
 
-            return self._default_response(db, candidate)
+            return await self._default_response(db, candidate)
 
         except Exception as e:
             try:
@@ -1769,7 +1808,9 @@ class ChatbotEngine:
                     return f"{agentic_msg}\n\n{cv_nudge}"
 
                 return agentic_msg
-            elif any(w in text_norm for w in [
+            text_norm = (text or "").lower().strip()
+            new_lang = None
+            if any(w in text_norm for w in [
                 "3", "3️⃣", "tamil", "thamil", "tamizh", "thamizh", "ta ", "தமிழ்", "tamila"
             ]):
                 new_lang = "ta"
@@ -1832,9 +1873,14 @@ class ChatbotEngine:
             # 1. Attempt Data Extraction
             active_countries_list = vacancy_service.get_active_countries()
             active_jobs_list = vacancy_service.get_active_job_titles()
-            entities = await rag_engine.extract_entities_multilingual(
-                text=text, language=language, active_countries=active_countries_list, active_jobs=active_jobs_list
+            unified = await rag_engine.process_unified_onboarding_turn(
+                user_message=text,
+                current_state=candidate.conversation_state,
+                language=language,
+                active_countries=active_countries_list,
+                active_jobs=active_jobs_list,
             )
+            entities = unified.get("entities") or {}
             target_data = entities.get("matched_crm_job") or entities.get("job_role")
             
             # 2. The Happy Path
@@ -1861,22 +1907,28 @@ class ChatbotEngine:
 
             # 3. The Universal Catch-All
             else:
-                takeover_reply = await rag_engine.generate_global_takeover(
-                    user_message=text, 
-                    current_state=candidate.conversation_state
+                takeover_reply = (unified.get("steering_reply") or "").strip() or await rag_engine.execute_silent_takeover(
+                    user_message=text,
+                    current_state=candidate.conversation_state,
                 )
                 if phone_number:
-                    await meta_client.send_text(phone_number, takeover_reply)
-                return ""
+                    await meta_client.send_message(phone_number, takeover_reply)
+                    return ""
+                return takeover_reply
 
         # ── AWAITING DESTINATION COUNTRY ──────────────────────────────────────
         elif state == self.STATE_AWAITING_COUNTRY:
             # 1. Attempt Data Extraction
-            entities = await rag_engine.extract_entities_multilingual(
-                text=text, language=language, 
-                active_countries=vacancy_service.get_active_countries(), 
-                active_jobs=vacancy_service.get_active_job_titles()
+            active_countries_list = vacancy_service.get_active_countries()
+            active_jobs_list = vacancy_service.get_active_job_titles()
+            unified = await rag_engine.process_unified_onboarding_turn(
+                user_message=text,
+                current_state=candidate.conversation_state,
+                language=language,
+                active_countries=active_countries_list,
+                active_jobs=active_jobs_list,
             )
+            entities = unified.get("entities") or {}
             target_data = entities.get("matched_crm_country") or entities.get("country")
             
             # 2. The Happy Path
@@ -1887,18 +1939,24 @@ class ChatbotEngine:
 
             # 3. The Universal Catch-All
             else:
-                takeover_reply = await rag_engine.generate_global_takeover(
-                    user_message=text, 
-                    current_state=candidate.conversation_state
+                takeover_reply = (unified.get("steering_reply") or "").strip() or await rag_engine.execute_silent_takeover(
+                    user_message=text,
+                    current_state=candidate.conversation_state,
                 )
                 if phone_number:
-                    await meta_client.send_text(phone_number, takeover_reply)
-                return ""
+                    await meta_client.send_message(phone_number, takeover_reply)
+                    return ""
+                return takeover_reply
 
         # ── AWAITING EXPERIENCE ───────────────────────────────────────────────
         elif state == self.STATE_AWAITING_EXPERIENCE:
             # 1. Attempt Data Extraction
-            entities = await rag_engine.extract_entities_multilingual(text=text, language=language)
+            unified = await rag_engine.process_unified_onboarding_turn(
+                user_message=text,
+                current_state=candidate.conversation_state,
+                language=language,
+            )
+            entities = unified.get("entities") or {}
             target_data = entities.get("experience_years")
             
             if not target_data:
@@ -1924,13 +1982,14 @@ class ChatbotEngine:
 
             # 3. The Universal Catch-All
             else:
-                takeover_reply = await rag_engine.generate_global_takeover(
-                    user_message=text, 
-                    current_state=candidate.conversation_state
+                takeover_reply = (unified.get("steering_reply") or "").strip() or await rag_engine.execute_silent_takeover(
+                    user_message=text,
+                    current_state=candidate.conversation_state,
                 )
                 if phone_number:
-                    await meta_client.send_text(phone_number, takeover_reply)
-                return ""
+                    await meta_client.send_message(phone_number, takeover_reply)
+                    return ""
+                return takeover_reply
 
         # ── AWAITING CV ───────────────────────────────────────────────────────
         elif state == self.STATE_AWAITING_CV:
@@ -1980,22 +2039,14 @@ class ChatbotEngine:
                 }
                 return done_msgs.get(language, done_msgs['en'])
 
-            retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
-            current_goal = self._current_goal_for_state(self.STATE_AWAITING_CV)
-            agentic_msg = await rag_engine.generate_agentic_response(
-                user_message=text,
-                current_goal=current_goal,
+            return await self._send_unified_takeover_reply(
+                text=text,
                 language=language,
+                state=candidate.conversation_state,
+                phone_number=phone_number,
+                active_countries=vacancy_service.get_active_countries(),
+                active_jobs=vacancy_service.get_active_job_titles(),
             )
-
-            if retries >= 3:
-                return self._finalize_no_cv_continue(db, candidate, language)
-
-            if retries >= 2:
-                cv_nudge = PromptTemplates.get_awaiting_cv_message(language, self.company_name)
-                return f"{agentic_msg}\n\n{cv_nudge}"
-
-            return agentic_msg
 
         # ── COLLECTING MISSING INFO ───────────────────────────────────────────
         elif state == self.STATE_COLLECTING_INFO:
@@ -2239,9 +2290,11 @@ class ChatbotEngine:
                 logger.error(f"Document processing failed: {result.error_message}")
                 cv_data = text_extractor.extract_from_bytes(file_content, filename)
                 extracted_data = None
+                extraction_failed = True
             else:
                 extracted_data = result.extracted_data
                 cv_data = None
+                extraction_failed = False
 
             # Merge intake fields into extracted_data for storage
             existing_intake = candidate.extracted_data or {}
@@ -2327,8 +2380,29 @@ class ChatbotEngine:
                 if not merged_data.get(field)
             ]
             merged_data['missing_critical_fields'] = list(dict.fromkeys(filtered_missing_fields))
+            if extraction_failed:
+                merged_data['extraction_failed'] = True
+            else:
+                merged_data.pop('extraction_failed', None)
             candidate.extracted_data = merged_data
             db.commit()
+
+            if extraction_failed:
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
+                candidate.conversation_state = self.STATE_AWAITING_CV
+                self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
+                try:
+                    return await rag_engine.execute_silent_takeover(
+                        user_message="I uploaded a CV but you couldn't read it.",
+                        current_state=candidate.conversation_state,
+                    )
+                except Exception as takeover_err:
+                    logger.warning(f"CV unreadable takeover generation failed: {takeover_err}")
+                    return {
+                        'en': "I couldn't read that file clearly. Please try sending your CV again as a clear PDF or image.",
+                        'si': "එම ගොනුව පැහැදිලිව කියවන්න බැරි වුණා. කරුණාකර ඔබගේ CV එක පැහැදිලි PDF එකක් හෝ image එකක් ලෙස නැවත යවන්න.",
+                        'ta': "அந்த கோப்பை தெளிவாக வாசிக்க முடியவில்லை. தயவு செய்து உங்கள் CV-ஐ தெளிவான PDF அல்லது image ஆக மீண்டும் அனுப்பவும்.",
+                    }.get(language, "I couldn't read that file clearly. Please try sending your CV again as a clear PDF or image.")
 
             candidate_name = (
                 (extracted_data.full_name if extracted_data else None)
@@ -2447,6 +2521,34 @@ class ChatbotEngine:
                     language, self.company_name, candidate.name or ""
                 )
                 response = f"{recap}{summary}\n\n{complete_msg}"
+
+            try:
+                sync_ok = await recruitment_sync.push(
+                    candidate,
+                    db,
+                    cv_bytes=file_content,
+                    cv_filename=filename,
+                )
+                if sync_ok:
+                    logger.info(f"Successfully synced candidate {candidate.phone_number} to CRM")
+                else:
+                    logger.warning(
+                        f"Immediate CRM sync returned unsuccessful for {candidate.phone_number}; scheduling background retry"
+                    )
+                    self._dispatch_recruitment_sync_background(
+                        candidate_id=candidate.id,
+                        cv_bytes=file_content,
+                        cv_filename=filename,
+                        reason="cv-upload-immediate-sync-retry",
+                    )
+            except Exception as sync_err:
+                logger.error(f"CRM sync error for {candidate.phone_number}: {sync_err}", exc_info=True)
+                self._dispatch_recruitment_sync_background(
+                    candidate_id=candidate.id,
+                    cv_bytes=file_content,
+                    cv_filename=filename,
+                    reason="cv-upload-sync-exception",
+                )
 
             self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, language)
 
@@ -2998,22 +3100,15 @@ class ChatbotEngine:
                     language, self.company_name, candidate.name or ""
                 )
 
-        readable_field = intake_field_alias.get(current_field, current_field).replace('_', ' ')
-        clarify = {
-            'en': [
-                f"Sorry, I didn't catch that. Could you share your {readable_field} again?",
-                f"No worries — could you type your {readable_field} one more time?",
-            ],
-            'si': [
-                f"සමාවෙන්න, මට ඒක හරියට ගත නොහැකි වුණා. ඔබගේ {readable_field} කියන්න පුළුවන්ද?",
-                f"තව වතාවක් කියන්නද? ඔබගේ {readable_field} ඕන.",
-            ],
-            'ta': [
-                f"மன்னிக்கவும், சரியாக புரியவில்லை. உங்கள் {readable_field} மீண்டும் சொல்ல முடியுமா?",
-                f"கவலைப்படாதீர்கள் — உங்கள் {readable_field} மறுபடி தட்டச்சு செய்ய முடியுமா?",
-            ],
-        }
-        return _pick(clarify.get(language, clarify['en']))
+        unified = await rag_engine.process_unified_onboarding_turn(
+            user_message=text,
+            current_state=candidate.conversation_state,
+            language=language,
+        )
+        return (unified.get("steering_reply") or "").strip() or await rag_engine.execute_silent_takeover(
+            user_message=text,
+            current_state=candidate.conversation_state,
+        )
 
     # ─── Contextual / RAG fallback ────────────────────────────────────────────
 
@@ -3278,17 +3373,12 @@ class ChatbotEngine:
         }
         return _pick(options.get(language, options['en']))
 
-    def _default_response(self, db, candidate) -> str:
+    async def _default_response(self, db, candidate) -> str:
         """Response when payload has no text/media."""
-        language = self._effective_language(candidate)
-        opts = {
-            'en': "Sorry, I didn't get that. Send a text or your CV! 😊",
-            'si': "මට එක් ගත නොහැකි වුණා. Text එකකා CV එකකා ෂෙයාර් කරන්න! 😊",
-            'ta': "புரியவில்லை. Text அல்லது CV அனுப்பவும்! 😊",
-            'singlish': "Sorry da, send text or CV la! 😊",
-            'tanglish': "Puriyala da, text or CV anuppu! 😊",
-        }
-        return opts.get(language, opts['en'])
+        return await rag_engine.execute_silent_takeover(
+            user_message="(no content)",
+            current_state=candidate.conversation_state,
+        )
 
     def _error_response(self, language: str, error_type: str = "error_generic") -> str:
         return PromptTemplates.get_error_message(error_type, language)
@@ -3347,8 +3437,10 @@ class ChatbotEngine:
             )
 
         db.commit()
-        # RAG had nothing useful — return register-matched fallback
-        return self.GIBBERISH_FALLBACK_MESSAGE
+        return await rag_engine.execute_silent_takeover(
+            user_message=text,
+            current_state=candidate.conversation_state,
+        )
 
 
 # Singleton

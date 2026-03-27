@@ -8,6 +8,7 @@ for maximum accuracy in CV/Resume processing.
 import logging
 import base64
 import json
+import re
 from typing import Optional, Dict, Any, Tuple, Union
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -95,6 +96,35 @@ class DocumentProcessor:
             self.ocr_engine = get_ocr_engine()
         if self.intelligent_extractor is None:
             self.intelligent_extractor = get_intelligent_extractor()
+
+    def _clean_and_parse_json(self, raw_text: str) -> Dict[str, Any]:
+        """Aggressively strip markdown wrappers and parse JSON safely."""
+        try:
+            clean_text = (raw_text or "").strip()
+
+            if clean_text.startswith("```json"):
+                clean_text = clean_text[7:]
+            elif clean_text.startswith("```"):
+                clean_text = clean_text[3:]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3]
+            clean_text = clean_text.strip()
+
+            # Capture the largest JSON object body when extra prose is present.
+            match = re.search(r"\{.*\}", clean_text, re.DOTALL)
+            if match:
+                clean_text = match.group(0)
+
+            return json.loads(clean_text)
+        except json.JSONDecodeError as exc:
+            logger.error(f"CV JSON parsing failed: {exc}. Raw content: {raw_text!r}")
+            return {
+                "name": "Unknown",
+                "phone": None,
+                "experience_years": None,
+                "skills": [],
+                "extraction_failed": True,
+            }
     
     def process_document(
         self,
@@ -246,11 +276,13 @@ class DocumentProcessor:
                 response_format={"type": "json_object"},
             )
 
-            payload = json.loads(response.choices[0].message.content or "{}")
+            payload = self._clean_and_parse_json(response.choices[0].message.content or "")
             name = (payload.get("name") or "").strip() or None
             phone = (payload.get("phone") or "").strip() or None
             passport = (payload.get("passport") or "").strip() or None
             experience = payload.get("experience")
+            if experience is None:
+                experience = payload.get("experience_years")
             skills = payload.get("skills")
             if isinstance(skills, str):
                 skills = [s.strip() for s in skills.split(",") if s.strip()]
@@ -305,12 +337,26 @@ class DocumentProcessor:
         """
         # Try extracting embedded text first
         embedded_text = pdf_parser.extract_text_from_bytes(file_content)
+        embedded_len = len((embedded_text or "").strip())
+        short_pdf_threshold = 50
         
-        if embedded_text and len(embedded_text.strip()) > 100:
+        if embedded_text and embedded_len > 100:
             # Check if the text looks valid (not just artifacts)
             if self._is_valid_text(embedded_text):
                 logger.info("Using embedded PDF text")
                 return embedded_text, "pdf_embedded", 0.95
+
+        # If PDF text is too short, treat as likely scanned and OCR before accepting partial text.
+        if self.ocr_engine and 0 < embedded_len < short_pdf_threshold:
+            logger.info(
+                f"PDF embedded text too short ({embedded_len} chars). Falling back to OCR."
+            )
+            text, confidence = self.ocr_engine.extract_text_from_pdf_images(
+                file_content, use_openai_ocr, language
+            )
+            if text:
+                source = "ocr_openai_short_pdf" if use_openai_ocr else "ocr_tesseract_short_pdf"
+                return text, source, confidence
         
         # Check if it's a scanned PDF
         if self.ocr_engine and self.ocr_engine.is_scanned_pdf(file_content):
@@ -324,7 +370,7 @@ class DocumentProcessor:
                 return text, source, confidence
         
         # If we have some embedded text, use it
-        if embedded_text and len(embedded_text.strip()) > 20:
+        if embedded_text and embedded_len > 20:
             return embedded_text, "pdf_embedded_partial", 0.6
         
         # Last resort: try full OCR even if not detected as scanned

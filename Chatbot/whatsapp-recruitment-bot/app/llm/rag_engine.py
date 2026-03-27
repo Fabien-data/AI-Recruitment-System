@@ -9,6 +9,8 @@ import asyncio
 import logging
 import hashlib
 import time
+import json
+import re
 from typing import Optional, List, Dict, Any, Tuple
 import os
 
@@ -60,7 +62,7 @@ except (ImportError, Exception) as _pinecone_err:
     logger.warning(f"Pinecone not available ({_pinecone_err}) â€” will use keyword fallback")
 
 from app.config import settings
-from app.llm.prompt_templates import PromptTemplates, GLOBAL_AI_TAKEOVER_PROMPT
+from app.llm.prompt_templates import PromptTemplates
 
 
 class RAGEngine:
@@ -1181,41 +1183,157 @@ Respond ONLY with valid JSON (no markdown):
 
 
 
-    async def generate_global_takeover(self, user_message: str, current_state: str) -> str:
-        """Universal AI fallback for out-of-bounds messages."""
-        
-        state_descriptions = {
-            "STATE_INITIAL": "Find out if they are looking for a job.",
-            "STATE_AWAITING_LANGUAGE": "Ask them to select their preferred language.",
-            "STATE_AWAITING_JOB": "Ask them what specific job role or profession they are looking for.",
+    async def execute_silent_takeover(self, user_message: str, current_state: str) -> str:
+        """Takes over the conversation when standard data extraction fails."""
+
+        state_goals = {
+            "STATE_INITIAL": "Find out if they are looking for a job right now.",
+            "STATE_AWAITING_LANGUAGE": "Ask them to select which language they prefer to chat in.",
+            "STATE_AWAITING_LANGUAGE_SELECTION": "Ask them to select which language they prefer to chat in.",
+            "STATE_AWAITING_JOB": "Ask them what specific job role or profession they want to apply for.",
+            "STATE_AWAITING_JOB_INTEREST": "Ask them what specific job role or profession they want to apply for.",
             "STATE_AWAITING_COUNTRY": "Ask them which destination country they want to work in.",
-            "STATE_AWAITING_EXPERIENCE": "Ask them how many years of experience they have.",
-            "STATE_AWAITING_CV": "Ask them to upload a document or clear photo of their CV/Resume.",
-            "STATE_COLLECTING_INFO": "Ask them for the specific missing detail we need."
+            "STATE_AWAITING_EXPERIENCE": "Ask them how many years of work experience they have.",
+            "STATE_AWAITING_CV": "Explain what a CV or Resume is if they ask, and ask them to upload a photo or document of it.",
+            "STATE_COLLECTING_INFO": "Ask them for the specific missing contact detail we are waiting for.",
+            "STATE_COLLECTING_JOB_REQS": "Ask them for the specific job requirement detail we are waiting for.",
+            "initial": "Find out if they are looking for a job right now.",
+            "awaiting_language_selection": "Ask them to select which language they prefer to chat in.",
+            "awaiting_job_interest": "Ask them what specific job role or profession they want to apply for.",
+            "awaiting_destination_country": "Ask them which destination country they want to work in.",
+            "awaiting_experience": "Ask them how many years of work experience they have.",
+            "awaiting_cv": "Explain what a CV or Resume is if they ask, and ask them to upload a photo or document of it.",
+            "collecting_info": "Ask them for the specific missing contact detail we are waiting for.",
         }
-        
-        current_stage_description = state_descriptions.get(current_state, "Figure out what they need help with regarding recruitment.")
+
+        current_stage_description = state_goals.get(
+            current_state,
+            "Find out how we can help them with recruitment.",
+        )
 
         try:
-            from app.llm.prompt_templates import GLOBAL_AI_TAKEOVER_PROMPT
-            prompt = GLOBAL_AI_TAKEOVER_PROMPT.format(
+            prompt = PromptTemplates.SILENT_AI_TAKEOVER_PROMPT.format(
                 current_stage_description=current_stage_description,
-                user_message=user_message
+                user_message=user_message,
             )
-            
+
             response = await self.async_openai_client.chat.completions.create(
-                model=self.complex_chat_model, # Use gpt-4o for high empathy
+                model=self.complex_chat_model,
                 messages=[
-                    {"role": "system", "content": "You are a helpful, multilingual recruitment AI."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": "You are an empathetic, multilingual recruitment AI."},
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
-                max_tokens=150
+                max_tokens=150,
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            print(f"Takeover Error: {e}")
+            print(f"Silent Takeover Error: {e}")
             return "I'm here to help! Could you provide the details we were just talking about? 😊"
+
+    async def generate_global_takeover(self, user_message: str, current_state: str) -> str:
+        """Backward-compatible wrapper for silent takeover."""
+        return await self.execute_silent_takeover(user_message=user_message, current_state=current_state)
+
+    def _safe_json_load(self, raw_text: str, fallback: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse model JSON safely even when wrapped with markdown or extra prose."""
+        try:
+            content = (raw_text or "").strip()
+            if content.startswith("```json"):
+                content = content[7:]
+            elif content.startswith("```"):
+                content = content[3:]
+            if content.endswith("```"):
+                content = content[:-3]
+            content = content.strip()
+
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            if match:
+                content = match.group(0)
+
+            data = json.loads(content)
+            return data if isinstance(data, dict) else fallback
+        except Exception:
+            return fallback
+
+    async def process_unified_onboarding_turn(
+        self,
+        user_message: str,
+        current_state: str,
+        language: str,
+        active_countries: Optional[List[str]] = None,
+        active_jobs: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Single LLM call that extracts CRM fields and generates steering text."""
+        current_goal_map = {
+            "awaiting_job_interest": "Find out their job role.",
+            "awaiting_destination_country": "Find out their destination country.",
+            "awaiting_experience": "Find out their years of work experience.",
+            "awaiting_cv": "Ask them to upload their CV or resume.",
+            "collecting_info": "Collect the missing required detail.",
+        }
+        current_goal = current_goal_map.get(current_state, "Guide the candidate through onboarding.")
+
+        fallback = {
+            "intent": "other",
+            "entities": {
+                "job_role": None,
+                "country": None,
+                "experience_years": None,
+                "matched_crm_country": None,
+                "matched_crm_job": None,
+            },
+            "crm": {"is_complete_for_state": False, "missing_fields": []},
+            "steering_reply": "Great, let's continue. Could you share that detail so I can proceed? 😊",
+        }
+
+        if not self.async_openai_client:
+            return fallback
+
+        try:
+            prompt = PromptTemplates.get_unified_agentic_json_prompt(
+                user_message=user_message,
+                current_goal=current_goal,
+                current_state=current_state,
+                language=language,
+                active_countries_list=active_countries,
+                active_jobs_list=active_jobs,
+            )
+
+            response = await self.async_openai_client.chat.completions.create(
+                model=self.complex_chat_model,
+                messages=[
+                    {"role": "system", "content": "You are an empathetic multilingual recruitment AI."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=220,
+                response_format={"type": "json_object"},
+            )
+            data = self._safe_json_load(response.choices[0].message.content or "", fallback)
+
+            entities = data.get("entities") if isinstance(data.get("entities"), dict) else {}
+            crm = data.get("crm") if isinstance(data.get("crm"), dict) else {}
+            steering_reply = str(data.get("steering_reply") or "").strip() or fallback["steering_reply"]
+
+            return {
+                "intent": str(data.get("intent") or "other"),
+                "entities": {
+                    "job_role": entities.get("job_role"),
+                    "country": entities.get("country"),
+                    "experience_years": entities.get("experience_years"),
+                    "matched_crm_country": entities.get("matched_crm_country"),
+                    "matched_crm_job": entities.get("matched_crm_job"),
+                },
+                "crm": {
+                    "is_complete_for_state": bool(crm.get("is_complete_for_state", False)),
+                    "missing_fields": crm.get("missing_fields") if isinstance(crm.get("missing_fields"), list) else [],
+                },
+                "steering_reply": steering_reply,
+            }
+        except Exception as e:
+            logger.warning(f"process_unified_onboarding_turn failed: {e}")
+            return fallback
 
 # Singleton instance
 rag_engine = RAGEngine()
