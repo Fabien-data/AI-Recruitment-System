@@ -11,6 +11,7 @@ import hashlib
 import time
 import json
 import re
+import difflib
 from typing import Optional, List, Dict, Any, Tuple
 import os
 
@@ -80,7 +81,7 @@ class RAGEngine:
         self.classify_model = "gpt-5.4-mini"
         # RAG / conversational generation model
         self.chat_model = "gpt-5.4-mini"
-        self.complex_chat_model = "gpt-5.4-mini"
+        self.complex_chat_model = "gpt-4o"
 
         # Initialize OpenAI (sync for embeddings / index operations)
         if OPENAI_AVAILABLE:
@@ -697,18 +698,22 @@ Respond ONLY with valid JSON (no markdown):
     def _get_fallback_response(self, language: str) -> str:
         """Get a fallback response when API is unavailable."""
         responses = {
-            'en': "I apologize, but I'm experiencing technical difficulties. Please try again in a moment or contact our support team.",
-            'si': "à¶¸à¶§ à¶šà¶«à¶œà·à¶§à·”à¶ºà·’, à¶±à¶¸à·”à¶­à·Š à¶¸à¶§ à¶­à·à¶šà·Šà·‚à¶«à·’à¶š à¶¯à·”à·‚à·Šà¶šà¶»à¶­à· à¶…à¶­à·Šà·€à·’à¶³à·’à¶¸à·’à¶±à·Š à·ƒà·’à¶§à·’à¶¸à·’. à¶šà¶»à·”à¶«à·à¶šà¶» à¶¸à·œà·„à·œà¶­à¶šà·’à¶±à·Š à¶±à·à·€à¶­ à¶‹à¶­à·Šà·ƒà·à·„ à¶šà¶»à¶±à·Šà¶±.",
-            'ta': "à®®à®©à¯à®©à®¿à®•à¯à®•à®µà¯à®®à¯, à®¨à®¾à®©à¯ à®¤à¯Šà®´à®¿à®²à¯à®¨à¯à®Ÿà¯à®ª à®šà®¿à®•à¯à®•à®²à¯à®•à®³à¯ˆ à®Žà®¤à®¿à®°à¯à®•à¯Šà®³à¯à®•à®¿à®±à¯‡à®©à¯. à®šà®¿à®±à®¿à®¤à¯ à®¨à¯‡à®°à®¤à¯à®¤à®¿à®²à¯ à®®à¯€à®£à¯à®Ÿà¯à®®à¯ à®®à¯à®¯à®±à¯à®šà®¿à®•à¯à®•à®µà¯à®®à¯."
+            'en': "Got you 😊 Let’s continue from this step.",
+            'si': "හරි 😊 මේ පියවරෙන්ම ඉදිරියට යමු.",
+            'ta': "சரி 😊 இந்த படியிலிருந்தே தொடரலாம்.",
+            'singlish': "Hari 😊 Me step ekenma continue karamu.",
+            'tanglish': "Seri 😊 Indha step-lendhu continue pannalaam.",
         }
         return responses.get(language, responses['en'])
     
     def _get_error_response(self, language: str) -> str:
-        """Get an error response."""
+        """Get a warm conversational recovery response."""
         responses = {
-            'en': "I encountered an error processing your request. Could you please try again?",
-            'si': "à¶”à¶¶à·š à¶‰à¶½à·Šà¶½à·“à¶¸ à·ƒà·à¶šà·ƒà·“à¶¸à·šà¶¯à·“ à¶¯à·à·‚à¶ºà¶šà·Š à¶‡à¶­à·’ à·€à·’à¶º. à¶šà¶»à·”à¶«à·à¶šà¶» à¶±à·à·€à¶­ à¶‹à¶­à·Šà·ƒà·à·„ à¶šà¶»à¶±à·Šà¶±.",
-            'ta': "à®‰à®™à¯à®•à®³à¯ à®•à¯‹à®°à®¿à®•à¯à®•à¯ˆà®¯à¯ˆ à®šà¯†à®¯à®²à®¾à®•à¯à®•à¯à®µà®¤à®¿à®²à¯ à®ªà®¿à®´à¯ˆ à®à®±à¯à®ªà®Ÿà¯à®Ÿà®¤à¯. à®®à¯€à®£à¯à®Ÿà¯à®®à¯ à®®à¯à®¯à®±à¯à®šà®¿à®•à¯à®•à®µà¯à®®à¯."
+            'en': "No worries 😊 Tell me that once more and I’ll keep things moving.",
+            'si': "ගැටලුවක් නැහැ 😊 ඒක තව පාරක් කියන්න, අපි ඉක්මනින් ඉදිරියට යමු.",
+            'ta': "பரவாயில்லை 😊 அதைப் இன்னொரு முறை சொல்லுங்கள், உடனே முன்னேறலாம்.",
+            'singlish': "Awlak na 😊 Eka ayeth kiyanna, api ikmanin continue karamu.",
+            'tanglish': "Parava illa 😊 Adha innoru thadava sollunga, udane continue pannalaam.",
         }
         return responses.get(language, responses['en'])
 
@@ -1066,43 +1071,26 @@ Respond ONLY with valid JSON (no markdown):
         Returns:
             A natural, warm steering response string.
         """
-        # Multilingual static fallbacks (used on API error)
-        _fallbacks = {
-            'en':       "Got it! ðŸ˜Š Please share your answer to the current step so I can continue.",
-            'si':       "à·„à¶»à·’! ðŸ˜Š à¶‰à¶¯à·’à¶»à·’à¶ºà¶§ à¶ºà¶±à·Šà¶±, à¶¯à·à¶±à¶§ à¶…à·„à¶± à¶´à·Šâ€à¶»à·à·Šà¶±à¶ºà¶§ à¶´à·’à·…à·’à¶­à·”à¶»à¶šà·Š à¶¯à·™à¶±à·Šà¶±.",
-            'ta':       "à®šà®°à®¿! ðŸ˜Š à®¤à¯Šà®Ÿà®°, à®‡à®ªà¯à®ªà¯‹à®¤à¯ à®•à¯‡à®Ÿà¯à®•à¯à®®à¯ à®•à¯‡à®³à¯à®µà®¿à®•à¯à®•à¯ à®ªà®¤à®¿à®²à¯ à®šà¯Šà®²à¯à®²à¯à®™à¯à®•à®³à¯.",
-            'singlish': "Hari da! ðŸ˜Š Continue karanna, dan ahana prashneta answer eka denna.",
-            'tanglish': "Seri da! ðŸ˜Š Continue panna, ippo kekkura kelvikku answer sollunga.",
+        fallback = {
+            'en': "Got you 😊 Let's complete this step together.",
+            'si': "හරි 😊 මේ පියවර එකටම complete කරමු.",
+            'ta': "சரி 😊 இந்த step-ஐ சேர்ந்து முடிப்போம்.",
+            'singlish': "Hari 😊 Me step eka ekka complete karamu.",
+            'tanglish': "Seri 😊 Indha step-ah serndhu complete pannalaam.",
         }
 
-        if not self.async_openai_client:
-            return _fallbacks.get(language, _fallbacks['en'])
-
         try:
-            prompt = PromptTemplates.get_agentic_takeover_prompt(
+            unified = await self.process_unified_turn(
                 user_message=user_message,
-                current_goal=current_goal,
+                current_state="collecting_info",
+                current_state_goal=current_goal,
                 language=language,
             )
-            response = await self.async_openai_client.chat.completions.create(
-                model=self.chat_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=150,
-                timeout=8,
-            )
-            text = response.choices[0].message.content.strip()
-            # Safety: strip stray quote wrappers the model might include
-            if text.startswith('"') and text.endswith('"'):
-                text = text[1:-1]
-            logger.info(
-                f"generate_agentic_response: goal='{current_goal[:40]}' "
-                f"lang={language} â†’ '{text[:80]}'"
-            )
-            return text
+            reply = str(unified.get("agent_reply") or "").strip()
+            return reply or fallback.get(language, fallback["en"])
         except Exception as e:
             logger.error(f"generate_agentic_response error: {e}")
-            return _fallbacks.get(language, _fallbacks['en'])
+            return fallback.get(language, fallback["en"])
 
     async def extract_entities_multilingual(
         self,
@@ -1185,94 +1173,30 @@ Respond ONLY with valid JSON (no markdown):
 
     async def execute_silent_takeover(self, user_message: str, current_state: str) -> str:
         """Takes over the conversation when standard data extraction fails."""
-
-        state_goals = {
-            "STATE_INITIAL": "Find out if they are looking for a job right now.",
-            "STATE_AWAITING_LANGUAGE": "Ask them to select which language they prefer to chat in.",
-            "STATE_AWAITING_LANGUAGE_SELECTION": "Ask them to select which language they prefer to chat in.",
-            "STATE_AWAITING_JOB": "Ask them what specific job role or profession they want to apply for.",
-            "STATE_AWAITING_JOB_INTEREST": "Ask them what specific job role or profession they want to apply for.",
-            "STATE_AWAITING_COUNTRY": "Ask them which destination country they want to work in.",
-            "STATE_AWAITING_EXPERIENCE": "Ask them how many years of work experience they have.",
-            "STATE_AWAITING_CV": "Explain what a CV or Resume is if they ask, and ask them to upload a photo or document of it.",
-            "STATE_COLLECTING_INFO": "Ask them for the specific missing contact detail we are waiting for.",
-            "STATE_COLLECTING_JOB_REQS": "Ask them for the specific job requirement detail we are waiting for.",
-            "initial": "Find out if they are looking for a job right now.",
-            "awaiting_language_selection": "Ask them to select which language they prefer to chat in.",
-            "awaiting_job_interest": "Ask them what specific job role or profession they want to apply for.",
-            "awaiting_destination_country": "Ask them which destination country they want to work in.",
-            "awaiting_experience": "Ask them how many years of work experience they have.",
-            "awaiting_cv": "Explain what a CV or Resume is if they ask, and ask them to upload a photo or document of it.",
-            "collecting_info": "Ask them for the specific missing contact detail we are waiting for.",
-        }
-
-        current_stage_description = state_goals.get(
-            current_state,
-            "Find out how we can help them with recruitment.",
-        )
-
         try:
-            prompt = PromptTemplates.SILENT_AI_TAKEOVER_PROMPT.format(
-                current_stage_description=current_stage_description,
+            unified = await self.process_unified_turn(
                 user_message=user_message,
+                current_state=current_state,
             )
-
-            response = await self.async_openai_client.chat.completions.create(
-                model=self.complex_chat_model,
-                messages=[
-                    {"role": "system", "content": "You are an empathetic, multilingual recruitment AI."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.7,
-                max_tokens=150,
-            )
-            return response.choices[0].message.content.strip()
+            return str(unified.get("agent_reply") or "").strip() or "Let's complete this step together 😊"
         except Exception as e:
-            print(f"Silent Takeover Error: {e}")
-            return "I'm here to help! Could you provide the details we were just talking about? 😊"
+            logger.warning(f"Silent Takeover Error: {e}")
+            return "Let's complete this step together 😊"
 
     async def generate_reonboard_response(self, candidate_profile: Dict[str, Any]) -> str:
         """Universal AI fallback for smoothly guiding a confused user back into onboarding."""
         current_state = candidate_profile.get("conversation_state")
         preferred_language = candidate_profile.get("preferred_language", "Singlish")
-
-        state_goals = {
-            "STATE_INITIAL": "Find out if they are looking for a job.",
-            "STATE_AWAITING_LANGUAGE": "Ask them to select which language they prefer to chat in.",
-            "STATE_AWAITING_LANGUAGE_SELECTION": "Ask them to select which language they prefer to chat in.",
-            "STATE_AWAITING_JOB": "Ask them what specific job role or profession they want to apply for.",
-            "STATE_AWAITING_JOB_INTEREST": "Ask them what specific job role or profession they want to apply for.",
-            "STATE_AWAITING_COUNTRY": "Ask them which destination country they want to work in.",
-            "STATE_AWAITING_DESTINATION_COUNTRY": "Ask them which destination country they want to work in.",
-            "STATE_AWAITING_EXPERIENCE": "Ask them how many years of work experience they have.",
-            "STATE_AWAITING_CV": "Gently explain what a CV is if they ask, and ask them to upload a photo/document of it.",
-            "initial": "Find out if they are looking for a job.",
-            "awaiting_language_selection": "Ask them to select which language they prefer to chat in.",
-            "awaiting_job_interest": "Ask them what specific job role or profession they want to apply for.",
-            "awaiting_destination_country": "Ask them which destination country they want to work in.",
-            "awaiting_experience": "Ask them how many years of work experience they have.",
-            "awaiting_cv": "Gently explain what a CV is if they ask, and ask them to upload a photo/document of it.",
-        }
-        current_state_goal = state_goals.get(current_state, "Assist with general recruitment questions.")
-
         try:
-            prompt = PromptTemplates.get_reonboard_after_error_prompt(
-                preferred_language=preferred_language,
-                current_state_goal=current_state_goal,
+            unified = await self.process_unified_turn(
+                user_message="User is confused after a previous issue.",
+                current_state=current_state or "collecting_info",
+                language=str(preferred_language).lower(),
             )
-            response = await self.async_openai_client.chat.completions.create(
-                model=self.complex_chat_model,
-                messages=[
-                    {"role": "system", "content": "You are an expert multilingual recruitment AI for Sri Lanka."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.7,
-                max_tokens=150,
-            )
-            return (response.choices[0].message.content or "").strip()
+            return str(unified.get("agent_reply") or "").strip() or "No worries 😊 let's continue with this step."
         except Exception as e:
             logger.warning(f"generate_reonboard_response failed: {e}")
-            return "Haha no worries Malli/Nangi! 😊 Apita me detail tika complete karanna puluwanda?"
+            return "No worries 😊 let's continue with this step."
 
     async def generate_global_takeover(self, user_message: str, current_state: str) -> str:
         """Backward-compatible wrapper for silent takeover."""
@@ -1307,15 +1231,66 @@ Respond ONLY with valid JSON (no markdown):
         active_countries: Optional[List[str]] = None,
         active_jobs: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Single LLM call that extracts CRM fields and generates steering text."""
-        current_goal_map = {
-            "awaiting_job_interest": "Find out their job role.",
-            "awaiting_destination_country": "Find out their destination country.",
-            "awaiting_experience": "Find out their years of work experience.",
-            "awaiting_cv": "Ask them to upload their CV or resume.",
-            "collecting_info": "Collect the missing required detail.",
+        """Compatibility wrapper that enriches process_unified_turn output for legacy callers."""
+        base = await self.process_unified_turn(
+            user_message=user_message,
+            current_state=current_state,
+            language=language,
+            active_countries=active_countries,
+            active_jobs=active_jobs,
+        )
+
+        extracted_data = base.get("extracted_data") if isinstance(base.get("extracted_data"), dict) else {}
+        merged_entities = {
+            "job_role": extracted_data.get("job_role"),
+            "country": extracted_data.get("country"),
+            "experience_years": extracted_data.get("experience_years"),
+            "matched_crm_country": extracted_data.get("matched_crm_country"),
+            "matched_crm_job": extracted_data.get("matched_crm_job"),
         }
-        current_goal = current_goal_map.get(current_state, "Guide the candidate through onboarding.")
+
+        expected_field_by_state = {
+            "awaiting_job_interest": ["matched_crm_job", "job_role"],
+            "awaiting_destination_country": ["matched_crm_country", "country"],
+            "awaiting_experience": ["experience_years"],
+        }
+        expected_fields = expected_field_by_state.get(current_state, [])
+        has_state_data = any(merged_entities.get(field) not in (None, "", []) for field in expected_fields)
+
+        return {
+            "intent": str(base.get("intent") or "other"),
+            "extracted_data": merged_entities,
+            "entities": merged_entities,
+            "crm": {
+                "is_complete_for_state": bool(has_state_data),
+                "missing_fields": [],
+            },
+            "agent_reply": "" if has_state_data else str(base.get("agent_reply") or "").strip(),
+            "steering_reply": "" if has_state_data else str(base.get("agent_reply") or "").strip(),
+        }
+
+    async def process_unified_turn(
+        self,
+        user_message: str,
+        current_state: str,
+        current_state_goal: Optional[str] = None,
+        language: str = "en",
+        active_countries: Optional[List[str]] = None,
+        active_jobs: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Canonical onboarding processor: extract fields or return a warm recovery reply."""
+        current_goal_map = {
+            "STATE_AWAITING_JOB": "Find out what job role they want to apply for.",
+            "STATE_AWAITING_COUNTRY": "Find out which country they want to work in.",
+            "STATE_AWAITING_EXPERIENCE": "Find out how many years of experience they have.",
+            "STATE_AWAITING_CV": "Explain what a CV is if they ask, and ask for a photo or document of it.",
+            "awaiting_job_interest": "Find out what job role they want to apply for.",
+            "awaiting_destination_country": "Find out which country they want to work in.",
+            "awaiting_experience": "Find out how many years of experience they have.",
+            "awaiting_cv": "Explain what a CV is if they ask, and ask for a photo or document of it.",
+            "collecting_info": "Help them with their job application.",
+        }
+        current_goal = current_state_goal or current_goal_map.get(current_state, "Help them with their job application.")
 
         fallback = {
             "intent": "other",
@@ -1323,27 +1298,17 @@ Respond ONLY with valid JSON (no markdown):
                 "job_role": None,
                 "country": None,
                 "experience_years": None,
-                "matched_crm_country": None,
-                "matched_crm_job": None,
             },
-            "crm": {"is_complete_for_state": False, "missing_fields": []},
-            "agent_reply": "Great, let's continue. Could you share that detail so I can proceed? 😊",
+            "agent_reply": "No worries Malli/Nangi 😊 let's complete this step together.",
         }
-
-        fallback["entities"] = dict(fallback["extracted_data"])
-        fallback["steering_reply"] = fallback["agent_reply"]
 
         if not self.async_openai_client:
             return fallback
 
         try:
-            prompt = PromptTemplates.get_unified_agentic_json_prompt(
+            prompt = PromptTemplates.get_unified_onboarding_agent_prompt(
                 user_message=user_message,
-                current_goal=current_goal,
-                current_state=current_state,
-                language=language,
-                active_countries_list=active_countries,
-                active_jobs_list=active_jobs,
+                current_state_goal=current_goal,
             )
 
             response = await self.async_openai_client.chat.completions.create(
@@ -1358,43 +1323,57 @@ Respond ONLY with valid JSON (no markdown):
             )
             data = self._safe_json_load(response.choices[0].message.content or "", fallback)
 
-            extracted_data = data.get("extracted_data") if isinstance(data.get("extracted_data"), dict) else {}
-            entities = data.get("entities") if isinstance(data.get("entities"), dict) else {}
-            merged_entities = {
-                "job_role": extracted_data.get("job_role", entities.get("job_role")),
-                "country": extracted_data.get("country", entities.get("country")),
-                "experience_years": extracted_data.get("experience_years", entities.get("experience_years")),
-                "matched_crm_country": extracted_data.get("matched_crm_country", entities.get("matched_crm_country")),
-                "matched_crm_job": extracted_data.get("matched_crm_job", entities.get("matched_crm_job")),
-            }
-            crm = data.get("crm") if isinstance(data.get("crm"), dict) else {}
-            agent_reply = str(data.get("agent_reply") or data.get("steering_reply") or "").strip() or fallback["agent_reply"]
+            raw_extracted = data.get("extracted_data") if isinstance(data.get("extracted_data"), dict) else {}
+            job_role = raw_extracted.get("job_role")
+            country = raw_extracted.get("country")
+            experience_val = raw_extracted.get("experience")
+            if experience_val is None:
+                experience_val = raw_extracted.get("experience_years")
 
-            expected_field_by_state = {
-                "awaiting_job_interest": ["matched_crm_job", "job_role"],
-                "awaiting_destination_country": ["matched_crm_country", "country"],
-                "awaiting_experience": ["experience_years"],
+            normalized_extracted = {
+                "job_role": str(job_role).strip() if job_role not in (None, "") else None,
+                "country": str(country).strip() if country not in (None, "") else None,
+                "experience_years": None,
+                "matched_crm_country": None,
+                "matched_crm_job": None,
             }
-            expected_fields = expected_field_by_state.get(current_state, [])
-            has_state_data = any(
-                merged_entities.get(field) not in (None, "", []) for field in expected_fields
-            )
-            if has_state_data or bool(crm.get("is_complete_for_state", False)):
-                agent_reply = ""
+            if experience_val not in (None, ""):
+                try:
+                    normalized_extracted["experience_years"] = int(float(str(experience_val).strip()))
+                except Exception:
+                    normalized_extracted["experience_years"] = str(experience_val).strip()
+
+            # CRM matching for state handlers that persist exact active values.
+            if normalized_extracted.get("country") and active_countries:
+                countries = [str(c) for c in active_countries if str(c).strip()]
+                exact = {c.lower(): c for c in countries}
+                key = normalized_extracted["country"].lower()
+                normalized_extracted["matched_crm_country"] = exact.get(key)
+                if not normalized_extracted["matched_crm_country"]:
+                    close = difflib.get_close_matches(normalized_extracted["country"], countries, n=1, cutoff=0.72)
+                    normalized_extracted["matched_crm_country"] = close[0] if close else None
+
+            if normalized_extracted.get("job_role") and active_jobs:
+                jobs = [str(j) for j in active_jobs if str(j).strip()]
+                exact = {j.lower(): j for j in jobs}
+                key = normalized_extracted["job_role"].lower()
+                normalized_extracted["matched_crm_job"] = exact.get(key)
+                if not normalized_extracted["matched_crm_job"]:
+                    close = difflib.get_close_matches(normalized_extracted["job_role"], jobs, n=1, cutoff=0.68)
+                    normalized_extracted["matched_crm_job"] = close[0] if close else None
+
+            agent_reply = data.get("agent_reply")
+            if agent_reply is None:
+                agent_reply = fallback["agent_reply"]
+            agent_reply = str(agent_reply).strip() if str(agent_reply or "").strip() else None
 
             return {
-                "intent": str(data.get("intent") or "other"),
-                "extracted_data": merged_entities,
-                "entities": merged_entities,
-                "crm": {
-                    "is_complete_for_state": bool(crm.get("is_complete_for_state", False)),
-                    "missing_fields": crm.get("missing_fields") if isinstance(crm.get("missing_fields"), list) else [],
-                },
+                "intent": "other",
+                "extracted_data": normalized_extracted,
                 "agent_reply": agent_reply,
-                "steering_reply": agent_reply,
             }
         except Exception as e:
-            logger.warning(f"process_unified_onboarding_turn failed: {e}")
+            logger.warning(f"process_unified_turn failed: {e}")
             return fallback
 
 # Singleton instance

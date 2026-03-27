@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     company_name: str = "Your Company"
     company_website: str = ""
 
+    # Unified onboarding rollout control.
+    # Use "*" to enable all intake states.
+    # Example: "awaiting_job_interest,awaiting_destination_country"
+    unified_onboarding_rollout_states: str = "*"
+
     # Test / Dev Numbers
     # Comma-separated phone numbers used for testing (e.g. "94771234567,94779876543").
     # Set TEST_NUMBERS in your .env to override.

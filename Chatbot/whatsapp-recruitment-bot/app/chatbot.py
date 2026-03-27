@@ -18,6 +18,7 @@ import random
 import asyncio
 import json
 import base64
+import difflib
 import httpx
 from typing import Optional, Dict, Any, Union
 
@@ -354,6 +355,114 @@ class ChatbotEngine:
             PromptTemplates.CURRENT_GOAL_MAP.get('awaiting_job_interest', 'Collect the required intake detail from the candidate')
         )
 
+    def _is_unified_rollout_enabled(self, state: str) -> bool:
+        """Check whether unified onboarding is enabled for a specific state."""
+        raw = (settings.unified_onboarding_rollout_states or "*").strip()
+        if not raw or raw == "*":
+            return True
+
+        allowed = {s.strip() for s in raw.split(",") if s.strip()}
+        alias_map = {
+            "job": self.STATE_AWAITING_JOB,
+            "country": self.STATE_AWAITING_COUNTRY,
+            "experience": self.STATE_AWAITING_EXPERIENCE,
+            "cv": self.STATE_AWAITING_CV,
+        }
+        expanded = set(allowed)
+        for item in list(allowed):
+            mapped = alias_map.get(item.lower())
+            if mapped:
+                expanded.add(mapped)
+        return state in expanded
+
+    def _match_country_from_text(self, text: str, active_countries: Optional[list]) -> Optional[str]:
+        """Resolve free-text country to an active CRM country value."""
+        stripped = (text or "").strip().lower()
+        if not stripped:
+            return None
+
+        mapped = _COUNTRY_MASTER_MAP.get(stripped)
+        candidate_country = mapped or stripped.title()
+
+        countries = [str(c) for c in (active_countries or []) if str(c).strip()]
+        if not countries:
+            return candidate_country
+
+        exact = {c.lower(): c for c in countries}
+        if candidate_country.lower() in exact:
+            return exact[candidate_country.lower()]
+
+        close = difflib.get_close_matches(candidate_country, countries, n=1, cutoff=0.72)
+        return close[0] if close else None
+
+    async def _handle_non_unified_rollout_state(
+        self,
+        db: Session,
+        candidate,
+        text: str,
+        language: str,
+        state: str,
+    ) -> Union[str, Dict[str, Any]]:
+        """Deterministic fallback path used when a state is excluded from unified rollout."""
+        if state == self.STATE_AWAITING_JOB:
+            matched = self._match_job_from_text(text)
+            if matched:
+                job_interest_value = (matched[1].get("title") or text.strip().title())[:200]
+                self._save_intake(db, candidate, 'job_interest', job_interest_value)
+
+                _edata = candidate.extracted_data or {}
+                _edata["matched_job_id"] = matched[0]
+                _edata["job_requirements"] = dict(matched[1].get("requirements", {}))
+                _edata.pop("future_pool", None)
+                candidate.extracted_data = _edata
+                db.commit()
+
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
+                ack = self._build_job_ack(job_interest_value, language)
+                return self._country_buttons_payload(language, body_prefix=ack.strip())
+
+            if self._looks_like_job_title(text):
+                job_interest_value = text.strip().title()[:200]
+                self._save_intake(db, candidate, 'job_interest', job_interest_value)
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
+                ack = self._build_job_ack(job_interest_value, language)
+                return self._country_buttons_payload(language, body_prefix=ack.strip())
+
+            return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
+
+        if state == self.STATE_AWAITING_COUNTRY:
+            active_countries_list = vacancy_service.get_active_countries()
+            resolved_country = self._match_country_from_text(text, active_countries_list)
+            if resolved_country:
+                self._save_intake(db, candidate, 'destination_country', resolved_country)
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
+                return self._experience_buttons_payload(language)
+            return self._country_buttons_payload(language)
+
+        if state == self.STATE_AWAITING_EXPERIENCE:
+            yrs = re.search(r'\d+', text or "")
+            if yrs:
+                target_data = yrs.group()
+                self._save_intake(db, candidate, 'experience_years_stated', str(target_data))
+
+                data = candidate.extracted_data or {}
+                job_reqs = data.get("job_requirements", {})
+                fields_to_ask = self._get_missing_req_fields(db, candidate, job_reqs)
+
+                if fields_to_ask:
+                    crud.update_candidate_state(db, candidate.id, self.STATE_COLLECTING_JOB_REQS)
+                    return self._get_next_intake_question(candidate, language)
+
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
+                return PromptTemplates.get_awaiting_cv_message(language, self.company_name)
+
+            return PromptTemplates.get_intake_question('experience_years', language)
+
+        if state == self.STATE_AWAITING_CV:
+            return PromptTemplates.get_awaiting_cv_message(language, self.company_name)
+
+        return self._get_next_intake_question(candidate, language)
+
     def _country_buttons_payload(self, language: str, body_prefix: str = "") -> str:
         country_q = PromptTemplates.get_intake_question('destination_country', language)
         active_countries = vacancy_service.get_active_countries() or []
@@ -624,7 +733,7 @@ class ChatbotEngine:
     ) -> str:
         """Use the unified processor to generate steering text for off-track onboarding turns."""
         try:
-            unified = await rag_engine.process_unified_onboarding_turn(
+            unified = await rag_engine.process_unified_turn(
                 user_message=text,
                 current_state=state,
                 language=language,
@@ -638,14 +747,7 @@ class ChatbotEngine:
         unified = self._normalize_unified_onboarding_response(unified)
         reply = (unified.get("agent_reply") or "").strip()
         if not reply:
-            reply = await rag_engine.generate_reonboard_response(
-                {
-                    "conversation_state": state,
-                    "preferred_language": language,
-                }
-            )
-        if not reply:
-            reply = await rag_engine.execute_silent_takeover(user_message=text, current_state=state)
+            reply = PromptTemplates.get_gibberish_fallback(language)
 
         if phone_number and reply:
             await meta_client.send_text(phone_number, reply)
@@ -1899,11 +2001,20 @@ class ChatbotEngine:
 
         # ── AWAITING JOB INTEREST ─────────────────────────────────────────────
         elif state == self.STATE_AWAITING_JOB:
+            if not self._is_unified_rollout_enabled(state):
+                return await self._handle_non_unified_rollout_state(
+                    db=db,
+                    candidate=candidate,
+                    text=text,
+                    language=language,
+                    state=state,
+                )
+
             # 1. Attempt Data Extraction
             active_countries_list = vacancy_service.get_active_countries()
             active_jobs_list = vacancy_service.get_active_job_titles()
             try:
-                unified = await rag_engine.process_unified_onboarding_turn(
+                unified = await rag_engine.process_unified_turn(
                     user_message=text,
                     current_state=candidate.conversation_state,
                     language=language,
@@ -1948,26 +2059,32 @@ class ChatbotEngine:
                 ack = self._build_job_ack(job_interest_value, language)
                 return self._country_buttons_payload(language, body_prefix=ack.strip())
 
-            # 3. The Universal Catch-All
-            else:
-                takeover_reply = await rag_engine.generate_reonboard_response(
-                    {
-                        "conversation_state": candidate.conversation_state,
-                        "preferred_language": language,
-                    }
-                )
-                if phone_number:
-                    await meta_client.send_text(phone_number, takeover_reply)
-                    return ""
-                return takeover_reply
+            # 3. Unified conversational recovery (stay in state)
+            return await self._send_unified_takeover_reply(
+                text=text,
+                language=language,
+                state=candidate.conversation_state,
+                phone_number=phone_number,
+                active_countries=active_countries_list,
+                active_jobs=active_jobs_list,
+            )
 
         # ── AWAITING DESTINATION COUNTRY ──────────────────────────────────────
         elif state == self.STATE_AWAITING_COUNTRY:
+            if not self._is_unified_rollout_enabled(state):
+                return await self._handle_non_unified_rollout_state(
+                    db=db,
+                    candidate=candidate,
+                    text=text,
+                    language=language,
+                    state=state,
+                )
+
             # 1. Attempt Data Extraction
             active_countries_list = vacancy_service.get_active_countries()
             active_jobs_list = vacancy_service.get_active_job_titles()
             try:
-                unified = await rag_engine.process_unified_onboarding_turn(
+                unified = await rag_engine.process_unified_turn(
                     user_message=text,
                     current_state=candidate.conversation_state,
                     language=language,
@@ -2001,24 +2118,30 @@ class ChatbotEngine:
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
                 return self._experience_buttons_payload(language)
 
-            # 3. The Universal Catch-All
-            else:
-                takeover_reply = await rag_engine.generate_reonboard_response(
-                    {
-                        "conversation_state": candidate.conversation_state,
-                        "preferred_language": language,
-                    }
-                )
-                if phone_number:
-                    await meta_client.send_text(phone_number, takeover_reply)
-                    return ""
-                return takeover_reply
+            # 3. Unified conversational recovery (stay in state)
+            return await self._send_unified_takeover_reply(
+                text=text,
+                language=language,
+                state=candidate.conversation_state,
+                phone_number=phone_number,
+                active_countries=active_countries_list,
+                active_jobs=active_jobs_list,
+            )
 
         # ── AWAITING EXPERIENCE ───────────────────────────────────────────────
         elif state == self.STATE_AWAITING_EXPERIENCE:
+            if not self._is_unified_rollout_enabled(state):
+                return await self._handle_non_unified_rollout_state(
+                    db=db,
+                    candidate=candidate,
+                    text=text,
+                    language=language,
+                    state=state,
+                )
+
             # 1. Attempt Data Extraction
             try:
-                unified = await rag_engine.process_unified_onboarding_turn(
+                unified = await rag_engine.process_unified_turn(
                     user_message=text,
                     current_state=candidate.conversation_state,
                     language=language,
@@ -2060,21 +2183,25 @@ class ChatbotEngine:
                     crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
                     return PromptTemplates.get_awaiting_cv_message(language, self.company_name)
 
-            # 3. The Universal Catch-All
-            else:
-                takeover_reply = await rag_engine.generate_reonboard_response(
-                    {
-                        "conversation_state": candidate.conversation_state,
-                        "preferred_language": language,
-                    }
-                )
-                if phone_number:
-                    await meta_client.send_text(phone_number, takeover_reply)
-                    return ""
-                return takeover_reply
+            # 3. Unified conversational recovery (stay in state)
+            return await self._send_unified_takeover_reply(
+                text=text,
+                language=language,
+                state=candidate.conversation_state,
+                phone_number=phone_number,
+            )
 
         # ── AWAITING CV ───────────────────────────────────────────────────────
         elif state == self.STATE_AWAITING_CV:
+            if not self._is_unified_rollout_enabled(state):
+                return await self._handle_non_unified_rollout_state(
+                    db=db,
+                    candidate=candidate,
+                    text=text,
+                    language=language,
+                    state=state,
+                )
+
             if _is_no_cv_message(text):
                 data = candidate.extracted_data or {}
                 data['cv_status'] = 'pending'
@@ -2473,20 +2600,14 @@ class ChatbotEngine:
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
                 candidate.conversation_state = self.STATE_AWAITING_CV
                 self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
-                try:
-                    return await rag_engine.generate_reonboard_response(
-                        {
-                            "conversation_state": candidate.conversation_state,
-                            "preferred_language": language,
-                        }
-                    )
-                except Exception as takeover_err:
-                    logger.warning(f"CV unreadable takeover generation failed: {takeover_err}")
-                    return {
-                        'en': "I couldn't read that file clearly. Please try sending your CV again as a clear PDF or image.",
-                        'si': "එම ගොනුව පැහැදිලිව කියවන්න බැරි වුණා. කරුණාකර ඔබගේ CV එක පැහැදිලි PDF එකක් හෝ image එකක් ලෙස නැවත යවන්න.",
-                        'ta': "அந்த கோப்பை தெளிவாக வாசிக்க முடியவில்லை. தயவு செய்து உங்கள் CV-ஐ தெளிவான PDF அல்லது image ஆக மீண்டும் அனுப்பவும்.",
-                    }.get(language, "I couldn't read that file clearly. Please try sending your CV again as a clear PDF or image.")
+                warm_retry = {
+                    'en': "Thanks for sharing 🙌 Please send your CV once more as a clear PDF or photo, and I'll continue right away.",
+                    'si': "ස්තූතියි 🙌 පැහැදිලි PDF එකක් හෝ photo එකක් ලෙස CV එක තව පාරක් එවන්න, අපි වහාම ඉදිරියට යමු.",
+                    'ta': "நன்றி 🙌 தெளிவான PDF அல்லது photo ஆக CV-ஐ மீண்டும் அனுப்புங்கள், உடனே அடுத்த படிக்கு போகலாம்.",
+                    'singlish': "Thanks machan 🙌 CV eka clear PDF/photo ekak widiyata ayeth ewanna, api ikmanin continue karamu.",
+                    'tanglish': "Thanks da 🙌 CV-a clear PDF/photo-a meendum anuppunga, namma udane continue pannalaam.",
+                }
+                return warm_retry.get(language, warm_retry['en'])
 
             candidate_name = (
                 (extracted_data.full_name if extracted_data else None)
@@ -3184,7 +3305,7 @@ class ChatbotEngine:
                     language, self.company_name, candidate.name or ""
                 )
 
-        unified = await rag_engine.process_unified_onboarding_turn(
+        unified = await rag_engine.process_unified_turn(
             user_message=text,
             current_state=candidate.conversation_state,
             language=language,
@@ -3193,12 +3314,7 @@ class ChatbotEngine:
         agent_reply = (unified.get("agent_reply") or "").strip()
         if agent_reply:
             return agent_reply
-        return await rag_engine.generate_reonboard_response(
-            {
-                "conversation_state": candidate.conversation_state,
-                "preferred_language": language,
-            }
-        )
+        return PromptTemplates.get_gibberish_fallback(language)
 
     # ─── Contextual / RAG fallback ────────────────────────────────────────────
 

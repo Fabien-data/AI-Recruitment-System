@@ -55,10 +55,12 @@ class MetaWhatsAppClient:
         return settings.meta_verify_token
 
     def _whatsapp_headers(self) -> Dict[str, str]:
-        return {
+        headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json; charset=UTF-8",
         }
+        assert "charset=UTF-8" in headers.get("Content-Type", "")
+        return headers
 
     @staticmethod
     def _json_bytes(payload: Dict[str, Any]) -> bytes:
@@ -121,19 +123,21 @@ class MetaWhatsAppClient:
         url = f"{self.base_url}/{self.phone_number_id}/messages"
         headers = self._whatsapp_headers()
         
+        safe_text = str(text or "")
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
             "to": to_number,
             "type": "text",
-            "text": {"body": text}
+            "text": {"body": safe_text}
         }
+        binary_data = self._json_bytes(payload)
         
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     url,
-                    data=self._json_bytes(payload),
+                    data=binary_data,
                     headers=headers,
                     timeout=12.0,
                 )
@@ -144,7 +148,10 @@ class MetaWhatsAppClient:
                 return result
             
         except httpx.HTTPError as e:
-            logger.error(f"Failed to send message to {to_number}: {e}")
+            logger.error(
+                f"Failed to send message to {to_number}: {e} | "
+                f"text_sample={safe_text[:60]!r} | encoding=utf-8"
+            )
             return {"error": str(e)}
     
     async def send_template_message(

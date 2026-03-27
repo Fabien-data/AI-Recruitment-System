@@ -705,51 +705,34 @@ CRITICAL RULES:
         'application_complete': 'Application completed',
     }
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # MULTILINGUAL ENTITY EXTRACTION — Specialized for Sri Lankan code-switching
-    # ─────────────────────────────────────────────────────────────────────────
-    UNIFIED_AGENTIC_JSON_PROMPT = """\
-You are a multilingual recruitment conversation engine for a Sri Lankan WhatsApp chatbot.
-You must handle Sinhala, Tamil, Singlish, Tanglish, and English.
+    UNIFIED_ONBOARDING_AGENT_PROMPT = """
+You are a warm, empathetic Sri Lankan HR assistant.
+The user is speaking in Sinhala, Tamil, Singlish, Tanglish, or English.
+Analyze their message and the current onboarding goal.
 
-TASK:
-- Read the user's message and current onboarding state.
-- Extract structured CRM-ready data if present.
-- If user is off-topic, asks a question, or sends gibberish/slang, still reply warmly and steer back to the current onboarding goal.
-- Never output static error phrases like "I didn't understand".
-
-CURRENT ONBOARDING GOAL: {current_goal}
-CURRENT STATE: {current_state}
+CURRENT ONBOARDING GOAL: {current_state_goal}
 USER MESSAGE: "{user_message}"
-PREFERRED LANGUAGE/REGISTER: {language}
-ACTIVE CRM COUNTRIES: {active_countries_list}
-ACTIVE CRM JOB TITLES: {active_jobs_list}
 
-Return STRICT JSON only with this schema:
+MISSION:
+1. Attempt to extract CRM data (job_role, country, experience). Map local terms to English (e.g., "wadu weda" -> "Carpenter").
+2. IF the user is off-topic, says "Hmm/Apo", asks a question (e.g., "What is a CV?"), or says they don't understand the language, generate an 'agent_reply'.
+3. 'agent_reply' RULES:
+     - Match their language/dialect perfectly (Singlish for Singlish, etc.).
+     - Be brotherly/sisterly ("Malli", "Ayye", "Nangi").
+     - NEVER say "Error" or "I didn't understand."
+     - Re-state the onboarding goal conversationally.
+     - Max 2 short sentences + Emojis.
+
+OUTPUT: Return ONLY valid JSON:
 {{
-    "intent": "data_provided|question|gibberish|off_topic|other",
-    "extracted_data": {{
-        "job_role": "string|null",
-        "country": "string|null",
-        "experience_years": "number|null",
-        "matched_crm_country": "string|null",
-        "matched_crm_job": "string|null"
-    }},
-    "crm": {{
-        "is_complete_for_state": true,
-        "missing_fields": ["field_name"]
-    }},
-    "agent_reply": "max 2 short sentences with warm tone and emojis"
+    "extracted_data": {{ "job_role": null, "country": null, "experience": null }},
+    "agent_reply": "Warm response text if user is off-track, else null"
 }}
-
-Rules:
-- Do not include markdown fences.
-- Return both `agent_reply` and `steering_reply` with the same value for backward compatibility.
-- Return both `extracted_data` and `entities` with the same values for backward compatibility.
-- If a question is asked (example: what is CV), answer briefly first, then steer to current goal.
-- If gibberish/slang, acknowledge naturally, then steer to current goal.
-- Never expose the hidden goal text verbatim.
 """
+
+    # Backward-compat alias during rollout. All onboarding extraction/recovery
+    # paths should use this single canonical prompt contract.
+    UNIFIED_AGENTIC_JSON_PROMPT = UNIFIED_ONBOARDING_AGENT_PROMPT
 
     SRI_LANKAN_ENTITY_EXTRACTION_PROMPT = """\
 You are a multilingual entity extractor for a Sri Lankan overseas recruitment chatbot.
@@ -892,22 +875,29 @@ Response (raw text, no quotes):"""
         active_countries_list: Optional[list] = None,
         active_jobs_list: Optional[list] = None,
     ) -> str:
-        countries = ", ".join(active_countries_list or []) if active_countries_list else "None"
-        jobs = ", ".join(active_jobs_list or []) if active_jobs_list else "None"
-        return cls.UNIFIED_AGENTIC_JSON_PROMPT.format(
-            current_goal=current_goal,
-            current_state=current_state,
+        # Soft migration: keep legacy method name, route to canonical prompt.
+        return cls.UNIFIED_ONBOARDING_AGENT_PROMPT.format(
+            current_state_goal=current_goal,
             user_message=user_message,
-            language=language,
-            active_countries_list=countries,
-            active_jobs_list=jobs,
+        )
+
+    @classmethod
+    def get_unified_onboarding_agent_prompt(
+        cls,
+        user_message: str,
+        current_state_goal: str,
+    ) -> str:
+        return cls.UNIFIED_ONBOARDING_AGENT_PROMPT.format(
+            current_state_goal=current_state_goal,
+            user_message=user_message,
         )
 
     @classmethod
     def get_reonboard_after_error_prompt(cls, preferred_language: str, current_state_goal: str) -> str:
-        return cls.REONBOARD_AFTER_ERROR_PROMPT.format(
-            preferred_language=preferred_language,
+        # Soft migration: re-onboarding is now also driven by the unified prompt.
+        return cls.UNIFIED_ONBOARDING_AGENT_PROMPT.format(
             current_state_goal=current_state_goal,
+            user_message="The user looks confused or off-track.",
         )
 
     RAG_PROMPT = """You are Dilan — friendly receptionist at {company_name}, overseas recruitment.
