@@ -691,7 +691,7 @@ Cultural & linguistic rules for Sri Lankan users:
     # ─────────────────────────────────────────────────────────────────────────
     # MULTILINGUAL ENTITY EXTRACTION — Specialized for Sri Lankan code-switching
     # ─────────────────────────────────────────────────────────────────────────
-        UNIFIED_AGENTIC_JSON_PROMPT = """\
+    UNIFIED_AGENTIC_JSON_PROMPT = """\
 You are a multilingual recruitment conversation engine for a Sri Lankan WhatsApp chatbot.
 You must handle Sinhala, Tamil, Singlish, Tanglish, and English.
 
