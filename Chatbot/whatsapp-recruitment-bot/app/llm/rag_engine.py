@@ -1,4 +1,4 @@
-"""
+﻿"""
 RAG Engine
 ==========
 Retrieval-Augmented Generation engine using OpenAI gpt-5.4-mini.
@@ -12,15 +12,15 @@ import time
 from typing import Optional, List, Dict, Any, Tuple
 import os
 
-# ─── RAG retrieval configuration (PDF spec) ─────────────────────────────────
-RAG_MIN_SCORE: float = 0.5      # was 0.7 — lower to reduce false-negatives
+# â”€â”€â”€ RAG retrieval configuration (PDF spec) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+RAG_MIN_SCORE: float = 0.5      # was 0.7 â€” lower to reduce false-negatives
 RAG_RETRIEVE_TOP_K: int = 5     # fetch 5 candidates from Pinecone
 RAG_RERANK_TOP_N: int = 3       # keep top 3 after LLM re-rank
 
-# ─── Lightweight in-memory caches (avoids redundant LLM calls) ───────────────
+# â”€â”€â”€ Lightweight in-memory caches (avoids redundant LLM calls) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # classify_message results for identical (text, state, language) tuples
 _CLASSIFY_CACHE: Dict[str, tuple] = {}
-_CLASSIFY_CACHE_TTL = 300   # 5 minutes — same intent doesn't change quickly
+_CLASSIFY_CACHE_TTL = 300   # 5 minutes â€” same intent doesn't change quickly
 
 # validate_intake_answer results for identical (field, text, language) tuples
 _VALIDATE_CACHE: Dict[str, tuple] = {}
@@ -57,10 +57,10 @@ try:
     PINECONE_AVAILABLE = True
 except (ImportError, Exception) as _pinecone_err:
     PINECONE_AVAILABLE = False
-    logger.warning(f"Pinecone not available ({_pinecone_err}) — will use keyword fallback")
+    logger.warning(f"Pinecone not available ({_pinecone_err}) â€” will use keyword fallback")
 
 from app.config import settings
-from app.llm.prompt_templates import PromptTemplates
+from app.llm.prompt_templates import PromptTemplates, GLOBAL_AI_TAKEOVER_PROMPT
 
 
 class RAGEngine:
@@ -89,7 +89,7 @@ class RAGEngine:
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI: {e}")
         
-        # Initialize Pinecone (optional — only if PINECONE_API_KEY is set)
+        # Initialize Pinecone (optional â€” only if PINECONE_API_KEY is set)
         if PINECONE_AVAILABLE and settings.pinecone_api_key:
             try:
                 pc = Pinecone(api_key=settings.pinecone_api_key)
@@ -100,7 +100,7 @@ class RAGEngine:
                 self.pinecone_index = None
         else:
             if not settings.pinecone_api_key:
-                logger.info("PINECONE_API_KEY not set — RAG will use keyword-based fallback from DB")
+                logger.info("PINECONE_API_KEY not set â€” RAG will use keyword-based fallback from DB")
             self.pinecone_index = None
     
     def generate_response(
@@ -195,15 +195,15 @@ class RAGEngine:
 
         # Add personalisation note if we know the name
         if candidate_name:
-            system_prompt += f"\n\nIMPORTANT: The candidate's first name is {candidate_name}. Use their name naturally in conversations — it feels more personal."
+            system_prompt += f"\n\nIMPORTANT: The candidate's first name is {candidate_name}. Use their name naturally in conversations â€” it feels more personal."
 
         # Strong language instruction
         language_names = {
             'en': 'English',
-            'si': 'Sinhala (සිංහල)',
-            'ta': 'Tamil (தமிழ்)',
-            'tanglish': 'Tanglish (Tamil–English mix)',
-            'singlish': 'Singlish (Sinhala–English mix)',
+            'si': 'Sinhala (à·ƒà·’à¶‚à·„à¶½)',
+            'ta': 'Tamil (à®¤à®®à®¿à®´à¯)',
+            'tanglish': 'Tanglish (Tamilâ€“English mix)',
+            'singlish': 'Singlish (Sinhalaâ€“English mix)',
         }
         lang_name = language_names.get(language, 'English')
 
@@ -211,12 +211,12 @@ class RAGEngine:
 
 === LANGUAGE & STYLE ===
 User language: {lang_name}. Match their communication style in your reply.
-- English → English only
-- Sinhala script → pure Sinhala Unicode, no English
-- Tamil script → pure Tamil Unicode, no English
-- Tanglish (Tamil in Latin) → natural Tamil/English code-switch, e.g. "Dubai la driver job irriki! Apply panna ready-ah?"
-- Singlish (Sinhala in Latin) → natural Sinhala/English code-switch, e.g. "Dubai driver job tiyenawa! Apply karanna ready da?"
-Understand intent regardless of script. Keep replies short — WhatsApp messages.
+- English â†’ English only
+- Sinhala script â†’ pure Sinhala Unicode, no English
+- Tamil script â†’ pure Tamil Unicode, no English
+- Tanglish (Tamil in Latin) â†’ natural Tamil/English code-switch, e.g. "Dubai la driver job irriki! Apply panna ready-ah?"
+- Singlish (Sinhala in Latin) â†’ natural Sinhala/English code-switch, e.g. "Dubai driver job tiyenawa! Apply karanna ready da?"
+Understand intent regardless of script. Keep replies short â€” WhatsApp messages.
 =============================="""
 
         # Append cultural context block for non-English registers
@@ -473,10 +473,10 @@ Treat ALL of these as valid language use. Do NOT mark a response as invalid just
 You are a Sri Lankan recruitment data extractor. Users will speak in English, Sinhala, Tamil, Singlish (Romanized Sinhala), or Tanglish (Romanized Tamil). You must aggressively extract the underlying meaning. If a user says 'Mata dubai yanna one', the destination_country is 'United Arab Emirates'. If they say 'Driver wedak', the job_interest is 'Driver'. Do not return null if a conversational intent is reasonably clear. Guess the standard English translation for the database.
 
 Analyze the response to determine if it provides a valid answer for the '{field}':
-- "job_interest": Any job title, role name, category or industry mentioned — VALID. Romanized Tamil/Sinhala job names are valid ("nurse paniyidam" = nurse job, "driver wadeema" = driver job).
-- "destination_country": Any country, region or destination mentioned — VALID. If the user expresses flexibility, such as "anywhere", "open to anything", "any", "nothing specific", "onama ratak" (Sinhala), or "entha nadum" (Tamil), you MUST output exactly "ANY". If the user says "Dubai", output "United Arab Emirates". Do not return null if they express flexibility.
-- "experience_years": Any number or time period mentioned — VALID.
-- If it is a pure question, off-topic, or completely irrelevant with no job/country/year info → NOT valid.
+- "job_interest": Any job title, role name, category or industry mentioned â€” VALID. Romanized Tamil/Sinhala job names are valid ("nurse paniyidam" = nurse job, "driver wadeema" = driver job).
+- "destination_country": Any country, region or destination mentioned â€” VALID. If the user expresses flexibility, such as "anywhere", "open to anything", "any", "nothing specific", "onama ratak" (Sinhala), or "entha nadum" (Tamil), you MUST output exactly "ANY". If the user says "Dubai", output "United Arab Emirates". Do not return null if they express flexibility.
+- "experience_years": Any number or time period mentioned â€” VALID.
+- If it is a pure question, off-topic, or completely irrelevant with no job/country/year info â†’ NOT valid.
 - If it is NOT valid, write a polite, short clarification message in {lang_name} asking them to provide the correct information.
 
 Respond ONLY with a valid JSON object in exactly this format:
@@ -516,7 +516,7 @@ Respond ONLY with a valid JSON object in exactly this format:
                           job_title | country | years_experience | question |
                           no_intent | greeting | cv_upload | other,
               "language": en | si | ta | tanglish | singlish,
-              "confidence": 0.0–1.0,
+              "confidence": 0.0â€“1.0,
               "entities": {
                   "job_roles":        [str, ...],
                   "countries":        [str, ...],
@@ -543,12 +543,12 @@ Current conversation state: {state}
 
 === LANGUAGE DETECTION ===
 Detect the language the user is WRITING in:
-- "en"        → English only
-- "si"        → Sinhala Unicode script (ශ, ක, etc.)
-- "ta"        → Tamil Unicode script (க, ந, etc.)
-- "tanglish"  → Tamil words written in Latin/English letters (Romanized Tamil)
+- "en"        â†’ English only
+- "si"        â†’ Sinhala Unicode script (à·, à¶š, etc.)
+- "ta"        â†’ Tamil Unicode script (à®•, à®¨, etc.)
+- "tanglish"  â†’ Tamil words written in Latin/English letters (Romanized Tamil)
                  Signs: enna, irriki, irukku, paniyidam, velai, vanakkam, nalla, seri, theriyuma
-- "singlish"  → Sinhala words written in Latin/English letters (Romanized Sinhala)
+- "singlish"  â†’ Sinhala words written in Latin/English letters (Romanized Sinhala)
                  Signs: mokakda, thiyanawa, tiyenawa, kohomada, ewanda, karanna, aney, machang, innawa
 - If the message is mixed (e.g. 50% Tamil words + 50% English), choose tanglish or singlish.
 
@@ -557,8 +557,8 @@ Classify into EXACTLY ONE intent:
 - "vacancy_query"       User asks what jobs/vacancies/positions are available.
                         Tanglish: "enna job irriki", "paniyidam irukku", "evvalo job"
                         Singlish: "mokakda job", "job thiyanawada", "ewanda job karanna"
-                        Tamil: "என்ன வேலை", "வேலை வாய்ப்புகள்"
-                        Sinhala: "රැකියා", "ඇති රැකියා"
+                        Tamil: "à®Žà®©à¯à®© à®µà¯‡à®²à¯ˆ", "à®µà¯‡à®²à¯ˆ à®µà®¾à®¯à¯à®ªà¯à®ªà¯à®•à®³à¯"
+                        Sinhala: "à¶»à·à¶šà·’à¶ºà·", "à¶‡à¶­à·’ à¶»à·à¶šà·’à¶ºà·"
 - "apply_intent"        User wants to apply, says yes/ok/ready/begin/interested.
 - "language_selection"  User is choosing a language (English / Sinhala / Tamil, or 1/2/3).
 - "job_title"           User is naming a specific job role they want.
@@ -576,7 +576,7 @@ Extract these entities (use English names for job roles and countries):
                     "driver" = driver, "nurse" = nurse, "cook" = cook,
                     "security" = security guard, "factory" = factory worker,
                     "cleaner" = cleaner, "weldere" = welder, "electrician" = electrician.
-- countries:        List of countries. Map: Dubai→UAE, Qatar, Saudi→Saudi Arabia,
+- countries:        List of countries. Map: Dubaiâ†’UAE, Qatar, Saudiâ†’Saudi Arabia,
                     Kuwait, Malaysia, Singapore, Maldives.
 - skills:           List of skills or qualifications mentioned.
 - experience_years: Integer if years of experience is mentioned, else null.
@@ -585,7 +585,7 @@ Respond ONLY with valid JSON (no markdown, no extra keys):
 {{
   "intent": "<intent>",
   "language": "<language code>",
-  "confidence": <0.0–1.0>,
+  "confidence": <0.0â€“1.0>,
   "entities": {{
     "job_roles": [],
     "countries": [],
@@ -608,7 +608,7 @@ Respond ONLY with valid JSON (no markdown, no extra keys):
             content = content.strip()
             result = json.loads(content)
             logger.info(
-                f"classify_message: '{text[:60]}' → "
+                f"classify_message: '{text[:60]}' â†’ "
                 f"intent={result.get('intent')} lang={result.get('language')} "
                 f"conf={result.get('confidence')} entities={result.get('entities')}"
             )
@@ -633,7 +633,7 @@ Respond ONLY with valid JSON (no markdown, no extra keys):
                     job_title | country | years_experience | question |
                     no_intent | other
           - extracted_value: normalized value when applicable (job title, country, years, language)
-          - confidence: float 0.0–1.0
+          - confidence: float 0.0â€“1.0
         """
         if not self.openai_client:
             return {"intent": "other", "extracted_value": None, "confidence": 0.5}
@@ -648,15 +648,15 @@ The chatbot supports English, Sinhala (script + romanized/Singlish), and Tamil (
 
 Classify the INTENT into EXACTLY ONE of:
 - "vacancy_query"    : User asks what jobs/vacancies are available.
-                       Examples: "enna job irriki", "what jobs", "என்ன job", "what are the vacancies",
+                       Examples: "enna job irriki", "what jobs", "à®Žà®©à¯à®© job", "what are the vacancies",
                                  "enna enna position", "jobs available", "mokakda jobs", "job list karanna",
                                  "evanda jobs thiyanawada", "enna position irukku", "job ulladha"
 - "apply_intent"     : User wants to apply, says yes/ok/sure/ready/begin.
 - "language_selection": User is choosing a language. Examples: "Tamil", "Sinhala", "English", "1", "2", "3",
-                                                               "தமிழ்", "සිංහල", "tamil please"
+                                                               "à®¤à®®à®¿à®´à¯", "à·ƒà·’à¶‚à·„à¶½", "tamil please"
 - "job_title"        : User is naming a specific job role (driver, nurse, cook, electrician, etc.)
 - "country"          : User is naming a destination country (Dubai, Qatar, Saudi, Kuwait, etc.)
-- "years_experience" : User is stating their years of experience (e.g., "5 years", "3 வருடம்", "3 years")
+- "years_experience" : User is stating their years of experience (e.g., "5 years", "3 à®µà®°à¯à®Ÿà®®à¯", "3 years")
 - "question"         : User is asking a specific question about salary, visa, process, requirements, benefits.
 - "no_intent"        : User is declining or saying no.
 - "other"            : Everything else.
@@ -685,7 +685,7 @@ Respond ONLY with valid JSON (no markdown):
             if content.endswith('```'): content = content[:-3]
             content = content.strip()
             result = json.loads(content)
-            logger.info(f"LLM intent classification: '{text[:50]}' → {result.get('intent')} ({result.get('confidence', '?')})")
+            logger.info(f"LLM intent classification: '{text[:50]}' â†’ {result.get('intent')} ({result.get('confidence', '?')})")
             return result
 
         except Exception as e:
@@ -696,8 +696,8 @@ Respond ONLY with valid JSON (no markdown):
         """Get a fallback response when API is unavailable."""
         responses = {
             'en': "I apologize, but I'm experiencing technical difficulties. Please try again in a moment or contact our support team.",
-            'si': "මට කණගාටුයි, නමුත් මට තාක්ෂණික දුෂ්කරතා අත්විඳිමින් සිටිමි. කරුණාකර මොහොතකින් නැවත උත්සාහ කරන්න.",
-            'ta': "மன்னிக்கவும், நான் தொழில்நுட்ப சிக்கல்களை எதிர்கொள்கிறேன். சிறிது நேரத்தில் மீண்டும் முயற்சிக்கவும்."
+            'si': "à¶¸à¶§ à¶šà¶«à¶œà·à¶§à·”à¶ºà·’, à¶±à¶¸à·”à¶­à·Š à¶¸à¶§ à¶­à·à¶šà·Šà·‚à¶«à·’à¶š à¶¯à·”à·‚à·Šà¶šà¶»à¶­à· à¶…à¶­à·Šà·€à·’à¶³à·’à¶¸à·’à¶±à·Š à·ƒà·’à¶§à·’à¶¸à·’. à¶šà¶»à·”à¶«à·à¶šà¶» à¶¸à·œà·„à·œà¶­à¶šà·’à¶±à·Š à¶±à·à·€à¶­ à¶‹à¶­à·Šà·ƒà·à·„ à¶šà¶»à¶±à·Šà¶±.",
+            'ta': "à®®à®©à¯à®©à®¿à®•à¯à®•à®µà¯à®®à¯, à®¨à®¾à®©à¯ à®¤à¯Šà®´à®¿à®²à¯à®¨à¯à®Ÿà¯à®ª à®šà®¿à®•à¯à®•à®²à¯à®•à®³à¯ˆ à®Žà®¤à®¿à®°à¯à®•à¯Šà®³à¯à®•à®¿à®±à¯‡à®©à¯. à®šà®¿à®±à®¿à®¤à¯ à®¨à¯‡à®°à®¤à¯à®¤à®¿à®²à¯ à®®à¯€à®£à¯à®Ÿà¯à®®à¯ à®®à¯à®¯à®±à¯à®šà®¿à®•à¯à®•à®µà¯à®®à¯."
         }
         return responses.get(language, responses['en'])
     
@@ -705,12 +705,12 @@ Respond ONLY with valid JSON (no markdown):
         """Get an error response."""
         responses = {
             'en': "I encountered an error processing your request. Could you please try again?",
-            'si': "ඔබේ ඉල්ලීම සැකසීමේදී දෝෂයක් ඇති විය. කරුණාකර නැවත උත්සාහ කරන්න.",
-            'ta': "உங்கள் கோரிக்கையை செயலாக்குவதில் பிழை ஏற்பட்டது. மீண்டும் முயற்சிக்கவும்."
+            'si': "à¶”à¶¶à·š à¶‰à¶½à·Šà¶½à·“à¶¸ à·ƒà·à¶šà·ƒà·“à¶¸à·šà¶¯à·“ à¶¯à·à·‚à¶ºà¶šà·Š à¶‡à¶­à·’ à·€à·’à¶º. à¶šà¶»à·”à¶«à·à¶šà¶» à¶±à·à·€à¶­ à¶‹à¶­à·Šà·ƒà·à·„ à¶šà¶»à¶±à·Šà¶±.",
+            'ta': "à®‰à®™à¯à®•à®³à¯ à®•à¯‹à®°à®¿à®•à¯à®•à¯ˆà®¯à¯ˆ à®šà¯†à®¯à®²à®¾à®•à¯à®•à¯à®µà®¤à®¿à®²à¯ à®ªà®¿à®´à¯ˆ à®à®±à¯à®ªà®Ÿà¯à®Ÿà®¤à¯. à®®à¯€à®£à¯à®Ÿà¯à®®à¯ à®®à¯à®¯à®±à¯à®šà®¿à®•à¯à®•à®µà¯à®®à¯."
         }
         return responses.get(language, responses['en'])
 
-    # ─── True async wrappers (use AsyncOpenAI — no thread blocking) ─────────────
+    # â”€â”€â”€ True async wrappers (use AsyncOpenAI â€” no thread blocking) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # AsyncOpenAI makes native async HTTP calls via httpx, so these never block
     # the event loop and can be awaited concurrently with asyncio.gather().
 
@@ -718,7 +718,7 @@ Respond ONLY with valid JSON (no markdown):
         self, text: str, state: str, stored_language: str = 'en',
         last_messages: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """True async classify — uses AsyncOpenAI directly.
+        """True async classify â€” uses AsyncOpenAI directly.
         
         Args:
             last_messages: Up to 5 recent messages for context (newest last).
@@ -741,7 +741,7 @@ Respond ONLY with valid JSON (no markdown):
             ctx_block = ""
             if last_messages:
                 ctx_lines = [f"  [{i+1}] {m[:120]}" for i, m in enumerate(last_messages[-5:])]
-                ctx_block = "Recent conversation (oldest→newest):\n" + "\n".join(ctx_lines) + "\n\n"
+                ctx_block = "Recent conversation (oldestâ†’newest):\n" + "\n".join(ctx_lines) + "\n\n"
 
             prompt = (
                 f'Multilingual NLU for Sri Lankan overseas recruitment chatbot (Dewan Consultants).\n'
@@ -766,33 +766,33 @@ Respond ONLY with valid JSON (no markdown):
                 '| cv_upload | sending or sent CV |\n'
                 '| other | everything else |\n\n'
                 'Sri Lankan few-shot examples (20+):\n'
-                '"bro meka apply karanna puluwanda?" → apply_intent, singlish\n'
-                '"salary kiyadha?" (ctx: driver job) → question, singlish\n'
-                '"Dubai" → country, en, countries=["UAE"]\n'
-                '"vanakkam da" → greeting, tanglish\n'
-                '"drv jb uae?" → vacancy_query, en, job_roles=["driver"], countries=["UAE"]\n'
-                '"ow eka da" (ctx: cook job) → apply_intent, singlish\n'
-                '"welding job tiyenawada, salary kiyadha?" → vacancy_query, singlish, job_roles=["welder"]\n'
-                '"anubavam 3 varsham" → years_experience, tanglish, experience_years=3\n'
-                '"kohomada" → greeting, singlish\n'
-                '"nurse job tiyenawada?" → vacancy_query, singlish, job_roles=["nurse"]\n'
-                '"na" → no_intent, singlish\n'
-                '"how many years experience they want?" → question, en\n'
-                '"mchng, meka kohomada apply karanne" → question, singlish\n'
-                '"aluth" (fresh/new) → years_experience, singlish, experience_years=0\n'
-                '"visa requirements for bahrain" → question, en, countries=["Bahrain"]\n'
-                '"ippo apply panna mudiyuma?" → question, tanglish\n'
-                '"waste time this bot" → other, en\n'
-                '"ow, apply karanna" (ctx: driver) → apply_intent, singlish, job_roles=["driver"]\n'
-                '"2 varusham" → years_experience, tanglish, experience_years=2\n'
-                '"oman la nurse job tiyenawada?" → vacancy_query, singlish, job_roles=["nurse"], countries=["Oman"]\n'
-                '"mokakda jobs thiyanawa" → vacancy_query, singlish\n'
-                '"job paniyidam irukku" → vacancy_query, tanglish\n'
-                '"enna job irriki" → vacancy_query, tanglish\n'
-                '"aama" → apply_intent, tanglish\n'
-                '"driver karanna" → job_title, singlish, job_roles=["driver"]\n\n'
+                '"bro meka apply karanna puluwanda?" â†’ apply_intent, singlish\n'
+                '"salary kiyadha?" (ctx: driver job) â†’ question, singlish\n'
+                '"Dubai" â†’ country, en, countries=["UAE"]\n'
+                '"vanakkam da" â†’ greeting, tanglish\n'
+                '"drv jb uae?" â†’ vacancy_query, en, job_roles=["driver"], countries=["UAE"]\n'
+                '"ow eka da" (ctx: cook job) â†’ apply_intent, singlish\n'
+                '"welding job tiyenawada, salary kiyadha?" â†’ vacancy_query, singlish, job_roles=["welder"]\n'
+                '"anubavam 3 varsham" â†’ years_experience, tanglish, experience_years=3\n'
+                '"kohomada" â†’ greeting, singlish\n'
+                '"nurse job tiyenawada?" â†’ vacancy_query, singlish, job_roles=["nurse"]\n'
+                '"na" â†’ no_intent, singlish\n'
+                '"how many years experience they want?" â†’ question, en\n'
+                '"mchng, meka kohomada apply karanne" â†’ question, singlish\n'
+                '"aluth" (fresh/new) â†’ years_experience, singlish, experience_years=0\n'
+                '"visa requirements for bahrain" â†’ question, en, countries=["Bahrain"]\n'
+                '"ippo apply panna mudiyuma?" â†’ question, tanglish\n'
+                '"waste time this bot" â†’ other, en\n'
+                '"ow, apply karanna" (ctx: driver) â†’ apply_intent, singlish, job_roles=["driver"]\n'
+                '"2 varusham" â†’ years_experience, tanglish, experience_years=2\n'
+                '"oman la nurse job tiyenawada?" â†’ vacancy_query, singlish, job_roles=["nurse"], countries=["Oman"]\n'
+                '"mokakda jobs thiyanawa" â†’ vacancy_query, singlish\n'
+                '"job paniyidam irukku" â†’ vacancy_query, tanglish\n'
+                '"enna job irriki" â†’ vacancy_query, tanglish\n'
+                '"aama" â†’ apply_intent, tanglish\n'
+                '"driver karanna" â†’ job_title, singlish, job_roles=["driver"]\n\n'
                 'EXTRACT entities (English names): job_roles[], countries[], skills[], experience_years\n'
-                'Map: Dubai→UAE | Saudi→Saudi Arabia | driver/riyaduru/ஓட்டுநர்→driver\n\n'
+                'Map: Dubaiâ†’UAE | Saudiâ†’Saudi Arabia | driver/riyaduru/à®“à®Ÿà¯à®Ÿà¯à®¨à®°à¯â†’driver\n\n'
                 'JSON only (no markdown):\n'
                 '{"intent":"<>","language":"<>","confidence":<0-1>,'
                 '"entities":{"job_roles":[],"countries":[],"skills":[],"experience_years":null}}'
@@ -811,7 +811,7 @@ Respond ONLY with valid JSON (no markdown):
             content = content.strip()
             result = json.loads(content)
             logger.info(
-                f"classify_message_async: '{text[:60]}' → "
+                f"classify_message_async: '{text[:60]}' â†’ "
                 f"intent={result.get('intent')} lang={result.get('language')} "
                 f"conf={result.get('confidence')}"
             )
@@ -829,7 +829,7 @@ Respond ONLY with valid JSON (no markdown):
         language: str = "en",
         use_rag: bool = True,
     ) -> str:
-        """True async generate — uses AsyncOpenAI directly."""
+        """True async generate â€” uses AsyncOpenAI directly."""
         if not self.async_openai_client:
             return await asyncio.to_thread(
                 self.generate_response, user_message, conversation_history,
@@ -866,14 +866,14 @@ Respond ONLY with valid JSON (no markdown):
     async def validate_intake_answer_async(
         self, field: str, text: str, language: str = "en"
     ) -> Dict[str, Any]:
-        """True async validate — uses AsyncOpenAI directly."""
+        """True async validate â€” uses AsyncOpenAI directly."""
         # NEW FAIL-CLOSED FALLBACK
         _fallback = {
             "is_valid": False,
             "extracted_value": None,
             "clarification_message": None # Let chatbot.py use its default fallback templates
         }
-        # Check cache — common answers like "Dubai", "driver", "2 years" are frequent
+        # Check cache â€” common answers like "Dubai", "driver", "2 years" are frequent
         _vkey = f"{field}|{text[:120]}|{language}"
         _vcached = _cache_get(_VALIDATE_CACHE, _vkey, _VALIDATE_CACHE_TTL)
         if _vcached is not None:
@@ -893,14 +893,14 @@ Respond ONLY with valid JSON (no markdown):
                 'job_interest: MUST be a distinct job title, professional role, or industry.\n'
                 '  CRITICAL: REJECT conversational filler, greetings, gibberish, or vague answers like "I don\'t know", "anything", "yes", "no".\n'
                 '  If it does NOT contain a clear professional role, mark as INVALID.\n'
-                '  Tanglish examples (→ extracted_value):\n'
-                '  "driver paniyidam"→"driver", "nurse velai"→"nurse"\n'
+                '  Tanglish examples (â†’ extracted_value):\n'
+                '  "driver paniyidam"â†’"driver", "nurse velai"â†’"nurse"\n'
                 '\n'
                 'destination_country: MUST be a specific country name, city, or recognized region. If the user expresses flexibility, such as "anywhere", "open to anything", "any", "nothing specific", "onama ratak" (Sinhala), or "entha nadum" (Tamil), you MUST output exactly "ANY". If the user says "Dubai", output "United Arab Emirates". Do not return null if they express flexibility.\n'
                 '  CRITICAL: REJECT answers like "abroad", "outside", or gibberish unless it clearly means flexibility.\n'
                 '\n'
                 'experience_years: MUST be a number, word description of a number, or time period.\n'
-                '  "3 varusham"→"3", "fresh"/"new"→"0", "no experience"→"0"\n'
+                '  "3 varusham"â†’"3", "fresh"/"new"â†’"0", "no experience"â†’"0"\n'
                 '  REJECT off-topic text.\n'
                 '\n'
                 'NOT valid: a pure question ("how much salary?"), fully off-topic text, conversational filler, or random gibberish.\n\n'
@@ -929,7 +929,7 @@ Respond ONLY with valid JSON (no markdown):
             return _fallback
 
     async def generate_missing_field_question_async(self, field: str, language: str = "en") -> str:
-        """True async question generator — uses AsyncOpenAI directly."""
+        """True async question generator â€” uses AsyncOpenAI directly."""
         if not self.async_openai_client:
             return await asyncio.to_thread(self.generate_missing_field_question, field, language)
         try:
@@ -993,14 +993,14 @@ Respond ONLY with valid JSON (no markdown):
             prompt = (
                 f'Sri Lankan overseas recruitment chatbot NLU.\n'
                 f'Message: "{text}" | Lang: {language} | State: {state} | Field: {field}\n\n'
-                'PART 1 — CLASSIFY:\n'
+                'PART 1 â€” CLASSIFY:\n'
                 'Detect language (en/si/ta/singlish/tanglish) and classify intent:\n'
                 'vacancy_query|apply_intent|language_selection|job_title|country|'
                 'years_experience|question|no_intent|greeting|cv_upload|other\n'
                 'Extract: job_roles[], countries[], skills[], experience_years\n\n'
-                'Few-shot: "enna job irriki"→vacancy_query,tanglish | "dubai poganum"→country,tanglish,UAE\n'
-                '"aama"→apply_intent,tanglish | "mokakda job"→vacancy_query,singlish\n\n'
-                f'PART 2 — VALIDATE for field "{field}":\n'
+                'Few-shot: "enna job irriki"â†’vacancy_query,tanglish | "dubai poganum"â†’country,tanglish,UAE\n'
+                '"aama"â†’apply_intent,tanglish | "mokakda job"â†’vacancy_query,singlish\n\n'
+                f'PART 2 â€” VALIDATE for field "{field}":\n'
                 'job_interest: MUST be a distinct job title/role. REJECT conversational filler, greetings, gibberish ("anything", "yes").\n'
                 'destination_country: MUST be country/city. If user expresses flexibility ("anywhere", "open to anything", "any", "onama ratak", "entha nadum"), MUST output "ANY". REJECT "abroad", gibberish.\n'
                 'experience_years: MUST be number/period. REJECT off-topic.\n'
@@ -1066,11 +1066,11 @@ Respond ONLY with valid JSON (no markdown):
         """
         # Multilingual static fallbacks (used on API error)
         _fallbacks = {
-            'en':       "Got it! 😊 Please share your answer to the current step so I can continue.",
-            'si':       "හරි! 😊 ඉදිරියට යන්න, දැනට අහන ප්‍රශ්නයට පිළිතුරක් දෙන්න.",
-            'ta':       "சரி! 😊 தொடர, இப்போது கேட்கும் கேள்விக்கு பதில் சொல்லுங்கள்.",
-            'singlish': "Hari da! 😊 Continue karanna, dan ahana prashneta answer eka denna.",
-            'tanglish': "Seri da! 😊 Continue panna, ippo kekkura kelvikku answer sollunga.",
+            'en':       "Got it! ðŸ˜Š Please share your answer to the current step so I can continue.",
+            'si':       "à·„à¶»à·’! ðŸ˜Š à¶‰à¶¯à·’à¶»à·’à¶ºà¶§ à¶ºà¶±à·Šà¶±, à¶¯à·à¶±à¶§ à¶…à·„à¶± à¶´à·Šâ€à¶»à·à·Šà¶±à¶ºà¶§ à¶´à·’à·…à·’à¶­à·”à¶»à¶šà·Š à¶¯à·™à¶±à·Šà¶±.",
+            'ta':       "à®šà®°à®¿! ðŸ˜Š à®¤à¯Šà®Ÿà®°, à®‡à®ªà¯à®ªà¯‹à®¤à¯ à®•à¯‡à®Ÿà¯à®•à¯à®®à¯ à®•à¯‡à®³à¯à®µà®¿à®•à¯à®•à¯ à®ªà®¤à®¿à®²à¯ à®šà¯Šà®²à¯à®²à¯à®™à¯à®•à®³à¯.",
+            'singlish': "Hari da! ðŸ˜Š Continue karanna, dan ahana prashneta answer eka denna.",
+            'tanglish': "Seri da! ðŸ˜Š Continue panna, ippo kekkura kelvikku answer sollunga.",
         }
 
         if not self.async_openai_client:
@@ -1095,7 +1095,7 @@ Respond ONLY with valid JSON (no markdown):
                 text = text[1:-1]
             logger.info(
                 f"generate_agentic_response: goal='{current_goal[:40]}' "
-                f"lang={language} → '{text[:80]}'"
+                f"lang={language} â†’ '{text[:80]}'"
             )
             return text
         except Exception as e:
@@ -1168,7 +1168,7 @@ Respond ONLY with valid JSON (no markdown):
 
             result = _json.loads(content)
             logger.info(
-                f"extract_entities_multilingual: '{text[:60]}' → "
+                f"extract_entities_multilingual: '{text[:60]}' â†’ "
                 f"job={result.get('job_role')} country={result.get('country')} "
                 f"crm_country={result.get('matched_crm_country')} conf={result.get('confidence')}"
             )
@@ -1180,5 +1180,43 @@ Respond ONLY with valid JSON (no markdown):
             return _fallback
 
 
+
+    async def generate_global_takeover(self, user_message: str, current_state: str) -> str:
+        """Universal AI fallback for out-of-bounds messages."""
+        
+        state_descriptions = {
+            "STATE_INITIAL": "Find out if they are looking for a job.",
+            "STATE_AWAITING_LANGUAGE": "Ask them to select their preferred language.",
+            "STATE_AWAITING_JOB": "Ask them what specific job role or profession they are looking for.",
+            "STATE_AWAITING_COUNTRY": "Ask them which destination country they want to work in.",
+            "STATE_AWAITING_EXPERIENCE": "Ask them how many years of experience they have.",
+            "STATE_AWAITING_CV": "Ask them to upload a document or clear photo of their CV/Resume.",
+            "STATE_COLLECTING_INFO": "Ask them for the specific missing detail we need."
+        }
+        
+        current_stage_description = state_descriptions.get(current_state, "Figure out what they need help with regarding recruitment.")
+
+        try:
+            from app.llm.prompt_templates import GLOBAL_AI_TAKEOVER_PROMPT
+            prompt = GLOBAL_AI_TAKEOVER_PROMPT.format(
+                current_stage_description=current_stage_description,
+                user_message=user_message
+            )
+            
+            response = await self.async_openai_client.chat.completions.create(
+                model=self.complex_chat_model, # Use gpt-4o for high empathy
+                messages=[
+                    {"role": "system", "content": "You are a helpful, multilingual recruitment AI."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=150
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"Takeover Error: {e}")
+            return "I'm here to help! Could you provide the details we were just talking about? 😊"
+
 # Singleton instance
 rag_engine = RAGEngine()
+

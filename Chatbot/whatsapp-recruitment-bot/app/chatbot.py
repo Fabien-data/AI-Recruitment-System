@@ -1509,68 +1509,6 @@ class ChatbotEngine:
         if state == self.STATE_HUMAN_HANDOFF:
             return ""
 
-        guided_states = {
-            self.STATE_AWAITING_JOB,
-            self.STATE_AWAITING_COUNTRY,
-            self.STATE_AWAITING_EXPERIENCE,
-        }
-        text_norm = _normalize_text(text).lower()
-        likely_valid_for_state = False
-        if state == self.STATE_AWAITING_COUNTRY:
-            if any(k in text_norm for k in _COUNTRY_MASTER_MAP.keys()):
-                likely_valid_for_state = True
-            else:
-                active_countries = {str(c).strip().lower() for c in (vacancy_service.get_active_countries() or []) if str(c).strip()}
-                if text_norm in active_countries:
-                    likely_valid_for_state = True
-        elif state == self.STATE_AWAITING_EXPERIENCE:
-            likely_valid_for_state = _extract_years(text) is not None
-        elif state == self.STATE_AWAITING_JOB:
-            likely_valid_for_state = self._match_job_from_text(text) is not None
-
-        is_gibberish_or_low_conf = (
-            _intent == "gibberish"
-            or (_intent in ("other", "unclear") and _llm_conf < 0.55)
-        )
-        if state in guided_states and is_gibberish_or_low_conf and not likely_valid_for_state and not _is_question(text):
-            _current_goal = self._current_goal_for_state(state)
-
-            retries = self._get_state_question_retry_count(candidate, state)
-
-            if retries < 2:
-                # Strike 1 or 2 → LLM-powered agentic acknowledgment + steering
-                self._increment_state_question_retry_count(db, candidate, state)
-                agentic_msg = await rag_engine.generate_agentic_response(
-                    user_message=text,
-                    current_goal=_current_goal,
-                    language=language,
-                )
-
-                # On strike 2 (second failure), also send interactive widget as visual aid
-                if retries == 1:
-                    if state == self.STATE_AWAITING_JOB:
-                        list_payload = self._build_job_picker_list_message(language)
-                        if list_payload:
-                            list_payload = dict(list_payload)
-                            list_payload["body_text"] = f"{agentic_msg}\n\n{list_payload.get('body_text', '')}".strip()
-                            return list_payload
-                    elif state == self.STATE_AWAITING_COUNTRY:
-                        return self._country_buttons_payload(language, body_prefix=agentic_msg)
-                    elif state == self.STATE_AWAITING_EXPERIENCE:
-                        payload = self._experience_buttons_payload(language)
-                        payload = dict(payload)
-                        payload["body_text"] = f"{agentic_msg}\n\n{payload.get('body_text', '')}".strip()
-                        return payload
-
-                return agentic_msg
-
-            # Strike 3: escalate to human handoff instead of forced auto-advance
-            return await self._escalate_to_human_handoff(
-                db,
-                candidate,
-                language,
-                reason=f"out_of_bound_{state}",
-            )
 
 
         # ── TOP-LEVEL: greetings at ANY state → warm re-welcome ───────────────
@@ -1891,680 +1829,108 @@ class ChatbotEngine:
 
         # ── AWAITING JOB INTEREST ─────────────────────────────────────────────
         elif state == self.STATE_AWAITING_JOB:
-            text_norm = _normalize_text(text)
+            # 1. Attempt Data Extraction
+            active_countries_list = vacancy_service.get_active_countries()
+            active_jobs_list = vacancy_service.get_active_job_titles()
+            entities = await rag_engine.extract_entities_multilingual(
+                text=text, language=language, active_countries=active_countries_list, active_jobs=active_jobs_list
+            )
+            target_data = entities.get("matched_crm_job") or entities.get("job_role")
+            
+            # 2. The Happy Path
+            if target_data and len(target_data.strip()) >= 2:
+                matched = self._match_job_from_text(target_data)
+                job_interest_value = target_data
+                if matched:
+                    job_interest_value = (matched[1].get("title") or target_data)[:200]
 
-            # If user just clicked "Apply for a Job" or sent a standalone apply word, re-prompt directly
-            clean_text = _APPLY_RE.sub('', text_norm).strip()
-            if _is_apply_intent(text) and len(clean_text) < 3:
-                return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
+                self._save_intake(db, candidate, 'job_interest', job_interest_value)
+                
+                _edata = candidate.extracted_data or {}
+                if matched:
+                    _edata["matched_job_id"] = matched[0]
+                    _edata["job_requirements"] = dict(matched[1].get("requirements", {}))
+                    _edata.pop("future_pool", None)
+                candidate.extracted_data = _edata
+                db.commit()
 
-            # Use pre-fetched validation if available (ran in parallel with classify)
-            if prefetched_validation is not None:
-                validation = prefetched_validation
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
+
+                ack = self._build_job_ack(job_interest_value, language)
+                return self._country_buttons_payload(language, body_prefix=ack.strip())
+
+            # 3. The Universal Catch-All
             else:
-                # Validate using LLM
-                validation = await rag_engine.validate_intake_answer_async('job_interest', text, language)
-
-            # Fallback for LLM failure/hallucinations: if it rejected, check exact match
-            if not validation.get('is_valid'):
-                matched_fallback = self._match_job_from_text(text_norm)
-                if matched_fallback:
-                    validation = {"is_valid": True, "extracted_value": text_norm}
-
-            if not validation.get('is_valid'):
-                # Short filler words / apply-intent → re-ask the question without extra fluff
-                if _is_apply_intent(text) or len(text_norm) < 3:
-                    return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
-
-                # If they explicitly ask about vacancies, list them (THIS IS THE ONLY TIME WE SHOW JOBS)
-                if _is_vacancy_question(text) or _intent == "vacancy_query":
-                    return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
-
-                # Secondary check: specialized multilingual entity extraction before declaring invalid
-                ml_result = await rag_engine.extract_entities_multilingual(
-                    text=text,
-                    language=language,
-                    active_countries=vacancy_service.get_active_countries(),
-                    active_jobs=vacancy_service.get_active_job_titles(),
+                takeover_reply = await rag_engine.generate_global_takeover(
+                    user_message=text, 
+                    current_state=candidate.conversation_state
                 )
-                ml_job = ml_result.get('matched_crm_job') or ml_result.get('job_role')
-                if ml_job and ml_result.get('confidence', 0.0) >= 0.65:
-                    logger.info(f"STATE_AWAITING_JOB: ML secondary extraction found job='{ml_job}' (conf={ml_result.get('confidence')})")
-                    validation = {"is_valid": True, "extracted_value": ml_job}
-                    # Fall through to the valid-job path below
-                else:
-                    retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB)
-                    current_goal = self._current_goal_for_state(self.STATE_AWAITING_JOB)
-                    agentic_msg = await rag_engine.generate_agentic_response(
-                        user_message=text,
-                        current_goal=current_goal,
-                        language=language,
-                    )
-
-                    if retries >= 3:
-                        return await self._escalate_to_human_handoff(
-                            db,
-                            candidate,
-                            language,
-                            reason="out_of_bound_awaiting_job",
-                        )
-
-                    if retries >= 2:
-                        list_payload = self._build_job_picker_list_message(language)
-                        if list_payload:
-                            list_payload = dict(list_payload)
-                            list_payload["body_text"] = f"{agentic_msg}\n\n{list_payload.get('body_text', '')}".strip()
-                            return list_payload
-
-                    return agentic_msg
-
-            if not validation.get('is_valid'):
-                return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
-
-            # Valid job interest — the LLM already extracted the key value; trust it
-            # regardless of how many words the original sentence had.
-            extracted_job = validation.get('extracted_value') or text_norm
-            matched = self._match_job_from_text(str(extracted_job))
-
-            job_interest_value = str(extracted_job)
-            if matched:
-                job_id, job_info = matched
-                job_interest_value = (job_info.get("title") or extracted_job)[:200]
-
-            self._save_intake(db, candidate, 'job_interest', job_interest_value)
-            self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB)
-
-            # Reset confusion streak on valid answer
-            _edata = candidate.extracted_data or {}
-            _edata['confusion_streak'] = 0
-            candidate.extracted_data = _edata
-            data = candidate.extracted_data or {}
-            if matched:
-                job_id, job_info = matched
-                data["matched_job_id"] = job_id
-                req = job_info.get("requirements")
-                data["job_requirements"] = dict(req) if isinstance(req, dict) else {}
-                data.pop("future_pool", None)  # clear future_pool flag if now matched
-                candidate.extracted_data = data
-                db.commit()
-
-            # Advance state
-            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
-
-            # If no exact match found but cache has active jobs, be honest about availability
-            # and register the candidate for future consideration (future pool)
-            if not matched and get_job_cache():
-                # Mark candidate as future pool so recruiters can identify them
-                data = candidate.extracted_data or {}
-                data["future_pool"] = True
-                data["future_pool_role"] = job_interest_value
-                candidate.extracted_data = data
-                db.commit()
-
-                j = job_interest_value.strip().title() if job_interest_value else "that role"
-                no_match_note = {
-                    'en': f"Thank you for your interest! Unfortunately, we don't have a *{j}* position open right now. 📋",
-                    'si': f"ඔබගේ ඇල්ම ගැන ස්තූතියි! අවාසනාවකට, දැනට *{j}* රැකියාවක් නොමැත. 📋",
-                    'ta': f"உங்கள் ஆர்வத்திற்கு நன்றி! துரதிர்ஷ்டவசமாக, இப்போது *{j}* பதவி காலியில்லை. 📋",
-                    'singlish': f"Oyagey interest gena thanks! But dang *{j}* job ekak naha. 📋",
-                    'tanglish': f"Ungal aarvathukku nandri! Aanaa ippo *{j}* position kaali illa. 📋",
-                }
-                
-                # Re-ask what job they actually want
-                job_q = PromptTemplates.get_intake_question('job_interest', language)
-                reply = f"{no_match_note.get(language, no_match_note['en'])}\n\n{job_q}"
-                
-                # Revert their state so they can try answering the job again, because this was a mismatched job
-                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB)
-                
-                return reply
-
-            # Matched role — standard positive ack
-            ack = self._build_job_ack(job_interest_value, language)
-            return self._country_buttons_payload(language, body_prefix=ack.strip())
+                if phone_number:
+                    await meta_client.send_text(phone_number, takeover_reply)
+                return ""
 
         # ── AWAITING DESTINATION COUNTRY ──────────────────────────────────────
         elif state == self.STATE_AWAITING_COUNTRY:
-            text_norm = _normalize_text(text)
-
-            validation = None
-            extracted_country = None
-
-            # Layer 1: Dictionary Check
-            for key, val in _COUNTRY_MASTER_MAP.items():
-                if key in text_norm:
-                    extracted_country = val
-                    validation = {"is_valid": True, "extracted_value": extracted_country}
-                    break
-
-            # Layer 2: Live DB Check
-            if not validation:
-                cache = get_job_cache()
-                active_countries = {str(job.get('country') or '').strip().lower(): str(job.get('country') or '').strip() for job in cache.values() if job.get('country')}
-                if text_norm in active_countries:
-                    extracted_country = active_countries[text_norm]
-                    validation = {"is_valid": True, "extracted_value": extracted_country}
-                else:
-                    # check if any active country name is fully contained in the user text
-                    for ac_low, ac_real in active_countries.items():
-                        if ac_low and ac_low in text_norm:
-                            extracted_country = ac_real
-                            validation = {"is_valid": True, "extracted_value": extracted_country}
-                            break
-
-            # Layer 3: Specialized multilingual entity extraction (CRM-aware fuzzy matching)
-            if not validation:
-                active_countries_list = vacancy_service.get_active_countries()
-                active_jobs_list = vacancy_service.get_active_job_titles()
-                ml_result = await rag_engine.extract_entities_multilingual(
-                    text=text,
-                    language=language,
-                    active_countries=active_countries_list,
-                    active_jobs=active_jobs_list,
-                )
-                extracted_ml = ml_result.get('matched_crm_country') or ml_result.get('country')
-                if extracted_ml and ml_result.get('confidence', 0.0) >= 0.65:
-                    logger.info(f"STATE_AWAITING_COUNTRY: Layer 3 ML extraction → '{extracted_ml}' (conf={ml_result.get('confidence')})")
-                    validation = {"is_valid": True, "extracted_value": extracted_ml}
-                else:
-                    # Also try pre-fetched validation as secondary option
-                    if prefetched_validation is not None:
-                        validation = prefetched_validation
-                    else:
-                        validation = await rag_engine.validate_intake_answer_async('destination_country', text, language)
-
-            if not validation.get('is_valid'):
-                country_retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_COUNTRY)
-
-                if country_retries >= 3:
-                    return await self._escalate_to_human_handoff(
-                        db,
-                        candidate,
-                        language,
-                        reason="out_of_bound_awaiting_country",
-                    )
-
-                current_goal = self._current_goal_for_state(self.STATE_AWAITING_COUNTRY)
-                agentic_msg = await rag_engine.generate_agentic_response(
-                    user_message=text,
-                    current_goal=current_goal,
-                    language=language,
-                )
-                if country_retries >= 2:
-                    return self._country_buttons_payload(language, body_prefix=agentic_msg)
-                return agentic_msg
-
-            extracted_country = validation.get('extracted_value') or text_norm
-            if not extracted_country:
-                return self._country_buttons_payload(language)
-
-            self._save_intake(db, candidate, 'destination_country', str(extracted_country))
-            self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_COUNTRY)
-
-            # Reset confusion streak on valid answer
-            _edata = candidate.extracted_data or {}
-            _edata['confusion_streak'] = 0
-            candidate.extracted_data = _edata
-
-            data = candidate.extracted_data or {}
-            job_interest = str(data.get('job_interest') or '').strip()
-            matching_jobs = await vacancy_service.get_matching_jobs(
-                job_interest=job_interest,
-                country=str(extracted_country),
-                limit=3,
+            # 1. Attempt Data Extraction
+            entities = await rag_engine.extract_entities_multilingual(
+                text=text, language=language, 
+                active_countries=vacancy_service.get_active_countries(), 
+                active_jobs=vacancy_service.get_active_job_titles()
             )
-
-            fallback_msg_str = ""
-
-            if matching_jobs:
-                data['presented_jobs'] = [str(job.get('id') or '') for job in matching_jobs[:3] if str(job.get('id') or '').strip()]
-                data['presented_job_cards'] = matching_jobs[:3]
-                candidate.extracted_data = data
-                db.commit()
-
-                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB_SELECTION)
-                ack = self._build_country_ack(str(extracted_country), language)
-                jobs_count = len(matching_jobs)
-                
-                if extracted_country == 'ANY':
-                    list_intro = {
-                        'en': f"Great! Since you are flexible, I looked at all our global locations and found {jobs_count} vacancies for {job_interest or 'your role'}.",
-                        'si': f"නියමයි! ඔබ ඕනෑම රටකට කැමති නිසා ලොව පුරා {job_interest or 'ඔබගේ රැකියා භූමිකාව'} සඳහා පුරප්පාඩු {jobs_count} ක් මට හමුවුණා.",
-                        'ta': "சிறப்பு! நீங்கள் எந்த நாடானாலும் சரி என்று கூறியதால், உலகம் முழுவதும் " + (job_interest or 'உங்கள் வேலை') + f"-க்காக {jobs_count} வேலைவாய்ப்புகளை நாடியுள்ளோம்.",
-                        'singlish': f"Niyamai! Oya flexible nisa mama loke wate balala {job_interest or 'oya balana role eka'} vacancies {jobs_count} k hoyagaththa.",
-                        'tanglish': f"Super! Neenga flexible nu sonnadhala, global-a thedi {job_interest or 'neenga paakura role'} kku {jobs_count} vacancies kandu pudichiruken.",
-                    }.get(language, f"Great! Since you are flexible, I looked at all our global locations and found {jobs_count} vacancies for {job_interest or 'your role'}.")
-                else:
-                    list_intro = {
-                        'en': f"Congratulations! 🎉 I found {jobs_count} vacancies for {job_interest or 'your role'} in {extracted_country}.",
-                        'si': f"සුබ පැතුම්! 🎉 {extracted_country} හි {job_interest or 'ඔබගේ රැකියා භූමිකාව'} සඳහා පුරප්පාඩු {jobs_count} ක් මට හමුවුණා.",
-                        'ta': f"வாழ்த்துக்கள்! 🎉 {extracted_country}-ல் {job_interest or 'உங்கள் வேலை பங்கு'} பணிக்கான {jobs_count} வேலைவாய்ப்புகள் உள்ளன.",
-                        'singlish': f"Niyamai! 🎉 {extracted_country} wala {job_interest or 'oya balana role eka'} vacancies {jobs_count} k thiyenawa.",
-                        'tanglish': f"Super! 🎉 {extracted_country}-la {job_interest or 'neenga paakura role'} kku {jobs_count} vacancies irukku.",
-                    }.get(language, f"Congratulations! 🎉 I found {jobs_count} vacancies for {job_interest or 'your role'} in {extracted_country}.")
-
-                rows = []
-                for i, job in enumerate(data.get('presented_job_cards', [])[:3]):
-                    title = job.get('title') or 'Job'
-                    location = str(job.get('country') or extracted_country)
-                    salary = job.get('salary') or ''
-                    row_title = f"{title} ({location})"[:24]
-                    row_desc = (salary if salary else job.get('description', ''))[:72]
-                    rows.append({
-                        "id": f"job_{i}",
-                        "title": row_title,
-                        "description": row_desc
-                    })
-
-                skip_title = {
-                    'en': "Skip & Join Pool",
-                    'si': "Skip කර Pool එකට යන්න",
-                    'ta': "Skip செந்து Pool-ல் சேர்",
-                    'singlish': "Skip - General Pool",
-                    'tanglish': "Skip - General Pool"
-                }.get(language, "Skip & Join Pool")[:24]
-
-                rows.append({
-                    "id": "skip",
-                    "title": skip_title,
-                    "description": "Don't select any specific job"[:72]
-                })
-
-                button_label = {
-                    'en': "View Jobs",
-                    'si': "රැකියා බලන්න",
-                    'ta': "வேலைகளைப் பார்",
-                    'singlish': "Jobs Balanna",
-                    'tanglish': "Jobs Paarkavum"
-                }.get(language, "View Jobs")[:20]
-
-                return {
-                    "type": "list",
-                    "body_text": f"{fallback_msg_str}{list_intro}\n\n{ack}",
-                    "button_label": button_label,
-                    "sections": [
-                        {
-                            "title": "Available Vacancies"[:24],
-                            "rows": rows
-                        }
-                    ]
-                }
-
-            has_exp = candidate.experience_years or data.get('experience_years_stated')
-            next_state = self.STATE_AWAITING_CV if has_exp else self.STATE_AWAITING_EXPERIENCE
-            crud.update_candidate_state(db, candidate.id, next_state)
-
-            pool_msg = {
-                'en': f"Currently, we don't have open positions for {job_interest or 'that role'} in {extracted_country}, but we frequently get new openings! Let's get your profile ready so we can contact you immediately when one opens up.",
-                'si': f"දැනට {extracted_country} හි {job_interest or 'එම රැකියා භූමිකාව'} සඳහා පුරප්පාඩු නොමැත, නමුත් අනාගතයේදී පැමිණිය හැක! ඔබගේ තොරතුරු ලබා දෙන්න.",
-                'ta': f"தற்போது {extracted_country}-ல் {job_interest or 'அந்த வேலை பங்கு'} வேலைகள் இல்லை, ஆனால் விரைவில் வரலாம்! உங்கள் விபரங்களை பதிவு செய்வோம்.",
-                'singlish': f"Danata {extracted_country} wala {job_interest or 'e role eka'} vacancies naha, eth aluth ewa enawa! Api profile eka hadala thiyagamu.",
-                'tanglish': f"Ippo {extracted_country}-la {job_interest or 'andha role'} vacancies illa, aana future-la varum! Profile-a ready pannuvom.",
-            }
+            target_data = entities.get("matched_crm_country") or entities.get("country")
             
-            if extracted_country == 'ANY':
-                pool_msg = {
-                    'en': f"Currently, we don't have open positions for {job_interest or 'that role'} anywhere, but we frequently get new openings! Let's get your profile ready so we can contact you immediately when one opens up.",
-                    'si': f"දැනට {job_interest or 'එම රැකියා භූමිකාව'} සඳහා ලොව පුරා පුරප්පාඩු නොමැත, නමුත් අනාගතයේදී පැමිණිය හැක! ඔබගේ තොරතුරු ලබා දෙන්න.",
-                    'ta': f"தற்போது {job_interest or 'அந்த வேலை பங்கு'} எங்கும் இல்லை, ஆனால் விரைவில் வரலாம்! உங்கள் விபரங்களை பதிவு செய்வோம்.",
-                    'singlish': f"Danata {job_interest or 'e role eka'} global vacancies naha, eth aluth ewa enawa! Api profile eka hadala thiyagamu.",
-                    'tanglish': f"Ippo {job_interest or 'andha role'} global vacancies illa, aana future-la varum! Profile-a ready pannuvom.",
-                }
+            # 2. The Happy Path
+            if target_data and len(target_data.strip()) >= 2:
+                self._save_intake(db, candidate, 'destination_country', str(target_data))
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
+                return self._experience_buttons_payload(language)
 
-            next_q = PromptTemplates.get_intake_question('cv_upload' if has_exp else 'experience_years', language)
-            reply_text = f"{pool_msg.get(language, pool_msg['en'])}\n\n{next_q}"
-            if has_exp:
-                return f"{fallback_msg_str}{reply_text}"
-            button_payload = self._experience_buttons_payload(language)
-            button_payload["body_text"] = f"{fallback_msg_str}{pool_msg.get(language, pool_msg['en'])}\n\n{button_payload.get('body_text', '')}".strip()
-            return button_payload
-
-        # ── AWAITING JOB SELECTION ───────────────────────────────────────────
-        elif state == self.STATE_AWAITING_JOB_SELECTION:
-            text_norm = _normalize_text(text).lower()
-            data = candidate.extracted_data or {}
-            presented_jobs = data.get('presented_job_cards') or data.get('presented_jobs') or []
-
-            if not presented_jobs:
-                job_interest = str(data.get('job_interest') or '').strip()
-                destination_country = str(data.get('destination_country') or '').strip()
-                if job_interest:
-                    recovered_jobs = await vacancy_service.get_matching_jobs(
-                        job_interest=job_interest,
-                        country=destination_country,
-                        limit=3,
-                    )
-                    if recovered_jobs:
-                        data['presented_jobs'] = [str(job.get('id') or '') for job in recovered_jobs[:3] if str(job.get('id') or '').strip()]
-                        data['presented_job_cards'] = recovered_jobs[:3]
-                        candidate.extracted_data = data
-                        db.commit()
-                        presented_jobs = data.get('presented_job_cards') or []
-
-            if not presented_jobs:
-                current_goal = self._current_goal_for_state(self.STATE_AWAITING_JOB_SELECTION)
-                agentic_msg = await rag_engine.generate_agentic_response(
-                    user_message=text,
-                    current_goal=current_goal,
-                    language=language,
-                )
-                role_q = PromptTemplates.get_intake_question('job_interest', language)
-                return f"{agentic_msg}\n\n{role_q}"
-
-            skip_words = {
-                'skip', 'general pool', 'pool', 'later', 'none', 'no',
-                'එපා', 'නැ', 'பிறகு', 'வேண்டாம்', 'illai', 'nehe',
-            }
-            if text_norm in skip_words or _is_no_intent(text):
-                data.pop('presented_jobs', None)
-                data.pop('presented_job_cards', None)
-                data['selected_job_id'] = None
-                data['selected_job_context'] = None
-                candidate.extracted_data = data
-                db.commit()
-                self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB_SELECTION)
-
-                # Check if we already have their experience
-                has_exp = candidate.experience_years or data.get('experience_years_stated')
-
-                msg = {
-                    'en': "No problem — I’ll keep you in our general pool for matching roles.",
-                    'si': "ප්‍රශ්නයක් නැහැ — ඔබව general pool එකේ තබාගෙන match වෙන roles බලමු.",
-                    'ta': "பிரச்சனை இல்லை — உங்களை general pool-ல் வைத்து பொருந்தும் வேலைகளை பார்க்கிறேன்.",
-                    'singlish': "Hari, awlak naha — oyawa general pool eke thiyagannam.",
-                    'tanglish': "Parava illa — ungala general pool-la vechitu matching jobs paapom.",
-                }
-
-                if has_exp:
-                    # Skip experience question, go straight to CV
-                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
-                    next_q = PromptTemplates.get_intake_question('cv_upload', language)
-                    return f"{msg.get(language, msg['en'])}\n\n{next_q}"
-                else:
-                    # Ask for experience
-                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
-                    button_payload = self._experience_buttons_payload(language)
-                    button_payload["body_text"] = f"{msg.get(language, msg['en'])}\n\n{button_payload.get('body_text', '')}".strip()
-                    return button_payload
-
-            idx = None
-            job_pick = re.search(r"\bjob_(\d+)\b", text_norm)
-            if job_pick:
-                idx = int(job_pick.group(1))
-            elif text_norm.startswith("job_"):
-                try:
-                    idx = int(text_norm.split("_")[1])
-                except ValueError:
-                    pass
+            # 3. The Universal Catch-All
             else:
-                if any(x in text_norm for x in ['1', '1️⃣', 'one']): idx = 0
-                elif any(x in text_norm for x in ['2', '2️⃣', 'two']): idx = 1
-                elif any(x in text_norm for x in ['3', '3️⃣', 'three']): idx = 2
-
-            if idx is None:
-                retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB_SELECTION)
-                current_goal = self._current_goal_for_state(self.STATE_AWAITING_JOB_SELECTION)
-                agentic_msg = await rag_engine.generate_agentic_response(
-                    user_message=text,
-                    current_goal=current_goal,
-                    language=language,
+                takeover_reply = await rag_engine.generate_global_takeover(
+                    user_message=text, 
+                    current_state=candidate.conversation_state
                 )
-                if retries >= 2:
-                    return self._build_presented_jobs_list_payload(language, presented_jobs, body_prefix=agentic_msg)
-                return agentic_msg
-
-            if idx < 0 or idx >= len(presented_jobs):
-                retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB_SELECTION)
-                invalid_pick_msg = {
-                    'en': "That selection doesn't look right.",
-                    'si': "එම තේරීම නිවැරදි නැහැ.",
-                    'ta': "அந்த தேர்வு சரியாக இல்லை.",
-                    'singlish': "E selection eka hari nemei.",
-                    'tanglish': "Andha selection sari illa.",
-                }.get(language, "That selection doesn't look right.")
-                if retries >= 2:
-                    return self._build_presented_jobs_list_payload(language, presented_jobs, body_prefix=invalid_pick_msg)
-                return invalid_pick_msg
-
-            selected = presented_jobs[idx]
-            selected_job_id = str(selected.get('id') or selected.get('job_id') or '')
-            selected_context = {
-                'job_id': selected_job_id,
-                'title': selected.get('title') or '',
-                'countries': [selected.get('country')] if selected.get('country') else [],
-                'salary_range': selected.get('salary') or '',
-                'description': selected.get('description') or '',
-                'requirements': selected.get('requirements') or {},
-            }
-
-            data['selected_job_id'] = selected_job_id
-            data['selected_job_title'] = selected_context['title']
-            data['selected_job_context'] = selected_context
-            data['matched_job_id'] = selected_job_id
-            data['job_requirements'] = selected_context['requirements'] if isinstance(selected_context['requirements'], dict) else {}
-            data.pop('presented_jobs', None)
-            data.pop('presented_job_cards', None)
-            candidate.extracted_data = data
-            db.commit()
-            self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB_SELECTION)
-
-            has_cv = bool(candidate.resume_file_path)
-            has_exp = bool(candidate.experience_years) or bool(data.get('experience_years_stated'))
-
-            if has_cv:
-                confirm = {
-                    'en': f"Excellent choice! Your application for *{selected_context['title']}* is complete with your CV.",
-                    'si': f"විශිෂ්ට තේරීමක්! *{selected_context['title']}* සඳහා ඔබගේ අයදුම්පත CV එකත් සමග සම්පූර්ණයි.",
-                    'ta': f"சிறந்த தேர்வு! *{selected_context['title']}* பணிக்கான உங்கள் விண்ணப்பம் CV உடன் முழுமையடைந்தது.",
-                    'singlish': f"Niyamai! CV ekath ekka *{selected_context['title']}* application eka complete.",
-                    'tanglish': f"Super choice! *{selected_context['title']}* ku unga application CV yoda complete aaiduchu.",
-                }
-                
-                missing_queue = list(dict.fromkeys(data.get('missing_critical_fields', [])))
-                if missing_queue:
-                    crud.update_candidate_state(db, candidate.id, self.STATE_COLLECTING_INFO)
-                    intake_field_alias = {'job_interest': 'job_interest', 'destination_country': 'destination_country', 'experience_years_stated': 'experience_years'}
-                    next_field = missing_queue[0]
-                    if next_field in intake_field_alias:
-                        next_question = PromptTemplates.get_intake_question(intake_field_alias[next_field], language)
-                    else:
-                        next_question = text_extractor.get_missing_field_question(next_field, language)
-                    return f"{confirm.get(language, confirm['en'])}\n\nI just need a little more information:\n{next_question}"
-                else:
-                    crud.update_candidate_state(db, candidate.id, self.STATE_APPLICATION_COMPLETE)
-                    complete_msg = PromptTemplates.get_application_complete_message(language, self.company_name, candidate.name or "")
-                    return f"{confirm.get(language, confirm['en'])}\n\n{complete_msg}"
-            else:
-                confirm = {
-                    'en': f"Great choice — *{selected_context['title']}* selected ✅",
-                    'si': f"හොඳ තේරීමක් — *{selected_context['title']}* තෝරාගත්තා ✅",
-                    'ta': f"சிறந்த தேர்வு — *{selected_context['title']}* தேர்ந்தெடுக்கப்பட்டது ✅",
-                    'singlish': f"Hari choice ekak — *{selected_context['title']}* select kala ✅",
-                    'tanglish': f"Super choice — *{selected_context['title']}* select pannitinga ✅",
-                }
-                
-                if has_exp:
-                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
-                    cv_q = PromptTemplates.get_intake_question('cv_upload', language)
-                    return f"{confirm.get(language, confirm['en'])}\n\n{cv_q}"
-                else:
-                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
-                    button_payload = self._experience_buttons_payload(language)
-                    button_payload["body_text"] = f"{confirm.get(language, confirm['en'])}\n\n{button_payload.get('body_text', '')}".strip()
-                    return button_payload
+                if phone_number:
+                    await meta_client.send_text(phone_number, takeover_reply)
+                return ""
 
         # ── AWAITING EXPERIENCE ───────────────────────────────────────────────
         elif state == self.STATE_AWAITING_EXPERIENCE:
-            text_norm = _normalize_text(text)
-
-            # Use pre-fetched validation if available (ran in parallel with classify)
-            if prefetched_validation is not None:
-                validation = prefetched_validation
-            else:
-                validation = await rag_engine.validate_intake_answer_async('experience_years', text, language)
+            # 1. Attempt Data Extraction
+            entities = await rag_engine.extract_entities_multilingual(text=text, language=language)
+            target_data = entities.get("experience_years")
             
-            if not validation.get('is_valid'):
-                # local fallback
-                yrs = _extract_years(text)
-                if yrs is not None:
-                    validation = {"is_valid": True, "extracted_value": str(yrs)}
-                elif not _is_question(text) and len(text_norm) < 20 and text_norm not in ["yes", "no"]:
-                    # just accept short text as experience if LLM is down
-                    validation = {"is_valid": True, "extracted_value": text_norm}
+            if not target_data:
+                import re
+                yrs = re.search(r'\d+', text)
+                if yrs:
+                    target_data = yrs.group()
 
-            if not validation.get('is_valid'):
-                retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_EXPERIENCE)
-                if retries >= 3:
-                    self._save_intake(db, candidate, 'experience_years_stated', "Unknown - Skipped")
-                    if hasattr(candidate, "experience_years"):
-                        candidate.experience_years = None
-                    self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_EXPERIENCE)
-
-                    ack = {
-                        'en': "No worries — I’ll mark experience as unknown for now.",
-                        'si': "කමක් නැහැ — පළපුරුද්ද දැනට නොදන්නා ලෙස සටහන් කරමු.",
-                        'ta': "பரவாயில்லை — அனுபவத்தை இப்போது தெரியவில்லை என்று பதிவு செய்கிறேன்.",
-                        'singlish': "Awlak naha — experience eka danata unknown kiyala dānnam.",
-                        'tanglish': "Parava illa — experience ippo unknown nu mark pannaren.",
-                    }.get(language, "No worries — I’ll mark experience as unknown for now.")
-
-                    early_result = await self._process_early_cv(db, candidate, f"{ack}\n\n")
-                    if early_result:
-                        return early_result
+            # 2. The Happy Path
+            if target_data:
+                self._save_intake(db, candidate, 'experience_years_stated', str(target_data))
+                
+                data = candidate.extracted_data or {}
+                job_reqs = data.get("job_requirements", {})
+                fields_to_ask = self._get_missing_req_fields(db, candidate, job_reqs)
+                
+                if fields_to_ask:
+                    crud.update_candidate_state(db, candidate.id, self.STATE_COLLECTING_JOB_REQS)
+                    return self._get_next_intake_question(candidate, language)
+                else:
                     crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
-                    cv_q = PromptTemplates.get_intake_question('cv_upload', language)
-                    return f"{ack}\n\n{cv_q}"
+                    return PromptTemplates.get_awaiting_cv_message(language, self.company_name)
 
-                current_goal = self._current_goal_for_state(self.STATE_AWAITING_EXPERIENCE)
-                agentic_msg = await rag_engine.generate_agentic_response(
-                    user_message=text,
-                    current_goal=current_goal,
-                    language=language,
+            # 3. The Universal Catch-All
+            else:
+                takeover_reply = await rag_engine.generate_global_takeover(
+                    user_message=text, 
+                    current_state=candidate.conversation_state
                 )
-
-                if retries >= 2:
-                    button_payload = self._experience_buttons_payload(language)
-                    button_payload["body_text"] = f"{agentic_msg}\n\n{button_payload.get('body_text', '')}".strip()
-                    return button_payload
-
-                return agentic_msg
-
-            extracted_exp = validation.get('extracted_value') or text_norm
-            years = _extract_years(str(extracted_exp))
-
-            value = str(years) if years is not None else str(extracted_exp)
-            self._save_intake(db, candidate, 'experience_years_stated', value)
-            self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_EXPERIENCE)
-
-            # Reset confusion streak on valid answer
-            _edata = candidate.extracted_data or {}
-            _edata['confusion_streak'] = 0
-            candidate.extracted_data = _edata
-            if hasattr(candidate, "confusion_streak"):
-                candidate.confusion_streak = 0
-            if years is not None:
-                candidate.experience_years = years
-                db.commit()
-
-            # Personalised acknowledgment echoing the years back
-            ack = self._build_experience_ack(years, str(extracted_exp), language)
-
-            # Check if there are specific job requirements to ask
-            reqs = (candidate.extracted_data or {}).get("job_requirements", {})
-            specific_info = list(reqs.get("specific_info_to_ask", []))
-            
-            # Auto-detect required fields from job requirements and add them if not already pending
-            auto_fields = []
-            if reqs.get("min_age") and "age" not in specific_info:
-                auto_fields.append("age")
-            if reqs.get("min_height_cm") and "height_cm" not in specific_info:
-                auto_fields.append("height_cm")
-            if reqs.get("licenses") and "licenses" not in specific_info:
-                auto_fields.append("licenses")
-            if reqs.get("required_languages") and "languages_spoken" not in specific_info:
-                auto_fields.append("languages_spoken")
-            specific_info = auto_fields + specific_info
-
-            # ── FALLBACK: when DB has no requirements configured, generate role-based defaults ──
-            if not specific_info:
-                job_interest = (candidate.extracted_data or {}).get('job_interest', '')
-                job_category = ""
-                matched_id = (candidate.extracted_data or {}).get('matched_job_id', '')
-                if matched_id:
-                    _cache = get_job_cache()
-                    job_category = (_cache.get(str(matched_id), {}) or {}).get('category', '')
-                specific_info = self._get_default_role_questions(job_interest, job_category)
-
-            if specific_info:
-                # Store the list of pending questions
-                data = candidate.extracted_data or {}
-                data["pending_job_reqs"] = specific_info
-                data["collected_job_reqs"] = {}
-                crud.update_candidate(db, candidate.id, CandidateUpdate(extracted_data=data))
-                crud.update_candidate_state(db, candidate.id, self.STATE_COLLECTING_JOB_REQS)
-                
-                # Ask the first one
-                first_req = specific_info[0]
-                q = await rag_engine.generate_missing_field_question_async(first_req, language)
-                return f"{ack}\n\n{q}"
-
-            # otherwise just proceed to CV (or process early CV if already received)
-            early_result = await self._process_early_cv(db, candidate, f"{ack}\n\n")
-            if early_result:
-                return early_result
-            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
-            cv_q = PromptTemplates.get_intake_question('cv_upload', language)
-            return f"{ack}\n\n{cv_q}"
-
-        # ── COLLECTING SPECIFIC JOB REQUIREMENTS ──────────────────────────────
-        elif state == self.STATE_COLLECTING_JOB_REQS:
-            if _is_question(text):
-                rag_resp = await rag_engine.generate_response_async(
-                    user_message=text,
-                    language=language,
-                    candidate_info=self._candidate_info_dict(candidate)
-                )
-                # Remind them of the current question
-                data = candidate.extracted_data or {}
-                pending = data.get("pending_job_reqs", [])
-                if pending:
-                    q = await rag_engine.generate_missing_field_question_async(pending[0], language)
-                    return f"{rag_resp}\n\n{q}"
-            
-            data = candidate.extracted_data or {}
-            pending = data.get("pending_job_reqs", [])
-            collected = data.get("collected_job_reqs", {})
-            
-            if pending:
-                current_req = pending.pop(0)
-                collected[current_req] = text
-                data["pending_job_reqs"] = pending
-                data["collected_job_reqs"] = collected
-                crud.update_candidate(db, candidate.id, CandidateUpdate(extracted_data=data))
-                
-                if pending:
-                    next_req = pending[0]
-                    q = await rag_engine.generate_missing_field_question_async(next_req, language)
-                    thanks = _pick({
-                        'en': ["Got it! ", "Perfect! ", "Great, thanks! "],
-                        'si': ["හරි! ", "ස්තූතියි! "],
-                        'ta': ["சரி! ", "நன்றி! "],
-                    }.get(language, ["Got it! "]))
-                    return f"{thanks}{q}"
-            
-            # If no more pending, proceed to CV
-            thanks = _pick({
-                'en': ["Thanks for that information! ", "Perfect, that's all the specific details needed. "],
-                'si': ["එම තොරතුරු වලට ස්තූතියි! ", "හරි, එපමණයි අවශ්‍ය විශේෂ තොරතුරු. "],
-                'ta': ["அந்த தகவலுக்கு நன்றி! ", "நன்று, குறிப்பிட்ட விவரங்கள் அவ்வளவுதான். "],
-            }.get(language, ["Thanks! "]))
-            # Process early CV if already received
-            early_result = await self._process_early_cv(db, candidate, f"{thanks}\n\n")
-            if early_result:
-                return early_result
-            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_CV)
-            cv_q = PromptTemplates.get_intake_question('cv_upload', language)
-            return f"{thanks}\n\n{cv_q}"
+                if phone_number:
+                    await meta_client.send_text(phone_number, takeover_reply)
+                return ""
 
         # ── AWAITING CV ───────────────────────────────────────────────────────
         elif state == self.STATE_AWAITING_CV:
@@ -3280,13 +2646,6 @@ class ChatbotEngine:
     @staticmethod
     def _looks_like_job_title(text: str) -> bool:
         """Heuristic: short text with no question mark is probably a job title."""
-        # Avoid common negative phrases
-        negatives = [
-            "don't know", "not sure", "no", "none", "nothing",
-            "hmm", "hmmm", "ok", "okay", "hi", "hello", "hey", "wtf",
-        ]
-        if any(n in text.lower() for n in negatives):
-            return False
         if len(text.strip()) < 4:
             return False
         return len(text) < 50 and '?' not in text and len(text.split()) < 6

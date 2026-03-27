@@ -1,4 +1,4 @@
-"""
+﻿"""
 WhatsApp Webhook Handlers
 =========================
 Handles incoming webhooks from Meta WhatsApp Business API.
@@ -424,42 +424,32 @@ async def process_single_message(message: dict, contacts: list, db):
 
     # ── Interactive (button / list reply) ─────────────────────────────────────
     elif message_type == "interactive":
-        interactive      = message.get("interactive", {})
-        interactive_type = interactive.get("type")
+        interactive_data = message.get("interactive", {})
+        interactive_type = interactive_data.get("type")
 
         if interactive_type == "button_reply":
-            btn_id    = interactive.get("button_reply", {}).get("id", "")
-            btn_title = interactive.get("button_reply", {}).get("title", "")
-            # Map button IDs to canonical text so the chatbot state machine
-            # doesn't need to be aware of button IDs directly.
-            _button_id_map = {
-                "lang_en": "English",
-                "lang_si": "Sinhala",
-                "lang_ta": "Tamil",
-                "action_apply": "apply",
-                "action_vacancies": "what are the available vacancies",
-                "action_question": "I have a question",
-            }
-            text_to_send = _button_id_map.get(btn_id, btn_title or btn_id)
+            text_body = interactive_data["button_reply"]["id"] # Extract hidden ID
             logger.info(
-                f"🔘 Button reply from {from_number}: id={btn_id!r} title={btn_title!r} "
-                f"→ routing as: {text_to_send!r}"
+                f"🔘 Button reply from {from_number}: id={text_body!r} "
+                f"→ routing as: {text_body!r}"
             )
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
-                message_text=text_to_send,
+                message_text=text_body,
                 source_message_type=message_type,
             )
 
         elif interactive_type == "list_reply":
-            list_id    = interactive.get("list_reply", {}).get("id", "")
-            list_title = interactive.get("list_reply", {}).get("title", "")
-            # Use canonical structured IDs whenever available
-            is_structured = bool(re.match(r"^(job_\d+|skip|ctr_\d+|country_[a-z_]+|exp_[a-z0-9_]+)$", str(list_id), re.IGNORECASE))
-            text_to_send = list_id if is_structured else (list_title or list_id)
+            text_body = interactive_data["list_reply"]["id"] # Extract hidden ID
             logger.info(
-                f"📋 List reply from {from_number}: id={list_id!r} title={list_title!r}"
+                f"📋 List reply from {from_number}: id={text_body!r}"
+            )
+            response_text = await _safe_process_message(
+                db=db,
+                phone_number=from_number,
+                message_text=text_body,
+                source_message_type=message_type,
             )
             response_text = await _safe_process_message(
                 db=db,
@@ -748,4 +738,6 @@ def is_human_controlled(phone: str) -> bool:
     if phone in _HUMAN_CONTROLLED_PHONES:
         return True
     return False
+
+
 

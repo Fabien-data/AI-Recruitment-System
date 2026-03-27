@@ -1,0 +1,163 @@
+        elif state == self.STATE_AWAITING_JOB:
+            likely_valid_for_state = self._match_job_from_text(text) is not None
+
+        is_gibberish_or_low_conf = (
+            _intent == "gibberish"
+            or (_intent in ("other", "unclear") and _llm_conf < 0.55)
+        )
+        if state in guided_states and is_gibberish_or_low_conf and not likely_valid_for_state and not _is_question(text):
+            _current_goal = self._current_goal_for_state(state)
+
+            retries = self._get_state_question_retry_count(candidate, state)
+
+            if retries < 2:
+                # Strike 1 or 2 → LLM-powered agentic acknowledgment + steering
+                self._increment_state_question_retry_count(db, candidate, state)
+                agentic_msg = await rag_engine.generate_agentic_response(
+                    user_message=text,
+                    current_goal=_current_goal,
+                    language=language,
+                )
+
+                # On strike 2 (second failure), also send interactive widget as visual aid
+                if retries == 1:
+                    if state == self.STATE_AWAITING_JOB:
+                        list_payload = self._build_job_picker_list_message(language)
+                        if list_payload:
+                            list_payload = dict(list_payload)
+                            list_payload["body_text"] = f"{agentic_msg}\n\n{list_payload.get('body_text', '')}".strip()
+                            return list_payload
+        elif state == self.STATE_AWAITING_JOB:
+            text_norm = _normalize_text(text)
+
+            # If user just clicked "Apply for a Job" or sent a standalone apply word, re-prompt directly
+            clean_text = _APPLY_RE.sub('', text_norm).strip()
+            if _is_apply_intent(text) and len(clean_text) < 3:
+                return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
+
+            # Use pre-fetched validation if available (ran in parallel with classify)
+            if prefetched_validation is not None:
+                validation = prefetched_validation
+            else:
+                # Validate using LLM
+                validation = await rag_engine.validate_intake_answer_async('job_interest', text, language)
+
+            # Fallback for LLM failure/hallucinations: if it rejected, check exact match
+            if not validation.get('is_valid'):
+                matched_fallback = self._match_job_from_text(text_norm)
+                if matched_fallback:
+                    validation = {"is_valid": True, "extracted_value": text_norm}
+
+            if not validation.get('is_valid'):
+                # Short filler words / apply-intent → re-ask the question without extra fluff
+                if _is_apply_intent(text) or len(text_norm) < 3:
+                    return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
+
+                # If they explicitly ask about vacancies, list them (THIS IS THE ONLY TIME WE SHOW JOBS)
+                if _is_vacancy_question(text) or _intent == "vacancy_query":
+                    return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
+
+                # Secondary check: specialized multilingual entity extraction before declaring invalid
+                ml_result = await rag_engine.extract_entities_multilingual(
+                    text=text,
+                    language=language,
+                    active_countries=vacancy_service.get_active_countries(),
+                    active_jobs=vacancy_service.get_active_job_titles(),
+                )
+                ml_job = ml_result.get('matched_crm_job') or ml_result.get('job_role')
+                if ml_job and ml_result.get('confidence', 0.0) >= 0.65:
+                    logger.info(f"STATE_AWAITING_JOB: ML secondary extraction found job='{ml_job}' (conf={ml_result.get('confidence')})")
+                    validation = {"is_valid": True, "extracted_value": ml_job}
+                    # Fall through to the valid-job path below
+                else:
+                    retries = self._increment_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB)
+                    current_goal = self._current_goal_for_state(self.STATE_AWAITING_JOB)
+                    agentic_msg = await rag_engine.generate_agentic_response(
+                        user_message=text,
+                        current_goal=current_goal,
+                        language=language,
+                    )
+
+                    if retries >= 3:
+                        return await self._escalate_to_human_handoff(
+                            db,
+                            candidate,
+                            language,
+                            reason="out_of_bound_awaiting_job",
+                        )
+
+                    if retries >= 2:
+                        list_payload = self._build_job_picker_list_message(language)
+                        if list_payload:
+                            list_payload = dict(list_payload)
+                            list_payload["body_text"] = f"{agentic_msg}\n\n{list_payload.get('body_text', '')}".strip()
+                            return list_payload
+
+                    return agentic_msg
+
+            if not validation.get('is_valid'):
+                return self._build_job_picker_list_message(language) or PromptTemplates.get_intake_question('job_interest', language)
+
+            # Valid job interest — the LLM already extracted the key value; trust it
+            # regardless of how many words the original sentence had.
+            extracted_job = validation.get('extracted_value') or text_norm
+            matched = self._match_job_from_text(str(extracted_job))
+
+            job_interest_value = str(extracted_job)
+            if matched:
+                job_id, job_info = matched
+                job_interest_value = (job_info.get("title") or extracted_job)[:200]
+
+            self._save_intake(db, candidate, 'job_interest', job_interest_value)
+            self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_JOB)
+
+            # Reset confusion streak on valid answer
+            _edata = candidate.extracted_data or {}
+            _edata['confusion_streak'] = 0
+            candidate.extracted_data = _edata
+            data = candidate.extracted_data or {}
+            if matched:
+                job_id, job_info = matched
+                data["matched_job_id"] = job_id
+                req = job_info.get("requirements")
+                data["job_requirements"] = dict(req) if isinstance(req, dict) else {}
+                data.pop("future_pool", None)  # clear future_pool flag if now matched
+                candidate.extracted_data = data
+                db.commit()
+
+            # Advance state
+            crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_COUNTRY)
+
+            # If no exact match found but cache has active jobs, be honest about availability
+            # and register the candidate for future consideration (future pool)
+            if not matched and get_job_cache():
+                # Mark candidate as future pool so recruiters can identify them
+                data = candidate.extracted_data or {}
+                data["future_pool"] = True
+                data["future_pool_role"] = job_interest_value
+                candidate.extracted_data = data
+                db.commit()
+
+                j = job_interest_value.strip().title() if job_interest_value else "that role"
+                no_match_note = {
+                    'en': f"Thank you for your interest! Unfortunately, we don't have a *{j}* position open right now. 📋",
+                    'si': f"ඔබගේ ඇල්ම ගැන ස්තූතියි! අවාසනාවකට, දැනට *{j}* රැකියාවක් නොමැත. 📋",
+                    'ta': f"உங்கள் ஆர்வத்திற்கு நன்றி! துரதிர்ஷ்டவசமாக, இப்போது *{j}* பதவி காலியில்லை. 📋",
+                    'singlish': f"Oyagey interest gena thanks! But dang *{j}* job ekak naha. 📋",
+                    'tanglish': f"Ungal aarvathukku nandri! Aanaa ippo *{j}* position kaali illa. 📋",
+                }
+                
+                # Re-ask what job they actually want
+                job_q = PromptTemplates.get_intake_question('job_interest', language)
+                reply = f"{no_match_note.get(language, no_match_note['en'])}\n\n{job_q}"
+                
+                # Revert their state so they can try answering the job again, because this was a mismatched job
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_JOB)
+                
+                return reply
+
+            # Matched role — standard positive ack
+            ack = self._build_job_ack(job_interest_value, language)
+            return self._country_buttons_payload(language, body_prefix=ack.strip())
+
+        # ── AWAITING DESTINATION COUNTRY ──────────────────────────────────────
