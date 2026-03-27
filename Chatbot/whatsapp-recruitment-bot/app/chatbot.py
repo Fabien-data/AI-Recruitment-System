@@ -623,24 +623,53 @@ class ChatbotEngine:
         active_jobs: Optional[list] = None,
     ) -> str:
         """Use the unified processor to generate steering text for off-track onboarding turns."""
-        unified = await rag_engine.process_unified_onboarding_turn(
-            user_message=text,
-            current_state=state,
-            language=language,
-            active_countries=active_countries,
-            active_jobs=active_jobs,
-        )
-        reply = (unified.get("steering_reply") or "").strip()
-        if not reply:
-            reply = await rag_engine.execute_silent_takeover(
+        try:
+            unified = await rag_engine.process_unified_onboarding_turn(
                 user_message=text,
                 current_state=state,
+                language=language,
+                active_countries=active_countries,
+                active_jobs=active_jobs,
             )
+        except Exception as e:
+            logger.warning(f"Unified takeover generation failed for state {state}: {e}")
+            unified = {}
+
+        unified = self._normalize_unified_onboarding_response(unified)
+        reply = (unified.get("agent_reply") or "").strip()
+        if not reply:
+            reply = await rag_engine.generate_reonboard_response(
+                {
+                    "conversation_state": state,
+                    "preferred_language": language,
+                }
+            )
+        if not reply:
+            reply = await rag_engine.execute_silent_takeover(user_message=text, current_state=state)
 
         if phone_number and reply:
-            await meta_client.send_message(phone_number, reply)
+            await meta_client.send_text(phone_number, reply)
             return ""
         return reply
+
+    def _normalize_unified_onboarding_response(self, unified_response: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Normalize unified onboarding response to extracted_data/agent_reply while keeping legacy compatibility."""
+        data = unified_response or {}
+        extracted_data = data.get("extracted_data") if isinstance(data.get("extracted_data"), dict) else {}
+        legacy_entities = data.get("entities") if isinstance(data.get("entities"), dict) else {}
+        if not extracted_data:
+            extracted_data = legacy_entities
+
+        agent_reply = str(data.get("agent_reply") or data.get("steering_reply") or "").strip()
+
+        return {
+            "intent": str(data.get("intent") or "other"),
+            "extracted_data": extracted_data,
+            "entities": legacy_entities or extracted_data,
+            "crm": data.get("crm") if isinstance(data.get("crm"), dict) else {},
+            "agent_reply": agent_reply,
+            "steering_reply": agent_reply,
+        }
 
     def _dispatch_recruitment_sync_background(
         self,
@@ -762,7 +791,7 @@ class ChatbotEngine:
 
                 if current_state == self.STATE_AWAITING_CV:
                     try:
-                        await meta_client.send_message(
+                        await meta_client.send_text(
                             phone_number,
                             "I received your file. Please give me a few seconds to read it..."
                         )
@@ -1873,15 +1902,29 @@ class ChatbotEngine:
             # 1. Attempt Data Extraction
             active_countries_list = vacancy_service.get_active_countries()
             active_jobs_list = vacancy_service.get_active_job_titles()
-            unified = await rag_engine.process_unified_onboarding_turn(
-                user_message=text,
-                current_state=candidate.conversation_state,
-                language=language,
-                active_countries=active_countries_list,
-                active_jobs=active_jobs_list,
-            )
-            entities = unified.get("entities") or {}
-            target_data = entities.get("matched_crm_job") or entities.get("job_role")
+            try:
+                unified = await rag_engine.process_unified_onboarding_turn(
+                    user_message=text,
+                    current_state=candidate.conversation_state,
+                    language=language,
+                    active_countries=active_countries_list,
+                    active_jobs=active_jobs_list,
+                )
+            except Exception as e:
+                logger.warning(f"Unified onboarding failed in job state: {e}")
+                unified = {}
+
+            unified = self._normalize_unified_onboarding_response(unified)
+            extracted_data = unified.get("extracted_data", {})
+            agent_reply = (unified.get("agent_reply") or "").strip()
+
+            if agent_reply:
+                if phone_number:
+                    await meta_client.send_text(phone_number, agent_reply)
+                    return ""
+                return agent_reply
+
+            target_data = extracted_data.get("matched_crm_job") or extracted_data.get("job_role")
             
             # 2. The Happy Path
             if target_data and len(target_data.strip()) >= 2:
@@ -1907,12 +1950,14 @@ class ChatbotEngine:
 
             # 3. The Universal Catch-All
             else:
-                takeover_reply = (unified.get("steering_reply") or "").strip() or await rag_engine.execute_silent_takeover(
-                    user_message=text,
-                    current_state=candidate.conversation_state,
+                takeover_reply = await rag_engine.generate_reonboard_response(
+                    {
+                        "conversation_state": candidate.conversation_state,
+                        "preferred_language": language,
+                    }
                 )
                 if phone_number:
-                    await meta_client.send_message(phone_number, takeover_reply)
+                    await meta_client.send_text(phone_number, takeover_reply)
                     return ""
                 return takeover_reply
 
@@ -1921,43 +1966,78 @@ class ChatbotEngine:
             # 1. Attempt Data Extraction
             active_countries_list = vacancy_service.get_active_countries()
             active_jobs_list = vacancy_service.get_active_job_titles()
-            unified = await rag_engine.process_unified_onboarding_turn(
-                user_message=text,
-                current_state=candidate.conversation_state,
-                language=language,
-                active_countries=active_countries_list,
-                active_jobs=active_jobs_list,
-            )
-            entities = unified.get("entities") or {}
-            target_data = entities.get("matched_crm_country") or entities.get("country")
+            try:
+                unified = await rag_engine.process_unified_onboarding_turn(
+                    user_message=text,
+                    current_state=candidate.conversation_state,
+                    language=language,
+                    active_countries=active_countries_list,
+                    active_jobs=active_jobs_list,
+                )
+            except Exception as e:
+                logger.warning(f"Unified onboarding failed in country state: {e}")
+                unified = {}
+
+            unified = self._normalize_unified_onboarding_response(unified)
+            extracted_data = unified.get("extracted_data", {})
+            agent_reply = (unified.get("agent_reply") or "").strip()
+
+            if agent_reply:
+                if phone_number:
+                    await meta_client.send_text(phone_number, agent_reply)
+                    return ""
+                return agent_reply
+
+            target_data = extracted_data.get("matched_crm_country") or extracted_data.get("country")
             
             # 2. The Happy Path
             if target_data and len(target_data.strip()) >= 2:
-                self._save_intake(db, candidate, 'destination_country', str(target_data))
+                active_countries_lower = {str(c).lower(): str(c) for c in (active_countries_list or [])}
+                resolved_country = active_countries_lower.get(str(target_data).lower())
+                if not resolved_country:
+                    return self._country_buttons_payload(language)
+
+                self._save_intake(db, candidate, 'destination_country', resolved_country)
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
                 return self._experience_buttons_payload(language)
 
             # 3. The Universal Catch-All
             else:
-                takeover_reply = (unified.get("steering_reply") or "").strip() or await rag_engine.execute_silent_takeover(
-                    user_message=text,
-                    current_state=candidate.conversation_state,
+                takeover_reply = await rag_engine.generate_reonboard_response(
+                    {
+                        "conversation_state": candidate.conversation_state,
+                        "preferred_language": language,
+                    }
                 )
                 if phone_number:
-                    await meta_client.send_message(phone_number, takeover_reply)
+                    await meta_client.send_text(phone_number, takeover_reply)
                     return ""
                 return takeover_reply
 
         # ── AWAITING EXPERIENCE ───────────────────────────────────────────────
         elif state == self.STATE_AWAITING_EXPERIENCE:
             # 1. Attempt Data Extraction
-            unified = await rag_engine.process_unified_onboarding_turn(
-                user_message=text,
-                current_state=candidate.conversation_state,
-                language=language,
-            )
-            entities = unified.get("entities") or {}
-            target_data = entities.get("experience_years")
+            try:
+                unified = await rag_engine.process_unified_onboarding_turn(
+                    user_message=text,
+                    current_state=candidate.conversation_state,
+                    language=language,
+                )
+            except Exception as e:
+                logger.warning(f"Unified onboarding failed in experience state: {e}")
+                unified = {}
+
+            unified = self._normalize_unified_onboarding_response(unified)
+            extracted_data = unified.get("extracted_data", {})
+            agent_reply = (unified.get("agent_reply") or "").strip()
+
+            if agent_reply:
+                if phone_number:
+                    await meta_client.send_text(phone_number, agent_reply)
+                    return ""
+                return agent_reply
+
+            target_data = extracted_data.get("experience_years")
             
             if not target_data:
                 import re
@@ -1982,12 +2062,14 @@ class ChatbotEngine:
 
             # 3. The Universal Catch-All
             else:
-                takeover_reply = (unified.get("steering_reply") or "").strip() or await rag_engine.execute_silent_takeover(
-                    user_message=text,
-                    current_state=candidate.conversation_state,
+                takeover_reply = await rag_engine.generate_reonboard_response(
+                    {
+                        "conversation_state": candidate.conversation_state,
+                        "preferred_language": language,
+                    }
                 )
                 if phone_number:
-                    await meta_client.send_message(phone_number, takeover_reply)
+                    await meta_client.send_text(phone_number, takeover_reply)
                     return ""
                 return takeover_reply
 
@@ -2392,9 +2474,11 @@ class ChatbotEngine:
                 candidate.conversation_state = self.STATE_AWAITING_CV
                 self._reset_state_question_retry_count(db, candidate, self.STATE_AWAITING_CV)
                 try:
-                    return await rag_engine.execute_silent_takeover(
-                        user_message="I uploaded a CV but you couldn't read it.",
-                        current_state=candidate.conversation_state,
+                    return await rag_engine.generate_reonboard_response(
+                        {
+                            "conversation_state": candidate.conversation_state,
+                            "preferred_language": language,
+                        }
                     )
                 except Exception as takeover_err:
                     logger.warning(f"CV unreadable takeover generation failed: {takeover_err}")
@@ -3105,9 +3189,15 @@ class ChatbotEngine:
             current_state=candidate.conversation_state,
             language=language,
         )
-        return (unified.get("steering_reply") or "").strip() or await rag_engine.execute_silent_takeover(
-            user_message=text,
-            current_state=candidate.conversation_state,
+        unified = self._normalize_unified_onboarding_response(unified)
+        agent_reply = (unified.get("agent_reply") or "").strip()
+        if agent_reply:
+            return agent_reply
+        return await rag_engine.generate_reonboard_response(
+            {
+                "conversation_state": candidate.conversation_state,
+                "preferred_language": language,
+            }
         )
 
     # ─── Contextual / RAG fallback ────────────────────────────────────────────

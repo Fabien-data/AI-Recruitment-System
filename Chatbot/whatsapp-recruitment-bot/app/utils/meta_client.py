@@ -10,6 +10,7 @@ import httpx
 import hashlib
 import hmac
 import logging
+import json
 from typing import Optional, Dict, Any
 import os
 
@@ -52,6 +53,16 @@ class MetaWhatsAppClient:
     @property
     def verify_token(self):
         return settings.meta_verify_token
+
+    def _whatsapp_headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json; charset=UTF-8",
+        }
+
+    @staticmethod
+    def _json_bytes(payload: Dict[str, Any]) -> bytes:
+        return json.dumps(payload, ensure_ascii=False).encode("utf-8")
     
     def verify_webhook(self, payload: bytes, signature: str) -> bool:
         """
@@ -94,34 +105,38 @@ class MetaWhatsAppClient:
             return False
     
     async def send_message(self, to_number: str, message: str) -> Dict[str, Any]:
+        return await self.send_text(to_number=to_number, text=message)
+
+    async def send_text(self, to_number: str, text: str) -> Dict[str, Any]:
         """
-        Send a text message via WhatsApp API asynchronously.
+        Send a text message via WhatsApp API asynchronously with explicit UTF-8 payload encoding.
         
         Args:
             to_number: Recipient's phone number (with country code)
-            message: Message text to send
+            text: Message text to send
             
         Returns:
             API response as dictionary
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
-        
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
+        headers = self._whatsapp_headers()
         
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
             "to": to_number,
             "type": "text",
-            "text": {"body": message}
+            "text": {"body": text}
         }
         
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, headers=headers, timeout=12.0)
+                response = await client.post(
+                    url,
+                    data=self._json_bytes(payload),
+                    headers=headers,
+                    timeout=12.0,
+                )
                 response.raise_for_status()
                 
                 result = response.json()
@@ -154,10 +169,7 @@ class MetaWhatsAppClient:
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
         
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
+        headers = self._whatsapp_headers()
         
         template = {
             "name": template_name,
@@ -177,7 +189,12 @@ class MetaWhatsAppClient:
         
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                response = await client.post(
+                    url,
+                    data=self._json_bytes(payload),
+                    headers=headers,
+                    timeout=30.0,
+                )
                 response.raise_for_status()
                 
                 result = response.json()
@@ -203,12 +220,13 @@ class MetaWhatsAppClient:
             return None
 
         url = f"{self.base_url}/{media_id}"
-        headers = {"Authorization": f"Bearer {self.access_token}"}
+        headers_resolve = {"Authorization": f"Bearer {self.access_token}"}
+        headers_download = {"Authorization": f"Bearer {self.access_token}"}
 
         try:
             async with httpx.AsyncClient() as client:
                 # Step 1: Resolve the signed media URL from Meta Graph API.
-                url_response = await client.get(url, headers=headers, timeout=30.0)
+                url_response = await client.get(url, headers=headers_resolve, timeout=30.0)
                 url_response.raise_for_status()
 
                 media_data = url_response.json()
@@ -218,7 +236,7 @@ class MetaWhatsAppClient:
                     return None
 
                 # Step 2: Download the binary using the same Bearer token.
-                media_response = await client.get(media_url, headers=headers, timeout=60.0)
+                media_response = await client.get(media_url, headers=headers_download, timeout=60.0)
                 media_response.raise_for_status()
 
                 content = media_response.content
@@ -277,10 +295,7 @@ class MetaWhatsAppClient:
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
         
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
+        headers = self._whatsapp_headers()
         
         payload = {
             "messaging_product": "whatsapp",
@@ -290,7 +305,12 @@ class MetaWhatsAppClient:
         
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                response = await client.post(
+                    url,
+                    data=self._json_bytes(payload),
+                    headers=headers,
+                    timeout=30.0,
+                )
                 response.raise_for_status()
                 return True
             
@@ -312,10 +332,7 @@ class MetaWhatsAppClient:
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
         
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
+        headers = self._whatsapp_headers()
         
         payload = {
             "messaging_product": "whatsapp",
@@ -330,7 +347,12 @@ class MetaWhatsAppClient:
         
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                response = await client.post(
+                    url,
+                    data=self._json_bytes(payload),
+                    headers=headers,
+                    timeout=30.0,
+                )
                 response.raise_for_status()
                 return response.json()
             
@@ -365,10 +387,7 @@ class MetaWhatsAppClient:
             footer_text: Optional footer string.
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json",
-        }
+        headers = self._whatsapp_headers()
 
         body_text_value = (body_text or text or "").strip()
         if not body_text_value:
@@ -422,7 +441,7 @@ class MetaWhatsAppClient:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    url, json=payload, headers=headers, timeout=8.0
+                    url, data=self._json_bytes(payload), headers=headers, timeout=8.0
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -462,10 +481,7 @@ class MetaWhatsAppClient:
             sections:    List of section dicts with rows.
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json",
-        }
+        headers = self._whatsapp_headers()
 
         body_text = (text or "").strip()
         if not body_text:
@@ -516,7 +532,7 @@ class MetaWhatsAppClient:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    url, json=payload, headers=headers, timeout=30.0
+                    url, data=self._json_bytes(payload), headers=headers, timeout=30.0
                 )
                 response.raise_for_status()
                 result = response.json()
