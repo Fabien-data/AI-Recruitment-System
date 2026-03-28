@@ -49,6 +49,12 @@ BAD_OPENERS = (
     "error",
 )
 
+SLANG_TERMS_RE = re.compile(r"\b(malli|nangi|ayye|machan|machang|apo)\b", re.IGNORECASE)
+LEAKAGE_RE = re.compile(
+    r"(you are currently at|current stage|current state|current onboarding goal|awaiting_[a-z_]+|state_awaiting)",
+    re.IGNORECASE,
+)
+
 
 def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
@@ -92,6 +98,8 @@ async def run_tests():
                 "short_enough": len(resp or "") <= 200,
                 "not_static_template": normalized not in static_set,
                 "no_bad_opener": not any(normalized.startswith(x) for x in BAD_OPENERS),
+                "no_slang_terms": SLANG_TERMS_RE.search(resp or "") is None,
+                "no_prompt_leakage": LEAKAGE_RE.search(resp or "") is None,
                 "not_robotic_repeat": all(
                     _normalize(PromptTemplates.get_intake_question(field, language)) != normalized
                     for field in ("job_interest", "destination_country", "experience_years")

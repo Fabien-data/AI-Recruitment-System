@@ -30,6 +30,11 @@ from app.services.voice_service import voice_service
 from app.config import settings
 from app.nlp.language_detector import is_greeting
 
+try:
+    from redis import Redis
+except Exception:
+    Redis = None
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhook", tags=["WhatsApp Webhook"])
@@ -39,10 +44,44 @@ router = APIRouter(prefix="/webhook", tags=["WhatsApp Webhook"])
 # Meta sometimes retries webhook delivery — this prevents duplicate responses.
 _PROCESSED_MSG_TTL = 300  # 5 minutes
 _processed_messages: dict = {}   # {msg_id: processed_at_epoch}
+_redis_dedupe_client = None
+
+
+def _get_redis_dedupe_client():
+    """Lazy-init Redis client for cross-instance webhook dedupe."""
+    global _redis_dedupe_client
+    if _redis_dedupe_client is not None:
+        return _redis_dedupe_client
+    if Redis is None or not settings.redis_url:
+        return None
+    try:
+        _redis_dedupe_client = Redis.from_url(settings.redis_url, decode_responses=True)
+        return _redis_dedupe_client
+    except Exception as exc:
+        logger.warning(f"Redis dedupe unavailable: {exc}")
+        return None
 
 
 def _is_duplicate(message_id: str) -> bool:
     """Return True if this message was already processed recently."""
+    if not message_id:
+        return False
+
+    # Primary dedupe: Redis SET NX with TTL to cover multi-instance deployment.
+    redis_client = _get_redis_dedupe_client()
+    if redis_client is not None:
+        try:
+            key = f"wa_msg_dedupe:{message_id}"
+            # Set only if not exists; expire automatically.
+            created = redis_client.set(name=key, value="1", ex=_PROCESSED_MSG_TTL, nx=True)
+            if not created:
+                logger.info(f"⏭️ Skipping duplicate message id={message_id} (redis)")
+                return True
+            return False
+        except Exception as exc:
+            logger.warning(f"Redis dedupe check failed, falling back to local cache: {exc}")
+
+    # Fallback dedupe: in-process cache.
     now = time.time()
     # Expire old entries opportunistically
     expired = [mid for mid, ts in _processed_messages.items() if now - ts > _PROCESSED_MSG_TTL]
@@ -291,6 +330,15 @@ async def process_single_message(message: dict, contacts: list, db):
                 if candidate.conversation_state in ("initial", "awaiting_language_selection"):
                     sel = await meta_client.send_language_selector(from_number)
                     if sel and "error" not in sel:
+                        try:
+                            crud.update_candidate_state(
+                                db,
+                                candidate.id,
+                                chatbot.STATE_AWAITING_LANGUAGE_SELECTION,
+                            )
+                            candidate.conversation_state = chatbot.STATE_AWAITING_LANGUAGE_SELECTION
+                        except Exception as state_err:
+                            logger.warning(f"Fast-path selector state update failed: {state_err}")
                         logger.info(f"Fast-path language selector sent to {from_number}")
                         return
                     fallback_text = (
@@ -299,6 +347,15 @@ async def process_single_message(message: dict, contacts: list, db):
                     )
                     send_res = await meta_client.send_message(from_number, fallback_text)
                     if send_res and "error" not in send_res:
+                        try:
+                            crud.update_candidate_state(
+                                db,
+                                candidate.id,
+                                chatbot.STATE_AWAITING_LANGUAGE_SELECTION,
+                            )
+                            candidate.conversation_state = chatbot.STATE_AWAITING_LANGUAGE_SELECTION
+                        except Exception as state_err:
+                            logger.warning(f"Fast-path fallback state update failed: {state_err}")
                         logger.info(f"Fast-path language fallback sent to {from_number}")
                         return
         except Exception as fast_path_err:
@@ -331,7 +388,17 @@ async def process_single_message(message: dict, contacts: list, db):
         ]
 
         if mime_type in allowed_types or filename.lower().endswith((".pdf", ".doc", ".docx")):
-            file_content = await meta_client.download_media(media_id)
+            file_content = None
+            for attempt in range(1, 4):
+                file_content = await meta_client.download_media(media_id)
+                if file_content:
+                    break
+                logger.warning(
+                    f"Document media download failed (attempt {attempt}/3) for {from_number}, media_id={media_id}"
+                )
+                if attempt < 3:
+                    await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
+
             if file_content:
                 response_text = await _safe_process_message(
                     db=db,
@@ -342,7 +409,7 @@ async def process_single_message(message: dict, contacts: list, db):
                     source_message_type=message_type,
                 )
             else:
-                response_text = "I couldn't download your document. Please try sending it again."
+                response_text = "I couldn't download your document right now. Please send it again in a few seconds."
         else:
             response_text = "Please send your CV as a PDF or Word document (.pdf / .doc / .docx)."
 
@@ -358,7 +425,17 @@ async def process_single_message(message: dict, contacts: list, db):
         filename = f"cv_image{ext_map.get(mime_type, '.jpg')}"
 
         media_url = await meta_client.get_media_url(media_id) if media_id else None
-        file_content = await meta_client.download_media(media_id)
+        file_content = None
+        for attempt in range(1, 4):
+            file_content = await meta_client.download_media(media_id)
+            if file_content:
+                break
+            logger.warning(
+                f"Image media download failed (attempt {attempt}/3) for {from_number}, media_id={media_id}"
+            )
+            if attempt < 3:
+                await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
+
         if file_content:
             response_text = await _safe_process_message(
                 db=db,

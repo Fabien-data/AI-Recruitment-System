@@ -709,11 +709,11 @@ Respond ONLY with valid JSON (no markdown):
     def _get_error_response(self, language: str) -> str:
         """Get a warm conversational recovery response."""
         responses = {
-            'en': "No worries 😊 Tell me that once more and I’ll keep things moving.",
-            'si': "ගැටලුවක් නැහැ 😊 ඒක තව පාරක් කියන්න, අපි ඉක්මනින් ඉදිරියට යමු.",
-            'ta': "பரவாயில்லை 😊 அதைப் இன்னொரு முறை சொல்லுங்கள், உடனே முன்னேறலாம்.",
-            'singlish': "Awlak na 😊 Eka ayeth kiyanna, api ikmanin continue karamu.",
-            'tanglish': "Parava illa 😊 Adha innoru thadava sollunga, udane continue pannalaam.",
+            'en': "Thank you. Please share that once more so we can continue.",
+            'si': "ස්තූතියි. කරුණාකර ඒක තව පාරක් කියන්න, අපි ඉදිරියට යමු.",
+            'ta': "நன்றி. தயவு செய்து அதை இன்னொரு முறை சொல்லுங்கள், நாம தொடரலாம்.",
+            'singlish': "Thanks. Eka ayeth kiyanna, api continue karamu.",
+            'tanglish': "Thanks. Adha innoru thadava sollunga, naama continue pannalaam.",
         }
         return responses.get(language, responses['en'])
 
@@ -1072,11 +1072,11 @@ Respond ONLY with valid JSON (no markdown):
             A natural, warm steering response string.
         """
         fallback = {
-            'en': "Got you 😊 Let's complete this step together.",
-            'si': "හරි 😊 මේ පියවර එකටම complete කරමු.",
-            'ta': "சரி 😊 இந்த step-ஐ சேர்ந்து முடிப்போம்.",
-            'singlish': "Hari 😊 Me step eka ekka complete karamu.",
-            'tanglish': "Seri 😊 Indha step-ah serndhu complete pannalaam.",
+            'en': "Thank you. Let's continue this step.",
+            'si': "ස්තූතියි. අපි මේ පියවර ඉදිරියට ගෙනියමු.",
+            'ta': "நன்றி. இந்த படியை தொடர்ந்து செய்யலாம்.",
+            'singlish': "Thanks. Api me step eka continue karamu.",
+            'tanglish': "Thanks. Indha step-ah continue pannalaam.",
         }
 
         try:
@@ -1086,7 +1086,7 @@ Respond ONLY with valid JSON (no markdown):
                 current_state_goal=current_goal,
                 language=language,
             )
-            reply = str(unified.get("agent_reply") or "").strip()
+            reply = self._sanitize_onboarding_agent_reply(str(unified.get("agent_reply") or "").strip())
             return reply or fallback.get(language, fallback["en"])
         except Exception as e:
             logger.error(f"generate_agentic_response error: {e}")
@@ -1178,10 +1178,11 @@ Respond ONLY with valid JSON (no markdown):
                 user_message=user_message,
                 current_state=current_state,
             )
-            return str(unified.get("agent_reply") or "").strip() or "Let's complete this step together 😊"
+            reply = self._sanitize_onboarding_agent_reply(str(unified.get("agent_reply") or "").strip())
+            return reply or "Thank you. Let's continue this step together."
         except Exception as e:
             logger.warning(f"Silent Takeover Error: {e}")
-            return "Let's complete this step together 😊"
+            return "Thank you. Let's continue this step together."
 
     async def generate_reonboard_response(self, candidate_profile: Dict[str, Any]) -> str:
         """Universal AI fallback for smoothly guiding a confused user back into onboarding."""
@@ -1193,10 +1194,11 @@ Respond ONLY with valid JSON (no markdown):
                 current_state=current_state or "collecting_info",
                 language=str(preferred_language).lower(),
             )
-            return str(unified.get("agent_reply") or "").strip() or "No worries 😊 let's continue with this step."
+            reply = self._sanitize_onboarding_agent_reply(str(unified.get("agent_reply") or "").strip())
+            return reply or "Thank you. Let's continue with this step."
         except Exception as e:
             logger.warning(f"generate_reonboard_response failed: {e}")
-            return "No worries 😊 let's continue with this step."
+            return "Thank you. Let's continue with this step."
 
     async def generate_global_takeover(self, user_message: str, current_state: str) -> str:
         """Backward-compatible wrapper for silent takeover."""
@@ -1222,6 +1224,26 @@ Respond ONLY with valid JSON (no markdown):
             return data if isinstance(data, dict) else fallback
         except Exception:
             return fallback
+
+    def _sanitize_onboarding_agent_reply(self, reply: str) -> str:
+        """Remove prompt leakage and banned slang from onboarding steering replies."""
+        text = str(reply or "").strip()
+        if not text:
+            return ""
+
+        leakage_pattern = re.compile(
+            r"(you are currently at|current onboarding goal|current onboarding stage goal|current stage|current state|state_awaiting|awaiting_[a-z_]+)",
+            re.IGNORECASE,
+        )
+        if leakage_pattern.search(text):
+            return "Thank you. Please share the required detail so we can continue your application."
+
+        text = re.sub(r"\b(malli|nangi|ayye|machan|machang|apo|haha)\b", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s{2,}", " ", text).strip(" -:;,\n\t")
+
+        if not text:
+            return "Thank you. Please share the required detail so we can continue your application."
+        return text
 
     async def process_unified_onboarding_turn(
         self,
@@ -1299,7 +1321,7 @@ Respond ONLY with valid JSON (no markdown):
                 "country": None,
                 "experience_years": None,
             },
-            "agent_reply": "No worries Malli/Nangi 😊 let's complete this step together.",
+            "agent_reply": "Thank you. Please share the required detail so we can continue your application.",
         }
 
         if not self.async_openai_client:
@@ -1366,6 +1388,8 @@ Respond ONLY with valid JSON (no markdown):
             if agent_reply is None:
                 agent_reply = fallback["agent_reply"]
             agent_reply = str(agent_reply).strip() if str(agent_reply or "").strip() else None
+            if agent_reply:
+                agent_reply = self._sanitize_onboarding_agent_reply(agent_reply)
 
             return {
                 "intent": "other",
