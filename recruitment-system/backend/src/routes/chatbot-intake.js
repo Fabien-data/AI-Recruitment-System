@@ -240,6 +240,7 @@ function withDocumentCategory(parsedData, category) {
  *   additional_documents array optional (each: {file_name, file_url|file_path|file_base64, raw_text?, parsed_data?})
  *   job_id             string  optional  (UUID — known if candidate came via ad)
  *   ad_ref             string  optional  (e.g. "job_abc123" from META ad)
+ *   is_general_pool    boolean optional  (route candidate to general pool instead of strict applications)
  *   chatbot_candidate_id number optional (chatbot's internal candidate PK)
  *
  * Response 201: { candidate_id, application_id, status: "created" }
@@ -322,8 +323,14 @@ router.post(
             additional_documents,
             job_id: providedJobId,
             ad_ref,
+            is_general_pool,
             chatbot_candidate_id
         } = req.body;
+
+        const isGeneralPool = (
+            is_general_pool === true ||
+            String(is_general_pool || '').toLowerCase() === 'true'
+        );
 
         const multipartCvFile = req.files?.cv_file?.[0] || null;
         const multipartAdditionalFiles = Array.isArray(req.files?.additional_files)
@@ -404,6 +411,10 @@ router.post(
             }
             if (destination_country) {
                 metadataUpdates.destination_country = destination_country.trim();
+            }
+
+            if (isGeneralPool) {
+                metadataUpdates.is_general_pool = true;
             }
 
             // Propagate future_pool flag set by the chatbot (unmatched job role)
@@ -681,9 +692,57 @@ router.post(
                 }
             }
 
-            // ── Step 5: Create application record ─────────────────────────
+            // ── Step 5: Create application record (strict) OR general pool entry ─────────────────────────
             let applicationId = null;
-            if (resolvedJobId) {
+            if (isGeneralPool) {
+                const poolMeta = {
+                    source: 'whatsapp_chatbot',
+                    ad_ref: ad_ref || null,
+                    destination_country: destination_country || null,
+                    job_interest_stated: job_interest || null,
+                    cv_file_id: cvFileId,
+                    additional_document_ids: additionalDocumentIds,
+                    routed_by: 'agentic_state_machine'
+                };
+
+                const existingPoolSQL = isMySQL
+                    ? 'SELECT id FROM general_pool WHERE candidate_id = ? LIMIT 1'
+                    : 'SELECT id FROM general_pool WHERE candidate_id = $1 LIMIT 1';
+                const existingPoolResult = await query(existingPoolSQL, [candidateId]);
+
+                if (existingPoolResult.rows.length > 0) {
+                    const poolId = existingPoolResult.rows[0].id;
+                    const updatePoolSQL = isMySQL
+                        ? 'UPDATE general_pool SET source = ?, metadata = ?, updated_at = NOW() WHERE id = ?'
+                        : 'UPDATE general_pool SET source = $1, metadata = $2, updated_at = NOW() WHERE id = $3';
+                    await query(updatePoolSQL, [
+                        'whatsapp_chatbot',
+                        JSON.stringify(poolMeta),
+                        poolId
+                    ]);
+                } else {
+                    const insertPoolSQL = isMySQL
+                        ? `INSERT INTO general_pool (id, candidate_id, source, metadata, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, NOW(), NOW())`
+                        : `INSERT INTO general_pool (id, candidate_id, source, metadata)
+                           VALUES ($1, $2, $3, $4)`;
+                    await query(insertPoolSQL, [
+                        generateUUID(),
+                        candidateId,
+                        'whatsapp_chatbot',
+                        JSON.stringify(poolMeta)
+                    ]);
+                }
+
+                const setFuturePoolSQL = isMySQL
+                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = ?`
+                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`;
+                await query(setFuturePoolSQL, [candidateId]).catch(err =>
+                    logger.warn(`Failed to set future_pool status for general-pool candidate ${candidateId}: ${err.message}`)
+                );
+
+                logger.info(`Chatbot intake: candidate ${candidateId} routed to general_pool`);
+            } else if (resolvedJobId) {
                 // Check for duplicate application
                 const dupSQL = isMySQL
                     ? 'SELECT id FROM applications WHERE candidate_id = ? AND job_id = ? LIMIT 1'
@@ -892,7 +951,10 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         return res.status(400).json({ error: 'direction must be "inbound" or "outbound"' });
     }
 
-    const normalizedPhone = phone.replace(/[\s\-()]/g, '');
+    const normalizedPhone = normalizePhone(phone);
+    const safeContent = typeof content === 'string' ? content : JSON.stringify(content);
+    const LANG_NORMALISE_MAP = { singlish: 'si', tanglish: 'ta' };
+    const preferredLanguage = LANG_NORMALISE_MAP[String(language || 'en').toLowerCase()] || (language || 'en');
 
     try {
         // Look up candidate by phone — needed for candidate_id FK
@@ -908,31 +970,53 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         if (candResult.rows.length > 0) {
             candidateId = candResult.rows[0].id;
             candidateName = candResult.rows[0].name;
+        } else {
+            // Keep chat sync resilient: create a lightweight candidate shell if missing.
+            candidateId = generateUUID();
+            candidateName = `WhatsApp ${normalizedPhone.slice(-6)}`;
+
+            const insertCandidateSQL = isMySQL
+                ? `INSERT INTO candidates
+                   (id, phone, whatsapp_phone, name, source, preferred_language, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'whatsapp', ?, 'new', NOW(), NOW())`
+                : `INSERT INTO candidates
+                   (id, phone, whatsapp_phone, name, source, preferred_language, status)
+                   VALUES ($1, $2, $3, $4, 'whatsapp', $5, 'new')`;
+
+            await query(insertCandidateSQL, [
+                candidateId,
+                normalizedPhone,
+                normalizedPhone,
+                candidateName,
+                preferredLanguage,
+            ]);
+
+            logger.info(`sync-message: auto-created candidate ${candidateId} (${normalizedPhone})`);
         }
 
         // Insert into communications
         const commId = generateUUID();
         const senderType = direction === 'inbound' ? 'candidate' : 'bot';
+        const metadataJson = JSON.stringify({
+            sender_type: senderType,
+            chatbot_state: chatbot_state || null,
+            detected_language: language || null,
+        });
 
         const insertSQL = isMySQL
             ? `INSERT INTO communications
-               (id, candidate_id, channel, direction, message_type, content,
-                sender_type, chatbot_state, detected_language, sent_at)
-               VALUES (?, ?, 'whatsapp', ?, ?, ?, ?, ?, ?, NOW())`
+               (candidate_id, channel, direction, message_type, content, metadata)
+               VALUES (?, 'whatsapp', ?, ?, ?, ?)`
             : `INSERT INTO communications
-               (id, candidate_id, channel, direction, message_type, content,
-                sender_type, chatbot_state, detected_language)
-               VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6, $7, $8)`;
+               (candidate_id, channel, direction, message_type, content, metadata)
+               VALUES ($1, 'whatsapp', $2, $3, $4, $5)`;
 
         await query(insertSQL, [
-            commId,
             candidateId,
             direction,
             message_type,
-            content.slice(0, 4000),
-            senderType,
-            chatbot_state || null,
-            language || null,
+            safeContent.slice(0, 4000),
+            metadataJson,
         ]);
 
         // Emit WebSocket event to agents watching this candidate
@@ -947,7 +1031,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     channel: 'whatsapp',
                     direction,
                     message_type,
-                    content: content.slice(0, 4000),
+                    content: safeContent.slice(0, 4000),
                     sender_type: senderType,
                     chatbot_state: chatbot_state || null,
                     detected_language: language || null,
@@ -958,7 +1042,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     candidate_id: candidateId,
                     candidate_name: candidateName,
                     phone: normalizedPhone,
-                    last_message: content.slice(0, 80),
+                    last_message: safeContent.slice(0, 80),
                     direction,
                     chatbot_state: chatbot_state || null,
                     ts: new Date().toISOString(),
@@ -971,8 +1055,9 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
 
         return res.status(201).json({ id: commId, candidate_id: candidateId });
     } catch (error) {
-        logger.error('sync-message error:', error.message);
-        return res.status(500).json({ error: 'Failed to store message', detail: error.message });
+        const errorDetail = error?.message || (typeof error === 'string' ? error : JSON.stringify(error));
+        logger.error(`sync-message error: ${errorDetail}`);
+        return res.status(500).json({ error: 'Failed to store message', detail: errorDetail });
     }
 });
 

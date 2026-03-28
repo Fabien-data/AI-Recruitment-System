@@ -389,6 +389,7 @@ class RecruitmentSyncService:
             # Job assignment (from job-aware match or ad)
             "job_id": extracted.get("selected_job_id") or extracted.get("matched_job_id") or extracted.get("ad_job_id"),
             "ad_ref": extracted.get("ad_ref"),
+            "is_general_pool": bool(getattr(candidate, "is_general_pool", False) or extracted.get("is_general_pool") or extracted.get("future_pool")),
 
             # CV data (base64 excluded — sent via multipart when possible)
             "cv_file_path": cv_file_path,

@@ -134,6 +134,7 @@ export default function Communications() {
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState('')
   const [chatList, setChatList] = useState([])
+  const [escalatedChats, setEscalatedChats] = useState(() => new Set())
   const [transcript, setTranscript] = useState([])
   const [connected, setConnected] = useState(false)
   const [agentTyping, setAgentTyping] = useState(null)
@@ -144,6 +145,14 @@ export default function Communications() {
 
   // Selected candidate object from chatList
   const selectedCandidate = chatList.find(c => c.candidate_id === selectedId)
+
+  const isCandidateEscalated = useCallback((candidate) => {
+    if (!candidate) return false
+    const phone = String(candidate.phone || candidate.whatsapp_phone || '').trim()
+    return Boolean(candidate.requires_human)
+      || String(candidate.ai_status || '').toLowerCase() === 'requires intervention'
+      || (phone && escalatedChats.has(phone))
+  }, [escalatedChats])
 
   // ── Fetch active chat list ─────────────────────────────────────────────────
   const { isLoading: listLoading } = useQuery({
@@ -224,6 +233,28 @@ export default function Communications() {
       ))
     })
 
+    socket.on('chat_escalated', (data) => {
+      const escalatedPhone = String(data?.phone || '').trim()
+      if (escalatedPhone) {
+        setEscalatedChats(prev => {
+          const next = new Set(prev)
+          next.add(escalatedPhone)
+          return next
+        })
+      }
+
+      setChatList(prev => prev.map(c => {
+        const candidatePhone = String(c.phone || c.whatsapp_phone || '').trim()
+        const sameCandidate = (data?.candidate_id && c.candidate_id === data.candidate_id) || (escalatedPhone && candidatePhone === escalatedPhone)
+        if (!sameCandidate) return c
+        return {
+          ...c,
+          ai_status: 'Requires Intervention',
+          requires_human: true,
+        }
+      }))
+    })
+
     socket.on('agent_typing', ({ agent_name, is_typing }) => {
       setAgentTyping(is_typing ? agent_name : null)
     })
@@ -246,7 +277,7 @@ export default function Communications() {
 
   // ── Takeover / Release mutations ───────────────────────────────────────────
   const takeoverMut = useMutation({
-    mutationFn: () => takeover(selectedId),
+    mutationFn: (candidateId) => takeover(candidateId),
     onSuccess: () => queryClient.invalidateQueries(['active-chats']),
   })
   const releaseMut = useMutation({
@@ -326,11 +357,20 @@ export default function Communications() {
           ) : (
             <div className="divide-y divide-slate-50">
               {chatList.map((c) => (
-                <button
+                <div
                   key={c.candidate_id}
                   onClick={() => { setSelectedId(c.candidate_id); setTranscript([]) }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setSelectedId(c.candidate_id)
+                      setTranscript([])
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
                   className={clsx(
-                    'w-full px-4 py-3 flex items-start gap-3 text-left hover:bg-slate-50 transition-colors',
+                    'w-full px-4 py-3 flex items-start gap-3 text-left hover:bg-slate-50 transition-colors cursor-pointer',
                     selectedId === c.candidate_id && 'bg-primary-50 hover:bg-primary-50'
                   )}
                 >
@@ -343,6 +383,27 @@ export default function Communications() {
                   </div>
 
                   <div className="flex-1 min-w-0">
+                    {isCandidateEscalated(c) && (
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-[10px] bg-red-500 text-white px-2 py-0.5 rounded-full font-semibold animate-pulse">
+                          Requires Intervention
+                        </span>
+                        {!c.is_human_handoff && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              takeoverMut.mutate(c.candidate_id)
+                            }}
+                            disabled={takeoverMut.isPending}
+                            className="text-[10px] px-2 py-1 h-auto bg-blue-600 hover:bg-blue-700"
+                          >
+                            Take Over Chat
+                          </Button>
+                        )}
+                      </div>
+                    )}
                     <div className="flex items-baseline justify-between gap-1 mb-0.5">
                       <p className="text-sm font-semibold text-slate-900 truncate">{c.name || 'Unknown'}</p>
                       {c.last_message_at && (
@@ -360,10 +421,15 @@ export default function Communications() {
                         : <span className="text-[10px] bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded-full font-medium flex items-center gap-1">
                           <Bot size={10} /> Bot
                         </span>}
+                      {isCandidateEscalated(c) && !c.is_human_handoff && (
+                        <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-medium">
+                          AI Hold
+                        </span>
+                      )}
                       {c.last_language && <LangBadge lang={c.last_language} />}
                     </div>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           )}
@@ -409,7 +475,7 @@ export default function Communications() {
                 <Button
                   variant="primary"
                   size="sm"
-                  onClick={() => takeoverMut.mutate()}
+                  onClick={() => selectedId && takeoverMut.mutate(selectedId)}
                   disabled={takeoverMut.isPending}
                   className="flex items-center gap-1.5 text-sm bg-indigo-600 hover:bg-indigo-700"
                 >
@@ -578,7 +644,7 @@ export default function Communications() {
             ) : (
               <Button
                 className="w-full text-xs flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700"
-                onClick={() => takeoverMut.mutate()}
+                onClick={() => selectedId && takeoverMut.mutate(selectedId)}
                 disabled={takeoverMut.isPending}
               >
                 <UserCheck size={13} /> Take Over Chat

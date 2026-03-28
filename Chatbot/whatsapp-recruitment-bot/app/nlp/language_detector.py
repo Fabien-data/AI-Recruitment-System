@@ -9,10 +9,13 @@ Supports Sinhala, Tamil, and English with handling for transliterated text.
 
 import json
 import logging
+import os
 import re
 import unicodedata
 from pathlib import Path
 from typing import Tuple, Optional
+
+from openai import AsyncOpenAI
 
 _NLP_RESOURCES = Path(__file__).parent / "resources"
 
@@ -47,6 +50,94 @@ _DOMAIN_WORDS: set = _load_resource_set("domain_words.json")
 DOMAIN_WEIGHT: float = 2.0
 
 logger = logging.getLogger(__name__)
+
+# Ensure your OPENAI_API_KEY is loaded in your environment/config
+_openai_api_key = os.getenv("OPENAI_API_KEY")
+client = AsyncOpenAI(api_key=_openai_api_key) if _openai_api_key else None
+
+
+async def normalize_sri_lankan_input(raw_text: str) -> dict:
+    """
+    Takes raw user input (Singlish, Tanglish, Sinhala, Tamil, or English)
+    and normalizes it into structured English intent using GPT-4o-mini.
+
+    Returns a dictionary with:
+    - detected_language (str)
+    - romanized_intent (str)
+    - english_translation (str)
+    - is_confusing (bool)
+    """
+
+    if not raw_text or len(raw_text.strip()) == 0:
+        return {
+            "detected_language": "Unknown",
+            "romanized_intent": "",
+            "english_translation": "",
+            "is_confusing": True
+        }
+
+    if client is None:
+        logger.error("OPENAI_API_KEY is not configured; normalization unavailable")
+        return {
+            "detected_language": "Unknown",
+            "romanized_intent": raw_text,
+            "english_translation": raw_text,
+            "is_confusing": True
+        }
+
+    system_prompt = """
+    You are the linguistic engine for Dewan Consultants, a premier recruitment agency in Sri Lanka.
+    Your job is to intercept candidate messages and normalize them into clean, professional English.
+
+    The input will be from Sri Lankan blue-collar workers. It may contain:
+    - English
+    - Singlish (Romanized Sinhala, e.g., "Mata job ekak ona")
+    - Tanglish (Romanized Tamil, e.g., "Enaku velai venum")
+    - Native Sinhala script
+    - Native Tamil script
+    - Slang or misspelled words (e.g., "sekuriti", "drivar")
+
+    Analyze the text and output a strictly valid JSON object with EXACTLY these keys:
+    {
+        "detected_language": "English" | "Sinhala" | "Tamil" | "Singlish" | "Tanglish",
+        "romanized_intent": "The intent kept in romanized local dialect (if applicable)",
+        "english_translation": "A clean, professional English translation of their request",
+        "is_confusing": boolean
+    }
+
+    RULES FOR 'is_confusing':
+    - Set to false if you can reasonably deduce they are asking about jobs, salaries, locations, or sending personal details.
+    - Set to true ONLY if the message is pure gibberish (e.g., "hghghg"), a pocket dial, meaningless emojis, or completely unrelated to recruitment, making it impossible to process.
+    """
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Normalize this input: '{raw_text}'"}
+            ],
+            temperature=0.1,
+            max_tokens=150
+        )
+
+        # Parse the JSON string returned by the LLM
+        result_text = response.choices[0].message.content
+        normalized_data = json.loads(result_text)
+
+        logger.info(f"Normalized Input: {normalized_data}")
+        return normalized_data
+
+    except Exception as e:
+        logger.error(f"Error in normalize_sri_lankan_input: {str(e)}")
+        # Failsafe return
+        return {
+            "detected_language": "Unknown",
+            "romanized_intent": raw_text,
+            "english_translation": raw_text,
+            "is_confusing": True
+        }
 
 
 # ─── Spelling normalisation (applied before detection) ───────────────────────

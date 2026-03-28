@@ -81,6 +81,19 @@ async function applyMigrations() {
         await safeAlter(sql, label);
     }
 
+    // ── Migration 006b: general_pool table ─────────────────────────────────
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS general_pool (
+            id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id  UUID         NOT NULL UNIQUE REFERENCES candidates(id) ON DELETE CASCADE,
+            source        VARCHAR(50)  NOT NULL DEFAULT 'chatbot',
+            metadata      JSONB,
+            created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'general_pool table');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_general_pool_candidate ON general_pool(candidate_id)`, 'idx_general_pool_candidate');
+
     // ── Migration 007: duplicate detection support ────────────────────────────
     await safeAlter(
         `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS merged_into_id UUID REFERENCES candidates(id) ON DELETE SET NULL`,
@@ -150,6 +163,18 @@ async function applyMigrations() {
         [`CREATE INDEX IF NOT EXISTS idx_candidates_handoff ON candidates(is_human_handoff) WHERE is_human_handoff = TRUE`, 'idx_candidates_handoff'],
     ];
     for (const [sql, label] of handoffCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 011: AI escalation tracking ───────────────────────────────
+    const escalationCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS ai_status            VARCHAR(100)`, 'candidates.ai_status'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS requires_human       BOOLEAN      NOT NULL DEFAULT FALSE`, 'candidates.requires_human'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS escalated_at         TIMESTAMPTZ`, 'candidates.escalated_at'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS escalation_reason    TEXT`, 'candidates.escalation_reason'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_requires_human ON candidates(requires_human) WHERE requires_human = TRUE`, 'idx_candidates_requires_human'],
+    ];
+    for (const [sql, label] of escalationCols) {
         await safeAlter(sql, label);
     }
 

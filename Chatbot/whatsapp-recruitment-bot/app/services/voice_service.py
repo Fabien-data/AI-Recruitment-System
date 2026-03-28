@@ -8,7 +8,7 @@ phone keyboard input is difficult, making voice a preferred input method.
 
 import io
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from app.config import settings
 
@@ -54,7 +54,7 @@ class VoiceService:
         audio_bytes: bytes,
         language_hint: str = "en",
         filename: str = "voice.ogg",
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         Transcribe audio bytes to text via Whisper API.
 
@@ -64,11 +64,15 @@ class VoiceService:
             filename: original filename (used by Whisper for format detection)
 
         Returns:
-            Transcribed text, or AUDIO_UNREADABLE_FALLBACK when transcription fails.
+            Dict with the shape {"is_voice": True, "raw_text": "<transcribed_text>"}.
         """
+        is_audio_like = str(filename or "").lower().endswith(".ogg") or str(filename or "").lower().endswith(".mp3") or str(filename or "").lower().endswith(".m4a") or str(filename or "").lower().endswith(".aac")
+        if not is_audio_like:
+            return {"is_voice": True, "raw_text": "AUDIO_UNREADABLE_FALLBACK"}
+
         if not self._client:
             logger.warning("VoiceService: Whisper not available, cannot transcribe")
-            return "AUDIO_UNREADABLE_FALLBACK"
+            return {"is_voice": True, "raw_text": "AUDIO_UNREADABLE_FALLBACK"}
 
         whisper_lang = self._WHISPER_LANG_MAP.get(language_hint, "en")
 
@@ -88,19 +92,19 @@ class VoiceService:
                 f"(lang_hint={whisper_lang}) → {len(text)} chars"
             )
             if len(text.split()) < 2:
-                return "AUDIO_UNREADABLE_FALLBACK"
-            return text
+                return {"is_voice": True, "raw_text": "AUDIO_UNREADABLE_FALLBACK"}
+            return {"is_voice": True, "raw_text": text}
 
         except Exception as e:
             logger.error(f"VoiceService: Whisper transcription failed: {e}", exc_info=True)
-            return "AUDIO_UNREADABLE_FALLBACK"
+            return {"is_voice": True, "raw_text": "AUDIO_UNREADABLE_FALLBACK"}
 
     async def transcribe_audio(
         self,
         audio_bytes: bytes,
         language_hint: str = "en",
         filename: str = "voice.ogg",
-    ) -> str:
+    ) -> Dict[str, Any]:
         return await self.transcribe(
             audio_bytes=audio_bytes,
             language_hint=language_hint,

@@ -26,14 +26,14 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.nlp.language_detector import (
-    detect_language, is_greeting, detect_language_switch_request
+    detect_language, is_greeting, detect_language_switch_request, normalize_sri_lankan_input
 )
 from app.nlp.sentiment_analyzer import analyze_sentiment, get_de_escalation
 from app.cv_parser.text_extractor import text_extractor, CVData
 from app.cv_parser.document_processor import get_document_processor
 from app.cv_parser.intelligent_extractor import ExtractedCVData
 from app.llm.rag_engine import rag_engine
-from app.llm.prompt_templates import PromptTemplates
+from app.llm.prompt_templates import PromptTemplates, DEWAN_AGENT_PROMPT
 from app.utils.file_handler import file_manager
 from app import crud
 from app.schemas import ConversationCreate, CandidateUpdate, MessageTypeEnum
@@ -46,6 +46,16 @@ from app.knowledge import get_job_cache, refresh_job_cache
 
 
 logger = logging.getLogger(__name__)
+
+
+def _default_extracted_profile() -> Dict[str, Any]:
+    return {
+        "job_role": None,
+        "target_countries": [],
+        "age": None,
+        "licenses": [],
+        "experience_years": None,
+    }
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -305,6 +315,11 @@ class ChatbotEngine:
     STATE_APPLICATION_COMPLETE = "application_complete"
     STATE_HUMAN_HANDOFF       = "human_handoff"
     GIBBERISH_FALLBACK_MESSAGE = PromptTemplates.GIBBERISH_FALLBACK['singlish']  # kept for backward compat
+    NORMALIZATION_CONFUSING_FALLBACK = (
+        "I'm sorry, I didn't quite catch that. To help you better, please reply with your language: "
+        "1 for English, 2 for Sinhala, 3 for Tamil."
+    )
+    NORMALIZATION_SECOND_CHANCE_MESSAGE = "Could you please clarify what kind of job you are looking for?"
 
     def __init__(self):
         self.company_name = settings.company_name
@@ -348,6 +363,34 @@ class ChatbotEngine:
 
     def _reset_question_retries(self, db: Session, candidate) -> None:
         self._reset_state_question_retry_count(db, candidate, candidate.conversation_state)
+
+    def _get_confusion_counter(self, candidate) -> int:
+        data = candidate.extracted_data or {}
+        raw = data.get("confusion_counter", data.get("confusion_streak", getattr(candidate, "confusion_streak", 0)))
+        try:
+            return max(0, int(raw or 0))
+        except Exception:
+            return 0
+
+    def _set_confusion_counter(self, db: Session, candidate, value: int) -> None:
+        counter = max(0, int(value))
+        data = candidate.extracted_data or {}
+        data["confusion_counter"] = counter
+        data["confusion_streak"] = counter
+        if counter == 0:
+            data["is_human_handoff"] = False
+        candidate.extracted_data = data
+        if hasattr(candidate, "confusion_streak"):
+            candidate.confusion_streak = counter
+        db.commit()
+
+    def _increment_confusion_counter(self, db: Session, candidate) -> int:
+        counter = self._get_confusion_counter(candidate) + 1
+        self._set_confusion_counter(db, candidate, counter)
+        return counter
+
+    def _reset_confusion_counter(self, db: Session, candidate) -> None:
+        self._set_confusion_counter(db, candidate, 0)
 
     def _current_goal_for_state(self, state: str) -> str:
         return PromptTemplates.CURRENT_GOAL_MAP.get(
@@ -491,6 +534,8 @@ class ChatbotEngine:
 
     async def _escalate_to_human_handoff(self, db: Session, candidate, language: str, reason: str) -> str:
         data = candidate.extracted_data or {}
+        data['confusion_counter'] = max(3, int(data.get('confusion_counter', 0) or 0))
+        data['confusion_streak'] = max(3, int(data.get('confusion_streak', 0) or 0))
         data['is_human_handoff'] = True
         candidate.extracted_data = data
         crud.update_candidate_state(db, candidate.id, self.STATE_HUMAN_HANDOFF)
@@ -498,6 +543,7 @@ class ChatbotEngine:
         if hasattr(candidate, "status"):
             candidate.status = self.STATE_HUMAN_HANDOFF
         db.commit()
+        await self._notify_recruitment_escalation(candidate, reason=reason)
         await self._notify_human_handoff(candidate, reason=reason)
         msg = {
             'en': "I’m bringing in a human recruiter so you get the best help quickly. Please wait a moment. 🙏",
@@ -705,6 +751,18 @@ class ChatbotEngine:
             return f"{prefix}{response}"
         return response
 
+    @staticmethod
+    def _map_normalized_language(detected_language: Optional[str]) -> Optional[str]:
+        mapping = {
+            "english": "en",
+            "sinhala": "si",
+            "tamil": "ta",
+            "singlish": "singlish",
+            "tanglish": "tanglish",
+        }
+        key = str(detected_language or "").strip().lower()
+        return mapping.get(key)
+
     def _sanitize_takeover_reply(self, reply: str) -> str:
         """Strip internal-stage leakage and banned slang from onboarding takeover text."""
         text = str(reply or "").strip()
@@ -741,6 +799,31 @@ class ChatbotEngine:
         except Exception as exc:
             logger.warning(f"Human handoff webhook failed: {exc}")
 
+    async def _notify_recruitment_escalation(self, candidate, reason: str = "Persistent unclear inputs") -> None:
+        base_url = str(getattr(settings, "recruitment_api_url", "") or "").strip().rstrip("/")
+        if not base_url:
+            return
+
+        phone = getattr(candidate, "phone_number", None) or getattr(candidate, "phone", None)
+        if not phone:
+            return
+
+        payload = {"phone": phone, "reason": reason or "Persistent unclear inputs"}
+        headers = {}
+        if getattr(settings, "chatbot_api_key", None):
+            headers["x-chatbot-api-key"] = settings.chatbot_api_key
+
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(
+                    f"{base_url}/api/communications/escalate",
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+        except Exception as exc:
+            logger.warning(f"Recruitment escalation API call failed: {exc}")
+
     async def _send_unified_takeover_reply(
         self,
         db: Session,
@@ -754,10 +837,14 @@ class ChatbotEngine:
     ) -> str:
         """Use the unified processor to generate steering text for off-track onboarding turns."""
         try:
-            unified = await rag_engine.process_unified_turn(
-                user_message=text,
+            normalized_data = candidate.extracted_data or {}
+            detected_language = str(normalized_data.get("detected_language") or language)
+            unified = await self._process_agentic_state(
+                db=db,
+                candidate=candidate,
+                user_intent=text,
+                detected_language=detected_language,
                 current_state=state,
-                language=language,
                 active_countries=active_countries,
                 active_jobs=active_jobs,
             )
@@ -810,6 +897,207 @@ class ChatbotEngine:
             "agent_reply": agent_reply,
             "steering_reply": agent_reply,
         }
+
+    @staticmethod
+    def _safe_int(value: Any) -> Optional[int]:
+        if value in (None, ""):
+            return None
+        try:
+            return int(float(str(value).strip()))
+        except Exception:
+            return None
+
+    def _coerce_extracted_profile(self, profile: Any) -> Dict[str, Any]:
+        base = _default_extracted_profile()
+        if not isinstance(profile, dict):
+            return base
+
+        job_role = profile.get("job_role")
+        target_countries = profile.get("target_countries")
+        age = self._safe_int(profile.get("age"))
+        licenses = profile.get("licenses")
+        experience_years = self._safe_int(profile.get("experience_years"))
+
+        base["job_role"] = str(job_role).strip() if job_role not in (None, "") else None
+        if isinstance(target_countries, list):
+            base["target_countries"] = [str(c).strip() for c in target_countries if str(c).strip()]
+        elif target_countries not in (None, ""):
+            base["target_countries"] = [str(target_countries).strip()]
+
+        base["age"] = age
+
+        if isinstance(licenses, list):
+            base["licenses"] = [str(l).strip() for l in licenses if str(l).strip()]
+        elif licenses not in (None, ""):
+            base["licenses"] = [str(licenses).strip()]
+
+        base["experience_years"] = experience_years
+        return base
+
+    def _merge_extracted_profile(self, current_profile: Dict[str, Any], updated_profile: Dict[str, Any]) -> Dict[str, Any]:
+        merged = self._coerce_extracted_profile(current_profile)
+        patch = self._coerce_extracted_profile(updated_profile)
+
+        if patch.get("job_role"):
+            merged["job_role"] = patch["job_role"]
+        if patch.get("target_countries"):
+            merged["target_countries"] = patch["target_countries"]
+        if patch.get("age") is not None:
+            merged["age"] = patch["age"]
+        if patch.get("licenses"):
+            merged["licenses"] = patch["licenses"]
+        if patch.get("experience_years") is not None:
+            merged["experience_years"] = patch["experience_years"]
+
+        return merged
+
+    def _get_candidate_extracted_profile(self, candidate) -> Dict[str, Any]:
+        profile = self._coerce_extracted_profile(getattr(candidate, "extracted_profile", None))
+        if profile != _default_extracted_profile():
+            return profile
+
+        data = candidate.extracted_data or {}
+        legacy_profile = self._coerce_extracted_profile(data.get("extracted_profile"))
+        if legacy_profile != _default_extracted_profile():
+            return legacy_profile
+
+        country = str(data.get("destination_country") or "").strip()
+        if data.get("job_interest"):
+            profile["job_role"] = str(data.get("job_interest")).strip()
+        if country:
+            profile["target_countries"] = [country]
+        exp = self._safe_int(data.get("experience_years_stated") or data.get("experience_years"))
+        if exp is not None:
+            profile["experience_years"] = exp
+        return profile
+
+    def _safe_json_object(self, raw_content: str) -> Dict[str, Any]:
+        content = str(raw_content or "").strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        elif content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+
+        if "{" in content and "}" in content:
+            content = content[content.find("{"):content.rfind("}") + 1]
+
+        try:
+            data = json.loads(content)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    async def _process_agentic_state(
+        self,
+        db: Session,
+        candidate,
+        user_intent: str,
+        detected_language: str,
+        current_state: str,
+        active_countries: Optional[list] = None,
+        active_jobs: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        fallback = await rag_engine.process_unified_turn(
+            user_message=user_intent,
+            current_state=current_state,
+            language=detected_language or "en",
+            active_countries=active_countries,
+            active_jobs=active_jobs,
+        )
+
+        if not rag_engine.async_openai_client:
+            return fallback
+
+        current_profile = self._get_candidate_extracted_profile(candidate)
+        prompt = DEWAN_AGENT_PROMPT.format(
+            current_profile_state=json.dumps(current_profile, ensure_ascii=False),
+            detected_language=detected_language or "en",
+            user_intent=user_intent,
+        )
+
+        try:
+            response = await rag_engine.async_openai_client.chat.completions.create(
+                model="gpt-4o",
+                response_format={"type": "json_object"},
+                messages=[{"role": "system", "content": prompt}],
+                temperature=0.3,
+            )
+
+            parsed = self._safe_json_object(response.choices[0].message.content or "")
+            updated_profile = self._coerce_extracted_profile(parsed.get("updated_profile"))
+            merged_profile = self._merge_extracted_profile(current_profile, updated_profile)
+
+            route_to_general_pool = bool(parsed.get("route_to_general_pool"))
+            profile_complete = bool(parsed.get("is_profile_complete"))
+            reply_message = str(parsed.get("reply_message") or "").strip()
+
+            target_country = None
+            target_countries = merged_profile.get("target_countries") or []
+            if target_countries:
+                target_country = str(target_countries[0]).strip()
+
+            matched_crm_country = None
+            if target_country and active_countries:
+                countries = [str(c) for c in active_countries if str(c).strip()]
+                exact = {c.lower(): c for c in countries}
+                matched_crm_country = exact.get(target_country.lower())
+                if not matched_crm_country:
+                    close = difflib.get_close_matches(target_country, countries, n=1, cutoff=0.72)
+                    matched_crm_country = close[0] if close else None
+
+            matched_crm_job = None
+            job_role = merged_profile.get("job_role")
+            if job_role and active_jobs:
+                jobs = [str(j) for j in active_jobs if str(j).strip()]
+                exact = {j.lower(): j for j in jobs}
+                matched_crm_job = exact.get(job_role.lower())
+                if not matched_crm_job:
+                    close = difflib.get_close_matches(job_role, jobs, n=1, cutoff=0.68)
+                    matched_crm_job = close[0] if close else None
+
+            candidate.extracted_profile = merged_profile
+            candidate.is_general_pool = bool(getattr(candidate, "is_general_pool", False) or route_to_general_pool)
+
+            data = candidate.extracted_data or {}
+            data["extracted_profile"] = merged_profile
+            data["is_general_pool"] = candidate.is_general_pool
+            data["is_profile_complete"] = profile_complete
+            if candidate.is_general_pool:
+                data["future_pool"] = True
+                if merged_profile.get("job_role"):
+                    data["future_pool_role"] = merged_profile.get("job_role")
+            candidate.extracted_data = data
+            db.commit()
+
+            expected_field_by_state = {
+                self.STATE_AWAITING_JOB: ["matched_crm_job", "job_role"],
+                self.STATE_AWAITING_COUNTRY: ["matched_crm_country", "country"],
+                self.STATE_AWAITING_EXPERIENCE: ["experience_years"],
+            }
+            expected_fields = expected_field_by_state.get(current_state, [])
+
+            mapped_extracted = {
+                "job_role": merged_profile.get("job_role"),
+                "country": target_country,
+                "experience_years": merged_profile.get("experience_years"),
+                "matched_crm_country": matched_crm_country,
+                "matched_crm_job": matched_crm_job,
+            }
+            has_state_data = any(mapped_extracted.get(field) not in (None, "", []) for field in expected_fields)
+
+            return {
+                "intent": "other",
+                "extracted_data": mapped_extracted,
+                "agent_reply": "" if has_state_data else reply_message,
+                "is_profile_complete": profile_complete,
+                "route_to_general_pool": candidate.is_general_pool,
+            }
+        except Exception as exc:
+            logger.warning(f"Agentic state processor failed, using unified fallback: {exc}")
+            return fallback
 
     def _dispatch_recruitment_sync_background(
         self,
@@ -1484,6 +1772,47 @@ class ChatbotEngine:
         source_message_type: Optional[str] = None,
     ) -> Union[str, Dict[str, Any]]:
 
+        raw_text = (message_text or "").strip()
+        normalized = await normalize_sri_lankan_input(raw_text)
+        if bool(normalized.get("is_confusing", False)):
+            language = self._effective_language(candidate)
+            confusion_counter = self._increment_confusion_counter(db, candidate)
+
+            self._log_msg(db, candidate.id, MessageTypeEnum.USER, raw_text, language)
+
+            if confusion_counter == 1:
+                crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_LANGUAGE_SELECTION)
+                candidate.conversation_state = self.STATE_AWAITING_LANGUAGE_SELECTION
+                response = self.NORMALIZATION_CONFUSING_FALLBACK
+            elif confusion_counter >= 3:
+                response = await self._escalate_to_human_handoff(
+                    db,
+                    candidate,
+                    language,
+                    reason="Persistent unclear inputs",
+                )
+            else:
+                response = self.NORMALIZATION_SECOND_CHANCE_MESSAGE
+
+            self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, language)
+            return response
+
+        if self._get_confusion_counter(candidate) > 0:
+            self._reset_confusion_counter(db, candidate)
+
+        normalized_language = self._map_normalized_language(normalized.get("detected_language"))
+        if normalized_language:
+            crud.update_candidate_language(db, candidate.id, normalized_language)
+
+        data = candidate.extracted_data or {}
+        data["detected_language"] = normalized.get("detected_language")
+        candidate.extracted_data = data
+        db.commit()
+
+        english_translation = str(normalized.get("english_translation") or "").strip()
+        if english_translation:
+            message_text = english_translation
+
         # 1. Explicit language switch
         switch_lang = detect_language_switch_request(message_text)
         if switch_lang:
@@ -1994,17 +2323,17 @@ class ChatbotEngine:
             # 1. Attempt Data Extraction
             active_countries_list = vacancy_service.get_active_countries()
             active_jobs_list = vacancy_service.get_active_job_titles()
-            try:
-                unified = await rag_engine.process_unified_turn(
-                    user_message=text,
-                    current_state=candidate.conversation_state,
-                    language=language,
-                    active_countries=active_countries_list,
-                    active_jobs=active_jobs_list,
-                )
-            except Exception as e:
-                logger.warning(f"Unified onboarding failed in job state: {e}")
-                unified = {}
+            normalized_data = candidate.extracted_data or {}
+            detected_language = str(normalized_data.get("detected_language") or language)
+            unified = await self._process_agentic_state(
+                db=db,
+                candidate=candidate,
+                user_intent=text,
+                detected_language=detected_language,
+                current_state=candidate.conversation_state,
+                active_countries=active_countries_list,
+                active_jobs=active_jobs_list,
+            )
 
             unified = self._normalize_unified_onboarding_response(unified)
             extracted_data = unified.get("extracted_data", {})
@@ -2077,17 +2406,17 @@ class ChatbotEngine:
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
                 return self._experience_buttons_payload(language)
 
-            try:
-                unified = await rag_engine.process_unified_turn(
-                    user_message=text,
-                    current_state=candidate.conversation_state,
-                    language=language,
-                    active_countries=active_countries_list,
-                    active_jobs=active_jobs_list,
-                )
-            except Exception as e:
-                logger.warning(f"Unified onboarding failed in country state: {e}")
-                unified = {}
+            normalized_data = candidate.extracted_data or {}
+            detected_language = str(normalized_data.get("detected_language") or language)
+            unified = await self._process_agentic_state(
+                db=db,
+                candidate=candidate,
+                user_intent=text,
+                detected_language=detected_language,
+                current_state=candidate.conversation_state,
+                active_countries=active_countries_list,
+                active_jobs=active_jobs_list,
+            )
 
             unified = self._normalize_unified_onboarding_response(unified)
             extracted_data = unified.get("extracted_data", {})
@@ -2250,15 +2579,15 @@ class ChatbotEngine:
                 )
 
             # 1. Attempt Data Extraction
-            try:
-                unified = await rag_engine.process_unified_turn(
-                    user_message=text,
-                    current_state=candidate.conversation_state,
-                    language=language,
-                )
-            except Exception as e:
-                logger.warning(f"Unified onboarding failed in experience state: {e}")
-                unified = {}
+            normalized_data = candidate.extracted_data or {}
+            detected_language = str(normalized_data.get("detected_language") or language)
+            unified = await self._process_agentic_state(
+                db=db,
+                candidate=candidate,
+                user_intent=text,
+                detected_language=detected_language,
+                current_state=candidate.conversation_state,
+            )
 
             unified = self._normalize_unified_onboarding_response(unified)
             extracted_data = unified.get("extracted_data", {})

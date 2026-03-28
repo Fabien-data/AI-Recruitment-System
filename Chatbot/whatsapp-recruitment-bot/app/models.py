@@ -71,6 +71,12 @@ class Candidate(Base):
     status = Column(String(50), default="active")
     confusion_streak = Column(Integer, default=0)
     question_retries = Column(Integer, default=0)
+    extracted_profile = Column(
+        MutableDict.as_mutable(JSON),
+        nullable=False,
+        default=dict
+    )
+    is_general_pool = Column(Boolean, default=False, nullable=False)
     cv_sync_status = Column(String(20), default=None, nullable=True)  # pending|synced|failed
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(

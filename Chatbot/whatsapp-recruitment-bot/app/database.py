@@ -100,6 +100,10 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN confusion_streak INTEGER DEFAULT 0"))
                 if "question_retries" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN question_retries INTEGER DEFAULT 0"))
+                if "extracted_profile" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN extracted_profile JSON"))
+                if "is_general_pool" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN is_general_pool BOOLEAN DEFAULT FALSE"))
             else:
                 cols = {
                     row[0]
@@ -115,6 +119,10 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN confusion_streak INTEGER DEFAULT 0"))
                 if "question_retries" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN question_retries INTEGER DEFAULT 0"))
+                if "extracted_profile" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN extracted_profile JSONB DEFAULT '{}'::jsonb"))
+                if "is_general_pool" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN is_general_pool BOOLEAN DEFAULT FALSE"))
     except Exception as schema_err:
         logger.warning(f"Schema self-heal skipped/failed: {schema_err}")
 

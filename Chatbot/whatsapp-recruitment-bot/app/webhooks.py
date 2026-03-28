@@ -479,12 +479,13 @@ async def process_single_message(message: dict, contacts: list, db):
                 transcribed = await voice_service.transcribe(
                     audio_bytes, language_hint=lang_hint, filename=fname
                 )
-                if transcribed and transcribed != "AUDIO_UNREADABLE_FALLBACK":
-                    logger.info(f"🎤→💬 Transcribed: {transcribed[:80]!r}")
+                transcribed_text = str((transcribed or {}).get("raw_text") or "").strip()
+                if transcribed_text and transcribed_text != "AUDIO_UNREADABLE_FALLBACK":
+                    logger.info(f"🎤→💬 Transcribed: {transcribed_text[:80]!r}")
                     response_text = await _safe_process_message(
                         db=db,
                         phone_number=from_number,
-                        message_text=transcribed,
+                        message_text=transcribed_text,
                         source_message_type="audio",
                     )
                 else:

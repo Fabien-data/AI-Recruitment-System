@@ -7,6 +7,7 @@
  *   GET  /api/communications/candidate/:id              — full transcript
  *   GET  /api/communications/candidate/:id/notifications— outbound notifications
  *   GET  /api/communications/active-chats               — list of active whatsapp convos
+ *   POST /api/communications/escalate                   — chatbot escalation alert
  *   POST /api/communications/send                       — agent sends a message
  *   POST /api/communications/candidate/:id/takeover     — agent takes over from bot
  *   POST /api/communications/candidate/:id/release      — release back to bot
@@ -20,6 +21,27 @@ const { adaptQuery } = require('../utils/query-adapter');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
+
+function authenticateChatbot(req, res, next) {
+    const apiKey = req.headers['x-chatbot-api-key'];
+    const expectedKey = process.env.CHATBOT_API_KEY;
+    const expectedOldKey = process.env.CHATBOT_API_KEY_OLD;
+
+    if (!expectedKey) {
+        logger.error('CHATBOT_API_KEY not set in environment!');
+        return res.status(500).json({ error: 'Server misconfiguration: chatbot key not set' });
+    }
+
+    if (!apiKey) {
+        return res.status(401).json({ error: 'Unauthorized: missing chatbot API key' });
+    }
+
+    if (apiKey === expectedKey || (expectedOldKey && apiKey === expectedOldKey)) {
+        return next();
+    }
+
+    return res.status(401).json({ error: 'Unauthorized: invalid chatbot API key' });
+}
 
 // ── GET /api/communications/candidate/:id ─────────────────────────────────────
 // Returns full chronological transcript for this candidate.
@@ -93,6 +115,10 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 ca.phone,
                 ca.whatsapp_phone,
                 ca.status        AS candidate_status,
+                ca.ai_status,
+                ca.requires_human,
+                ca.escalated_at,
+                ca.escalation_reason,
                 ca.is_human_handoff,
                 ca.agent_id,
                 u.name           AS agent_name,
@@ -119,6 +145,87 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
 
         const result = await query(sql, params);
         res.json(result.rows);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── POST /api/communications/escalate ─────────────────────────────────────────
+// Called by Python chatbot when confusion counter reaches escalation threshold.
+router.post('/escalate', authenticateChatbot, async (req, res, next) => {
+    try {
+        const { phone, reason } = req.body || {};
+        if (!phone) {
+            return res.status(400).json({ error: 'phone is required' });
+        }
+
+        const candidateResult = await query(
+            adaptQuery(`
+                SELECT id, name, phone, whatsapp_phone
+                FROM candidates
+                WHERE phone = $1 OR whatsapp_phone = $1
+                ORDER BY updated_at DESC
+                LIMIT 1
+            `),
+            [phone]
+        );
+
+        if (candidateResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Candidate not found for phone' });
+        }
+
+        const candidate = candidateResult.rows[0];
+        await query(
+            adaptQuery(`
+                UPDATE candidates
+                SET ai_status = 'Requires Intervention',
+                    requires_human = TRUE,
+                    escalated_at = NOW(),
+                    escalation_reason = $2,
+                    updated_at = NOW()
+                WHERE id = $1
+            `),
+            [candidate.id, reason || 'Persistent unclear inputs']
+        );
+
+        const commId = generateUUID();
+        const systemMsg = `AI escalation requested: ${reason || 'Persistent unclear inputs'}`;
+        await query(
+            adaptQuery(`
+                INSERT INTO communications
+                (id, candidate_id, channel, direction, message_type, content,
+                 sender_type, sender_name, sent_at)
+                VALUES ($1, $2, 'whatsapp', 'outbound', 'text',
+                 $3, 'system', 'System', NOW())
+            `),
+            [commId, candidate.id, systemMsg]
+        );
+
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) {
+                const eventPayload = {
+                    candidate_id: candidate.id,
+                    phone,
+                    alert: 'AI Handoff Requested',
+                    reason: reason || 'Persistent unclear inputs',
+                };
+                io.emit('chat_escalated', eventPayload);
+                io.emit('chat_activity', {
+                    candidate_id: candidate.id,
+                    candidate_name: candidate.name,
+                    ai_status: 'Requires Intervention',
+                    requires_human: true,
+                    ts: new Date().toISOString(),
+                });
+            }
+        } catch (wsErr) {
+            logger.debug(`escalate WS emit skipped: ${wsErr.message}`);
+        }
+
+        logger.info(`Chat escalated for candidate ${candidate.id} (${phone})`);
+        return res.status(200).json({ success: true, message: 'Chat escalated to human agents.', candidate_id: candidate.id });
     } catch (error) {
         next(error);
     }
