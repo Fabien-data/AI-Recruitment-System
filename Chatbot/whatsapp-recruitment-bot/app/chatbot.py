@@ -20,7 +20,7 @@ import json
 import base64
 import difflib
 import httpx
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, List
 
 from sqlalchemy.orm import Session
 
@@ -33,7 +33,11 @@ from app.cv_parser.text_extractor import text_extractor, CVData
 from app.cv_parser.document_processor import get_document_processor
 from app.cv_parser.intelligent_extractor import ExtractedCVData
 from app.llm.rag_engine import rag_engine
-from app.llm.prompt_templates import PromptTemplates, DEWAN_AGENT_PROMPT
+from app.llm.prompt_templates import (
+    PromptTemplates,
+    DEWAN_AGENT_PROMPT,
+    SUPERVISOR_OVERRIDE_PROMPT,
+)
 from app.utils.file_handler import file_manager
 from app import crud
 from app.schemas import ConversationCreate, CandidateUpdate, MessageTypeEnum
@@ -46,6 +50,22 @@ from app.knowledge import get_job_cache, refresh_job_cache
 
 
 logger = logging.getLogger(__name__)
+
+
+def is_repeating(proposed_response: str, recent_messages: List[str]) -> bool:
+    """Checks if the proposed response is >80% similar to recent messages."""
+    if not proposed_response or not recent_messages:
+        return False
+
+    for past_message in recent_messages:
+        similarity = difflib.SequenceMatcher(
+            None,
+            proposed_response.lower(),
+            str(past_message).lower(),
+        ).ratio()
+        if similarity > 0.80:
+            return True
+    return False
 
 
 def _default_extracted_profile() -> Dict[str, Any]:
@@ -323,6 +343,111 @@ class ChatbotEngine:
 
     def __init__(self):
         self.company_name = settings.company_name
+
+    @staticmethod
+    def _response_preview_text(response: Union[str, Dict[str, Any]]) -> str:
+        """Extract a text preview from either plain text or interactive payloads."""
+        if isinstance(response, str):
+            return response.strip()
+        if isinstance(response, dict):
+            return str(response.get("body_text") or "").strip()
+        return ""
+
+    @staticmethod
+    def _loop_failsafe_message() -> str:
+        return (
+            "To help you better, please select your preferred language:\n"
+            "1. English\n"
+            "2. Sinhala\n"
+            "3. Tamil"
+        )
+
+    @staticmethod
+    def _should_use_loop_failsafe(reply: str) -> bool:
+        low = (reply or "").lower()
+        if not low:
+            return True
+        return ("sorry" in low) or ("understand" in low)
+
+    @staticmethod
+    def _get_recent_bot_messages(candidate) -> List[str]:
+        messages = getattr(candidate, "recent_bot_messages", None)
+        if isinstance(messages, list):
+            return [str(m) for m in messages if str(m).strip()]
+        return []
+
+    def _push_recent_bot_message(self, db: Session, candidate, message: str) -> None:
+        text = (message or "").strip()
+        if not text:
+            return
+        recent = self._get_recent_bot_messages(candidate)
+        recent.append(text)
+        candidate.recent_bot_messages = recent[-3:]
+        db.commit()
+
+    async def _call_supervisor_ai(
+        self,
+        user_message: str,
+        stuck_response: str,
+        current_state: Dict[str, Any],
+        language: str,
+    ) -> str:
+        fallback = self._loop_failsafe_message()
+        current_state_json = json.dumps(current_state or {}, ensure_ascii=False)
+        prompt = SUPERVISOR_OVERRIDE_PROMPT.format(
+            user_message=(user_message or "")[:1000],
+            stuck_response=(stuck_response or "")[:1000],
+            current_state=current_state_json[:2000],
+        )
+
+        if not getattr(rag_engine, "async_openai_client", None):
+            return fallback
+
+        try:
+            response = await rag_engine.async_openai_client.chat.completions.create(
+                model=rag_engine.complex_chat_model if language in ("singlish", "tanglish") else rag_engine.chat_model,
+                messages=[
+                    {"role": "system", "content": PromptTemplates.SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                timeout=10,
+            )
+            return str(response.choices[0].message.content or "").strip() or fallback
+        except Exception as exc:
+            logger.warning(f"Supervisor override failed: {exc}")
+            return fallback
+
+    async def _apply_loop_guard(
+        self,
+        db: Session,
+        candidate,
+        raw_user_text: str,
+        proposed_response: Union[str, Dict[str, Any]],
+        language: str,
+    ) -> Union[str, Dict[str, Any]]:
+        preview = self._response_preview_text(proposed_response)
+        recent = self._get_recent_bot_messages(candidate)
+        if not is_repeating(preview, recent):
+            if preview:
+                self._push_recent_bot_message(db, candidate, preview)
+            return proposed_response
+
+        logger.warning(
+            f"LOOP DETECTED for {candidate.phone_number}. Triggering Supervisor Override."
+        )
+
+        supervisor_reply = await self._call_supervisor_ai(
+            user_message=raw_user_text,
+            stuck_response=preview,
+            current_state=self._coerce_extracted_profile(getattr(candidate, "extracted_profile", {})),
+            language=language,
+        )
+
+        if self._should_use_loop_failsafe(supervisor_reply):
+            supervisor_reply = self._loop_failsafe_message()
+
+        self._push_recent_bot_message(db, candidate, supervisor_reply)
+        return supervisor_reply
 
     def _get_state_question_retry_count(self, candidate, state: str) -> int:
         data = candidate.extracted_data or {}
@@ -2015,6 +2140,14 @@ class ChatbotEngine:
             db, candidate, message_text, language, state, classified, phone_number,
             source_message_type=source_message_type,
             prefetched_validation=prefetched_validation,
+        )
+
+        response = await self._apply_loop_guard(
+            db=db,
+            candidate=candidate,
+            raw_user_text=message_text,
+            proposed_response=response,
+            language=language,
         )
 
         log_text = json.dumps(response, ensure_ascii=False) if isinstance(response, dict) else response

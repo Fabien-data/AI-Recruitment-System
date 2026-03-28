@@ -9,7 +9,7 @@ from sqlalchemy import (
     Column, Integer, String, Text, Float, Boolean,
     Enum, JSON, TIMESTAMP, ForeignKey, Index
 )
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -75,6 +75,11 @@ class Candidate(Base):
         MutableDict.as_mutable(JSON),
         nullable=False,
         default=dict
+    )
+    recent_bot_messages = Column(
+        MutableList.as_mutable(JSON),
+        nullable=False,
+        default=list
     )
     is_general_pool = Column(Boolean, default=False, nullable=False)
     cv_sync_status = Column(String(20), default=None, nullable=True)  # pending|synced|failed

@@ -104,6 +104,8 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN extracted_profile JSON"))
                 if "is_general_pool" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN is_general_pool BOOLEAN DEFAULT FALSE"))
+                if "recent_bot_messages" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN recent_bot_messages JSON DEFAULT '[]'"))
             else:
                 cols = {
                     row[0]
@@ -123,6 +125,8 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN extracted_profile JSONB DEFAULT '{}'::jsonb"))
                 if "is_general_pool" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN is_general_pool BOOLEAN DEFAULT FALSE"))
+                if "recent_bot_messages" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN recent_bot_messages JSONB DEFAULT '[]'::jsonb"))
     except Exception as schema_err:
         logger.warning(f"Schema self-heal skipped/failed: {schema_err}")
 
