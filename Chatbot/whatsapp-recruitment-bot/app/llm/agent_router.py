@@ -96,14 +96,18 @@ DEWAN_TOOLS = [
 ]
 
 
-async def route_user_message(user_message: str, session_state: dict) -> dict:
+async def route_user_message(user_message: str, session_state: dict, chat_history: list = None) -> dict:
     """
-    Acts as the master router. Decides if the AI should reply with a text message,
+    Acts as the master router with memory injection. Decides if the AI should reply with a text message,
     or execute a WhatsApp UI tool based on the conversation context.
+    
+    UPGRADED: Now accepts chat_history to prevent Amnesia Loops and enable natural context-aware responses.
     
     Args:
         user_message: The raw text from the user
-        session_state: Dict containing at minimum {"language": "en"/"si"/"ta" or None}
+        session_state: Dict containing at minimum {"language": "en"/"si"/"ta" or None, 
+                       candidate_name, candidate_job, candidate_country (known values)}
+        chat_history: List of last 4 message dicts: [{"role": "user"|"assistant", "content": "..."}, ...]
     
     Returns:
         Either:
@@ -119,33 +123,63 @@ async def route_user_message(user_message: str, session_state: dict) -> dict:
         }
     """
     
+    if chat_history is None:
+        chat_history = []
+    
     # Extract current state
     current_lang = session_state.get("language", "Unknown")
     is_new_user = not bool(current_lang) or current_lang == "Unknown"
     
+    # ── EXTRACT KNOWN PROFILE DATA ──────────────────────────────────────────────
+    known_name = session_state.get("candidate_name", "MISSING")
+    known_job = session_state.get("candidate_job", "MISSING")
+    known_country = session_state.get("candidate_country", "MISSING")
+    
+    # ── ELITE PROMPT v2 (MEMORY-INJECTED, NO AMNESIA LOOPS) ─────────────────────
     system_prompt = f"""
 You are the Elite AI Recruiter for Dewan Consultants in Sri Lanka.
-The user's preferred language is locked to: {current_lang}. 
-ALWAYS reply in {current_lang} using culturally appropriate, warm phrasing.
+The user's preferred language is: {current_lang}. 
 
-YOUR OBJECTIVE: Onboard the candidate by getting their Name, Job Role, and Preferred Country.
+CRITICAL LANGUAGE RULES:
+1. NEVER use formal/written dictionary Sinhala or Tamil. 
+2. ALWAYS use casual, spoken, street-level dialect (e.g., use 'ඔයා' instead of 'ඔබ', use 'රස්සාව/වැඩ' instead of 'රැකියාව'). 
+3. Keep responses extremely short (1-2 sentences maximum).
 
-RULES:
-1. If the user is new/language is Unknown, IMMEDIATELY call the `show_language_selector` tool.
-2. If the user asks to see jobs, call the `show_vacancies_list` tool.
-3. If the user wants to apply, chat with them naturally to gather their Name, Job Role, and Country. Ask ONE question at a time.
-4. If the user sends a vague message or gibberish, DO NOT SAY "I don't understand". Gently pivot back: "To help you best, what kind of work are you looking for?"
-5. CRITICAL: Once you have extracted the Name, Job Role, and Country, DO NOT ask any more questions. IMMEDIATELY call the `submit_candidate_profile` tool.
+YOUR OBJECTIVE: Gather the missing profile data to call `submit_candidate_profile`.
+
+CURRENT PROFILE STATUS (DO NOT ask for information that is already Known):
+- Name: {known_name}
+- Job Role: {known_job}
+- Preferred Country: {known_country}
+
+BEHAVIORAL GUARDRAILS:
+1. ONLY ask for ONE 'MISSING' item at a time. Never ask two questions in one message.
+2. If the user says "Ow", "Hari", "OK", or sends an emoji, acknowledge it warmly and immediately ask for the next 'MISSING' item.
+3. If ALL items are filled, DO NOT chat. Call the `submit_candidate_profile` tool immediately.
+4. If the user is speaking Tanglish/Singlish, match their tone but map the data to English internally.
 """
 
     try:
         client = _get_client()
+        
+        # ── BUILD COMPLETE MESSAGE HISTORY ──────────────────────────────────────
+        # Format: [system, ...chat_history, current_user_message]
+        messages = [
+            {"role": "system", "content": system_prompt}
+        ]
+        
+        # Add unpacked chat history
+        if chat_history:
+            messages.extend(chat_history)
+        
+        # Add current user message
+        messages.append({"role": "user", "content": user_message})
+        
+        logger.debug(f"📜 Message history: {len(messages)} messages (system + {len(chat_history)} history + current)")
+        
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ],
+            messages=messages,
             tools=DEWAN_TOOLS,
             tool_choice="auto",
             temperature=0.2

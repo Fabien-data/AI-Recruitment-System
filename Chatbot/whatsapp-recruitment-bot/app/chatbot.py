@@ -4388,27 +4388,59 @@ class ChatbotEngine:
         candidate: "Candidate"
     ) -> str:
         """
-        Handle message using the new LLM Router (Elite Implementation).
-        This is the GatewayMethod that decides:
+        Handle message using the new LLM Router (Elite Implementation v2 - Memory-Injected).
+        This is the Gateway Method that decides:
         1. Chat response → send text back
         2. Tool call → execute WhatsApp UI action + save to DB
         
-        The router is responsible for all the "brain" logic.
-        This method is just the pipeline executor.
+        UPGRADED: Now injects chat history (last 4 messages) to prevent Amnesia Loops
+        and ensure natural, context-aware responses.
         """
         
         try:
-            # Build session state from candidate record
+            # ── FETCH CHAT HISTORY (Last 4 messages) ────────────────────────────
+            recent_conversations = db.query(crud.Conversation).filter(
+                crud.Conversation.candidate_id == candidate.id
+            ).order_by(crud.Conversation.created_at.desc()).limit(4).all()
+            
+            # Reverse to chronological order (oldest first)
+            recent_conversations = list(reversed(recent_conversations))
+            
+            # Build chat history in OpenAI format
+            chat_history = []
+            for conv in recent_conversations:
+                if conv.user_message:
+                    chat_history.append({
+                        "role": "user",
+                        "content": conv.user_message
+                    })
+                if conv.bot_message:
+                    chat_history.append({
+                        "role": "assistant",
+                        "content": conv.bot_message
+                    })
+            
+            # ── EXTRACT KNOWN PROFILE DATA ──────────────────────────────────────
+            extracted_profile = candidate.extracted_profile or {}
+            
+            # Build session state with KNOWN profile data
             session_state = {
                 "language": candidate.language_preference or "Unknown",
                 "candidate_id": candidate.id,
                 "current_flow": candidate.conversation_state,
-                "extracted_data": candidate.extracted_profile or {}
+                "extracted_data": extracted_profile,
+                # NEW: Include known profile fields for Elite Prompt
+                "candidate_name": candidate.name or "MISSING",
+                "candidate_job": extracted_profile.get("job_role", "MISSING"),
+                "candidate_country": (
+                    extracted_profile.get("target_countries", ["MISSING"])[0] 
+                    if extracted_profile.get("target_countries") else "MISSING"
+                )
             }
             
-            # Ask the LLM router what to do
-            logger.info(f"🧠 Routing message from {user_phone}: {raw_text[:50]}")
-            decision = await route_user_message(raw_text, session_state)
+            # Ask the LLM router what to do (WITH chat history)
+            logger.info(f"🧠 Routing message from {user_phone}: {raw_text[:50]} (history: {len(chat_history)} msgs)")
+            decision = await route_user_message(raw_text, session_state, chat_history=chat_history)
             
             # Execute the router's decision
             if decision["action"] == "chat":
