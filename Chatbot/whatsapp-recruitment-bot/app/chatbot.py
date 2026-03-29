@@ -4389,19 +4389,26 @@ class ChatbotEngine:
     ) -> str:
         """
         Handle message using the new LLM Router (Elite Implementation v2 - Memory-Injected).
+        
         This is the Gateway Method that decides:
         1. Chat response → send text back
         2. Tool call → execute WhatsApp UI action + save to DB
         
-        UPGRADED: Now injects chat history (last 4 messages) to prevent Amnesia Loops
-        and ensure natural, context-aware responses.
+        UPGRADED: Now injects chat history (last 4-6 messages) to prevent Amnesia Loops
+        and ensure natural, context-aware responses. Implements full memory management:
+        - Load recent chat history from DB
+        - Append current user message
+        - Keep only last 6 messages (3 user + 3 bot exchanges)
+        - Pass to router with context
+        - Update history after each interaction
+        - Lock variables only on tool_call execution
         """
         
         try:
-            # ── FETCH CHAT HISTORY (Last 4 messages) ────────────────────────────
+            # ── STEP 1: FETCH AND BUILD CHAT HISTORY ─────────────────────────────
             recent_conversations = db.query(crud.Conversation).filter(
                 crud.Conversation.candidate_id == candidate.id
-            ).order_by(crud.Conversation.created_at.desc()).limit(4).all()
+            ).order_by(crud.Conversation.created_at.desc()).limit(6).all()
             
             # Reverse to chronological order (oldest first)
             recent_conversations = list(reversed(recent_conversations))
@@ -4420,16 +4427,27 @@ class ChatbotEngine:
                         "content": conv.bot_message
                     })
             
-            # ── EXTRACT KNOWN PROFILE DATA ──────────────────────────────────────
+            # ── STEP 2: APPEND CURRENT USER MESSAGE TO HISTORY ──────────────────
+            chat_history.append({
+                "role": "user",
+                "content": raw_text
+            })
+            
+            # ── STEP 3: TRIM TO LAST 6 MESSAGES (Save tokens, prevent overflow) ───
+            if len(chat_history) > 6:
+                chat_history = chat_history[-6:]
+                logger.debug(f"📚 Trimmed history to {len(chat_history)} messages (token optimization)")
+            
+            # ── STEP 4: EXTRACT KNOWN PROFILE DATA ────────────────────────────────
             extracted_profile = candidate.extracted_profile or {}
             
-            # Build session state with KNOWN profile data
+            # Build session state with KNOWN profile data for Elite Prompt
             session_state = {
                 "language": candidate.language_preference or "Unknown",
                 "candidate_id": candidate.id,
                 "current_flow": candidate.conversation_state,
                 "extracted_data": extracted_profile,
-                # NEW: Include known profile fields for Elite Prompt
+                # Profile fields used by Elite Prompt to decide what to ask
                 "candidate_name": candidate.name or "MISSING",
                 "candidate_job": extracted_profile.get("job_role", "MISSING"),
                 "candidate_country": (
@@ -4438,28 +4456,42 @@ class ChatbotEngine:
                 )
             }
             
-            # Ask the LLM router what to do (WITH chat history)
-            logger.info(f"🧠 Routing message from {user_phone}: {raw_text[:50]} (history: {len(chat_history)} msgs)")
-            decision = await route_user_message(raw_text, session_state, chat_history=chat_history)
+            # ── STEP 5: ROUTE WITH MEMORY INJECTION ────────────────────────────────
+            logger.info(
+                f"🧠 Routing: {user_phone} | history: {len(chat_history)} msgs | "
+                f"state: name={session_state['candidate_name']}, "
+                f"job={session_state['candidate_job']}, "
+                f"country={session_state['candidate_country']}"
+            )
             
-            # Execute the router's decision
+            decision = await route_user_message(
+                user_message=raw_text, 
+                session_state=session_state, 
+                chat_history=chat_history[:-1]  # Pass history WITHOUT current message (LLM adds it)
+            )
+            
+            # ── STEP 6: EXECUTE ROUTER DECISION ────────────────────────────────────
             if decision["action"] == "chat":
                 # Just send a normal text response
-                message = decision.get("message", "")
-                logger.info(f"💬 Chat response: {message[:50]}")
-                await meta_client.send_text(user_phone, message)
+                ai_message = decision.get("message", "")
+                logger.info(f"💬 Chat response: {ai_message[:60]}")
                 
-                # Log the interaction
+                # Send the message via WhatsApp
+                await meta_client.send_text(user_phone, ai_message)
+                
+                # ── STEP 7: UPDATE MEMORY (Append AI response to conversation) ─────
                 crud.create_conversation(
                     db,
                     ConversationCreate(
                         candidate_id=candidate.id,
                         user_message=raw_text,
-                        bot_message=message,
+                        bot_message=ai_message,
                         message_type=MessageTypeEnum.BOT
                     )
                 )
-                return message
+                
+                logger.debug(f"📝 Memory saved: user='{raw_text[:40]}...' | bot='{ai_message[:40]}...'")
+                return ai_message
             
             elif decision["action"] == "tool_call":
                 tool_name = decision.get("tool_name")
@@ -4473,6 +4505,17 @@ class ChatbotEngine:
                     await meta_client.send_language_selector(user_phone, greeting)
                     candidate.conversation_state = self.STATE_AWAITING_LANGUAGE_SELECTION
                     db.commit()
+                    
+                    # Log interaction
+                    crud.create_conversation(
+                        db,
+                        ConversationCreate(
+                            candidate_id=candidate.id,
+                            user_message=raw_text,
+                            bot_message=f"[TOOL] show_language_selector: {greeting}",
+                            message_type=MessageTypeEnum.SYSTEM
+                        )
+                    )
                     return "Language selector displayed"
                 
                 elif tool_name == "show_main_menu":
@@ -4484,6 +4527,16 @@ class ChatbotEngine:
                         await meta_client.send_interactive_list(user_phone, payload)
                     candidate.conversation_state = self.STATE_AWAITING_JOB
                     db.commit()
+                    
+                    crud.create_conversation(
+                        db,
+                        ConversationCreate(
+                            candidate_id=candidate.id,
+                            user_message=raw_text,
+                            bot_message="[TOOL] show_main_menu",
+                            message_type=MessageTypeEnum.SYSTEM
+                        )
+                    )
                     return "Main menu displayed"
                 
                 elif tool_name == "show_vacancies_list":
@@ -4498,25 +4551,43 @@ class ChatbotEngine:
                             await meta_client.send_interactive_list(user_phone, payload)
                             candidate.conversation_state = "viewing_vacancies"
                             db.commit()
+                            
+                            crud.create_conversation(
+                                db,
+                                ConversationCreate(
+                                    candidate_id=candidate.id,
+                                    user_message=raw_text,
+                                    bot_message=f"[TOOL] show_vacancies_list: shown {len(jobs_list)} jobs",
+                                    message_type=MessageTypeEnum.SYSTEM
+                                )
+                            )
                             return f"Showing {len(jobs_list)} vacancies"
                     else:
-                        await meta_client.send_text(
-                            user_phone,
-                            "No vacancies available at this moment. Please check back soon!"
+                        no_jobs_msg = "No vacancies available at this moment. Please check back soon!"
+                        await meta_client.send_text(user_phone, no_jobs_msg)
+                        
+                        crud.create_conversation(
+                            db,
+                            ConversationCreate(
+                                candidate_id=candidate.id,
+                                user_message=raw_text,
+                                bot_message=no_jobs_msg,
+                                message_type=MessageTypeEnum.BOT
+                            )
                         )
                         return "No vacancies available"
                 
                 elif tool_name == "submit_candidate_profile":
-                    # The AI has gathered all required data! Save to CRM
-                    name = args.get("name", "")
-                    job_role = args.get("job_role", "")
-                    preferred_country = args.get("preferred_country", "")
+                    # ── AI HAS GATHERED ALL DATA! LOCK IT TO DATABASE ───────────────
+                    name = args.get("name", "").strip()
+                    job_role = args.get("job_role", "").strip()
+                    preferred_country = args.get("preferred_country", "").strip()
                     
                     logger.info(
-                        f"✅ AI collected: name={name}, role={job_role}, country={preferred_country}"
+                        f"✅ AI successfully collected: name={name}, role={job_role}, country={preferred_country}"
                     )
                     
-                    # Update candidate in database
+                    # LOCK data to database (no longer using chat_history for this)
                     candidate.name = name
                     candidate.extracted_profile = {
                         "job_role": job_role,
@@ -4526,24 +4597,26 @@ class ChatbotEngine:
                     db.commit()
                     
                     # Send success message
+                    first_name = name.split()[0] if name else "there"
                     success_msg = (
-                        f"✅ Thank you {name.split()[0] if name else 'there'}! "
+                        f"✅ Thank you {first_name}! "
                         f"Your profile for **{job_role}** in **{preferred_country}** "
                         f"has been successfully saved. We will contact you soon! 🎉"
                     )
                     await meta_client.send_text(user_phone, success_msg)
                     
-                    # Log the submission
+                    # Log the submission (clear future context)
                     crud.create_conversation(
                         db,
                         ConversationCreate(
                             candidate_id=candidate.id,
                             user_message=f"[AUTO] Submitted: {job_role} in {preferred_country}",
                             bot_message=success_msg,
-                            message_type=MessageTypeEnum.BOT
+                            message_type=MessageTypeEnum.SYSTEM
                         )
                     )
                     
+                    logger.debug(f"🔒 Profile locked to database for {user_phone}")
                     return success_msg
             
             else:
@@ -4551,12 +4624,36 @@ class ChatbotEngine:
                 logger.warning(f"Unknown router action: {decision.get('action')}")
                 fallback = "I'm having a moment of confusion. Could you repeat that?"
                 await meta_client.send_text(user_phone, fallback)
+                
+                crud.create_conversation(
+                    db,
+                    ConversationCreate(
+                        candidate_id=candidate.id,
+                        user_message=raw_text,
+                        bot_message=fallback,
+                        message_type=MessageTypeEnum.BOT
+                    )
+                )
                 return fallback
         
         except Exception as e:
             logger.error(f"LLM Router error: {str(e)}", exc_info=True)
             fallback = "I'm experiencing a technical issue. Please try again in a moment."
-            await meta_client.send_text(user_phone, fallback)
+            
+            try:
+                await meta_client.send_text(user_phone, fallback)
+                crud.create_conversation(
+                    db,
+                    ConversationCreate(
+                        candidate_id=candidate.id,
+                        user_message=raw_text,
+                        bot_message=fallback,
+                        message_type=MessageTypeEnum.BOT
+                    )
+                )
+            except Exception as inner_e:
+                logger.error(f"Failed to send fallback: {inner_e}")
+            
             return fallback
 
     def _build_main_menu_payload(self, language: str) -> Optional[Dict[str, Any]]:
