@@ -25,6 +25,7 @@ from typing import Optional, Dict, Any, Union, List
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.llm.agent_router import route_user_message
 from app.nlp.language_detector import (
     detect_language, is_greeting, detect_language_switch_request, normalize_sri_lankan_input
 )
@@ -45,6 +46,7 @@ from app.database import SessionLocal
 from app.services.ad_context_service import ad_context_service
 from app.services.recruitment_sync import recruitment_sync
 from app.services.vacancy_service import vacancy_service
+from app.services.voice_service import voice_service
 from app.utils.meta_client import meta_client
 from app.knowledge import get_job_cache, refresh_job_cache
 
@@ -145,7 +147,9 @@ _NO_CV_RE = re.compile(
 )
 
 _INTERACTIVE_TOKEN_RE = re.compile(
-    r"^(job_\d+|skip|ctr_\d+|country_[a-z_]+|exp_[a-z0-9_]+)$",
+    r"^(job_\d+|skip|skip_complete|ctr_\d+|country_[a-z_]+|exp_[a-z0-9_]+"
+    r"|lang_en|lang_si|lang_ta"
+    r"|action_apply|action_vacancies|action_question)$",
     re.IGNORECASE,
 )
 
@@ -353,14 +357,38 @@ class ChatbotEngine:
             return str(response.get("body_text") or "").strip()
         return ""
 
-    @staticmethod
-    def _loop_failsafe_message() -> str:
-        return (
-            "To help you better, please select your preferred language:\n"
-            "1. English\n"
-            "2. Sinhala\n"
-            "3. Tamil"
-        )
+    def _localized_language_selector_prompt(self, language: str) -> str:
+        prompts = {
+            "en": "To help you better, please select your preferred language:\n1. English\n2. Sinhala\n3. Tamil",
+            "si": "ඔබට හොඳින් උදව් කිරීමට, කරුණාකර ඔබගේ භාෂාව තෝරන්න:\n1. English\n2. Sinhala\n3. Tamil",
+            "ta": "உங்களுக்கு நல்ல உதவி செய்ய, தயவு செய்து உங்கள் மொழியைத் தேர்வு செய்யவும்:\n1. English\n2. Sinhala\n3. Tamil",
+            "singlish": "Oyata honda help karanna, oyage language eka select karanna:\n1. English\n2. Sinhala\n3. Tamil",
+            "tanglish": "Ungalukku nalla help panna, unga language-a select pannunga:\n1. English\n2. Sinhala\n3. Tamil",
+        }
+        return prompts.get(language, prompts["en"])
+
+    def _normalization_confusing_fallback(self, language: str) -> str:
+        prompts = {
+            "en": "I'm sorry, I didn't quite catch that. To help you better, please reply with your language: 1 for English, 2 for Sinhala, 3 for Tamil.",
+            "si": "සමාවන්න, ඔබ කියූ දේ හරියටම තේරුම් ගන්න බැරි වුණා. කරුණාකර භාෂාව 1 (English), 2 (Sinhala), 3 (Tamil) ලෙස reply කරන්න.",
+            "ta": "மன்னிக்கவும், உங்கள் செய்தி முழுமையாக புரியவில்லை. தயவு செய்து மொழியை 1 (English), 2 (Sinhala), 3 (Tamil) என்று reply செய்யவும்.",
+            "singlish": "Samawenna, oyage message eka hariyata catch une ne. Language eka reply karanna: 1 English, 2 Sinhala, 3 Tamil.",
+            "tanglish": "Sorry, unga message clear-ah puriyala. Language-a reply pannunga: 1 English, 2 Sinhala, 3 Tamil.",
+        }
+        return prompts.get(language, prompts["en"])
+
+    def _normalization_second_chance_message(self, language: str) -> str:
+        prompts = {
+            "en": "Could you please clarify what kind of job you are looking for?",
+            "si": "ඔබ බලාපොරොත්තු වන රැකියා වර්ගය ටිකක් පැහැදිලි කරලා කියන්න පුළුවන්ද?",
+            "ta": "நீங்கள் எந்த வகை வேலை தேடுகிறீர்கள் என்பதை சற்று தெளிவாக சொல்ல முடியுமா?",
+            "singlish": "Oya balanne mona wage job ekakda kiyala tikak clear karanna puluwanda?",
+            "tanglish": "Neenga thedura job type enna-nu konjam clear-ah solla mudiyuma?",
+        }
+        return prompts.get(language, prompts["en"])
+
+    def _loop_failsafe_message(self, language: str = "en") -> str:
+        return self._localized_language_selector_prompt(language)
 
     @staticmethod
     def _should_use_loop_failsafe(reply: str) -> bool:
@@ -392,12 +420,13 @@ class ChatbotEngine:
         current_state: Dict[str, Any],
         language: str,
     ) -> str:
-        fallback = self._loop_failsafe_message()
+        fallback = self._loop_failsafe_message(language)
         current_state_json = json.dumps(current_state or {}, ensure_ascii=False)
         prompt = SUPERVISOR_OVERRIDE_PROMPT.format(
             user_message=(user_message or "")[:1000],
             stuck_response=(stuck_response or "")[:1000],
             current_state=current_state_json[:2000],
+            language=language or "en",
         )
 
         if not getattr(rag_engine, "async_openai_client", None):
@@ -444,7 +473,7 @@ class ChatbotEngine:
         )
 
         if self._should_use_loop_failsafe(supervisor_reply):
-            supervisor_reply = self._loop_failsafe_message()
+            supervisor_reply = self._loop_failsafe_message(language)
 
         self._push_recent_bot_message(db, candidate, supervisor_reply)
         return supervisor_reply
@@ -563,6 +592,24 @@ class ChatbotEngine:
         close = difflib.get_close_matches(candidate_country, countries, n=1, cutoff=0.72)
         return close[0] if close else None
 
+    def _normalize_free_text_country(self, text: str) -> Optional[str]:
+        """Normalize a country-like free-text answer when CRM match is unavailable."""
+        stripped = (text or "").strip()
+        if len(stripped) < 2:
+            return None
+
+        mapped = _COUNTRY_MASTER_MAP.get(stripped.lower())
+        if mapped:
+            return mapped
+
+        if re.search(r"\d", stripped):
+            return None
+
+        cleaned = re.sub(r"\s+", " ", stripped).strip(" .,!?:;-")
+        if not cleaned or len(cleaned) > 48:
+            return None
+        return cleaned.title()
+
     async def _handle_non_unified_rollout_state(
         self,
         db: Session,
@@ -679,6 +726,15 @@ class ChatbotEngine:
         }
         return msg.get(language, msg['en'])
 
+    @staticmethod
+    def _clean_job_title(title: str) -> str:
+        """Remove trailing test IDs (5+ digit numbers) and smart-truncate to 24 chars."""
+        import re as _re
+        clean = _re.sub(r'\s+\d{5,}$', '', str(title).strip())
+        if len(clean) > 24:
+            return clean[:23] + "…"
+        return clean
+
     def _build_presented_jobs_list_payload(
         self,
         language: str,
@@ -687,29 +743,34 @@ class ChatbotEngine:
     ) -> Dict[str, Any]:
         rows = []
         for i, job in enumerate((presented_jobs or [])[:3]):
-            title = str(job.get('title') or 'Job')
-            location = str(job.get('country') or '')
-            salary = str(job.get('salary') or '')
-            row_title = (f"{title} ({location})" if location else title)[:24]
-            row_desc = (salary if salary else str(job.get('description') or ''))[:72]
+            title = self._clean_job_title(job.get('title') or 'Job')
+            # Build rich description: country · salary · exp
+            desc_parts = []
+            if job.get('country'): desc_parts.append(str(job['country']))
+            if job.get('salary') or job.get('salary_range'):
+                desc_parts.append(str(job.get('salary') or job.get('salary_range')))
+            reqs = job.get('requirements') or {}
+            if isinstance(reqs, dict) and reqs.get('experience_years'):
+                desc_parts.append(f"{reqs['experience_years']}+ yrs")
+            row_desc = (" · ".join(desc_parts) if desc_parts else str(job.get('description') or 'Tap to apply'))[:72]
             rows.append({
                 "id": f"job_{i}",
-                "title": row_title,
+                "title": title,
                 "description": row_desc,
             })
 
-        skip_title = {
-            'en': "Skip & Join Pool",
-            'si': "Skip කර Pool එකට යන්න",
-            'ta': "Skip செந்து Pool-ல் சேர்",
-            'singlish': "Skip - General Pool",
-            'tanglish': "Skip - General Pool",
-        }.get(language, "Skip & Join Pool")[:24]
-
+        skip_labels = {
+            'en':       {"title": "Skip & Complete",    "description": "Just complete my application"},
+            'si':       {"title": "Skip කරන්න",          "description": "Application submit කරන්න"},
+            'ta':       {"title": "Skip செய்து முடி",     "description": "விண்ணப்பத்தை முடிக்க"},
+            'singlish': {"title": "Skip karala finish",  "description": "Application eka submit karanna"},
+            'tanglish': {"title": "Skip pannu",          "description": "Application submit pannidu"},
+        }
+        skip = skip_labels.get(language, skip_labels['en'])
         rows.append({
             "id": "skip",
-            "title": skip_title,
-            "description": "Don't select any specific job"[:72],
+            "title": skip["title"][:24],
+            "description": skip["description"][:72],
         })
 
         button_label = {
@@ -961,9 +1022,12 @@ class ChatbotEngine:
         active_jobs: Optional[list] = None,
     ) -> str:
         """Use the unified processor to generate steering text for off-track onboarding turns."""
+        if self._is_language_locked(candidate):
+            language = self._effective_language(candidate)
+
         try:
             normalized_data = candidate.extracted_data or {}
-            detected_language = str(normalized_data.get("detected_language") or language)
+            detected_language = language if self._is_language_locked(candidate) else str(normalized_data.get("detected_language") or language)
             unified = await self._process_agentic_state(
                 db=db,
                 candidate=candidate,
@@ -1369,9 +1433,8 @@ class ChatbotEngine:
             if message_text:
                 is_audio = source_message_type == "audio"
                 if message_text == "AUDIO_UNREADABLE_FALLBACK":
-                    noisy_audio_msg = (
-                        "It's a bit noisy on your end and I couldn't catch that clearly! 😅 "
-                        "Could you click one of the buttons below or type a short reply?"
+                    noisy_audio_msg = voice_service.AUDIO_FALLBACK_MESSAGES.get(
+                        language, voice_service.AUDIO_FALLBACK_MESSAGES["en"]
                     )
                     state_prompt: Union[str, Dict[str, Any]]
                     if candidate.conversation_state == self.STATE_AWAITING_EXPERIENCE:
@@ -1898,9 +1961,26 @@ class ChatbotEngine:
     ) -> Union[str, Dict[str, Any]]:
 
         raw_text = (message_text or "").strip()
-        normalized = await normalize_sri_lankan_input(raw_text)
+        interactive_token = _is_structured_interactive_token(raw_text)
+
+        # Interactive button/list reply IDs are machine tokens, not user text.
+        # Skip NLP normalization entirely — they must never be flagged as "confusing".
+        if interactive_token:
+            normalized = {"is_confusing": False, "detected_language": None, "english_translation": raw_text}
+        else:
+            normalized = await normalize_sri_lankan_input(raw_text)
+
         if bool(normalized.get("is_confusing", False)):
+            current_state = candidate.conversation_state
             language = self._effective_language(candidate)
+
+            # During language pick state, never route to generic confusion text.
+            if current_state == self.STATE_AWAITING_LANGUAGE_SELECTION:
+                self._log_msg(db, candidate.id, MessageTypeEnum.USER, raw_text, language)
+                response = PromptTemplates.get_language_selection()
+                self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, language)
+                return response
+
             confusion_counter = self._increment_confusion_counter(db, candidate)
 
             self._log_msg(db, candidate.id, MessageTypeEnum.USER, raw_text, language)
@@ -1908,7 +1988,7 @@ class ChatbotEngine:
             if confusion_counter == 1:
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_LANGUAGE_SELECTION)
                 candidate.conversation_state = self.STATE_AWAITING_LANGUAGE_SELECTION
-                response = self.NORMALIZATION_CONFUSING_FALLBACK
+                response = self._normalization_confusing_fallback(language)
             elif confusion_counter >= 3:
                 response = await self._escalate_to_human_handoff(
                     db,
@@ -1917,7 +1997,7 @@ class ChatbotEngine:
                     reason="Persistent unclear inputs",
                 )
             else:
-                response = self.NORMALIZATION_SECOND_CHANCE_MESSAGE
+                response = self._normalization_second_chance_message(language)
 
             self._log_msg(db, candidate.id, MessageTypeEnum.BOT, response, language)
             return response
@@ -1925,8 +2005,9 @@ class ChatbotEngine:
         if self._get_confusion_counter(candidate) > 0:
             self._reset_confusion_counter(db, candidate)
 
+        language_locked = self._is_language_locked(candidate)
         normalized_language = self._map_normalized_language(normalized.get("detected_language"))
-        if normalized_language:
+        if normalized_language and (not language_locked) and (not interactive_token):
             crud.update_candidate_language(db, candidate.id, normalized_language)
 
         data = candidate.extracted_data or {}
@@ -1989,7 +2070,6 @@ class ChatbotEngine:
 
         # 2. Detect language — with sliding-window adaptation
         # Treat structured tokens as interactive even if WhatsApp delivers them as text.
-        interactive_token = _is_structured_interactive_token(message_text)
         det_lang, det_conf = detect_language(message_text, phone_number)
         
         # Proactive adaptation: if the language detector has seen 2+ consecutive
@@ -2376,11 +2456,12 @@ class ChatbotEngine:
             text_norm = (text or "").lower().strip()
             new_lang = None
 
-            if text_norm.strip() in ("1", "en", "english", "eng") or "english" in text_norm:
+            # Button IDs from send_language_selector: lang_en / lang_si / lang_ta
+            if text_norm in ("lang_en", "1", "en", "english", "eng") or "english" in text_norm:
                 new_lang = "en"
-            elif text_norm.strip() in ("2", "si", "sinhala", "sinhalese") or "සිංහල" in text_norm:
+            elif text_norm in ("lang_si", "2", "si", "sinhala", "sinhalese") or "සිංහල" in text_norm:
                 new_lang = "si"
-            elif text_norm.strip() in ("3", "ta", "tamil", "tamizh", "thamizh") or "தமிழ்" in text_norm:
+            elif text_norm in ("lang_ta", "3", "ta", "tamil", "tamizh", "thamizh") or "தமிழ்" in text_norm:
                 new_lang = "ta"
             elif "singlish" in text_norm or "sinhala english" in text_norm:
                 new_lang = "singlish"
@@ -2565,12 +2646,16 @@ class ChatbotEngine:
             
             # 2. The Happy Path
             if target_data and len(target_data.strip()) >= 2:
-                active_countries_lower = {str(c).lower(): str(c) for c in (active_countries_list or [])}
-                resolved_country = active_countries_lower.get(str(target_data).lower())
-                if not resolved_country:
-                    return self._country_buttons_payload(language)
+                resolved_country = self._match_country_from_text(target_data, active_countries_list)
+                country_to_save = resolved_country or self._normalize_free_text_country(target_data)
+                if country_to_save:
+                    self._save_intake(db, candidate, 'destination_country', country_to_save)
+                    crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
+                    return self._experience_buttons_payload(language)
 
-                self._save_intake(db, candidate, 'destination_country', resolved_country)
+            fallback_country = self._match_country_from_text(text, active_countries_list) or self._normalize_free_text_country(text)
+            if fallback_country:
+                self._save_intake(db, candidate, 'destination_country', fallback_country)
                 crud.update_candidate_state(db, candidate.id, self.STATE_AWAITING_EXPERIENCE)
                 return self._experience_buttons_payload(language)
 
@@ -2597,10 +2682,20 @@ class ChatbotEngine:
                 search_job = str(data.get('job_interest') or '').strip()
                 search_country = str(data.get('destination_country') or '').strip()
                 if search_job:
+                    # Pass CV skills + experience for smarter job matching
+                    _skills_raw = data.get('skills') or ''
+                    _cv_skills = [s.strip() for s in _skills_raw.split(',') if s.strip()] if _skills_raw else []
+                    _exp_yrs = data.get('experience_years') or data.get('experience_years_stated')
+                    try:
+                        _exp_yrs = int(str(_exp_yrs).split('.')[0]) if _exp_yrs else None
+                    except (ValueError, TypeError):
+                        _exp_yrs = None
                     rebuilt = await vacancy_service.get_matching_jobs(
                         job_interest=search_job,
                         country=search_country,
                         limit=3,
+                        candidate_skills=_cv_skills,
+                        experience_years=_exp_yrs,
                     )
                     if rebuilt:
                         presented_cards = rebuilt[:3]
@@ -2610,7 +2705,7 @@ class ChatbotEngine:
                         db.commit()
 
             selected_index: Optional[int] = None
-            should_skip = normalized == 'skip'
+            should_skip = normalized in ('skip', 'skip_complete', 'skip & complete', 'skip karala finish', 'skip pannu', 'skip කරන්න', 'skip செய்து முடி')
 
             token_match = re.match(r'^job_(\d+)$', normalized)
             if token_match:
@@ -4284,6 +4379,228 @@ class ChatbotEngine:
             user_message=text,
             current_state=candidate.conversation_state,
         )
+
+    async def handle_with_llm_router(
+        self,
+        db: Session,
+        user_phone: str,
+        raw_text: str,
+        candidate: "Candidate"
+    ) -> str:
+        """
+        Handle message using the new LLM Router (Elite Implementation).
+        This is the GatewayMethod that decides:
+        1. Chat response → send text back
+        2. Tool call → execute WhatsApp UI action + save to DB
+        
+        The router is responsible for all the "brain" logic.
+        This method is just the pipeline executor.
+        """
+        
+        try:
+            # Build session state from candidate record
+            session_state = {
+                "language": candidate.language_preference or "Unknown",
+                "candidate_id": candidate.id,
+                "current_flow": candidate.conversation_state,
+                "extracted_data": candidate.extracted_profile or {}
+            }
+            
+            # Ask the LLM router what to do
+            logger.info(f"🧠 Routing message from {user_phone}: {raw_text[:50]}")
+            decision = await route_user_message(raw_text, session_state)
+            
+            # Execute the router's decision
+            if decision["action"] == "chat":
+                # Just send a normal text response
+                message = decision.get("message", "")
+                logger.info(f"💬 Chat response: {message[:50]}")
+                await meta_client.send_text(user_phone, message)
+                
+                # Log the interaction
+                crud.create_conversation(
+                    db,
+                    ConversationCreate(
+                        candidate_id=candidate.id,
+                        user_message=raw_text,
+                        bot_message=message,
+                        message_type=MessageTypeEnum.BOT
+                    )
+                )
+                return message
+            
+            elif decision["action"] == "tool_call":
+                tool_name = decision.get("tool_name")
+                args = decision.get("arguments", {})
+                
+                logger.info(f"🔧 Tool call: {tool_name} with args: {args}")
+                
+                if tool_name == "show_language_selector":
+                    # Send 3 language buttons (English, Sinhala, Tamil)
+                    greeting = args.get("greeting", "Please select your language:")
+                    await meta_client.send_language_selector(user_phone, greeting)
+                    candidate.conversation_state = self.STATE_AWAITING_LANGUAGE_SELECTION
+                    db.commit()
+                    return "Language selector displayed"
+                
+                elif tool_name == "show_main_menu":
+                    # Send main menu as interactive list
+                    payload = self._build_main_menu_payload(
+                        candidate.language_preference or "en"
+                    )
+                    if payload:
+                        await meta_client.send_interactive_list(user_phone, payload)
+                    candidate.conversation_state = self.STATE_AWAITING_JOB
+                    db.commit()
+                    return "Main menu displayed"
+                
+                elif tool_name == "show_vacancies_list":
+                    # Fetch top 5 jobs and send as WhatsApp list
+                    jobs_list = self._get_top_vacancies_for_list(limit=5)
+                    if jobs_list:
+                        payload = self._build_vacancies_payload(
+                            jobs_list,
+                            candidate.language_preference or "en"
+                        )
+                        if payload:
+                            await meta_client.send_interactive_list(user_phone, payload)
+                            candidate.conversation_state = "viewing_vacancies"
+                            db.commit()
+                            return f"Showing {len(jobs_list)} vacancies"
+                    else:
+                        await meta_client.send_text(
+                            user_phone,
+                            "No vacancies available at this moment. Please check back soon!"
+                        )
+                        return "No vacancies available"
+                
+                elif tool_name == "submit_candidate_profile":
+                    # The AI has gathered all required data! Save to CRM
+                    name = args.get("name", "")
+                    job_role = args.get("job_role", "")
+                    preferred_country = args.get("preferred_country", "")
+                    
+                    logger.info(
+                        f"✅ AI collected: name={name}, role={job_role}, country={preferred_country}"
+                    )
+                    
+                    # Update candidate in database
+                    candidate.name = name
+                    candidate.extracted_profile = {
+                        "job_role": job_role,
+                        "target_countries": [preferred_country],
+                    }
+                    candidate.conversation_state = self.STATE_APPLICATION_COMPLETE
+                    db.commit()
+                    
+                    # Send success message
+                    success_msg = (
+                        f"✅ Thank you {name.split()[0] if name else 'there'}! "
+                        f"Your profile for **{job_role}** in **{preferred_country}** "
+                        f"has been successfully saved. We will contact you soon! 🎉"
+                    )
+                    await meta_client.send_text(user_phone, success_msg)
+                    
+                    # Log the submission
+                    crud.create_conversation(
+                        db,
+                        ConversationCreate(
+                            candidate_id=candidate.id,
+                            user_message=f"[AUTO] Submitted: {job_role} in {preferred_country}",
+                            bot_message=success_msg,
+                            message_type=MessageTypeEnum.BOT
+                        )
+                    )
+                    
+                    return success_msg
+            
+            else:
+                # Unknown action type
+                logger.warning(f"Unknown router action: {decision.get('action')}")
+                fallback = "I'm having a moment of confusion. Could you repeat that?"
+                await meta_client.send_text(user_phone, fallback)
+                return fallback
+        
+        except Exception as e:
+            logger.error(f"LLM Router error: {str(e)}", exc_info=True)
+            fallback = "I'm experiencing a technical issue. Please try again in a moment."
+            await meta_client.send_text(user_phone, fallback)
+            return fallback
+
+    def _build_main_menu_payload(self, language: str) -> Optional[Dict[str, Any]]:
+        """Build the main menu interactive list payload."""
+        menus = {
+            "en": {
+                "body": "What would you like to do?",
+                "items": [
+                    {"id": "action_apply", "title": "Apply for a Job"},
+                    {"id": "action_vacancies", "title": "View Vacancies"},
+                    {"id": "action_question", "title": "Ask a Question"}
+                ]
+            },
+            "si": {
+                "body": "ඔබ කුමක්ද කිරීමට කැමතිද?",
+                "items": [
+                    {"id": "action_apply", "title": "වැඩ සඳහා අයදුම් කරන්න"},
+                    {"id": "action_vacancies", "title": "විවෘත ස්ථාන බලන්න"},
+                    {"id": "action_question", "title": "ප්‍රශ්න කරන්න"}
+                ]
+            },
+            "ta": {
+                "body": "நீங்கள் என்ன செய்ய விரும்புகிறீர்கள்?",
+                "items": [
+                    {"id": "action_apply", "title": "வேலைக்கு விண்ணப்பிக்கவும்"},
+                    {"id": "action_vacancies", "title": "காலிப்பொருளைக் பார்க்கவும்"},
+                    {"id": "action_question", "title": "கேள்வி கேளுங்கள்"}
+                ]
+            }
+        }
+        
+        menu_data = menus.get(language, menus["en"])
+        return {
+            "body": menu_data["body"],
+            "items": menu_data["items"]
+        }
+
+    def _get_top_vacancies_for_list(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get top N vacancies formatted for WhatsApp list."""
+        try:
+            # Simple implementation — fetch active job titles
+            # You may want to expand this to fetch actual job postings from DB
+            active_jobs = vacancy_service.get_active_job_titles() or []
+            return active_jobs[:limit]
+        except Exception as e:
+            logger.error(f"Error fetching vacancies: {str(e)}")
+            return []
+
+    def _build_vacancies_payload(
+        self,
+        jobs_list: List[Dict[str, Any]],
+        language: str
+    ) -> Optional[Dict[str, Any]]:
+        """Build vacancies list interactive payload."""
+        if not jobs_list:
+            return None
+        
+        items = []
+        for i, job in enumerate(jobs_list[:10], 1):  # WhatsApp list has limits
+            job_title = job.get("title", job) if isinstance(job, dict) else str(job)
+            items.append({
+                "id": f"job_{i}",
+                "title": job_title[:24],  # WhatsApp title character limit
+                "description": "Click to learn more" 
+            })
+        
+        title_map = {
+            "en": "Available Positions",
+            "si": "විවෘත ස්ථාන",
+            "ta": "கிடைக்கும் பல்வேறு பொறுப்புகள்"
+        }
+        
+        return {
+            "body": title_map.get(language, "Available Positions"),
+            "items": items
+        }
 
 
 # Singleton
