@@ -34,10 +34,21 @@ class VoiceService:
         "tanglish": "ta", # Romanized Tamil — hint Whisper to Tamil
     }
 
-    _WHISPER_LOCALIZED_PROMPT = (
+    _WHISPER_BASE_PROMPT = (
         "This is a WhatsApp voice note from a Sri Lankan user talking about jobs, CV, passport, "
-        "Dubai, Qatar, driver, mason, cleaning. They might speak in Sinhala, Tamil, Singlish, or Tanglish."
+        "Dubai, Qatar, Kuwait, Saudi Arabia, Oman, Malaysia, driver, mason, cleaning, security guard, "
+        "nurse, cook, welder, electrician, plumber. They might speak in Sinhala, Tamil, Singlish, or Tanglish."
     )
+
+    # Extra context per conversation state to improve Whisper accuracy
+    _STATE_WHISPER_HINTS: Dict[str, str] = {
+        "awaiting_job_interest":      "Job roles: security guard, driver, nurse, cook, welder, factory worker, mason, plumber, electrician, cleaner, waiter.",
+        "awaiting_destination_country": "Countries: UAE, Dubai, Qatar, Saudi Arabia, Kuwait, Oman, Malaysia, Maldives, Jordan.",
+        "awaiting_experience":        "Experience in years: one year, two years, five years, no experience, fresh, new.",
+        "collecting_info":            "Personal info: name, age, address, phone number, Colombo, Kandy, Galle, Jaffna, Batticaloa.",
+        "awaiting_cv":                "CV, resume, document, PDF, photo of certificate.",
+        "collecting_job_requirements": "Job preferences: salary, shift, accommodation, food, visa, contract period.",
+    }
 
     def __init__(self):
         self._client: Optional[AsyncOpenAI] = None
@@ -49,11 +60,21 @@ class VoiceService:
     def available(self) -> bool:
         return self._client is not None
 
+    # "Couldn't hear you" messages in all 5 languages
+    AUDIO_FALLBACK_MESSAGES: Dict[str, str] = {
+        "en":       "I couldn't hear that clearly 🎤 Could you send the voice note again, or type your reply?",
+        "si":       "හරිකට ඇහුණේ නෑ 🎤 නැවත voice note එකක් දෙන්න, නැත්නම් type කරන්න.",
+        "ta":       "சரியாக கேட்கவில்லை 🎤 மீண்டும் voice note அனுப்புங்கள், அல்லது type செய்யுங்கள்.",
+        "singlish": "Sando kiyala aruna naa 🎤 Awith voice note ekak denna, nethnam type karanna.",
+        "tanglish": "Sariyaa ketkaala 🎤 Thirumba voice note anuppu, illa type pannunga.",
+    }
+
     async def transcribe(
         self,
         audio_bytes: bytes,
         language_hint: str = "en",
         filename: str = "voice.ogg",
+        conversation_state: str = "",
     ) -> Dict[str, Any]:
         """
         Transcribe audio bytes to text via Whisper API.
@@ -62,11 +83,13 @@ class VoiceService:
             audio_bytes: raw audio file content (ogg/opus from WhatsApp)
             language_hint: candidate's current language preference
             filename: original filename (used by Whisper for format detection)
+            conversation_state: current chatbot state (for context hints)
 
         Returns:
             Dict with the shape {"is_voice": True, "raw_text": "<transcribed_text>"}.
         """
-        is_audio_like = str(filename or "").lower().endswith(".ogg") or str(filename or "").lower().endswith(".mp3") or str(filename or "").lower().endswith(".m4a") or str(filename or "").lower().endswith(".aac")
+        audio_ext = str(filename or "").lower().rsplit(".", 1)[-1]
+        is_audio_like = audio_ext in ("ogg", "mp3", "m4a", "aac", "opus", "wav", "flac")
         if not is_audio_like:
             return {"is_voice": True, "raw_text": "AUDIO_UNREADABLE_FALLBACK"}
 
@@ -76,6 +99,12 @@ class VoiceService:
 
         whisper_lang = self._WHISPER_LANG_MAP.get(language_hint, "en")
 
+        # Build state-aware prompt for better accuracy
+        state_hint = self._STATE_WHISPER_HINTS.get(conversation_state, "")
+        whisper_prompt = self._WHISPER_BASE_PROMPT
+        if state_hint:
+            whisper_prompt = f"{state_hint} {whisper_prompt}"
+
         try:
             audio_file = io.BytesIO(audio_bytes)
             audio_file.name = filename
@@ -84,7 +113,7 @@ class VoiceService:
                 model="whisper-1",
                 file=audio_file,
                 language=whisper_lang,
-                prompt=self._WHISPER_LOCALIZED_PROMPT,
+                prompt=whisper_prompt,
             )
             text = response.text.strip()
             logger.info(
@@ -104,11 +133,13 @@ class VoiceService:
         audio_bytes: bytes,
         language_hint: str = "en",
         filename: str = "voice.ogg",
+        conversation_state: str = "",
     ) -> Dict[str, Any]:
         return await self.transcribe(
             audio_bytes=audio_bytes,
             language_hint=language_hint,
             filename=filename,
+            conversation_state=conversation_state,
         )
 
 

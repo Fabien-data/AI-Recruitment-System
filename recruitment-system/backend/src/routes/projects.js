@@ -3,6 +3,8 @@ const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate, authorize } = require('../middleware/auth');
+const { syncJobAsync } = require('./chatbot-sync');
+const logger = require('../utils/logger');
 
 /**
  * Get all projects with filters
@@ -383,6 +385,27 @@ router.put('/:id', authenticate, authorize('admin', 'supervisor'), async (req, r
             }
             res.json(result.rows[0]);
         }
+
+        // Re-sync all active jobs in this project so the chatbot picks up
+        // updated benefits, salary_info, interview_date, etc. — non-blocking.
+        setImmediate(async () => {
+            try {
+                const jobsSQL = isMySQL
+                    ? `SELECT id FROM jobs WHERE project_id = ? AND status = 'active'`
+                    : `SELECT id FROM jobs WHERE project_id = $1 AND status = 'active'`;
+                const jobsResult = await query(jobsSQL, [id]);
+                for (const job of jobsResult.rows) {
+                    await syncJobAsync(job.id).catch(err =>
+                        logger.warn(`Project update: chatbot sync failed for job ${job.id}: ${err.message}`)
+                    );
+                }
+                if (jobsResult.rows.length > 0) {
+                    logger.info(`Project ${id} update: re-synced ${jobsResult.rows.length} jobs to chatbot KB`);
+                }
+            } catch (err) {
+                logger.warn(`Project ${id} update: chatbot job re-sync failed: ${err.message}`);
+            }
+        });
     } catch (error) {
         next(error);
     }
@@ -766,9 +789,19 @@ router.post('/:id/jobs', authenticate, authorize('admin', 'supervisor'), async (
         if (isMySQL) {
             const selectQuery = 'SELECT * FROM jobs WHERE id = ?';
             const selectResult = await query(selectQuery, [jobId]);
-            res.status(201).json(selectResult.rows[0]);
+            const created = selectResult.rows[0];
+            // Sync new job to chatbot KB — non-blocking
+            syncJobAsync(created.id).catch(err =>
+                logger.warn(`Project job create: chatbot sync failed for job ${created.id}: ${err.message}`)
+            );
+            res.status(201).json(created);
         } else {
-            res.status(201).json(result.rows[0]);
+            const created = result.rows[0];
+            // Sync new job to chatbot KB — non-blocking
+            syncJobAsync(created.id).catch(err =>
+                logger.warn(`Project job create: chatbot sync failed for job ${created.id}: ${err.message}`)
+            );
+            res.status(201).json(created);
         }
     } catch (error) {
         next(error);

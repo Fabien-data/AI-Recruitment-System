@@ -105,10 +105,24 @@ async def bootstrap_job_cache() -> int:
         data = response.json()
         jobs = data.get("jobs", [])
 
+        # Keywords that identify test/demo jobs — never show these to real users
+        _TEST_TITLE_KEYWORDS = {"test", "e2e", "cache test", "demo", "dummy", "tbd", "sample"}
+        loaded_count = 0
         for job in jobs:
             job_id = str(job.get("job_id", ""))
             if not job_id:
                 continue
+
+            # Skip jobs that are not active
+            if job.get("status", "active") != "active":
+                continue
+
+            # Skip test/demo jobs by title
+            title_lower = (job.get("title") or "").lower()
+            if any(kw in title_lower for kw in _TEST_TITLE_KEYWORDS):
+                logger.debug(f"Skipping test/demo job from cache: {job.get('title')!r}")
+                continue
+
             raw_req = job.get("requirements")
             if isinstance(raw_req, str):
                 try:
@@ -126,10 +140,13 @@ async def bootstrap_job_cache() -> int:
                 "status": job.get("status", "active"),
                 "requirements": requirements,
                 "salary_range": job.get("salary_range"),
+                "location": job.get("location", ""),
+                "description": job.get("description", ""),
             }
+            loaded_count += 1
 
         global _cache_last_refreshed
-        logger.info(f"✅ Job cache bootstrap: loaded {len(jobs)} active jobs from recruitment system")
+        logger.info(f"✅ Job cache bootstrap: loaded {loaded_count} active jobs ({len(jobs) - loaded_count} test/inactive skipped)")
         _cache_last_refreshed = time.time()
         return len(jobs)
 
@@ -235,8 +252,10 @@ async def upsert_knowledge(
             "status": metadata.get("status"),
             "requirements": requirements,
             "salary_range": metadata.get("salary_range"),
+            "location": metadata.get("location", ""),
+            "description": metadata.get("description", ""),
         }
-        logger.info(f"Job cache updated for job_id={job_id}")
+        logger.info(f"✅ Job cache instantly updated for job_id={job_id} title={body.title!r}")
 
     return {
         "status": "ok",

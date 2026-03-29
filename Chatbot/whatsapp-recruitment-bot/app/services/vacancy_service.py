@@ -115,35 +115,89 @@ class VacancyService:
         job_interest: str,
         country: str,
         limit: int = 3,
+        candidate_skills: Optional[List[str]] = None,
+        experience_years: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Compatibility helper for state-machine selection flow.
         Returns a lightweight list of dicts with id/title/salary/description/country.
+        Uses candidate CV data for smarter skill-based ranking.
         """
         entities = {
             "job_roles": [job_interest] if job_interest else [],
             "countries": [] if country == 'ANY' else ([country] if country else []),
-            "skills": [],
+            "skills": candidate_skills or [],
+            "experience_years": experience_years,
         }
         ranked = await self.get_ranked_jobs(entities=entities, limit=limit)
+
+        # Secondary re-rank using CV skills if provided
+        if candidate_skills and ranked:
+            ranked = self._cv_rerank_jobs(ranked, candidate_skills, experience_years)
+            ranked = ranked[:limit]
+
         out: List[Dict[str, Any]] = []
         for job in ranked:
             requirements = job.get("requirements") if isinstance(job.get("requirements"), dict) else {}
             countries = [str(c) for c in (job.get("countries") or [])]
+
+            # Build rich description — never show "TBD"
+            desc_parts = []
+            if job.get("salary_range"):
+                desc_parts.append(str(job["salary_range"]))
+            if requirements.get("experience_years"):
+                desc_parts.append(f"{requirements['experience_years']}+ yrs exp")
+            if job.get("location"):
+                desc_parts.append(str(job["location"]))
+            if not desc_parts and job.get("description"):
+                desc_parts.append(str(job["description"])[:80])
+            rich_desc = " · ".join(desc_parts) if desc_parts else "Enquire for details"
+
             out.append({
                 "id": str(job.get("job_id") or ""),
                 "title": str(job.get("title") or "").strip(),
-                "salary": str(job.get("salary_range") or "").strip() or "TBD",
-                "description": str(
-                    requirements.get("summary")
-                    or requirements.get("short_description")
-                    or requirements.get("note")
-                    or "Click to learn more."
-                )[:120],
+                "salary": str(job.get("salary_range") or "").strip() or "",
+                "salary_range": str(job.get("salary_range") or "").strip() or "",
+                "description": rich_desc[:120],
                 "country": countries[0] if countries else country,
+                "location": str(job.get("location") or ""),
                 "requirements": requirements,
             })
         return out
+
+    def _cv_rerank_jobs(
+        self,
+        jobs: List[Dict[str, Any]],
+        candidate_skills: List[str],
+        experience_years: Optional[int],
+    ) -> List[Dict[str, Any]]:
+        """Re-rank jobs using candidate CV skills and experience."""
+        skill_set = {s.lower().strip() for s in candidate_skills if s}
+
+        def _score(job: Dict[str, Any]) -> int:
+            score = 0
+            reqs = job.get("requirements") or {}
+            if isinstance(reqs, dict):
+                # Match skills in requirements fields
+                req_text = " ".join([
+                    str(reqs.get("summary", "")),
+                    str(reqs.get("skills", "")),
+                    str(reqs.get("description", "")),
+                ]).lower()
+                for skill in skill_set:
+                    if skill in req_text:
+                        score += 4
+                # Experience match
+                if experience_years is not None:
+                    min_exp = reqs.get("experience_years", 0) or 0
+                    if experience_years >= min_exp:
+                        score += 3
+                    elif experience_years >= min_exp - 1:
+                        score += 1
+            return score
+
+        scored = sorted(jobs, key=_score, reverse=True)
+        return scored
 
     # ─────────────────────────────────────────────────────────────────────────
     # Job fetching (3-layer: cache → REST API → PostgreSQL)

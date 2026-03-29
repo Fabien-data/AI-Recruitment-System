@@ -203,18 +203,43 @@ async def process_webhook_value(value: dict):
                 f"Error processing message {message.get('id')}: {e}\n"
                 f"{traceback.format_exc()}"
             )
-            # Try to send an error reply so the user isn't left hanging
+            # Warm graceful recovery — NEVER show a technical error to the user
             from_number = message.get("from")
             if from_number:
                 try:
-                    await meta_client.send_message(
-                        from_number,
-                        "I'm sorry, I encountered an error. Please try again in a moment."
-                    )
+                    recovery_msg = await _graceful_recovery_message(from_number, db)
+                    await meta_client.send_message(from_number, recovery_msg)
                 except Exception as send_err:
-                    logger.error(f"Failed to send error reply: {send_err}")
+                    logger.error(f"Failed to send graceful recovery reply: {send_err}")
         finally:
             db.close()
+
+
+# ─── Graceful Recovery (never show technical errors to users) ────────────────
+
+_GRACEFUL_RECOVERY_MESSAGES = {
+    "en":       "Just a moment! Can you send that again? We'll continue from where we left off 😊",
+    "si":       "ටිකක් ඉවසන්න! නැවත message එක send කරන්න, අපි ඉදිරියට යමු 😊",
+    "ta":       "கொஞ்சம் பொறுங்கள்! மீண்டும் message அனுப்புங்கள், தொடர்வோம் 😊",
+    "singlish": "Ekka moment! Again send karanna, api inna thamath 😊",
+    "tanglish": "Oru nimisham! Thirumba message anuppu, thoda paakalaam 😊",
+}
+
+
+async def _graceful_recovery_message(phone: str, db) -> str:
+    """
+    Return a warm, language-appropriate recovery message.
+    NEVER returns a technical error string — always a friendly nudge.
+    """
+    lang = "en"
+    try:
+        candidate = crud.get_candidate_by_phone(db, phone)
+        if candidate and candidate.language_preference:
+            lp = candidate.language_preference
+            lang = lp.value if hasattr(lp, "value") else str(lp)
+    except Exception:
+        pass
+    return _GRACEFUL_RECOVERY_MESSAGES.get(lang, _GRACEFUL_RECOVERY_MESSAGES["en"])
 
 
 # ─── Recruitment System Chat Sync ────────────────────────────────────────────
@@ -476,8 +501,10 @@ async def process_single_message(message: dict, contacts: list, db):
                            "audio/mp4": "voice.m4a", "audio/aac": "voice.aac"}
                 fname = ext_map.get(mime.split(";")[0], "voice.ogg")
 
+                conv_state = getattr(cand, "conversation_state", "") or ""
                 transcribed = await voice_service.transcribe(
-                    audio_bytes, language_hint=lang_hint, filename=fname
+                    audio_bytes, language_hint=lang_hint, filename=fname,
+                    conversation_state=conv_state,
                 )
                 transcribed_text = str((transcribed or {}).get("raw_text") or "").strip()
                 if transcribed_text and transcribed_text != "AUDIO_UNREADABLE_FALLBACK":
@@ -527,12 +554,6 @@ async def process_single_message(message: dict, contacts: list, db):
                 db=db,
                 phone_number=from_number,
                 message_text=text_body,
-                source_message_type=message_type,
-            )
-            response_text = await _safe_process_message(
-                db=db,
-                phone_number=from_number,
-                message_text=text_to_send,
                 source_message_type=message_type,
             )
 
