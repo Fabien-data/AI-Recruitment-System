@@ -16,11 +16,107 @@
 
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const { uploadToGCS } = require('../utils/gcs-upload');
+
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 20 * 1024 * 1024 },
+});
+
+const ALLOWED_MEDIA_MIME_PREFIXES = ['image/', 'audio/', 'video/'];
+const ALLOWED_DOC_MIME_TYPES = new Set([
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain',
+]);
+
+function sanitizeFileName(name) {
+    return String(name || 'upload.bin').replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function detectMediaType(mimeType, requestedType) {
+    if (requestedType && ['image', 'audio', 'document', 'video'].includes(requestedType)) {
+        return requestedType;
+    }
+
+    if (mimeType?.startsWith('image/')) return 'image';
+    if (mimeType?.startsWith('audio/')) return 'audio';
+    if (mimeType?.startsWith('video/')) return 'video';
+    return 'document';
+}
+
+function validateMediaMime(file) {
+    if (!file?.mimetype) return false;
+    if (ALLOWED_MEDIA_MIME_PREFIXES.some(prefix => file.mimetype.startsWith(prefix))) return true;
+    return ALLOWED_DOC_MIME_TYPES.has(file.mimetype);
+}
+
+async function uploadCommunicationMedia(file, candidateId) {
+    const safeName = sanitizeFileName(file.originalname);
+    const objectName = `communications/${candidateId}/${Date.now()}_${safeName}`;
+    const mediaUrl = await uploadToGCS(file.buffer, objectName, file.mimetype || 'application/octet-stream');
+    if (!mediaUrl) {
+        throw new Error('Media upload failed. Check GCS configuration and bucket permissions.');
+    }
+    return mediaUrl;
+}
+
+async function insertCommunicationMessage({
+    id,
+    candidateId,
+    channel,
+    direction,
+    messageType,
+    content,
+    sentBy,
+    senderType,
+    senderName,
+    attachmentsValue,
+    metadataValue,
+    callRecordingUrl,
+}) {
+    try {
+        await query(
+            adaptQuery(`INSERT INTO communications
+                (id, candidate_id, channel, direction, message_type, content,
+                 attachments, metadata, call_recording_url,
+                 sent_by, sender_type, sender_name)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`),
+            [
+                id,
+                candidateId,
+                channel,
+                direction,
+                messageType,
+                content,
+                isMySQL ? JSON.stringify(attachmentsValue || []) : (attachmentsValue || []),
+                metadataValue || '{}',
+                callRecordingUrl || null,
+                sentBy || null,
+                senderType || null,
+                senderName || null,
+            ]
+        );
+    } catch (err) {
+        const msg = String(err?.message || '').toLowerCase();
+        const schemaMismatch = msg.includes('column') || msg.includes('does not exist') || msg.includes('unknown column');
+        if (!schemaMismatch) throw err;
+
+        await query(
+            adaptQuery(`INSERT INTO communications
+                (id, candidate_id, channel, direction, message_type, content, sent_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`),
+            [id, candidateId, channel, direction, messageType, content, sentBy || null]
+        );
+    }
+}
 
 function authenticateChatbot(req, res, next) {
     const apiKey = req.headers['x-chatbot-api-key'];
@@ -52,7 +148,7 @@ router.get('/candidate/:candidate_id', authenticate, async (req, res, next) => {
 
         const params = [candidate_id];
         let sql = adaptQuery(
-            `SELECT c.*, u.name AS agent_name
+            `SELECT c.*, u.full_name AS agent_name
              FROM communications c
              LEFT JOIN users u ON u.id = c.sent_by
              WHERE c.candidate_id = $1`
@@ -121,7 +217,7 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 ca.escalation_reason,
                 ca.is_human_handoff,
                 ca.agent_id,
-                u.name           AS agent_name,
+                u.full_name      AS agent_name,
                 lm.content       AS last_message,
                 lm.direction     AS last_direction,
                 lm.sender_type   AS last_sender_type,
@@ -129,17 +225,22 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 lm.chatbot_state AS last_chatbot_state,
                 lm.sent_at       AS last_message_at
             FROM candidates ca
-            INNER JOIN (
+            LEFT JOIN (
                 SELECT DISTINCT ON (candidate_id)
-                    candidate_id, content, direction, sender_type,
-                    detected_language, chatbot_state, sent_at
+                    candidate_id,
+                    content,
+                    direction,
+                    NULL AS sender_type,
+                    NULL AS detected_language,
+                    NULL AS chatbot_state,
+                    sent_at
                 FROM communications
                 WHERE channel = 'whatsapp'
                 ORDER BY candidate_id, sent_at DESC
             ) lm ON lm.candidate_id = ca.id
             LEFT JOIN users u ON u.id = ca.agent_id
             ${whereClause}
-            ORDER BY lm.sent_at DESC
+            ORDER BY COALESCE(lm.sent_at, ca.created_at) DESC
             LIMIT ${parseInt(limit, 10)}
         `);
 
@@ -190,16 +291,20 @@ router.post('/escalate', authenticateChatbot, async (req, res, next) => {
 
         const commId = generateUUID();
         const systemMsg = `AI escalation requested: ${reason || 'Persistent unclear inputs'}`;
-        await query(
-            adaptQuery(`
-                INSERT INTO communications
-                (id, candidate_id, channel, direction, message_type, content,
-                 sender_type, sender_name, sent_at)
-                VALUES ($1, $2, 'whatsapp', 'outbound', 'text',
-                 $3, 'system', 'System', NOW())
-            `),
-            [commId, candidate.id, systemMsg]
-        );
+        await insertCommunicationMessage({
+            id: commId,
+            candidateId: candidate.id,
+            channel: 'whatsapp',
+            direction: 'outbound',
+            messageType: 'text',
+            content: systemMsg,
+            sentBy: null,
+            senderType: 'system',
+            senderName: 'System',
+            attachmentsValue: [],
+            metadataValue: JSON.stringify({ source: 'escalate' }),
+            callRecordingUrl: null,
+        });
 
         try {
             const { getIO } = require('../utils/websocket');
@@ -260,15 +365,20 @@ router.post('/candidate/:candidate_id/takeover', authenticate, async (req, res, 
 
         // Log a system message in the chat
         const commId = generateUUID();
-        await query(
-            adaptQuery(`INSERT INTO communications
-                (id, candidate_id, channel, direction, message_type, content,
-                 sender_type, sender_name, sent_at)
-                VALUES ($1, $2, 'whatsapp', 'outbound', 'text',
-                 $3, 'system', 'System', NOW())`),
-            [commId, candidate_id,
-                `🙋 Agent ${req.user.name || req.user.email} has taken over the conversation.`]
-        );
+        await insertCommunicationMessage({
+            id: commId,
+            candidateId: candidate_id,
+            channel: 'whatsapp',
+            direction: 'outbound',
+            messageType: 'text',
+            content: `🙋 Agent ${req.user.name || req.user.email} has taken over the conversation.`,
+            sentBy: req.user.id,
+            senderType: 'system',
+            senderName: 'System',
+            attachmentsValue: [],
+            metadataValue: JSON.stringify({ source: 'takeover' }),
+            callRecordingUrl: null,
+        });
 
         // Emit WebSocket notification
         try {
@@ -314,15 +424,20 @@ router.post('/candidate/:candidate_id/release', authenticate, async (req, res, n
 
         // System message in the chat
         const commId = generateUUID();
-        await query(
-            adaptQuery(`INSERT INTO communications
-                (id, candidate_id, channel, direction, message_type, content,
-                 sender_type, sender_name, sent_at)
-                VALUES ($1, $2, 'whatsapp', 'outbound', 'text',
-                 $3, 'system', 'System', NOW())`),
-            [commId, candidate_id,
-                `🤖 Bot has resumed control of the conversation.`]
-        );
+        await insertCommunicationMessage({
+            id: commId,
+            candidateId: candidate_id,
+            channel: 'whatsapp',
+            direction: 'outbound',
+            messageType: 'text',
+            content: '🤖 Bot has resumed control of the conversation.',
+            sentBy: req.user.id,
+            senderType: 'system',
+            senderName: 'System',
+            attachmentsValue: [],
+            metadataValue: JSON.stringify({ source: 'release' }),
+            callRecordingUrl: null,
+        });
 
         // Emit WebSocket notification
         try {
@@ -353,12 +468,18 @@ router.post('/candidate/:candidate_id/release', authenticate, async (req, res, n
 // ── POST /api/communications/send ─────────────────────────────────────────────
 // Agent manually sends a WhatsApp message to a candidate.
 // If not already in handoff, automatically triggers takeover first.
-router.post('/send', authenticate, async (req, res, next) => {
+router.post('/send', authenticate, upload.single('media'), async (req, res, next) => {
     try {
-        const { candidate_id, channel = 'whatsapp', message } = req.body;
+        const { candidate_id, channel = 'whatsapp', message = '', msgType } = req.body;
+        const mediaFile = req.file;
+        const hasText = Boolean(String(message).trim());
 
-        if (!candidate_id || !message) {
-            return res.status(400).json({ error: 'candidate_id and message are required' });
+        if (!candidate_id) {
+            return res.status(400).json({ error: 'candidate_id is required' });
+        }
+
+        if (!hasText && !mediaFile) {
+            return res.status(400).json({ error: 'message or media file is required' });
         }
 
         const candidateResult = await query(
@@ -371,19 +492,40 @@ router.post('/send', authenticate, async (req, res, next) => {
 
         const candidate = candidateResult.rows[0];
         let sendResult = { simulated: false };
+        let mediaUrl = null;
+        let finalMessageType = 'text';
+
+        if (mediaFile) {
+            if (!validateMediaMime(mediaFile)) {
+                return res.status(400).json({ error: `Unsupported media MIME type: ${mediaFile.mimetype}` });
+            }
+            mediaUrl = await uploadCommunicationMedia(mediaFile, candidate_id);
+            finalMessageType = detectMediaType(mediaFile.mimetype, msgType);
+        }
 
         if (channel === 'whatsapp') {
-            const { sendTextMessage } = require('../services/whatsapp');
+            const { sendTextMessage, sendMediaMessage } = require('../services/whatsapp');
             try {
-                await sendTextMessage(candidate.phone || candidate.whatsapp_phone, message);
+                const phone = candidate.phone || candidate.whatsapp_phone;
+                if (mediaUrl) {
+                    await sendMediaMessage(phone, finalMessageType, mediaUrl, String(message || '').trim());
+                } else {
+                    await sendTextMessage(phone, message);
+                }
             } catch (err) {
                 logger.warn(`WhatsApp send failed (simulating): ${err.message}`);
                 sendResult.simulated = true;
             }
         } else if (channel === 'sms') {
+            if (mediaUrl) {
+                return res.status(400).json({ error: 'SMS channel does not support media attachments in this endpoint' });
+            }
             const { sendSMS } = require('../services/sms');
             sendResult = await sendSMS(candidate.phone, message);
         } else if (channel === 'email') {
+            if (mediaUrl) {
+                return res.status(400).json({ error: 'Email media attachments are not supported by this endpoint yet' });
+            }
             if (candidate.email) {
                 try {
                     const gmailService = require('../services/gmail');
@@ -406,13 +548,28 @@ router.post('/send', authenticate, async (req, res, next) => {
         // Store the message in communications
         const commId = generateUUID();
         const agentName = req.user?.name || req.user?.email || 'Agent';
-        await query(
-            adaptQuery(`INSERT INTO communications
-                (id, candidate_id, channel, direction, message_type, content,
-                 sent_by, sender_type, sender_name)
-                VALUES ($1, $2, $3, 'outbound', 'text', $4, $5, 'agent', $6)`),
-            [commId, candidate_id, channel, message, req.user.id, agentName]
-        );
+        const messageText = String(message || '').trim();
+        const attachmentsValue = mediaUrl ? [mediaUrl] : [];
+        const metadataValue = JSON.stringify({
+            source: 'agent_dashboard',
+            upload_mime_type: mediaFile?.mimetype || null,
+            upload_original_name: mediaFile?.originalname || null,
+            upload_size: mediaFile?.size || null,
+        });
+        await insertCommunicationMessage({
+            id: commId,
+            candidateId: candidate_id,
+            channel,
+            direction: 'outbound',
+            messageType: finalMessageType,
+            content: messageText,
+            sentBy: req.user.id,
+            senderType: 'agent',
+            senderName: agentName,
+            attachmentsValue,
+            metadataValue,
+            callRecordingUrl: finalMessageType === 'audio' ? mediaUrl : null,
+        });
 
         // Broadcast via WebSocket
         try {
@@ -424,20 +581,30 @@ router.post('/send', authenticate, async (req, res, next) => {
                     candidate_id,
                     channel,
                     direction: 'outbound',
-                    message_type: 'text',
-                    content: message,
+                    message_type: finalMessageType,
+                    content: messageText,
+                    attachments: attachmentsValue,
                     sender_type: 'agent',
                     sender_name: agentName,
                     sent_at: new Date().toISOString(),
                 };
                 io.to(`candidate:${candidate_id}`).emit('new_message', msgPayload);
-                io.emit('chat_activity', { candidate_id, last_message: message.slice(0, 80), ts: new Date().toISOString() });
+                const chatPreview = messageText
+                    || (mediaUrl ? `[${finalMessageType.toUpperCase()}]` : '');
+                io.emit('chat_activity', { candidate_id, last_message: chatPreview.slice(0, 80), ts: new Date().toISOString() });
             }
         } catch (wsErr) {
             logger.debug(`send WS emit skipped: ${wsErr.message}`);
         }
 
-        return res.status(201).json({ ...{ id: commId, direction: 'outbound', content: message }, simulated: sendResult.simulated || false });
+        return res.status(201).json({
+            id: commId,
+            direction: 'outbound',
+            content: messageText,
+            message_type: finalMessageType,
+            attachments: attachmentsValue,
+            simulated: sendResult.simulated || false,
+        });
     } catch (error) {
         next(error);
     }
@@ -475,12 +642,20 @@ router.post('/send-bulk', authenticate, async (req, res, next) => {
                     await sendSMS(candidate.phone, message);
                 }
                 const commId = generateUUID();
-                await query(
-                    adaptQuery(`INSERT INTO communications
-                        (id, candidate_id, channel, direction, message_type, content, sent_by, sender_type)
-                        VALUES ($1, $2, $3, 'outbound', 'text', $4, $5, 'agent')`),
-                    [commId, candidateId, channel, message, req.user.id]
-                );
+                await insertCommunicationMessage({
+                    id: commId,
+                    candidateId,
+                    channel,
+                    direction: 'outbound',
+                    messageType: 'text',
+                    content: message,
+                    sentBy: req.user.id,
+                    senderType: 'agent',
+                    senderName: req.user?.name || req.user?.email || 'Agent',
+                    attachmentsValue: [],
+                    metadataValue: JSON.stringify({ source: 'bulk_send' }),
+                    callRecordingUrl: null,
+                });
                 results.success.push({ candidate_id: candidateId, name: candidate.name });
             } catch (err) {
                 results.failed.push({ candidate_id: candidateId, error: err.message });

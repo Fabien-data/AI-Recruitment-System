@@ -1,5 +1,4 @@
 const axios = require('axios');
-const FormData = require('form-data');
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v18.0';
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -62,6 +61,43 @@ async function sendTemplateMessage(to, templateName, languageCode, components = 
         return response.data;
     } catch (error) {
         console.error('WhatsApp template send error:', error.response?.data || error.message);
+        throw error;
+    }
+}
+
+/**
+ * Send WhatsApp media message (image, document, audio, video)
+ */
+async function sendMediaMessage(to, type, mediaUrl, caption = '') {
+    try {
+        const payload = {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: to.replace(/[^0-9]/g, ''),
+            type,
+            [type]: {
+                link: mediaUrl
+            }
+        };
+
+        if (caption && (type === 'image' || type === 'document' || type === 'video')) {
+            payload[type].caption = caption;
+        }
+
+        const response = await axios.post(
+            `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+            payload,
+            {
+                headers: {
+                    'Authorization': `Bearer ${ACCESS_TOKEN}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        return response.data;
+    } catch (error) {
+        console.error(`WhatsApp ${type} send error:`, error.response?.data || error.message);
         throw error;
     }
 }
@@ -144,6 +180,7 @@ function getExtensionFromMimeType(mimeType) {
 module.exports = {
     sendTextMessage,
     sendTemplateMessage,
+    sendMediaMessage,
     downloadMedia,
     markMessageAsRead
 };

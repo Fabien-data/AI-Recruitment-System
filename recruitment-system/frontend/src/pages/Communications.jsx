@@ -20,7 +20,8 @@ import { io } from 'socket.io-client'
 import {
   MessageSquare, Search, Send, Phone, Mail, Bot, User,
   UserCheck, RefreshCw, Globe, Briefcase, MapPin, Clock,
-  ChevronRight, AlertCircle, Wifi, WifiOff, Loader2
+  ChevronRight, AlertCircle, Wifi, WifiOff, Loader2,
+  Mic, Square, Trash2, Paperclip
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { format, formatDistanceToNow } from 'date-fns'
@@ -31,12 +32,19 @@ import { useAuthStore } from '../stores/authStore'
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
-const API_BASE = 'http://localhost:3000'; // Hardcoded for local test
+const API_BASE = import.meta.env.VITE_API_URL || ''
 
 async function apiFetch(path, opts = {}) {
   const token = useAuthStore.getState().token
+  const isFormData = opts.body instanceof FormData
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...opts.headers },
+    cache: 'no-store',
+    headers: {
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(isFormData ? {} : { 'Cache-Control': 'no-cache' }),
+      Authorization: `Bearer ${token}`,
+      ...opts.headers,
+    },
     ...opts,
   })
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
@@ -47,7 +55,71 @@ const getActiveChats = (search) => apiFetch(`/api/communications/active-chats?se
 const getTranscript = (id) => apiFetch(`/api/communications/candidate/${id}?limit=200`)
 const takeover = (id) => apiFetch(`/api/communications/candidate/${id}/takeover`, { method: 'POST' })
 const release = (id) => apiFetch(`/api/communications/candidate/${id}/release`, { method: 'POST' })
-const sendMsg = (body) => apiFetch('/api/communications/send', { method: 'POST', body: JSON.stringify(body) })
+const sendMsg = (body) => apiFetch('/api/communications/send', {
+  method: 'POST',
+  body: body instanceof FormData ? body : JSON.stringify(body)
+})
+
+const parseAttachments = (value) => {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : [value]
+    } catch {
+      if (value.startsWith('{') || value.startsWith('[')) return []
+      return [value]
+    }
+  }
+  return []
+}
+
+const getPrimaryAttachment = (msg) => {
+  const attachments = parseAttachments(msg.attachments)
+  if (attachments.length === 0) return null
+
+  const first = attachments[0]
+  if (typeof first === 'string') return first
+  if (first && typeof first === 'object') return first.url || null
+  return null
+}
+
+function MediaContent({ msg, isOutbound }) {
+  const mediaUrl = getPrimaryAttachment(msg)
+  if (!mediaUrl) return null
+
+  if (msg.message_type === 'image') {
+    return <img src={mediaUrl} alt="attachment" className="max-h-64 w-auto rounded-lg border border-white/20" />
+  }
+
+  if (msg.message_type === 'audio' || msg.message_type === 'voice') {
+    return <audio controls src={mediaUrl} className="w-64 max-w-full" />
+  }
+
+  if (msg.message_type === 'video') {
+    return <video controls src={mediaUrl} className="max-h-64 w-auto rounded-lg border border-white/20" />
+  }
+
+  if (msg.message_type === 'document') {
+    return (
+      <a
+        href={mediaUrl}
+        target="_blank"
+        rel="noreferrer"
+        className={clsx(
+          'inline-flex items-center gap-2 underline text-sm',
+          isOutbound ? 'text-white' : 'text-indigo-700'
+        )}
+      >
+        <Paperclip size={14} />
+        Open attachment
+      </a>
+    )
+  }
+
+  return null
+}
 
 // ── Language badge ────────────────────────────────────────────────────────────
 
@@ -73,6 +145,7 @@ function MsgBubble({ msg }) {
   const isInbound = msg.direction === 'inbound'
   const isSystem = msg.sender_type === 'system'
   const isAgent = msg.sender_type === 'agent'
+  const hasMedia = Boolean(getPrimaryAttachment(msg))
 
   if (isSystem) {
     return (
@@ -105,6 +178,11 @@ function MsgBubble({ msg }) {
               ? 'bg-indigo-600 text-white rounded-tr-none'
               : 'bg-primary-600 text-white rounded-tr-none'
         )}>
+          {hasMedia && (
+            <div className={msg.content ? 'mb-2' : ''}>
+              <MediaContent msg={msg} isOutbound={!isInbound} />
+            </div>
+          )}
           {msg.content}
         </div>
         <div className={clsx('flex items-center gap-1 mt-0.5 text-[10px] text-gray-400', isInbound ? 'ml-1' : 'mr-1 flex-row-reverse')}>
@@ -139,8 +217,15 @@ export default function Communications() {
   const [connected, setConnected] = useState(false)
   const [agentTyping, setAgentTyping] = useState(null)
   const [sendError, setSendError] = useState(null)
+  const [isRecording, setIsRecording] = useState(false)
+  const [audioBlob, setAudioBlob] = useState(null)
+  const [audioUrl, setAudioUrl] = useState(null)
   const socketRef = useRef(null)
   const bottomRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const mediaChunksRef = useRef([])
+  const mediaStreamRef = useRef(null)
+  const fileInputRef = useRef(null)
   const queryClient = useQueryClient()
 
   // Selected candidate object from chatList
@@ -155,26 +240,32 @@ export default function Communications() {
   }, [escalatedChats])
 
   // ── Fetch active chat list ─────────────────────────────────────────────────
-  const { isLoading: listLoading } = useQuery({
+  const { data: activeChatsData, isLoading: listLoading } = useQuery({
     queryKey: ['active-chats', search],
     queryFn: () => getActiveChats(search),
-    onSuccess: (data) => {
-      setChatList(prev => {
-        // Merge API data with any real-time updates we received
-        const merged = Array.isArray(data) ? data : []
-        return merged
-      })
-    },
     refetchInterval: 30000, // fallback poll every 30s
   })
 
+  useEffect(() => {
+    if (Array.isArray(activeChatsData)) {
+      setChatList(activeChatsData)
+    }
+  }, [activeChatsData])
+
   // ── Fetch transcript when candidate changes ────────────────────────────────
-  const { isLoading: transcriptLoading } = useQuery({
+  const { data: transcriptData, isLoading: transcriptLoading } = useQuery({
     queryKey: ['transcript', selectedId],
     queryFn: () => getTranscript(selectedId),
     enabled: !!selectedId,
-    onSuccess: (data) => setTranscript(Array.isArray(data) ? data : []),
   })
+
+  useEffect(() => {
+    if (!selectedId) {
+      setTranscript([])
+      return
+    }
+    setTranscript(Array.isArray(transcriptData) ? transcriptData : [])
+  }, [selectedId, transcriptData])
 
   // ── Socket.io real-time ────────────────────────────────────────────────────
   useEffect(() => {
@@ -275,6 +366,15 @@ export default function Communications() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [transcript, agentTyping])
 
+  useEffect(() => {
+    return () => {
+      if (audioUrl) URL.revokeObjectURL(audioUrl)
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+      }
+    }
+  }, [audioUrl])
+
   // ── Takeover / Release mutations ───────────────────────────────────────────
   const takeoverMut = useMutation({
     mutationFn: (candidateId) => takeover(candidateId),
@@ -286,18 +386,101 @@ export default function Communications() {
   })
 
   // ── Send message ───────────────────────────────────────────────────────────
-  const handleSend = useCallback(async (e) => {
+  const discardAudio = useCallback(() => {
+    setAudioBlob(null)
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl)
+      setAudioUrl(null)
+    }
+  }, [audioUrl])
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+    }
+  }, [isRecording])
+
+  const startRecording = useCallback(async () => {
+    try {
+      setSendError(null)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaStreamRef.current = stream
+
+      const recorder = new MediaRecorder(stream)
+      mediaRecorderRef.current = recorder
+      mediaChunksRef.current = []
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          mediaChunksRef.current.push(event.data)
+        }
+      }
+
+      recorder.onstop = () => {
+        const blob = new Blob(mediaChunksRef.current, { type: 'audio/webm' })
+        if (audioUrl) URL.revokeObjectURL(audioUrl)
+        setAudioBlob(blob)
+        setAudioUrl(URL.createObjectURL(blob))
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+          mediaStreamRef.current = null
+        }
+      }
+
+      recorder.start()
+      setIsRecording(true)
+    } catch (error) {
+      setSendError('Could not access microphone. Please check browser permissions.')
+    }
+  }, [audioUrl])
+
+  const handleSend = useCallback(async (e, fileToUpload = null) => {
     e?.preventDefault()
-    if (!message.trim() || !selectedId) return
+    const hasText = Boolean(message.trim())
+    const hasAudio = Boolean(audioBlob)
+    const hasFile = Boolean(fileToUpload)
+    if ((!hasText && !hasAudio && !hasFile) || !selectedId) return
+
     setSendError(null)
     try {
-      const result = await sendMsg({ candidate_id: selectedId, channel: 'whatsapp', message })
+      const formData = new FormData()
+      formData.append('candidate_id', selectedId)
+      formData.append('channel', 'whatsapp')
+      if (hasText) formData.append('message', message.trim())
+
+      let optimisticType = 'text'
+      let optimisticAttachment = null
+
+      if (hasAudio) {
+        formData.append('media', audioBlob, 'voice_note.webm')
+        formData.append('msgType', 'audio')
+        optimisticType = 'audio'
+      } else if (hasFile) {
+        formData.append('media', fileToUpload)
+        optimisticType = fileToUpload.type?.startsWith('image/')
+          ? 'image'
+          : fileToUpload.type?.startsWith('audio/')
+            ? 'audio'
+            : fileToUpload.type?.startsWith('video/')
+              ? 'video'
+              : 'document'
+      }
+
+      const result = await sendMsg(formData)
       setMessage('')
+      discardAudio()
+      if (fileInputRef.current) fileInputRef.current.value = ''
+
+      optimisticAttachment = result.attachments?.[0] || null
+
       // Optimistically add to transcript
       setTranscript(prev => [...prev, {
         id: result.id || Date.now(),
         direction: 'outbound',
-        content: message,
+        content: message.trim(),
+        message_type: result.message_type || optimisticType,
+        attachments: optimisticAttachment ? [optimisticAttachment] : [],
         sender_type: 'agent',
         sender_name: 'You',
         sent_at: new Date().toISOString(),
@@ -305,7 +488,7 @@ export default function Communications() {
     } catch (err) {
       setSendError('Failed to send. Please try again.')
     }
-  }, [message, selectedId])
+  }, [message, selectedId, audioBlob, discardAudio])
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -530,27 +713,88 @@ export default function Communications() {
                 </div>
               )}
               <form onSubmit={handleSend} className="flex items-end gap-2">
-                <div className="flex-1 bg-slate-50 rounded-xl border border-slate-200 focus-within:ring-2 focus-within:ring-indigo-400 focus-within:bg-white transition-all">
-                  <textarea
-                    value={message}
-                    onChange={(e) => {
-                      setMessage(e.target.value)
-                      socketRef.current?.emit('typing', { candidateId: selectedId, isTyping: true })
-                    }}
-                    onBlur={() => socketRef.current?.emit('typing', { candidateId: selectedId, isTyping: false })}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-                    placeholder="Type a message as agent… (Enter to send)"
-                    className="w-full bg-transparent border-0 focus:ring-0 p-3 max-h-28 resize-none text-sm"
-                    rows={1}
-                  />
-                </div>
-                <Button
-                  type="submit"
-                  disabled={!message.trim()}
-                  className="mb-0.5 w-10 h-10 px-0 rounded-xl bg-indigo-600 hover:bg-indigo-700 flex items-center justify-center"
-                >
-                  <Send size={16} />
-                </Button>
+
+                {isRecording ? (
+                  <div className="flex-1 flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-2 h-11">
+                    <div className="flex items-center gap-2 text-red-600 text-sm font-medium">
+                      <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />
+                      Recording voice note...
+                    </div>
+                    <button
+                      type="button"
+                      onClick={stopRecording}
+                      className="text-red-600 hover:bg-red-100 p-1.5 rounded-lg transition-colors"
+                    >
+                      <Square size={16} fill="currentColor" />
+                    </button>
+                  </div>
+                ) : audioUrl ? (
+                  <div className="flex-1 flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 h-11">
+                    <button
+                      type="button"
+                      onClick={discardAudio}
+                      className="text-slate-400 hover:text-red-500 transition-colors"
+                      title="Discard voice note"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                    <audio src={audioUrl} controls className="h-7 w-full max-w-[220px]" />
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center pb-1">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        className="hidden"
+                        id="agent-media-upload"
+                        accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.txt"
+                        onChange={(e) => {
+                          if (e.target.files?.[0]) handleSend(null, e.target.files[0])
+                        }}
+                      />
+                      <label
+                        htmlFor="agent-media-upload"
+                        className="p-2 text-slate-400 hover:text-indigo-600 cursor-pointer transition-colors"
+                      >
+                        <Paperclip size={20} />
+                      </label>
+                    </div>
+
+                    <div className="flex-1 bg-slate-50 rounded-xl border border-slate-200 focus-within:ring-2 focus-within:ring-indigo-400 focus-within:bg-white transition-all">
+                      <textarea
+                        value={message}
+                        onChange={(e) => {
+                          setMessage(e.target.value)
+                          socketRef.current?.emit('typing', { candidateId: selectedId, isTyping: true })
+                        }}
+                        onBlur={() => socketRef.current?.emit('typing', { candidateId: selectedId, isTyping: false })}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+                        placeholder="Type a message as agent..."
+                        className="w-full bg-transparent border-0 focus:ring-0 p-3 max-h-28 resize-none text-sm"
+                        rows={1}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {(message.trim() || audioBlob) ? (
+                  <Button
+                    type="submit"
+                    className="mb-0.5 w-10 h-10 px-0 rounded-xl bg-indigo-600 hover:bg-indigo-700 flex items-center justify-center"
+                  >
+                    <Send size={16} />
+                  </Button>
+                ) : !isRecording && (
+                  <Button
+                    type="button"
+                    onClick={startRecording}
+                    variant="outline"
+                    className="mb-0.5 w-10 h-10 px-0 rounded-xl border-slate-200 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 flex items-center justify-center"
+                  >
+                    <Mic size={18} />
+                  </Button>
+                )}
               </form>
             </div>
           )}

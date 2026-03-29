@@ -66,7 +66,13 @@ export const getCommunications = (candidateId) =>
   apiClient.get(`/api/communications/candidate/${candidateId}`).then(res => res.data)
 
 export const sendCommunication = (data) =>
-  apiClient.post('/api/communications/send', data).then(res => res.data)
+  apiClient.post(
+    '/api/communications/send',
+    data,
+    data instanceof FormData
+      ? { headers: { 'Content-Type': 'multipart/form-data' } }
+      : undefined
+  ).then(res => res.data)
 
 // Mock Data API (for testing)
 export const seedMockData = () =>

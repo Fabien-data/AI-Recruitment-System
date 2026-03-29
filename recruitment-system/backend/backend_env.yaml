@@ -6,5 +6,6 @@ CLOUD_SQL_PASSWORD: RecApp2024Secure!
 CLOUD_SQL_DATABASE: recruitment_db
 JWT_SECRET: dewan_jwt_secret_prod_2024
 CHATBOT_API_KEY: dewan_chatbot_secret_2024_change_in_production
-FRONTEND_URL: https://recruitment-frontend-782458551389.us-central1.run.app
+OPENAI_API_KEY: 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
+FRONTEND_URL: https://recruitment.markui.lk
 CORS_ORIGIN: https://recruitment.markui.lk

@@ -148,6 +148,9 @@ async function applyMigrations() {
         [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS sender_name       VARCHAR(255)`, 'communications.sender_name'],
         [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS chatbot_state     VARCHAR(100)`, 'communications.chatbot_state'],
         [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS detected_language VARCHAR(20)`, 'communications.detected_language'],
+        [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS attachments       TEXT[]`, 'communications.attachments'],
+        [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS call_recording_url TEXT`, 'communications.call_recording_url'],
+        [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS metadata          JSONB DEFAULT '{}'::jsonb`, 'communications.metadata'],
         [`CREATE INDEX IF NOT EXISTS idx_comm_candidate_sent ON communications(candidate_id, sent_at DESC)`, 'idx_comm_candidate_sent'],
     ];
     for (const [sql, label] of commCols) {
