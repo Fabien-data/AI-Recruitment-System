@@ -1037,6 +1037,16 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     detected_language: language || null,
                     sent_at: new Date().toISOString(),
                 });
+                io.to(`candidate:${candidateId}`).emit('receive_message', {
+                    id: commId,
+                    candidate_id: candidateId,
+                    phone: normalizedPhone,
+                    sender: senderType,
+                    text: safeContent.slice(0, 4000),
+                    timestamp: new Date().toISOString(),
+                    message_type,
+                    direction,
+                });
                 // Also notify the global chat list that this candidate has new activity
                 io.emit('chat_activity', {
                     candidate_id: candidateId,

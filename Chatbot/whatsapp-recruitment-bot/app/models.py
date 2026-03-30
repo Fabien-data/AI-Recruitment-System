@@ -73,6 +73,8 @@ class Candidate(Base):
     question_retries = Column(Integer, default=0)
     confidence_score = Column(Float, nullable=False, default=0.0)
     handoff_flag = Column(Boolean, default=False, nullable=False)
+    intervention_needed = Column(Boolean, default=False, nullable=False)
+    intervention_reason = Column(Text, nullable=True)
     agent_state = Column(
         MutableDict.as_mutable(JSON),
         nullable=False,

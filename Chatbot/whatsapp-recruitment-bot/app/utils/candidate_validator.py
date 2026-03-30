@@ -1,23 +1,42 @@
-"""
-Candidate Validator
-===================
-Pre-push validation gate that ensures candidate data is complete
-and correctly formatted before it is sent to the recruitment system.
+"""AI supervisor state and lightweight sync validator."""
 
-Called by recruitment_sync.py before making the HTTP request.
-"""
+from __future__ import annotations
 
-import re
+import json
 import logging
+import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Result type
-# ---------------------------------------------------------------------------
+class AIConversationState(BaseModel):
+    """Structured output the AI supervisor returns for every text message."""
+
+    extracted_name: Optional[str] = Field(default=None, description="Candidate full name")
+    experience_years: Optional[int] = Field(default=None, description="Experience years as integer")
+    job_interest: Optional[str] = Field(default=None, description="Job/field user is interested in")
+    intent: str = Field(default="INQUIRY", description="GREETING, APPLYING, INQUIRY, or FRUSTRATED")
+    intervention_needed: bool = Field(default=False, description="True if human intervention is needed")
+    reply_message: str = Field(default="Thank you. I can help with jobs and applications.", description="Reply to user")
+
+
+SYSTEM_PROMPT = """
+You are an Elite Sri Lankan Recruitment Agent for 'NODE.io Solutions'.
+RULES:
+1. Speak naturally. If user uses Singlish/Tanglish, reply in a helpful matching mix.
+2. DO NOT enforce a single language. Be fluid.
+3. If user is talking about CV, job, or applying, intent is APPLYING.
+4. If user repeatedly asks same thing, is angry, or asks for human, set intervention_needed=true.
+5. Extract name, experience_years, and job_interest whenever possible.
+6. Return valid JSON only.
+""".strip()
+
 
 @dataclass
 class ValidationResult:
@@ -25,36 +44,11 @@ class ValidationResult:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
-    def add_error(self, msg: str):
-        self.errors.append(msg)
-        self.is_valid = False
-
-    def add_warning(self, msg: str):
-        self.warnings.append(msg)
-
     def __bool__(self) -> bool:
         return self.is_valid
 
 
-# ---------------------------------------------------------------------------
-# Validators
-# ---------------------------------------------------------------------------
-
-# E.164-compatible: optional leading +, then 7–15 digits
-_PHONE_RE = re.compile(r'^\+?[0-9]{7,15}$')
-
-# Basic RFC 5322 subset
-_EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
-
-# Known throwaway email domains to warn about (not block)
-_THROWAWAY_DOMAINS = {
-    'mailinator.com', 'guerrillamail.com', 'tempmail.com',
-    'throwam.com', 'fakeinbox.com', 'sharklasers.com',
-    'guerrillamailblock.com', 'yopmail.com', 'trashmail.com',
-    'dispostable.com', 'temp-mail.org', 'getnada.com',
-}
-
-VALID_LANGUAGES = {'en', 'si', 'ta'}
+_PHONE_RE = re.compile(r"^\+?[0-9]{7,15}$")
 
 
 def validate_candidate(
@@ -64,102 +58,100 @@ def validate_candidate(
     job_interest: Optional[str],
     preferred_language: Optional[str],
     experience_years: Optional[Any],
-    extracted_data: Optional[Dict] = None
+    extracted_data: Optional[Dict] = None,
 ) -> ValidationResult:
-    """
-    Run all validation rules against candidate fields.
+    """Minimal safety validation before sync; non-blocking for language/register differences."""
+    errors: List[str] = []
+    warnings: List[str] = []
 
-    Returns a ValidationResult with:
-      - is_valid: False if any hard rule fails (blocks push)
-      - errors: list of blocking problems
-      - warnings: list of non-blocking notes
-    """
-    result = ValidationResult(is_valid=True)
-    extracted_data = extracted_data or {}
+    if not phone or not isinstance(phone, str) or not _PHONE_RE.match(phone.replace(" ", "").replace("-", "")):
+        errors.append("phone is required and must be E.164-like")
 
-    # ── phone: REQUIRED, format check ─────────────────────────────────────
-    if not phone or not isinstance(phone, str):
-        result.add_error("phone is required")
-    else:
-        normalized = phone.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
-        if not _PHONE_RE.match(normalized):
-            result.add_error(
-                f"phone format invalid: '{phone}' — expected E.164 e.g. +94771234567"
-            )
+    if not name or len(str(name).strip()) < 2:
+        warnings.append("name is missing or short")
 
-    # ── name: REQUIRED, length/content check ──────────────────────────────
-    if not name or not isinstance(name, str):
-        result.add_error("name is required")
-    elif len(name.strip()) < 2:
-        result.add_error("name is too short (minimum 2 characters)")
-    elif name.strip().isdigit():
-        result.add_error("name appears to be a number, not a real name")
-    elif len(name.strip()) > 200:
-        result.add_error("name is too long (maximum 200 characters)")
+    if not job_interest or len(str(job_interest).strip()) < 2:
+        warnings.append("job_interest missing; using general pool")
 
-    # ── job_interest: REQUIRED ─────────────────────────────────────────────
-    if not job_interest or not isinstance(job_interest, str):
-        result.add_error("job_interest is required — the role the candidate wants to apply for")
-    elif len(job_interest.strip()) < 2:
-        result.add_error("job_interest is too short")
-
-    # ── email: OPTIONAL but validate format if present ────────────────────
-    if email and isinstance(email, str) and email.strip():
-        if not _EMAIL_RE.match(email.strip()):
-            result.add_error(f"email format invalid: '{email}'")
-        else:
-            # Warn about throwaway domains
-            domain = email.strip().lower().split('@')[-1]
-            if domain in _THROWAWAY_DOMAINS:
-                result.add_warning(f"email domain '{domain}' appears to be a disposable address")
-
-    # ── preferred_language: optional but must be valid if present ─────────
-    if preferred_language and preferred_language not in VALID_LANGUAGES:
-        result.add_warning(
-            f"preferred_language '{preferred_language}' is not recognised — defaulting to 'en'. "
-            f"Valid values: {', '.join(VALID_LANGUAGES)}"
-        )
-
-    # ── experience_years: optional, must be sensible integer ──────────────
     if experience_years is not None:
         try:
             exp = int(experience_years)
             if exp < 0 or exp > 60:
-                result.add_error(
-                    f"experience_years must be between 0 and 60, got {exp}"
-                )
-        except (TypeError, ValueError):
-            result.add_error(
-                f"experience_years must be an integer, got '{experience_years}'"
-            )
+                warnings.append("experience_years outside expected range")
+        except Exception:
+            warnings.append("experience_years not parseable as integer")
 
-    # ── cross-field consistency warnings ──────────────────────────────────
-    # If chatbot collected experience and CV says different — warn
-    stated_exp = extracted_data.get('experience_years_stated')
-    if stated_exp and experience_years is not None:
-        try:
-            stated_int = int(str(stated_exp).split()[0])
-            cv_int = int(experience_years)
-            if abs(stated_int - cv_int) > 5:
-                result.add_warning(
-                    f"Experience mismatch: candidate stated {stated_int} years, "
-                    f"CV extracted {cv_int} years. Recommend manual review."
-                )
-        except (ValueError, TypeError):
-            pass
+    return ValidationResult(is_valid=(len(errors) == 0), errors=errors, warnings=warnings)
 
-    # ── Log result ─────────────────────────────────────────────────────────
-    if result.is_valid:
-        if result.warnings:
-            logger.info(
-                f"Validation PASSED for '{name}' / '{phone}' "
-                f"with {len(result.warnings)} warning(s): {result.warnings}"
-            )
-        else:
-            logger.debug(f"Validation PASSED (clean) for '{name}' / '{phone}'")
-    else:
-        logger.warning(
-            f"Validation FAILED for '{name}' / '{phone}': {result.errors}"
+
+async def run_ai_supervisor(
+    *,
+    user_text: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    force_applying: bool = False,
+) -> AIConversationState:
+    """Single-pass AI supervisor for intent, extraction, intervention, and reply."""
+    text = (user_text or "").strip()
+    if not text:
+        return AIConversationState(intent="INQUIRY", reply_message="Please send your message and I will help.")
+
+    if not settings.openai_api_key:
+        return _fallback_supervisor(text, force_applying)
+
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for item in (history or [])[-10:]:
+            role = item.get("role") if item.get("role") in {"assistant", "user"} else "user"
+            content = str(item.get("content") or "").strip()
+            if content:
+                messages.append({"role": role, "content": content})
+
+        content = text if not force_applying else f"{text}\n\n[Context: user is currently applying.]"
+        messages.append({"role": "user", "content": content})
+
+        response = await client.chat.completions.create(
+            model=settings.classifier_model or settings.llm_primary_model,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            messages=messages,
+            max_completion_tokens=320,
         )
 
-    return result
+        raw = response.choices[0].message.content or "{}"
+        parsed = AIConversationState.model_validate(json.loads(raw))
+        return parsed
+    except Exception as exc:
+        logger.warning("AI supervisor fallback triggered: %s", exc)
+        return _fallback_supervisor(text, force_applying)
+
+
+def _fallback_supervisor(text: str, force_applying: bool) -> AIConversationState:
+    lower = text.lower()
+    frustrated = any(k in lower for k in ["human", "agent", "angry", "frustrated", "annoyed", "help me", "operator"])
+    intent = "APPLYING" if force_applying or any(k in lower for k in ["apply", "job", "cv", "resume", "velai", "රැකියා"]) else "INQUIRY"
+
+    name = None
+    m_name = re.search(r"\b(i am|i'm|my name is)\s+([a-zA-Z][a-zA-Z\s]{1,40})", text, flags=re.IGNORECASE)
+    if m_name:
+        name = m_name.group(2).strip().title()
+
+    exp = None
+    m_exp = re.search(r"\b(\d{1,2})\b", text)
+    if m_exp:
+        exp = int(m_exp.group(1))
+
+    reply = "Thanks. I can help you apply for jobs. Please share your name, experience, and preferred job."
+    if frustrated:
+        reply = "I understand. A human agent will assist you shortly."
+
+    return AIConversationState(
+        extracted_name=name,
+        experience_years=exp,
+        job_interest="General" if intent == "APPLYING" else None,
+        intent="FRUSTRATED" if frustrated else intent,
+        intervention_needed=frustrated,
+        reply_message=reply,
+    )

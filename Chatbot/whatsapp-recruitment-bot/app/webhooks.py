@@ -321,6 +321,26 @@ async def _sync_chat_message(
 async def process_single_message(message: dict, contacts: list, db):
     """Process a single incoming WhatsApp message."""
 
+    def _cv_processing_ack(lang: str) -> str:
+        register = (lang or "en").lower()
+        prompts = {
+            "en": "Thanks! I received your CV. I am processing it now.",
+            "si": "ස්තුතියි! ඔබේ CV එක ලැබුණා. දැන් process කරනවා.",
+            "ta": "நன்றி! உங்கள் CV கிடைத்தது. இப்போது செயலாக்குகிறேன்.",
+            "singlish": "sthuthi! oyage CV eka labuna. dan process karanawa.",
+            "tanglish": "nandri! unga CV kidaichiduchu. ippo process panren.",
+        }
+        return prompts.get(register, prompts["en"])
+
+    def _candidate_register(phone: str) -> str:
+        cand = crud.get_or_create_candidate(db, phone)
+        extracted = cand.extracted_data if isinstance(cand.extracted_data, dict) else {}
+        return (
+            extracted.get("language_register")
+            or extracted.get("agent_state", {}).get("reply_register")
+            or getattr(cand.language_preference, "value", "en")
+        )
+
     async def _safe_process_message(**kwargs):
         has_media_payload = bool(kwargs.get("media_content") or kwargs.get("media_type"))
         try:
@@ -478,6 +498,8 @@ async def process_single_message(message: dict, contacts: list, db):
                     await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
 
             if file_content:
+                ack = _cv_processing_ack(_candidate_register(from_number))
+                await meta_client.send_message(from_number, ack)
                 response_text = await _safe_process_message(
                     db=db,
                     phone_number=from_number,
@@ -515,6 +537,8 @@ async def process_single_message(message: dict, contacts: list, db):
                 await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
 
         if file_content:
+            ack = _cv_processing_ack(_candidate_register(from_number))
+            await meta_client.send_message(from_number, ack)
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,

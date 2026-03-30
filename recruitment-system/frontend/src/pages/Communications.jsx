@@ -16,6 +16,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { io } from 'socket.io-client'
 import {
   MessageSquare, Search, Send, Phone, Mail, Bot, User,
@@ -208,6 +209,7 @@ function MsgBubble({ msg }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Communications() {
+  const [searchParams] = useSearchParams()
   const [selectedId, setSelectedId] = useState(null)
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState('')
@@ -230,6 +232,13 @@ export default function Communications() {
 
   // Selected candidate object from chatList
   const selectedCandidate = chatList.find(c => c.candidate_id === selectedId)
+
+  useEffect(() => {
+    const candidateFromUrl = searchParams.get('candidate')
+    if (candidateFromUrl) {
+      setSelectedId(candidateFromUrl)
+    }
+  }, [searchParams])
 
   const isCandidateEscalated = useCallback((candidate) => {
     if (!candidate) return false
@@ -294,6 +303,25 @@ export default function Communications() {
       setChatList(prev => prev.map(c =>
         c.candidate_id === msg.candidate_id
           ? { ...c, last_message: msg.content, last_message_at: msg.sent_at, last_direction: msg.direction }
+          : c
+      ))
+    })
+
+    socket.on('receive_message', (newMessage) => {
+      const mapped = {
+        id: newMessage.id || Date.now(),
+        candidate_id: newMessage.candidate_id,
+        direction: newMessage.direction || (newMessage.sender === 'candidate' ? 'inbound' : 'outbound'),
+        message_type: newMessage.message_type || 'text',
+        content: newMessage.text || '',
+        sender_type: newMessage.sender || (newMessage.direction === 'inbound' ? 'candidate' : 'agent'),
+        sent_at: newMessage.timestamp || new Date().toISOString(),
+        attachments: newMessage.attachments || [],
+      }
+      setTranscript(prev => [...prev, mapped])
+      setChatList(prev => prev.map(c =>
+        c.candidate_id === mapped.candidate_id
+          ? { ...c, last_message: mapped.content, last_message_at: mapped.sent_at, last_direction: mapped.direction }
           : c
       ))
     })
@@ -474,17 +502,7 @@ export default function Communications() {
 
       optimisticAttachment = result.attachments?.[0] || null
 
-      // Optimistically add to transcript
-      setTranscript(prev => [...prev, {
-        id: result.id || Date.now(),
-        direction: 'outbound',
-        content: message.trim(),
-        message_type: result.message_type || optimisticType,
-        attachments: optimisticAttachment ? [optimisticAttachment] : [],
-        sender_type: 'agent',
-        sender_name: 'You',
-        sent_at: new Date().toISOString(),
-      }])
+      // Server emits websocket events; avoid duplicating optimistic bubble.
     } catch (err) {
       setSendError('Failed to send. Please try again.')
     }

@@ -19,7 +19,8 @@ router.get('/', authenticate, async (req, res, next) => {
             status,
             source,
             search,
-            language
+            language,
+            intervention_needed
         } = req.query;
 
         const offset = (page - 1) * limit;
@@ -53,6 +54,12 @@ router.get('/', authenticate, async (req, res, next) => {
                 whereClause += ` AND (name ILIKE $${params.length + 1} OR phone ILIKE $${params.length + 1} OR email ILIKE $${params.length + 1})`;
                 params.push(`%${search}%`);
             }
+        }
+
+        if (intervention_needed !== undefined) {
+            const asBool = String(intervention_needed).toLowerCase() === 'true';
+            whereClause += isMySQL ? ' AND intervention_needed = ?' : ` AND intervention_needed = $${params.length + 1}`;
+            params.push(asBool);
         }
 
         // Count query
@@ -304,6 +311,30 @@ router.put('/:id', authenticate, async (req, res, next) => {
                 _notifyChatbotStatusChange(updatedCandidate, updates.status);
             }
         }
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Resolve AI intervention flag after human takeover
+ */
+router.post('/:id/resolve-intervention', authenticate, async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const placeholder = isMySQL ? '?' : '$1';
+        const updateSql = isMySQL
+            ? 'UPDATE candidates SET intervention_needed = FALSE, intervention_reason = NULL, updated_at = NOW() WHERE id = ?'
+            : 'UPDATE candidates SET intervention_needed = FALSE, intervention_reason = NULL, updated_at = NOW() WHERE id = $1 RETURNING id';
+
+        const updated = await query(updateSql, [id]);
+        if ((!isMySQL && updated.rows.length === 0) || (isMySQL && updated.rowCount === 0)) {
+            return res.status(404).json({ error: 'Candidate not found' });
+        }
+
+        const fetchSql = `SELECT * FROM candidates WHERE id = ${placeholder}`;
+        const candidateResult = await query(fetchSql, [id]);
+        return res.json({ success: true, candidate: candidateResult.rows[0] });
     } catch (error) {
         next(error);
     }

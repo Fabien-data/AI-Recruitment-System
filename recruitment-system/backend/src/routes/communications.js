@@ -168,6 +168,63 @@ router.get('/candidate/:candidate_id', authenticate, async (req, res, next) => {
     }
 });
 
+// ── GET /api/communications/history/:phone ───────────────────────────────────
+// Compatibility endpoint for phone-based transcript loading.
+router.get('/history/:phone', authenticate, async (req, res, next) => {
+    try {
+        const rawPhone = String(req.params.phone || '').trim();
+        if (!rawPhone) {
+            return res.status(400).json({ error: 'phone is required' });
+        }
+
+        const normalizedPhone = rawPhone.replace(/[\s\-()]/g, '');
+        const candidateResult = await query(
+            adaptQuery(`
+                SELECT id
+                FROM candidates
+                WHERE phone = $1 OR whatsapp_phone = $1
+                ORDER BY updated_at DESC
+                LIMIT 1
+            `),
+            [normalizedPhone]
+        );
+
+        if (candidateResult.rows.length === 0) {
+            return res.json({ messages: [] });
+        }
+
+        const candidateId = candidateResult.rows[0].id;
+        const transcript = await query(
+            adaptQuery(`
+                SELECT id, direction, message_type, content,
+                       COALESCE(sender_type, CASE WHEN direction = 'inbound' THEN 'candidate' ELSE 'agent' END) AS sender,
+                       sent_at,
+                       attachments
+                FROM communications
+                WHERE candidate_id = $1
+                ORDER BY sent_at ASC
+                LIMIT 300
+            `),
+            [candidateId]
+        );
+
+        return res.json({
+            candidate_id: candidateId,
+            messages: transcript.rows.map((m) => ({
+                id: m.id,
+                sender: m.sender,
+                text: m.content,
+                direction: m.direction,
+                message_type: m.message_type,
+                attachments: m.attachments,
+                timestamp: m.sent_at,
+            })),
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // ── GET /api/communications/candidate/:id/notifications ──────────────────────
 router.get('/candidate/:candidate_id/notifications', authenticate, async (req, res, next) => {
     try {
@@ -470,12 +527,32 @@ router.post('/candidate/:candidate_id/release', authenticate, async (req, res, n
 // If not already in handoff, automatically triggers takeover first.
 router.post('/send', authenticate, upload.single('media'), async (req, res, next) => {
     try {
-        const { candidate_id, channel = 'whatsapp', message = '', msgType } = req.body;
+        const { candidate_id, phone, channel = 'whatsapp', message = '', text = '', msgType, sender = 'agent' } = req.body;
         const mediaFile = req.file;
-        const hasText = Boolean(String(message).trim());
+        const normalizedMessage = String(message || text || '').trim();
+        const hasText = Boolean(normalizedMessage);
 
-        if (!candidate_id) {
-            return res.status(400).json({ error: 'candidate_id is required' });
+        let resolvedCandidateId = candidate_id;
+
+        if (!resolvedCandidateId && phone) {
+            const normalizedPhone = String(phone).replace(/[\s\-()]/g, '');
+            const foundCandidate = await query(
+                adaptQuery(`
+                    SELECT id
+                    FROM candidates
+                    WHERE phone = $1 OR whatsapp_phone = $1
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                `),
+                [normalizedPhone]
+            );
+            if (foundCandidate.rows.length > 0) {
+                resolvedCandidateId = foundCandidate.rows[0].id;
+            }
+        }
+
+        if (!resolvedCandidateId) {
+            return res.status(400).json({ error: 'candidate_id or phone is required' });
         }
 
         if (!hasText && !mediaFile) {
@@ -484,7 +561,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
 
         const candidateResult = await query(
             adaptQuery('SELECT * FROM candidates WHERE id = $1'),
-            [candidate_id]
+            [resolvedCandidateId]
         );
         if (candidateResult.rows.length === 0) {
             return res.status(404).json({ error: 'Candidate not found' });
@@ -508,9 +585,9 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             try {
                 const phone = candidate.phone || candidate.whatsapp_phone;
                 if (mediaUrl) {
-                    await sendMediaMessage(phone, finalMessageType, mediaUrl, String(message || '').trim());
+                    await sendMediaMessage(phone, finalMessageType, mediaUrl, normalizedMessage);
                 } else {
-                    await sendTextMessage(phone, message);
+                    await sendTextMessage(phone, normalizedMessage);
                 }
             } catch (err) {
                 logger.warn(`WhatsApp send failed (simulating): ${err.message}`);
@@ -548,7 +625,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
         // Store the message in communications
         const commId = generateUUID();
         const agentName = req.user?.name || req.user?.email || 'Agent';
-        const messageText = String(message || '').trim();
+        const messageText = normalizedMessage;
         const attachmentsValue = mediaUrl ? [mediaUrl] : [];
         const metadataValue = JSON.stringify({
             source: 'agent_dashboard',
@@ -558,7 +635,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
         });
         await insertCommunicationMessage({
             id: commId,
-            candidateId: candidate_id,
+            candidateId: resolvedCandidateId,
             channel,
             direction: 'outbound',
             messageType: finalMessageType,
@@ -571,6 +648,18 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             callRecordingUrl: finalMessageType === 'audio' ? mediaUrl : null,
         });
 
+        // If a human agent responded, consider intervention resolved.
+        await query(
+            adaptQuery(`
+                UPDATE candidates
+                SET intervention_needed = FALSE,
+                    intervention_reason = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+            `),
+            [candidate_id]
+        );
+
         // Broadcast via WebSocket
         try {
             const { getIO } = require('../utils/websocket');
@@ -578,20 +667,30 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             if (io) {
                 const msgPayload = {
                     id: commId,
-                    candidate_id,
+                    candidate_id: resolvedCandidateId,
                     channel,
                     direction: 'outbound',
                     message_type: finalMessageType,
                     content: messageText,
                     attachments: attachmentsValue,
-                    sender_type: 'agent',
+                    sender_type: sender || 'agent',
                     sender_name: agentName,
                     sent_at: new Date().toISOString(),
                 };
-                io.to(`candidate:${candidate_id}`).emit('new_message', msgPayload);
+                io.to(`candidate:${resolvedCandidateId}`).emit('new_message', msgPayload);
+                io.to(`candidate:${resolvedCandidateId}`).emit('receive_message', {
+                    id: commId,
+                    candidate_id: resolvedCandidateId,
+                    phone: candidate.phone || candidate.whatsapp_phone,
+                    sender: sender || 'agent',
+                    text: messageText,
+                    timestamp: new Date().toISOString(),
+                    message_type: finalMessageType,
+                    attachments: attachmentsValue,
+                });
                 const chatPreview = messageText
                     || (mediaUrl ? `[${finalMessageType.toUpperCase()}]` : '');
-                io.emit('chat_activity', { candidate_id, last_message: chatPreview.slice(0, 80), ts: new Date().toISOString() });
+                io.emit('chat_activity', { candidate_id: resolvedCandidateId, last_message: chatPreview.slice(0, 80), ts: new Date().toISOString() });
             }
         } catch (wsErr) {
             logger.debug(`send WS emit skipped: ${wsErr.message}`);
@@ -603,6 +702,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             content: messageText,
             message_type: finalMessageType,
             attachments: attachmentsValue,
+            candidate_id: resolvedCandidateId,
             simulated: sendResult.simulated || false,
         });
     } catch (error) {

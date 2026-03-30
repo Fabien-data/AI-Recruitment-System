@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS candidates (
     source VARCHAR(50) NOT NULL COMMENT 'whatsapp, email, messenger, phone, walkin, web',
     preferred_language VARCHAR(10) DEFAULT 'en' COMMENT 'en, si, ta',
     status VARCHAR(50) DEFAULT 'new' COMMENT 'new, screening, interview, hired, rejected, future_pool',
+    intervention_needed BOOLEAN DEFAULT FALSE,
+    intervention_reason TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     last_contact_at TIMESTAMP NULL,

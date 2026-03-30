@@ -19,6 +19,7 @@ from app.services.handoff_service import handoff_service
 from app.services.job_matching_service import job_matching_service
 from app.services.recruitment_sync import recruitment_sync
 from app.services.vacancy_service import vacancy_service
+from app.utils.candidate_validator import run_ai_supervisor
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +45,67 @@ class IntakeOrchestrator:
             db.commit()
             return await self._route_interactive_action(db, candidate, state, interactive_text)
 
+        # AI supervisor rewrite: one-pass extraction, intent, intervention, and reply.
+        history_items = []
+        for conv in reversed(crud.get_conversation_history(db, candidate.id, limit=6)):
+            role = "assistant" if str(conv.message_type.value) == "bot" else "user"
+            content = str(conv.message_text or "").strip()
+            if content:
+                history_items.append({"role": role, "content": content})
+
+        ai_decision = await run_ai_supervisor(
+            user_text=message_text,
+            history=history_items,
+            force_applying=bool(state.get("cv_uploaded")),
+        )
+
+        collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
+        if ai_decision.extracted_name:
+            candidate.name = ai_decision.extracted_name
+        if ai_decision.experience_years is not None:
+            try:
+                years = int(ai_decision.experience_years)
+                candidate.experience_years = years
+                collected["experience_years"] = years
+            except Exception:
+                pass
+        if ai_decision.job_interest:
+            collected["job_role"] = ai_decision.job_interest
+
+        state["collected_data"] = collected
+
+        if ai_decision.intervention_needed:
+            candidate.intervention_needed = True
+            candidate.intervention_reason = "AI detected user frustration or explicit request."
+            state["handoff_flag"] = True
+            candidate.handoff_flag = True
+            self._save_agent_state(candidate, state)
+            await handoff_service.notify(candidate, reason="ai_intervention_needed")
+            crud.update_candidate_state(db, candidate.id, "human_handoff")
+            candidate.conversation_state = "human_handoff"
+            db.commit()
+            return ai_decision.reply_message
+
+        if candidate.name and candidate.experience_years is not None:
+            try:
+                await recruitment_sync.push(candidate, db)
+            except Exception as exc:
+                logger.warning("Recruitment sync failed during AI supervisor flow: %s", exc)
+
+        resolved_language = language_service.resolve_language(
+            user_text=message_text,
+            locked_language=state.get("locked_language"),
+        )
+        self._apply_language_lock(db, candidate, state, resolved_language)
+        self._save_agent_state(candidate, state)
+        db.commit()
+
+        return ai_decision.reply_message
+
         # Priority 1: CV/media messages are handled in webhook media branches.
         # Text branch uses classifier + deterministic orchestration.
         analysis = await classify_message(message_text)
-        self._merge_entities_from_analysis(state, analysis)
+        self._merge_entities_from_analysis(state, analysis, message_text)
         resolved_language = language_service.resolve_language(
             user_text=message_text,
             locked_language=state.get("locked_language"),
@@ -233,7 +291,7 @@ class IntakeOrchestrator:
     def _is_structured_interactive_token(self, text: str) -> bool:
         return bool(re.match(r"^(job_\d+|action_apply|action_question)$", text or ""))
 
-    def _merge_entities_from_analysis(self, state: Dict[str, Any], analysis) -> None:
+    def _merge_entities_from_analysis(self, state: Dict[str, Any], analysis, user_text: str) -> None:
         collected = state.get("collected_data")
         if not isinstance(collected, dict):
             collected = {}
@@ -243,9 +301,87 @@ class IntakeOrchestrator:
             collected["job_role"] = analysis.job_role
         if analysis.country and not collected.get("country"):
             collected["country"] = analysis.country
-        if analysis.experience and not collected.get("experience_years"):
-            match = re.search(r"\d+", str(analysis.experience))
-            collected["experience_years"] = int(match.group(0)) if match else analysis.experience
+
+        experience_value = None
+        if analysis.experience:
+            experience_value = self._parse_multilingual_experience(str(analysis.experience))
+        if experience_value is None:
+            experience_value = self._parse_multilingual_experience(user_text or "")
+
+        current_step = str(state.get("step") or "")
+        expects_experience = current_step in {"collecting_experience", "intake_collecting_experience"}
+        if experience_value is not None and (not collected.get("experience_years") or expects_experience):
+            collected["experience_years"] = int(experience_value)
+
+    def _parse_multilingual_experience(self, text: str) -> Optional[int]:
+        if not text:
+            return None
+
+        digit_map = str.maketrans("෦෧෨෩෪෫෬෭෮෯௦௧௨௩௪௫௬௭௮௯", "01234567890123456789")
+        normalized = text.translate(digit_map).lower()
+
+        scoped = re.search(
+            r"\b(\d{1,2})\b\s*(year|years|yr|yrs|avurudu|awurudu|varudam|varusham|வருடம்|ஆண்டு|අවුරුදු)",
+            normalized,
+        )
+        if scoped:
+            return int(scoped.group(1))
+
+        tokens = re.findall(r"[\w\u0B80-\u0DFF]+", normalized)
+        word_map = {
+            "eka": 1,
+            "deka": 2,
+            "dekai": 2,
+            "rendu": 2,
+            "irandu": 2,
+            "thuna": 3,
+            "naangu": 4,
+            "paha": 5,
+            "anju": 5,
+            "haya": 6,
+            "aaru": 6,
+            "hatha": 7,
+            "ezhu": 7,
+            "ata": 8,
+            "ettu": 8,
+            "navaya": 9,
+            "onbadhu": 9,
+            "dahaya": 10,
+            "pathu": 10,
+            "එක": 1,
+            "එකයි": 1,
+            "දෙක": 2,
+            "දෙකයි": 2,
+            "තුන": 3,
+            "හතර": 4,
+            "පහ": 5,
+            "හය": 6,
+            "හත": 7,
+            "අට": 8,
+            "නවය": 9,
+            "දහය": 10,
+            "ஒன்று": 1,
+            "ஒரு": 1,
+            "இரண்டு": 2,
+            "ரெண்டு": 2,
+            "மூன்று": 3,
+            "நான்கு": 4,
+            "ஐந்து": 5,
+            "ஆறு": 6,
+            "ஏழு": 7,
+            "எட்டு": 8,
+            "ஒன்பது": 9,
+            "பத்து": 10,
+        }
+        for token in tokens:
+            if token in word_map:
+                return int(word_map[token])
+
+        plain_digit = re.search(r"\b(\d{1,2})\b", normalized)
+        if plain_digit:
+            return int(plain_digit.group(1))
+
+        return None
 
     def _country_prompt(self, candidate) -> str:
         lang = getattr(candidate.language_preference, "value", "en")
@@ -283,6 +419,7 @@ class IntakeOrchestrator:
     def _apply_language_lock(self, db: Session, candidate, state: Dict[str, Any], detected_language: str) -> None:
         if not detected_language:
             return
+        state["reply_register"] = detected_language
         if not state.get("locked_language") or state.get("locked_language") != detected_language:
             state["locked_language"] = detected_language
             self._save_agent_state(candidate, state)

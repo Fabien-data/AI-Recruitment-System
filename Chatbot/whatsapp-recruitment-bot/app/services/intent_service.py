@@ -10,6 +10,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.nlp.language_detector import detect_language
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,18 @@ class MessageAnalysis(BaseModel):
 
 
 _INTENT_HINTS = {
-    "apply_job": ["apply", "job", "work", "vacancy", " රැක", "வேலை", "job ekak", "velai"],
-    "view_jobs": ["vacancy", "openings", "jobs", "list", "show jobs", "රැකියා", "வேலை வாய்ப்பு"],
-    "ask_question": ["?", "how", "what", "why", "salary", "visa", "process", "mokak", "enna"],
-    "greeting": ["hi", "hello", "hey", "ayubowan", "vanakkam", "hii", "yo"],
+    "apply_job": [
+        "apply", "job", "work", "vacancy", "job ekak", "velai",
+        "රැක", "வேலை", "apply karanna", "apply pannunga",
+    ],
+    "view_jobs": [
+        "vacancy", "openings", "jobs", "list", "show jobs",
+        "රැකියා", "வேலை வாய்ப்பு", "vacancies", "job list",
+    ],
+    "ask_question": [
+        "?", "how", "what", "why", "salary", "visa", "process", "mokak", "enna", "kohomada", "epdi",
+    ],
+    "greeting": ["hi", "hello", "hey", "ayubowan", "vanakkam", "hii", "yo", "machang", "machan"],
 }
 
 _ROLE_HINTS = [
@@ -38,17 +47,94 @@ _ROLE_HINTS = [
     "cleaner", "nurse", "caregiver", "factory", "construction",
 ]
 
+_ROLE_ALIASES = {
+    "driver": ["driver", "driving", "riyaduru", "துடுப்பாளர்", "ஓட்டுநர்", "drivar"],
+    "security": ["security", "guard", "sekuriti", "arakshaka", "பாதுகாப்பு", "security guard"],
+    "housemaid": ["housemaid", "maid", "home maid", "gedara wada", "வீட்டு வேலை"],
+    "cook": ["cook", "chef", "kusini", "சமையல்", "samayal"],
+    "welder": ["welder", "welding"],
+    "nurse": ["nurse", "caregiver", "nars", "செவிலியர்"],
+}
+
 _COUNTRIES = {
     "uae": "United Arab Emirates",
+    "dubai": "United Arab Emirates",
     "qatar": "Qatar",
     "saudi": "Saudi Arabia",
+    "sowdi": "Saudi Arabia",
     "kuwait": "Kuwait",
+    "kuwet": "Kuwait",
     "oman": "Oman",
     "malaysia": "Malaysia",
     "korea": "South Korea",
+    "කුවේට්": "Kuwait",
+    "ඩුබායි": "United Arab Emirates",
+    "குவைத்": "Kuwait",
+    "துபாய்": "United Arab Emirates",
 }
 
 _GIBBERISH_RE = re.compile(r"^[^A-Za-z0-9\u0B80-\u0DFF]{4,}$")
+
+_SINHALA_NUM_WORDS = {
+    "බිංදුව": 0,
+    "ශුන්ය": 0,
+    "එක": 1,
+    "එකයි": 1,
+    "දෙක": 2,
+    "දෙකයි": 2,
+    "තුන": 3,
+    "තුනයි": 3,
+    "හතර": 4,
+    "පහ": 5,
+    "හය": 6,
+    "හත": 7,
+    "අට": 8,
+    "නවය": 9,
+    "දහය": 10,
+}
+
+_TAMIL_NUM_WORDS = {
+    "பூஜ்ஜியம்": 0,
+    "ஒன்று": 1,
+    "ஒரு": 1,
+    "இரண்டு": 2,
+    "ரெண்டு": 2,
+    "மூன்று": 3,
+    "நான்கு": 4,
+    "ஐந்து": 5,
+    "ஆறு": 6,
+    "ஏழு": 7,
+    "எட்டு": 8,
+    "ஒன்பது": 9,
+    "பத்து": 10,
+}
+
+_ROMANIZED_NUM_WORDS = {
+    "zero": 0,
+    "one": 1,
+    "eka": 1,
+    "deka": 2,
+    "dekai": 2,
+    "rendu": 2,
+    "irandu": 2,
+    "thuna": 3,
+    "three": 3,
+    "hathara": 4,
+    "naangu": 4,
+    "paha": 5,
+    "anju": 5,
+    "five": 5,
+    "haya": 6,
+    "aaru": 6,
+    "hatha": 7,
+    "ezhu": 7,
+    "ata": 8,
+    "ettu": 8,
+    "navaya": 9,
+    "onbadhu": 9,
+    "dahaya": 10,
+    "pathu": 10,
+}
 
 
 async def classify_message(user_message: str) -> MessageAnalysis:
@@ -123,10 +209,12 @@ def _heuristic_classification(text: str) -> MessageAnalysis:
     role = _extract_job_role(text_l)
     country = _extract_country(text_l)
     experience = _extract_experience(text_l)
+    detected_lang, _ = detect_language(text)
 
     for intent, hints in _INTENT_HINTS.items():
         if any(h in text_l for h in hints):
             return MessageAnalysis(
+                language=detected_lang,
                 intent=intent,
                 confidence=0.55,
                 job_role=role,
@@ -135,6 +223,7 @@ def _heuristic_classification(text: str) -> MessageAnalysis:
             )
 
     return MessageAnalysis(
+        language=detected_lang,
         intent="ask_question",
         confidence=0.45,
         job_role=role,
@@ -153,6 +242,9 @@ def _looks_like_gibberish(text: str) -> bool:
 
 
 def _extract_job_role(text: str) -> Optional[str]:
+    for canonical, aliases in _ROLE_ALIASES.items():
+        if any(alias in text for alias in aliases):
+            return canonical.title()
     for role in _ROLE_HINTS:
         if role in text:
             return role.title()
@@ -167,7 +259,27 @@ def _extract_country(text: str) -> Optional[str]:
 
 
 def _extract_experience(text: str) -> Optional[str]:
-    match = re.search(r"(\d+)\s*(year|years|yr|yrs)", text)
+    digit_map = str.maketrans("෦෧෨෩෪෫෬෭෮෯௦௧௨௩௪௫௬௭௮௯", "01234567890123456789")
+    normalized = text.translate(digit_map)
+
+    match = re.search(
+        r"(\d+)\s*(year|years|yr|yrs|avurudu|awurudu|varudam|varusham|வருடம்|ஆண்டு|අවුරුදු)",
+        normalized,
+    )
     if match:
         return match.group(1)
+
+    tokens = re.findall(r"[\w\u0B80-\u0DFF]+", normalized.lower())
+    for token in tokens:
+        if token in _ROMANIZED_NUM_WORDS:
+            return str(_ROMANIZED_NUM_WORDS[token])
+        if token in _SINHALA_NUM_WORDS:
+            return str(_SINHALA_NUM_WORDS[token])
+        if token in _TAMIL_NUM_WORDS:
+            return str(_TAMIL_NUM_WORDS[token])
+
+    standalone = re.search(r"\b(\d{1,2})\b", normalized)
+    if standalone:
+        return standalone.group(1)
+
     return None

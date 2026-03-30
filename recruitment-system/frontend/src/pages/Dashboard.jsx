@@ -20,6 +20,7 @@ import toast from 'react-hot-toast'
 import { motion } from 'framer-motion'
 import { Card } from '../components/ui/Card'
 import { twMerge } from 'tailwind-merge'
+import InterventionAlerts from '../components/InterventionAlerts'
 
 function AnimatedNumber({ value, duration = 800, suffix = '' }) {
   const [display, setDisplay] = useState(0)
@@ -182,6 +183,10 @@ export default function Dashboard() {
             <Plus size={16} /> New Job
           </Button>
         </div>
+      </motion.div>
+
+      <motion.div variants={itemVariants}>
+        <InterventionAlerts />
       </motion.div>
 
       {/* Primary KPI Bento Row */}

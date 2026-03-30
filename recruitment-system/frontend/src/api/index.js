@@ -29,6 +29,9 @@ export const updateCandidate = (id, data) =>
 export const deleteCandidate = (id) =>
   apiClient.delete(`/api/candidates/${id}`).then(res => res.data)
 
+export const resolveCandidateIntervention = (id) =>
+  apiClient.post(`/api/candidates/${id}/resolve-intervention`).then(res => res.data)
+
 // Jobs
 export const getJobs = (params) =>
   apiClient.get('/api/jobs', { params }).then(res => res.data)
