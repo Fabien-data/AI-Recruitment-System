@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     
     # OpenAI
     openai_api_key: str
-    llm_primary_model: str = "gpt-5.4-mini"
+    llm_primary_model: str = "gpt-5"
     llm_fallback_model: str = "gpt-5.4-mini"
     classifier_model: str = "gpt-5.4-mini"
     
@@ -76,7 +76,9 @@ class Settings(BaseSettings):
     test_numbers: str = ""
 
     # Controlled rollout flags for modular architecture
-    enable_modular_orchestrator: bool = False
+    enable_modular_orchestrator: bool = True
+    enable_celery_webhook_dispatch: bool = True
+    enable_webhook_reaction_signal: bool = True
     enable_ai_classifier: bool = True
     enable_voice_pipeline: bool = True
     enable_cv_priority_interrupt: bool = True

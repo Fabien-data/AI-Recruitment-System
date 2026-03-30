@@ -118,6 +118,7 @@ async def process_message(db, user, message_data):
 
     # 1. Voice Interception
     if attachments.get("voice"):
+        
         message_text = await transcribe_voice(attachments["voice"])
 
     # 2. CV PRIORITY (KING RULE)

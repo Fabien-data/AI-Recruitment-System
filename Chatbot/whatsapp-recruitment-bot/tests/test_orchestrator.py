@@ -32,8 +32,7 @@ class OrchestratorTests(unittest.TestCase):
         )
 
         with patch("app.core.orchestrator.crud.get_or_create_candidate", return_value=candidate), \
-             patch("app.core.orchestrator.classify_message", new=AsyncMock(return_value=MessageAnalysis(intent="gibberish", is_gibberish=True, confidence=0.2))), \
-             patch("app.core.orchestrator.chatbot.process_message", new=AsyncMock(return_value="legacy")):
+             patch("app.core.orchestrator.classify_message", new=AsyncMock(return_value=MessageAnalysis(intent="gibberish", is_gibberish=True, confidence=0.2))):
             result = asyncio.run(
                 orch.process_text_message(
                     db=DummyDB(),
@@ -190,7 +189,7 @@ class OrchestratorTests(unittest.TestCase):
 
         with patch("app.core.orchestrator.crud.get_or_create_candidate", return_value=candidate), \
              patch("app.core.orchestrator.classify_message", new=AsyncMock(return_value=MessageAnalysis(intent="gibberish", is_gibberish=True, confidence=0.1))), \
-             patch("app.core.orchestrator.chatbot._notify_human_handoff", new=AsyncMock(return_value=None)) as mocked_notify, \
+             patch("app.core.orchestrator.handoff_service.notify", new=AsyncMock(return_value=None)) as mocked_notify, \
              patch("app.core.orchestrator.crud.update_candidate_state", return_value=candidate):
             result = asyncio.run(
                 orch.process_text_message(
@@ -217,7 +216,8 @@ class OrchestratorTests(unittest.TestCase):
         )
 
         with patch("app.core.orchestrator.crud.get_or_create_candidate", return_value=candidate), \
-             patch("app.core.orchestrator.chatbot.process_message", new=AsyncMock(return_value="cv processed")):
+             patch("app.core.orchestrator.cv_service.process_cv", new=AsyncMock(return_value={})), \
+             patch("app.core.orchestrator.IntakeOrchestrator._route_apply_flow", new=AsyncMock(return_value="cv processed")):
             result = asyncio.run(
                 orch.process_media_message(
                     db=DummyDB(),

@@ -77,11 +77,11 @@ class RAGEngine:
         self.async_openai_client = None
         self.pinecone_index = None
         self.embedding_model = "text-embedding-ada-002"
-        # Classification: fast model for intent/entity extraction (low latency)
-        self.classify_model = "gpt-5.4-mini"
-        # RAG / conversational generation model
-        self.chat_model = "gpt-5.4-mini"
-        self.complex_chat_model = "gpt-4o"
+        # Classification: low-latency model for intent/entity extraction.
+        self.classify_model = settings.classifier_model
+        # RAG / conversational generation model strategy.
+        self.chat_model = settings.llm_primary_model
+        self.complex_chat_model = settings.llm_fallback_model
 
         # Initialize OpenAI (sync for embeddings / index operations)
         if OPENAI_AVAILABLE:

@@ -25,7 +25,6 @@ from pydantic import BaseModel
 from app.database import SessionLocal
 from app import crud
 from app.utils.meta_client import meta_client
-from app.chatbot import chatbot
 from app.core.message_router import message_router
 from app.services.voice_service import voice_service
 from app.config import settings
@@ -39,6 +38,9 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhook", tags=["WhatsApp Webhook"])
+
+STATE_INITIAL = "initial"
+STATE_AWAITING_LANGUAGE_SELECTION = "awaiting_language_selection"
 
 # ─── Message Deduplication Cache ─────────────────────────────────────────────
 # Stores (message_id -> timestamp) for recently-processed messages.
@@ -156,6 +158,19 @@ async def handle_webhook(
             for change in entry.get("changes", []):
                 if change.get("field") == "messages":
                     value = change.get("value", {})
+
+                    if settings.enable_celery_webhook_dispatch:
+                        try:
+                            from app.tasks import process_webhook_task
+
+                            process_webhook_task.delay(value)
+                            logger.info("Webhook task queued via Celery")
+                            continue
+                        except Exception as celery_exc:
+                            logger.warning(
+                                f"Celery dispatch failed, falling back to asyncio task: {celery_exc}"
+                            )
+
                     task = asyncio.create_task(process_webhook_value(value))
 
                     def _log_task_exception(done_task: asyncio.Task):
@@ -307,46 +322,43 @@ async def process_single_message(message: dict, contacts: list, db):
     """Process a single incoming WhatsApp message."""
 
     async def _safe_process_message(**kwargs):
-        use_modular_router = settings.enable_modular_orchestrator
         has_media_payload = bool(kwargs.get("media_content") or kwargs.get("media_type"))
         try:
-            if use_modular_router:
-                if has_media_payload:
-                    return await asyncio.wait_for(
-                        message_router.route_media(
-                            db=kwargs["db"],
-                            phone_number=kwargs["phone_number"],
-                            media_content=kwargs.get("media_content"),
-                            media_type=kwargs.get("media_type", "document"),
-                            media_filename=kwargs.get("media_filename"),
-                            media_url=kwargs.get("media_url"),
-                            source_message_type=kwargs.get("source_message_type", "document"),
-                        ),
-                        timeout=45,
-                    )
+            if has_media_payload:
                 return await asyncio.wait_for(
-                    message_router.route_text(
+                    message_router.route_media(
                         db=kwargs["db"],
                         phone_number=kwargs["phone_number"],
-                        text=kwargs.get("message_text", ""),
-                        source_message_type=kwargs.get("source_message_type", "text"),
+                        media_content=kwargs.get("media_content"),
+                        media_type=kwargs.get("media_type", "document"),
+                        media_filename=kwargs.get("media_filename"),
+                        media_url=kwargs.get("media_url"),
+                        source_message_type=kwargs.get("source_message_type", "document"),
                     ),
                     timeout=45,
                 )
-            return await asyncio.wait_for(chatbot.process_message(**kwargs), timeout=45)
+            return await asyncio.wait_for(
+                message_router.route_text(
+                    db=kwargs["db"],
+                    phone_number=kwargs["phone_number"],
+                    text=kwargs.get("message_text", ""),
+                    source_message_type=kwargs.get("source_message_type", "text"),
+                ),
+                timeout=45,
+            )
         except asyncio.TimeoutError:
             try:
                 db.rollback()
             except Exception:
                 pass
-            logger.error("chatbot.process_message timed out after 45s")
+            logger.error("message_router processing timed out after 45s")
             return "Thanks for your patience 🙏 Let me help you continue — please send your answer again in the same language."
         except Exception as exc:
             try:
                 db.rollback()
             except Exception:
                 pass
-            logger.error(f"chatbot.process_message failed: {exc}")
+            logger.error(f"message_router processing failed: {exc}")
             return "I’m here to help — could you send that once more? I’ll continue from where we left off."
 
     message_id   = message.get("id")
@@ -373,11 +385,12 @@ async def process_single_message(message: dict, contacts: list, db):
         logger.warning(f"Could not mark message as read: {e}")
 
     # Optional fast UX signal while orchestration runs.
-    try:
-        if message_id and from_number:
-            await meta_client.send_reaction(message_id=message_id, to_number=from_number, emoji="👍")
-    except Exception as e:
-        logger.debug(f"Could not send quick reaction: {e}")
+    if settings.enable_webhook_reaction_signal:
+        try:
+            if message_id and from_number:
+                await meta_client.send_reaction(message_id=message_id, to_number=from_number, emoji="👍")
+        except Exception as e:
+            logger.debug(f"Could not send quick reaction: {e}")
 
     response_text = None
 
@@ -392,16 +405,16 @@ async def process_single_message(message: dict, contacts: list, db):
             greet, _ = is_greeting(text_body)
             if greet:
                 candidate = crud.get_or_create_candidate(db, from_number)
-                if candidate.conversation_state in ("initial", "awaiting_language_selection"):
+                if candidate.conversation_state in (STATE_INITIAL, STATE_AWAITING_LANGUAGE_SELECTION):
                     sel = await meta_client.send_language_selector(from_number)
                     if sel and "error" not in sel:
                         try:
                             crud.update_candidate_state(
                                 db,
                                 candidate.id,
-                                chatbot.STATE_AWAITING_LANGUAGE_SELECTION,
+                                STATE_AWAITING_LANGUAGE_SELECTION,
                             )
-                            candidate.conversation_state = chatbot.STATE_AWAITING_LANGUAGE_SELECTION
+                            candidate.conversation_state = STATE_AWAITING_LANGUAGE_SELECTION
                         except Exception as state_err:
                             logger.warning(f"Fast-path selector state update failed: {state_err}")
                         logger.info(f"Fast-path language selector sent to {from_number}")
@@ -416,9 +429,9 @@ async def process_single_message(message: dict, contacts: list, db):
                             crud.update_candidate_state(
                                 db,
                                 candidate.id,
-                                chatbot.STATE_AWAITING_LANGUAGE_SELECTION,
+                                STATE_AWAITING_LANGUAGE_SELECTION,
                             )
-                            candidate.conversation_state = chatbot.STATE_AWAITING_LANGUAGE_SELECTION
+                            candidate.conversation_state = STATE_AWAITING_LANGUAGE_SELECTION
                         except Exception as state_err:
                             logger.warning(f"Fast-path fallback state update failed: {state_err}")
                         logger.info(f"Fast-path language fallback sent to {from_number}")

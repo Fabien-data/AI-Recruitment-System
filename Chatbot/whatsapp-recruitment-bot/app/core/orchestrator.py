@@ -1,4 +1,4 @@
-"""Deterministic intake orchestrator with legacy-safe fallback."""
+"""Deterministic modular intake orchestrator (no legacy fallback)."""
 
 from __future__ import annotations
 
@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.agents.intake_agent import intake_agent
 from app.agents.recovery_agent import recovery_agent
-from app.chatbot import chatbot
 from app.config import settings
 from app.services.intent_service import classify_message
+from app.services.cv_service import cv_service
 from app.services.language_service import language_service
 from app.services.handoff_service import handoff_service
 from app.services.job_matching_service import job_matching_service
+from app.services.recruitment_sync import recruitment_sync
 from app.services.vacancy_service import vacancy_service
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,8 @@ class IntakeOrchestrator:
                 candidate.handoff_flag = True
                 self._save_agent_state(candidate, state)
                 await handoff_service.notify(candidate, reason="confusion_threshold")
-                crud.update_candidate_state(db, candidate.id, chatbot.STATE_HUMAN_HANDOFF)
-                candidate.conversation_state = chatbot.STATE_HUMAN_HANDOFF
+                crud.update_candidate_state(db, candidate.id, "human_handoff")
+                candidate.conversation_state = "human_handoff"
             db.commit()
             if candidate.handoff_flag:
                 return self._handoff_prompt(candidate)
@@ -74,7 +75,7 @@ class IntakeOrchestrator:
         self._save_agent_state(candidate, state)
         db.commit()
 
-        # Deterministic routing with controlled handoff to legacy path.
+        # Deterministic modular routing.
         if analysis.intent == "apply_job" or analysis.intent == "greeting":
             return await self._route_apply_flow(db, candidate, state)
 
@@ -85,19 +86,9 @@ class IntakeOrchestrator:
             return await self._route_question(candidate, message_text, state)
 
         if analysis.intent == "upload_cv":
-            return await chatbot.process_message(
-                db=db,
-                phone_number=phone_number,
-                message_text=message_text,
-                source_message_type=source_message_type,
-            )
+            return self._cv_prompt(candidate)
 
-        return await chatbot.process_message(
-            db=db,
-            phone_number=phone_number,
-            message_text=message_text,
-            source_message_type=source_message_type,
-        )
+        return self._recovery_prompt(candidate)
 
     async def process_media_message(
         self,
@@ -113,40 +104,43 @@ class IntakeOrchestrator:
         candidate = crud.get_or_create_candidate(db, phone_number)
         state = self._ensure_agent_state(candidate)
 
-        if media_type in {"document", "image"}:
-            state["cv_uploaded"] = True
-            state["step"] = "cv_received"
-            self._save_agent_state(candidate, state)
-            db.commit()
+        if media_type not in {"document", "image"}:
+            return self._recovery_prompt(candidate)
 
-        return await chatbot.process_message(
-            db=db,
-            phone_number=phone_number,
-            media_content=media_content,
-            media_type=media_type,
-            media_filename=media_filename,
+        extracted = await cv_service.process_cv(
+            file_content=media_content,
+            filename=media_filename or ("cv.jpg" if media_type == "image" else "cv.pdf"),
             media_url=media_url,
-            source_message_type=source_message_type,
         )
+
+        state["cv_uploaded"] = True
+        state["step"] = "cv_received"
+        collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
+        collected.update({k: v for k, v in extracted.items() if v is not None})
+        state["collected_data"] = collected
+        self._save_agent_state(candidate, state)
+        db.commit()
+
+        return await self._route_apply_flow(db, candidate, state)
 
     async def _route_apply_flow(self, db: Session, candidate, state: Dict[str, Any]) -> str:
         next_field = intake_agent.next_missing_field(state)
         if next_field == "job_role":
             state["step"] = "collecting_job_role"
-            crud.update_candidate_state(db, candidate.id, chatbot.STATE_AWAITING_JOB)
-            candidate.conversation_state = chatbot.STATE_AWAITING_JOB
+            crud.update_candidate_state(db, candidate.id, "intake_collecting_job_role")
+            candidate.conversation_state = "intake_collecting_job_role"
         elif next_field == "country":
             state["step"] = "collecting_country"
-            crud.update_candidate_state(db, candidate.id, chatbot.STATE_AWAITING_COUNTRY)
-            candidate.conversation_state = chatbot.STATE_AWAITING_COUNTRY
+            crud.update_candidate_state(db, candidate.id, "intake_collecting_country")
+            candidate.conversation_state = "intake_collecting_country"
         elif next_field == "experience_years":
             state["step"] = "collecting_experience"
-            crud.update_candidate_state(db, candidate.id, chatbot.STATE_AWAITING_EXPERIENCE)
-            candidate.conversation_state = chatbot.STATE_AWAITING_EXPERIENCE
+            crud.update_candidate_state(db, candidate.id, "intake_collecting_experience")
+            candidate.conversation_state = "intake_collecting_experience"
         else:
-            state["step"] = "awaiting_cv"
-            crud.update_candidate_state(db, candidate.id, chatbot.STATE_AWAITING_CV)
-            candidate.conversation_state = chatbot.STATE_AWAITING_CV
+            state["step"] = "intake_ready_for_matching"
+            crud.update_candidate_state(db, candidate.id, "intake_ready_for_matching")
+            candidate.conversation_state = "intake_ready_for_matching"
 
         self._save_agent_state(candidate, state)
         db.commit()
@@ -156,7 +150,14 @@ class IntakeOrchestrator:
         if next_field == "experience_years":
             return self._experience_prompt(candidate)
         if next_field is None:
-            return self._cv_prompt(candidate)
+            try:
+                await recruitment_sync.push(candidate, db)
+            except Exception as exc:
+                logger.warning("Recruitment sync failed during modular flow: %s", exc)
+            jobs_payload = await self._route_view_jobs(candidate, state)
+            if isinstance(jobs_payload, dict):
+                return jobs_payload
+            return "Great. Your profile is ready."
 
         lang = getattr(candidate.language_preference, "value", "en")
         return intake_agent.job_role_prompt(lang)
@@ -223,8 +224,8 @@ class IntakeOrchestrator:
         if re.match(r"^job_\d+$", action):
             state["step"] = "collecting_experience"
             self._save_agent_state(candidate, state)
-            crud.update_candidate_state(db, candidate.id, chatbot.STATE_AWAITING_EXPERIENCE)
-            candidate.conversation_state = chatbot.STATE_AWAITING_EXPERIENCE
+            crud.update_candidate_state(db, candidate.id, "intake_collecting_experience")
+            candidate.conversation_state = "intake_collecting_experience"
             db.commit()
             return self._experience_prompt(candidate)
         return await self._route_apply_flow(db, candidate, state)
@@ -291,9 +292,14 @@ class IntakeOrchestrator:
                 logger.debug("Language lock update fallback: %s", exc)
 
     def _save_agent_state(self, candidate, state: Dict[str, Any]) -> None:
-        candidate.agent_state = state
-        extracted = candidate.extracted_data or {}
-        extracted["agent_state"] = state
+        # Avoid sharing the same MutableDict instance across two JSON columns.
+        # Reusing one mutable object for both `agent_state` and `extracted_data["agent_state"]`
+        # can cause SQLAlchemy mutation tracking errors in production.
+        safe_state = dict(state or {})
+        candidate.agent_state = dict(safe_state)
+
+        extracted = dict(candidate.extracted_data or {})
+        extracted["agent_state"] = dict(safe_state)
         candidate.extracted_data = extracted
 
     def _recovery_prompt(self, candidate) -> str:

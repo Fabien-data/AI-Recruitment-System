@@ -19,6 +19,11 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='Asia/Colombo',
     enable_utc=True,
+    task_track_started=True,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_soft_time_limit=180,
+    task_time_limit=210,
     worker_prefetch_multiplier=1, # Fair dispatching for heavy OCR/LLM tasks
     worker_max_tasks_per_child=50 # Prevent memory leaks over time
 )
