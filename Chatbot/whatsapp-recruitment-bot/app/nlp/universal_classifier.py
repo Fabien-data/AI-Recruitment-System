@@ -1,18 +1,19 @@
 """
 Universal Intent Classifier
 ============================
-Uses GPT-4o-mini to understand ANY message from Sri Lankan users —
+Uses the configured classifier model to understand ANY message from Sri Lankan users —
 Sinhala, Tamil, Singlish, Tanglish, slang, voice transcriptions, gibberish.
 
 Returns structured intent data so the state machine can always make a
 decision rather than failing or repeating itself.
 
-Budget: GPT-4o-mini at ~$0.00015/1K tokens ≈ $0.00005 per classification.
+Budget is controlled by the configured classifier model.
 """
 
 import json
 import logging
 from typing import Any, Dict, List, Optional
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,6 @@ async def classify_intent(
     if client is None:
         try:
             from openai import AsyncOpenAI
-            from app.config import settings
             if settings.openai_api_key:
                 client = AsyncOpenAI(api_key=settings.openai_api_key)
         except Exception as e:
@@ -131,9 +131,9 @@ async def classify_intent(
 
     try:
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.classifier_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
+            max_completion_tokens=200,
             temperature=0.1,
             response_format={"type": "json_object"},
         )

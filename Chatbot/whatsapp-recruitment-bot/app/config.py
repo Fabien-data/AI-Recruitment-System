@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     
     # OpenAI
     openai_api_key: str
+    llm_primary_model: str = "gpt-5.4-mini"
+    llm_fallback_model: str = "gpt-5.4-mini"
+    classifier_model: str = "gpt-5.4-mini"
     
     # Pinecone (OPTIONAL — if empty, falls back to PostgreSQL text search)
     pinecone_api_key: Optional[str] = None
@@ -71,6 +74,13 @@ class Settings(BaseSettings):
     # Set TEST_NUMBERS in your .env to override.
     # These numbers are reset as a group via POST /admin/reset-test-numbers.
     test_numbers: str = ""
+
+    # Controlled rollout flags for modular architecture
+    enable_modular_orchestrator: bool = False
+    enable_ai_classifier: bool = True
+    enable_voice_pipeline: bool = True
+    enable_cv_priority_interrupt: bool = True
+    handoff_confusion_threshold: int = 3
 
     @property
     def test_number_list(self) -> list[str]:

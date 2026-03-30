@@ -106,6 +106,12 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN is_general_pool BOOLEAN DEFAULT FALSE"))
                 if "recent_bot_messages" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN recent_bot_messages JSON DEFAULT '[]'"))
+                if "confidence_score" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN confidence_score FLOAT DEFAULT 0.0"))
+                if "handoff_flag" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN handoff_flag BOOLEAN DEFAULT FALSE"))
+                if "agent_state" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN agent_state JSON"))
             else:
                 cols = {
                     row[0]
@@ -127,6 +133,12 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN is_general_pool BOOLEAN DEFAULT FALSE"))
                 if "recent_bot_messages" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN recent_bot_messages JSONB DEFAULT '[]'::jsonb"))
+                if "confidence_score" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN confidence_score FLOAT DEFAULT 0.0"))
+                if "handoff_flag" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN handoff_flag BOOLEAN DEFAULT FALSE"))
+                if "agent_state" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN agent_state JSONB DEFAULT '{}'::jsonb"))
     except Exception as schema_err:
         logger.warning(f"Schema self-heal skipped/failed: {schema_err}")
 

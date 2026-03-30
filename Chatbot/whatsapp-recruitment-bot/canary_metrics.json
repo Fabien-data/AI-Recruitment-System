@@ -1,0 +1,13 @@
+{
+  "project": "dewan-chatbot-1234",
+  "service": "whatsapp-chatbot",
+  "region": "us-central1",
+  "freshness": "30m",
+  "requests_observed": 48,
+  "p95_ms": 60000.93,
+  "error_rate_pct": 52.083,
+  "p95_threshold_ms": 2000.0,
+  "error_threshold_pct": 1.0,
+  "min_requests": 20,
+  "pass": false
+}

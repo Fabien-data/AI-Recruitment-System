@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Tuple, Optional
 
 from openai import AsyncOpenAI
+from app.config import settings
 
 _NLP_RESOURCES = Path(__file__).parent / "resources"
 
@@ -51,8 +52,8 @@ DOMAIN_WEIGHT: float = 2.0
 
 logger = logging.getLogger(__name__)
 
-# Ensure your OPENAI_API_KEY is loaded in your environment/config
-_openai_api_key = os.getenv("OPENAI_API_KEY")
+# Ensure OpenAI key comes from centralized settings
+_openai_api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
 client = AsyncOpenAI(api_key=_openai_api_key) if _openai_api_key else None
 
 
@@ -112,14 +113,14 @@ async def normalize_sri_lankan_input(raw_text: str) -> dict:
 
     try:
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.llm_primary_model,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Normalize this input: '{raw_text}'"}
             ],
             temperature=0.1,
-            max_tokens=150
+            max_completion_tokens=150
         )
 
         # Parse the JSON string returned by the LLM

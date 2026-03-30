@@ -181,6 +181,33 @@ def update_candidate_state(
     return db_candidate
 
 
+def update_candidate_agent_state(
+    db: Session,
+    candidate_id: int,
+    agent_state: Dict[str, Any],
+    confidence_score: Optional[float] = None,
+    handoff_flag: Optional[bool] = None,
+) -> Optional[Candidate]:
+    """Update controlled-agentic state and optional confidence/handoff flags."""
+    db_candidate = get_candidate_by_id(db, candidate_id)
+    if not db_candidate:
+        return None
+
+    db_candidate.agent_state = agent_state
+    extracted = db_candidate.extracted_data or {}
+    extracted["agent_state"] = agent_state
+    db_candidate.extracted_data = extracted
+
+    if confidence_score is not None:
+        db_candidate.confidence_score = max(0.0, min(1.0, float(confidence_score)))
+    if handoff_flag is not None:
+        db_candidate.handoff_flag = bool(handoff_flag)
+
+    db.commit()
+    db.refresh(db_candidate)
+    return db_candidate
+
+
 # ============= Conversation CRUD =============
 
 def create_conversation(db: Session, conversation: ConversationCreate) -> Conversation:

@@ -1,0 +1,55 @@
+{
+  "scenarios": [
+    {
+      "id": "en_apply",
+      "language": "en",
+      "steps": [
+        "Hi",
+        "I want to apply for a driver job",
+        "Qatar",
+        "I have 4 years experience"
+      ],
+      "expected": ["job", "country", "experience"]
+    },
+    {
+      "id": "si_singlish_apply",
+      "language": "singlish",
+      "steps": [
+        "ayubowan",
+        "mata driver job ekak ona",
+        "qatar",
+        "years 3"
+      ],
+      "expected": ["job", "country", "experience", "ratak", "awurudu"]
+    },
+    {
+      "id": "ta_tanglish_apply",
+      "language": "tanglish",
+      "steps": [
+        "vanakkam",
+        "enaku security velai venum",
+        "saudi",
+        "2 years experience"
+      ],
+      "expected": ["job", "country", "experience", "naadu", "varusham"]
+    },
+    {
+      "id": "view_jobs",
+      "language": "en",
+      "steps": [
+        "show me vacancies"
+      ],
+      "expected": ["vacancies", "available vacancies", "view jobs"]
+    },
+    {
+      "id": "recovery_case",
+      "language": "en",
+      "steps": [
+        "...",
+        "???",
+        "apply"
+      ],
+      "expected": ["apply", "vacancies", "question", "human", "connect", "upload your cv", "cv"]
+    }
+  ]
+}

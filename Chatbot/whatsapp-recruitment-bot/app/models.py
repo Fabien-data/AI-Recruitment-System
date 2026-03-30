@@ -71,6 +71,19 @@ class Candidate(Base):
     status = Column(String(50), default="active")
     confusion_streak = Column(Integer, default=0)
     question_retries = Column(Integer, default=0)
+    confidence_score = Column(Float, nullable=False, default=0.0)
+    handoff_flag = Column(Boolean, default=False, nullable=False)
+    agent_state = Column(
+        MutableDict.as_mutable(JSON),
+        nullable=False,
+        default=lambda: {
+            "step": "entry",
+            "collected_data": {},
+            "cv_uploaded": False,
+            "confusion_count": 0,
+            "locked_language": None,
+        },
+    )
     extracted_profile = Column(
         MutableDict.as_mutable(JSON),
         nullable=False,

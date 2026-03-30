@@ -16,6 +16,7 @@ import os
 import json
 import logging
 from openai import AsyncOpenAI
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,7 @@ BEHAVIORAL GUARDRAILS:
         logger.debug(f"📜 Message history: {len(messages)} messages (system + {len(chat_history)} history + current)")
         
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.llm_primary_model,
             messages=messages,
             tools=DEWAN_TOOLS,
             tool_choice="auto",

@@ -18,7 +18,7 @@ from typing import Optional
 
 import httpx
 
-from fastapi import APIRouter, Request, HTTPException, Query, BackgroundTasks, Header
+from fastapi import APIRouter, Request, HTTPException, Query, Header
 from starlette import status as http_status
 from pydantic import BaseModel
 
@@ -26,6 +26,7 @@ from app.database import SessionLocal
 from app import crud
 from app.utils.meta_client import meta_client
 from app.chatbot import chatbot
+from app.core.message_router import message_router
 from app.services.voice_service import voice_service
 from app.config import settings
 from app.nlp.language_detector import is_greeting
@@ -129,7 +130,6 @@ async def verify_webhook(
 @router.post("/whatsapp")
 async def handle_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
 ):
     """
     Handle incoming WhatsApp messages from Meta webhook.
@@ -149,15 +149,23 @@ async def handle_webhook(
         logger.info(f"📨 Webhook received: object={data.get('object', 'unknown')}")
         logger.debug(f"Webhook payload: {data}")
 
-        # Queue each message for background processing via FastAPI BackgroundTasks
+        # Detach processing from request lifecycle so webhook ACK is immediate.
         
         entries = data.get("entry", [])
         for entry in entries:
             for change in entry.get("changes", []):
                 if change.get("field") == "messages":
                     value = change.get("value", {})
-                    background_tasks.add_task(process_webhook_value, value)
-                    logger.info("Background task queued via FastAPI BackgroundTasks")
+                    task = asyncio.create_task(process_webhook_value(value))
+
+                    def _log_task_exception(done_task: asyncio.Task):
+                        try:
+                            done_task.result()
+                        except Exception as task_exc:
+                            logger.error(f"Detached webhook task failed: {task_exc}")
+
+                    task.add_done_callback(_log_task_exception)
+                    logger.info("Detached webhook task queued via asyncio.create_task")
 
         return {"status": "ok"}
 
@@ -299,7 +307,32 @@ async def process_single_message(message: dict, contacts: list, db):
     """Process a single incoming WhatsApp message."""
 
     async def _safe_process_message(**kwargs):
+        use_modular_router = settings.enable_modular_orchestrator
+        has_media_payload = bool(kwargs.get("media_content") or kwargs.get("media_type"))
         try:
+            if use_modular_router:
+                if has_media_payload:
+                    return await asyncio.wait_for(
+                        message_router.route_media(
+                            db=kwargs["db"],
+                            phone_number=kwargs["phone_number"],
+                            media_content=kwargs.get("media_content"),
+                            media_type=kwargs.get("media_type", "document"),
+                            media_filename=kwargs.get("media_filename"),
+                            media_url=kwargs.get("media_url"),
+                            source_message_type=kwargs.get("source_message_type", "document"),
+                        ),
+                        timeout=45,
+                    )
+                return await asyncio.wait_for(
+                    message_router.route_text(
+                        db=kwargs["db"],
+                        phone_number=kwargs["phone_number"],
+                        text=kwargs.get("message_text", ""),
+                        source_message_type=kwargs.get("source_message_type", "text"),
+                    ),
+                    timeout=45,
+                )
             return await asyncio.wait_for(chatbot.process_message(**kwargs), timeout=45)
         except asyncio.TimeoutError:
             try:
@@ -338,6 +371,13 @@ async def process_single_message(message: dict, contacts: list, db):
         await meta_client.mark_as_read(message_id)
     except Exception as e:
         logger.warning(f"Could not mark message as read: {e}")
+
+    # Optional fast UX signal while orchestration runs.
+    try:
+        if message_id and from_number:
+            await meta_client.send_reaction(message_id=message_id, to_number=from_number, emoji="👍")
+    except Exception as e:
+        logger.debug(f"Could not send quick reaction: {e}")
 
     response_text = None
 
