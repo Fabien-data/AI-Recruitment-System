@@ -144,7 +144,7 @@ function authenticateChatbot(req, res, next) {
 router.get('/candidate/:candidate_id', authenticate, async (req, res, next) => {
     try {
         const { candidate_id } = req.params;
-        const { channel, limit = 200 } = req.query;
+        const { channel, limit = 200, date_from, date_to, response_status } = req.query;
 
         const params = [candidate_id];
         let sql = adaptQuery(
@@ -157,6 +157,22 @@ router.get('/candidate/:candidate_id', authenticate, async (req, res, next) => {
         if (channel) {
             params.push(channel);
             sql += adaptQuery(` AND c.channel = $${params.length}`);
+        }
+
+        if (date_from) {
+            params.push(date_from);
+            sql += adaptQuery(` AND c.sent_at >= $${params.length}`);
+        }
+
+        if (date_to) {
+            params.push(date_to);
+            sql += adaptQuery(` AND c.sent_at <= $${params.length}`);
+        }
+
+        if (response_status === 'awaiting_candidate') {
+            sql += ` AND c.direction = 'outbound'`;
+        } else if (response_status === 'awaiting_agent') {
+            sql += ` AND c.direction = 'inbound'`;
         }
 
         sql += ` ORDER BY c.sent_at ASC LIMIT ${parseInt(limit, 10)}`;
@@ -252,14 +268,54 @@ router.get('/candidate/:candidate_id/notifications', authenticate, async (req, r
 // sorted by most recent message. Used to populate the chat list panel.
 router.get('/active-chats', authenticate, async (req, res, next) => {
     try {
-        const { search = '', limit = 100 } = req.query;
+        const {
+            search = '',
+            limit = 100,
+            date_from,
+            date_to,
+            conversation_stage,
+            response_status,
+        } = req.query;
+
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 300);
         const params = [];
-        let whereClause = '';
+        const filters = [];
+        const addParam = (value) => {
+            params.push(value);
+            return isMySQL ? '?' : `$${params.length}`;
+        };
 
         if (search) {
-            params.push(`%${search}%`);
-            whereClause = adaptQuery(`WHERE (ca.name ILIKE $1 OR ca.phone ILIKE $1 OR ca.whatsapp_phone ILIKE $1)`);
+            const searchPlaceholder = addParam(`%${search}%`);
+            if (isMySQL) {
+                filters.push(`(ca.name LIKE ${searchPlaceholder} OR ca.phone LIKE ${searchPlaceholder} OR ca.whatsapp_phone LIKE ${searchPlaceholder})`);
+            } else {
+                filters.push(`(ca.name ILIKE ${searchPlaceholder} OR ca.phone ILIKE ${searchPlaceholder} OR ca.whatsapp_phone ILIKE ${searchPlaceholder})`);
+            }
         }
+
+        if (conversation_stage) {
+            const stagePlaceholder = addParam(conversation_stage);
+            filters.push(`ca.conversation_stage = ${stagePlaceholder}`);
+        }
+
+        if (date_from) {
+            const fromPlaceholder = addParam(date_from);
+            filters.push(`lm.sent_at >= ${fromPlaceholder}`);
+        }
+
+        if (date_to) {
+            const toPlaceholder = addParam(date_to);
+            filters.push(`lm.sent_at <= ${toPlaceholder}`);
+        }
+
+        if (response_status === 'awaiting_candidate') {
+            filters.push(`lm.direction = 'outbound'`);
+        } else if (response_status === 'awaiting_agent') {
+            filters.push(`lm.direction = 'inbound'`);
+        }
+
+        const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
 
         const sql = adaptQuery(`
             SELECT
@@ -268,6 +324,10 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 ca.phone,
                 ca.whatsapp_phone,
                 ca.status        AS candidate_status,
+                ca.conversation_stage,
+                ca.cv_uploaded,
+                ca.cv_status,
+                ca.last_interaction,
                 ca.ai_status,
                 ca.requires_human,
                 ca.escalated_at,
@@ -280,7 +340,12 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 lm.sender_type   AS last_sender_type,
                 lm.detected_language AS last_language,
                 lm.chatbot_state AS last_chatbot_state,
-                lm.sent_at       AS last_message_at
+                lm.sent_at       AS last_message_at,
+                COALESCE(NULLIF(ca.name, ''), NULLIF(ca.whatsapp_phone, ''), ca.phone, 'Unknown') AS display_name,
+                CASE
+                    WHEN lm.direction = 'outbound' THEN 'awaiting_candidate'
+                    ELSE 'awaiting_agent'
+                END AS response_status
             FROM candidates ca
             LEFT JOIN (
                 SELECT DISTINCT ON (candidate_id)
@@ -298,7 +363,7 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
             LEFT JOIN users u ON u.id = ca.agent_id
             ${whereClause}
             ORDER BY COALESCE(lm.sent_at, ca.created_at) DESC
-            LIMIT ${parseInt(limit, 10)}
+            LIMIT ${safeLimit}
         `);
 
         const result = await query(sql, params);
@@ -582,16 +647,21 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
 
         if (channel === 'whatsapp') {
             const { sendTextMessage, sendMediaMessage } = require('../services/whatsapp');
+            const phone = candidate.phone || candidate.whatsapp_phone;
+            if (!phone) {
+                return res.status(400).json({ error: 'Candidate has no phone number. Cannot send WhatsApp message.' });
+            }
             try {
-                const phone = candidate.phone || candidate.whatsapp_phone;
                 if (mediaUrl) {
                     await sendMediaMessage(phone, finalMessageType, mediaUrl, normalizedMessage);
                 } else {
                     await sendTextMessage(phone, normalizedMessage);
                 }
             } catch (err) {
-                logger.warn(`WhatsApp send failed (simulating): ${err.message}`);
+                const waError = err.response?.data?.error?.message || err.message;
+                logger.warn(`WhatsApp send failed for ${phone}: ${waError}`);
                 sendResult.simulated = true;
+                sendResult.error = waError;
             }
         } else if (channel === 'sms') {
             if (mediaUrl) {
@@ -657,7 +727,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
                     updated_at = NOW()
                 WHERE id = $1
             `),
-            [candidate_id]
+            [resolvedCandidateId]
         );
 
         // Broadcast via WebSocket
@@ -704,6 +774,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             attachments: attachmentsValue,
             candidate_id: resolvedCandidateId,
             simulated: sendResult.simulated || false,
+            ...(sendResult.error && { delivery_error: sendResult.error }),
         });
     } catch (error) {
         next(error);

@@ -13,7 +13,16 @@ const logger = require('../utils/logger');
  */
 router.get('/', authenticate, async (req, res, next) => {
     try {
-        const { job_id, candidate_id, status, project_id } = req.query;
+        const {
+            job_id,
+            candidate_id,
+            status,
+            project_id,
+            date_from,
+            date_to,
+            page,
+            limit,
+        } = req.query;
         const params = [];
         let whereClause = ' WHERE 1=1';
 
@@ -33,6 +42,30 @@ router.get('/', authenticate, async (req, res, next) => {
             whereClause += isMySQL ? ' AND j.project_id = ?' : ` AND j.project_id = $${params.length + 1}`;
             params.push(project_id);
         }
+        if (date_from) {
+            whereClause += isMySQL
+                ? ' AND DATE(a.applied_at) >= DATE(?)'
+                : ` AND CAST(a.applied_at AS DATE) >= CAST($${params.length + 1} AS DATE)`;
+            params.push(date_from);
+        }
+        if (date_to) {
+            whereClause += isMySQL
+                ? ' AND DATE(a.applied_at) <= DATE(?)'
+                : ` AND CAST(a.applied_at AS DATE) <= CAST($${params.length + 1} AS DATE)`;
+            params.push(date_to);
+        }
+
+        const safePage = Math.max(parseInt(page, 10) || 1, 1);
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 0, 0), 100);
+        const usePagination = safeLimit > 0;
+
+        let paginationClause = '';
+        if (usePagination) {
+            const offset = (safePage - 1) * safeLimit;
+            paginationClause = isMySQL
+                ? ` LIMIT ${safeLimit} OFFSET ${offset}`
+                : ` LIMIT ${safeLimit} OFFSET ${offset}`;
+        }
 
         const sql = `SELECT a.*, c.name as candidate_name, c.phone as candidate_phone,
                      c.email as candidate_email, j.title as job_title, j.category as job_category,
@@ -41,9 +74,30 @@ router.get('/', authenticate, async (req, res, next) => {
                      JOIN candidates c ON a.candidate_id = c.id
                      JOIN jobs j ON a.job_id = j.id
                      LEFT JOIN projects p ON j.project_id = p.id
-                     ${whereClause} ORDER BY a.applied_at DESC`;
+                     ${whereClause} ORDER BY a.applied_at DESC${paginationClause}`;
         const result = await query(sql, params);
-        res.json(result.rows);
+
+        if (!usePagination) {
+            return res.json(result.rows);
+        }
+
+        const countSql = `SELECT COUNT(*) AS total
+                          FROM applications a
+                          JOIN jobs j ON a.job_id = j.id
+                          ${whereClause}`;
+        const countResult = await query(countSql, params);
+        const total = parseInt(countResult.rows?.[0]?.total, 10) || 0;
+        const totalPages = Math.max(Math.ceil(total / safeLimit), 1);
+
+        return res.json({
+            data: result.rows,
+            pagination: {
+                page: safePage,
+                limit: safeLimit,
+                total,
+                totalPages,
+            },
+        });
     } catch (error) { next(error); }
 });
 

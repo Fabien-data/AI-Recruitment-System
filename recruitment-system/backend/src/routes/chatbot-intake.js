@@ -183,6 +183,29 @@ function normalizePhone(phone) {
     return phone.replace(/[\s\-()]/g, '');
 }
 
+function isDuplicateConstraintError(error) {
+    const msg = String(error?.message || '').toLowerCase();
+    return error?.code === 'ER_DUP_ENTRY' || msg.includes('duplicate') || msg.includes('unique constraint');
+}
+
+function isMissingColumnError(error) {
+    const msg = String(error?.message || '').toLowerCase();
+    return (
+        msg.includes('column') && msg.includes('does not exist')
+    ) || msg.includes('unknown column');
+}
+
+function mapConversationStage(chatbotState, messageType, direction) {
+    if (String(messageType || '').toLowerCase() === 'document') return 'cv_sent';
+
+    const state = String(chatbotState || '').toUpperCase();
+    if (state.includes('COMPLETED') || state.includes('DONE') || state.includes('FINAL')) return 'completed';
+    if (state.includes('DROP') || state.includes('ABANDON')) return 'dropped';
+    if (state.includes('CV') || state.includes('RESUME')) return 'cv_sent';
+    if (direction === 'outbound') return 'responding';
+    return 'new';
+}
+
 function parseAdditionalDocuments(rawValue) {
     if (!rawValue) return [];
     if (Array.isArray(rawValue)) return rawValue;
@@ -955,6 +978,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
     const safeContent = typeof content === 'string' ? content : JSON.stringify(content);
     const LANG_NORMALISE_MAP = { singlish: 'si', tanglish: 'ta' };
     const preferredLanguage = LANG_NORMALISE_MAP[String(language || 'en').toLowerCase()] || (language || 'en');
+    const conversationStage = mapConversationStage(chatbot_state, message_type, direction);
 
     try {
         // Look up candidate by phone — needed for candidate_id FK
@@ -983,15 +1007,36 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                    (id, phone, whatsapp_phone, name, source, preferred_language, status)
                    VALUES ($1, $2, $3, $4, 'whatsapp', $5, 'new')`;
 
-            await query(insertCandidateSQL, [
-                candidateId,
-                normalizedPhone,
-                normalizedPhone,
-                candidateName,
-                preferredLanguage,
-            ]);
+            try {
+                await query(insertCandidateSQL, [
+                    candidateId,
+                    normalizedPhone,
+                    normalizedPhone,
+                    candidateName,
+                    preferredLanguage,
+                ]);
+                logger.info(`sync-message: auto-created candidate ${candidateId} (${normalizedPhone})`);
+            } catch (insertErr) {
+                // Another request may have created the candidate first.
+                if (!isDuplicateConstraintError(insertErr)) {
+                    throw insertErr;
+                }
 
-            logger.info(`sync-message: auto-created candidate ${candidateId} (${normalizedPhone})`);
+                const existingResult = await query(
+                    isMySQL
+                        ? 'SELECT id, name FROM candidates WHERE phone = ? OR whatsapp_phone = ? LIMIT 1'
+                        : 'SELECT id, name FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1',
+                    [normalizedPhone, normalizedPhone]
+                );
+
+                if (!existingResult.rows.length) {
+                    throw insertErr;
+                }
+
+                candidateId = existingResult.rows[0].id;
+                candidateName = existingResult.rows[0].name;
+                logger.info(`sync-message: candidate existed after race ${candidateId} (${normalizedPhone})`);
+            }
         }
 
         // Insert into communications
@@ -1005,19 +1050,64 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
 
         const insertSQL = isMySQL
             ? `INSERT INTO communications
-               (candidate_id, channel, direction, message_type, content, metadata)
-               VALUES (?, 'whatsapp', ?, ?, ?, ?)`
+               (id, candidate_id, channel, direction, message_type, content, metadata)
+               VALUES (?, ?, 'whatsapp', ?, ?, ?, ?)`
             : `INSERT INTO communications
-               (candidate_id, channel, direction, message_type, content, metadata)
-               VALUES ($1, 'whatsapp', $2, $3, $4, $5)`;
+               (id, candidate_id, channel, direction, message_type, content, metadata)
+               VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6)`;
 
         await query(insertSQL, [
+            commId,
             candidateId,
             direction,
             message_type,
             safeContent.slice(0, 4000),
             metadataJson,
         ]);
+
+        // Best-effort candidate activity updates (schema can vary by deployment).
+        const primaryCandidateUpdateSQL = isMySQL
+            ? `UPDATE candidates
+               SET preferred_language = ?, conversation_stage = ?, last_interaction = NOW(), updated_at = NOW()
+               WHERE id = ?`
+            : `UPDATE candidates
+               SET preferred_language = $1, conversation_stage = $2, last_interaction = NOW(), updated_at = NOW()
+               WHERE id = $3`;
+
+        try {
+            await query(primaryCandidateUpdateSQL, [preferredLanguage, conversationStage, candidateId]);
+        } catch (candidateUpdateErr) {
+            if (!isMissingColumnError(candidateUpdateErr)) {
+                throw candidateUpdateErr;
+            }
+
+            const fallbackCandidateUpdateSQL = isMySQL
+                ? `UPDATE candidates
+                   SET preferred_language = ?, last_contact_at = NOW(), updated_at = NOW()
+                   WHERE id = ?`
+                : `UPDATE candidates
+                   SET preferred_language = $1, updated_at = NOW()
+                   WHERE id = $2`;
+
+            const fallbackParams = isMySQL
+                ? [preferredLanguage, candidateId]
+                : [preferredLanguage, candidateId];
+            await query(fallbackCandidateUpdateSQL, fallbackParams);
+        }
+
+        if (String(message_type || '').toLowerCase() === 'document') {
+            const cvFlagSQL = isMySQL
+                ? 'UPDATE candidates SET cv_uploaded = TRUE, updated_at = NOW() WHERE id = ?'
+                : 'UPDATE candidates SET cv_uploaded = TRUE, updated_at = NOW() WHERE id = $1';
+            try {
+                await query(cvFlagSQL, [candidateId]);
+            } catch (cvFlagErr) {
+                // Some environments may not have this column yet.
+                if (!isMissingColumnError(cvFlagErr)) {
+                    throw cvFlagErr;
+                }
+            }
+        }
 
         // Emit WebSocket event to agents watching this candidate
         try {
@@ -1063,7 +1153,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
             logger.debug(`sync-message: WebSocket emit skipped — ${wsErr.message}`);
         }
 
-        return res.status(201).json({ id: commId, candidate_id: candidateId });
+        return res.status(201).json({ id: commId, candidate_id: candidateId, conversation_stage: conversationStage });
     } catch (error) {
         const errorDetail = error?.message || (typeof error === 'string' ? error : JSON.stringify(error));
         logger.error(`sync-message error: ${errorDetail}`);

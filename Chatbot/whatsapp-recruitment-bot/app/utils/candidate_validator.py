@@ -1,13 +1,10 @@
-"""AI supervisor state and lightweight sync validator."""
-
 from __future__ import annotations
 
-import json
 import logging
-import re
-from dataclasses import dataclass, field
+import os
 from typing import Any, Dict, List, Optional
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -16,142 +13,215 @@ logger = logging.getLogger(__name__)
 
 
 class AIConversationState(BaseModel):
-    """Structured output the AI supervisor returns for every text message."""
+    """Structured output for the AI supervisor."""
+    extracted_name: Optional[str] = Field(None, description="The user's name if mentioned")
+    experience_years: Optional[int] = Field(None, description="Years of experience as an integer")
+    job_interest: Optional[str] = Field(None, description="Job role or interest if mentioned")
+    country: Optional[str] = Field(None, description="Preferred country to work in if mentioned")
+    reply_message: str = Field(..., description="Reply in the exact language/register the user used")
+    is_ready_to_sync: bool = Field(False, description="True when name, experience_years, job_interest, and country are all captured")
+    intervention_needed: bool = Field(False, description="True if the user asks for a human or sounds frustrated")
+    next_question_type: Optional[str] = Field(
+        None,
+        description="The field name you are asking for in this reply (name/job_role/experience_years/country/cv). Null if not asking for anything."
+    )
 
-    extracted_name: Optional[str] = Field(default=None, description="Candidate full name")
-    experience_years: Optional[int] = Field(default=None, description="Experience years as integer")
-    job_interest: Optional[str] = Field(default=None, description="Job/field user is interested in")
-    intent: str = Field(default="INQUIRY", description="GREETING, APPLYING, INQUIRY, or FRUSTRATED")
-    intervention_needed: bool = Field(default=False, description="True if human intervention is needed")
-    reply_message: str = Field(default="Thank you. I can help with jobs and applications.", description="Reply to user")
+
+_client: Optional[AsyncOpenAI] = None
 
 
-SYSTEM_PROMPT = """
-You are an Elite Sri Lankan Recruitment Agent for 'NODE.io Solutions'.
+def _get_client() -> AsyncOpenAI:
+    global _client
+    if _client is None:
+        api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set.")
+        _client = AsyncOpenAI(api_key=api_key)
+    return _client
+
+
+def _build_language_instruction(lang: str) -> str:
+    instructions: Dict[str, str] = {
+        "en": (
+            "LANGUAGE: Respond in clear, simple English. "
+            "Keep domain terms (Job, CV, Experience, Apply, Upload) in English."
+        ),
+        "si": (
+            "LANGUAGE: Respond ONLY in native Sinhala script (සිංහල). "
+            "Keep domain terms like Job, CV, Experience, Apply in English."
+        ),
+        "ta": (
+            "LANGUAGE: Respond ONLY in native Tamil script (தமிழ்). "
+            "Keep domain terms like Job, CV, Experience, Apply in English."
+        ),
+        "singlish": (
+            "LANGUAGE: Respond in Singlish — Romanized Sinhala naturally mixed with English. "
+            "Concrete examples of the register you must use:\n"
+            "  - 'Oyata mokada job ekata apply karanna?' (What job do you want to apply for?)\n"
+            "  - 'Kochchara avurudu experience thiyenawada?' (How many years of experience do you have?)\n"
+            "  - 'Hari, dan CV eka upload karanna.' (Okay, please upload your CV now.)\n"
+            "  - 'Kohomada, mama oyata help karanna innawa.' (Hello, I'm here to help you.)\n"
+            "  - 'Sthuthi! Oyage CV eka labuna.' (Thank you! I received your CV.)\n"
+            "NEVER switch to Sinhala script or pure English paragraphs."
+        ),
+        "tanglish": (
+            "LANGUAGE: Respond in Tanglish — Romanized Tamil naturally mixed with English. "
+            "Concrete examples of the register you must use:\n"
+            "  - 'Neenga yeh job-ku apply panna virumbureenga?' (Which job do you want to apply for?)\n"
+            "  - 'Evalo varusham experience irukku?' (How many years of experience do you have?)\n"
+            "  - 'Sari, CV upload pannunga.' (Okay, please upload your CV.)\n"
+            "  - 'Vanakkam, unga ku help panna ready-a irukken.' (Hello, I'm ready to help you.)\n"
+            "  - 'Nandri! Unga CV kedaichuchu.' (Thank you! I received your CV.)\n"
+            "NEVER switch to Tamil script or pure English paragraphs."
+        ),
+    }
+    return instructions.get(lang or "en", instructions["en"])
+
+
+def _build_system_prompt(
+    collected_data: Dict[str, Any],
+    asked_questions: List[str],
+    locked_language: str,
+    cv_just_uploaded: bool,
+) -> str:
+    # --- Build "already known" summary ---
+    known_parts: List[str] = []
+    if collected_data.get("name"):
+        known_parts.append(f"name: {collected_data['name']}")
+    if collected_data.get("job_role"):
+        known_parts.append(f"job_role: {collected_data['job_role']}")
+    if collected_data.get("experience_years") is not None:
+        known_parts.append(f"experience_years: {collected_data['experience_years']}")
+    if collected_data.get("country"):
+        known_parts.append(f"country: {collected_data['country']}")
+    if collected_data.get("skills"):
+        known_parts.append("skills: captured")
+    if collected_data.get("cv_uploaded"):
+        known_parts.append("cv: uploaded")
+    known_summary = ", ".join(known_parts) if known_parts else "nothing yet"
+
+    # --- Build "still missing" list ---
+    missing: List[str] = []
+    if not collected_data.get("name"):
+        missing.append("name")
+    if not collected_data.get("job_role"):
+        missing.append("job_role")
+    if collected_data.get("experience_years") is None:
+        missing.append("experience_years")
+    if not collected_data.get("country"):
+        missing.append("country")
+    if not collected_data.get("cv_uploaded"):
+        missing.append("cv")
+    missing_str = ", ".join(missing) if missing else "NOTHING — all data collected, ready to sync"
+
+    # --- CV confirmation section ---
+    cv_section = ""
+    if cv_just_uploaded:
+        cv_section = """
+CV WAS JUST RECEIVED:
+- Thank the user warmly (in their language register).
+- Tell them specifically what you extracted from their CV (mention name/role/experience/skills if present in WHAT I ALREADY KNOW).
+- Only ask for fields listed in WHAT STILL NEEDS COLLECTING.
+- DO NOT ask for anything already in WHAT I ALREADY KNOW.
+"""
+
+    lang_instruction = _build_language_instruction(locked_language)
+
+    asked_str = ", ".join(asked_questions) if asked_questions else "nothing yet"
+
+    return f"""You are an Elite Sri Lankan Recruitment Agent working for Dewan Consultants.
+Your goal: help candidates find overseas jobs by collecting their details smoothly and naturally.
+
+WHAT I ALREADY KNOW ABOUT THIS CANDIDATE:
+{known_summary}
+
+WHAT STILL NEEDS COLLECTING (in priority order):
+{missing_str}
+
+ALREADY ASKED — DO NOT ASK AGAIN:
+{asked_str}
+{cv_section}
+COLLECTION GOAL — gather these fields (skip any already known):
+1. name — candidate's full name
+2. job_role — what job they are looking for
+3. experience_years — total years of work experience (integer)
+4. country — which country they want to work in
+5. cv — ask them to upload their CV document or photo (only if not yet uploaded)
+
+{lang_instruction}
+
 RULES:
-1. Speak naturally. If user uses Singlish/Tanglish, reply in a helpful matching mix.
-2. DO NOT enforce a single language. Be fluid.
-3. If user is talking about CV, job, or applying, intent is APPLYING.
-4. If user repeatedly asks same thing, is angry, or asks for human, set intervention_needed=true.
-5. Extract name, experience_years, and job_interest whenever possible.
-6. Return valid JSON only.
-""".strip()
+1. NEVER ask for a field already listed in WHAT I ALREADY KNOW.
+2. NEVER ask for a field listed in ALREADY ASKED unless the user just gave a new answer to it.
+3. Ask only ONE question per reply. Do not bundle multiple questions.
+4. Keep replies short and conversational (1–3 sentences max).
+5. If the user asks for a human agent or sounds clearly frustrated, set intervention_needed to true.
+6. When all 5 items are done (name, job_role, experience_years, country, cv uploaded), set is_ready_to_sync to true.
+7. If your reply asks for a specific field, set next_question_type to that field name exactly: name / job_role / experience_years / country / cv.
+8. If not asking for any field (e.g. just acknowledging), set next_question_type to null.
+
+Return ONLY valid JSON with these exact keys:
+extracted_name, experience_years, job_interest, country, reply_message, is_ready_to_sync, intervention_needed, next_question_type
+"""
 
 
-@dataclass
-class ValidationResult:
-    is_valid: bool
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
-
-    def __bool__(self) -> bool:
-        return self.is_valid
-
-
-_PHONE_RE = re.compile(r"^\+?[0-9]{7,15}$")
-
-
-def validate_candidate(
-    phone: Optional[str],
-    name: Optional[str],
-    email: Optional[str],
-    job_interest: Optional[str],
-    preferred_language: Optional[str],
-    experience_years: Optional[Any],
-    extracted_data: Optional[Dict] = None,
-) -> ValidationResult:
-    """Minimal safety validation before sync; non-blocking for language/register differences."""
-    errors: List[str] = []
-    warnings: List[str] = []
-
-    if not phone or not isinstance(phone, str) or not _PHONE_RE.match(phone.replace(" ", "").replace("-", "")):
-        errors.append("phone is required and must be E.164-like")
-
-    if not name or len(str(name).strip()) < 2:
-        warnings.append("name is missing or short")
-
-    if not job_interest or len(str(job_interest).strip()) < 2:
-        warnings.append("job_interest missing; using general pool")
-
-    if experience_years is not None:
-        try:
-            exp = int(experience_years)
-            if exp < 0 or exp > 60:
-                warnings.append("experience_years outside expected range")
-        except Exception:
-            warnings.append("experience_years not parseable as integer")
-
-    return ValidationResult(is_valid=(len(errors) == 0), errors=errors, warnings=warnings)
+def _fallback_reply() -> str:
+    return "Thanks for your message. Could you please tell me your name and what job you are looking for?"
 
 
 async def run_ai_supervisor(
-    *,
     user_text: str,
     history: Optional[List[Dict[str, str]]] = None,
     force_applying: bool = False,
+    collected_data: Optional[Dict[str, Any]] = None,
+    asked_questions: Optional[List[str]] = None,
+    locked_language: Optional[str] = None,
+    cv_just_uploaded: bool = False,
 ) -> AIConversationState:
-    """Single-pass AI supervisor for intent, extraction, intervention, and reply."""
-    text = (user_text or "").strip()
-    if not text:
-        return AIConversationState(intent="INQUIRY", reply_message="Please send your message and I will help.")
+    effective_collected = collected_data or {}
+    effective_asked = asked_questions or []
+    effective_lang = locked_language or "en"
 
-    if not settings.openai_api_key:
-        return _fallback_supervisor(text, force_applying)
+    system_prompt = _build_system_prompt(
+        collected_data=effective_collected,
+        asked_questions=effective_asked,
+        locked_language=effective_lang,
+        cv_just_uploaded=cv_just_uploaded,
+    )
+
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+
+    if history:
+        messages.extend(history)
+
+    if force_applying and not cv_just_uploaded:
+        messages.append({
+            "role": "system",
+            "content": "The candidate has already uploaded a CV. Only ask for fields that are genuinely still missing.",
+        })
+
+    messages.append({"role": "user", "content": user_text or ""})
 
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
-        messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        for item in (history or [])[-10:]:
-            role = item.get("role") if item.get("role") in {"assistant", "user"} else "user"
-            content = str(item.get("content") or "").strip()
-            if content:
-                messages.append({"role": role, "content": content})
-
-        content = text if not force_applying else f"{text}\n\n[Context: user is currently applying.]"
-        messages.append({"role": "user", "content": content})
-
+        client = _get_client()
         response = await client.chat.completions.create(
-            model=settings.classifier_model or settings.llm_primary_model,
-            temperature=0.2,
-            response_format={"type": "json_object"},
+            model="gpt-4o-mini",
             messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.3,
             max_completion_tokens=320,
         )
-
-        raw = response.choices[0].message.content or "{}"
-        parsed = AIConversationState.model_validate(json.loads(raw))
-        return parsed
+        content = response.choices[0].message.content or "{}"
+        return AIConversationState.model_validate_json(content)
     except Exception as exc:
-        logger.warning("AI supervisor fallback triggered: %s", exc)
-        return _fallback_supervisor(text, force_applying)
-
-
-def _fallback_supervisor(text: str, force_applying: bool) -> AIConversationState:
-    lower = text.lower()
-    frustrated = any(k in lower for k in ["human", "agent", "angry", "frustrated", "annoyed", "help me", "operator"])
-    intent = "APPLYING" if force_applying or any(k in lower for k in ["apply", "job", "cv", "resume", "velai", "රැකියා"]) else "INQUIRY"
-
-    name = None
-    m_name = re.search(r"\b(i am|i'm|my name is)\s+([a-zA-Z][a-zA-Z\s]{1,40})", text, flags=re.IGNORECASE)
-    if m_name:
-        name = m_name.group(2).strip().title()
-
-    exp = None
-    m_exp = re.search(r"\b(\d{1,2})\b", text)
-    if m_exp:
-        exp = int(m_exp.group(1))
-
-    reply = "Thanks. I can help you apply for jobs. Please share your name, experience, and preferred job."
-    if frustrated:
-        reply = "I understand. A human agent will assist you shortly."
-
-    return AIConversationState(
-        extracted_name=name,
-        experience_years=exp,
-        job_interest="General" if intent == "APPLYING" else None,
-        intent="FRUSTRATED" if frustrated else intent,
-        intervention_needed=frustrated,
-        reply_message=reply,
-    )
+        logger.warning("AI supervisor fallback used: %s", exc)
+        return AIConversationState(
+            extracted_name=None,
+            experience_years=None,
+            job_interest=None,
+            country=None,
+            reply_message=_fallback_reply(),
+            is_ready_to_sync=False,
+            intervention_needed=False,
+            next_question_type=None,
+        )

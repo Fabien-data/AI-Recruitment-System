@@ -6,6 +6,37 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { syncJobAsync } = require('./chatbot-sync');
 const logger = require('../utils/logger');
 
+function normalizeProjectPayload(body = {}) {
+    const countriesInput = body.countries || body.country_of_recruitment || [];
+    const countries = Array.isArray(countriesInput) ? countriesInput : [];
+
+    const salaryInfo = {
+        ...(body.salary_info || {}),
+    };
+    if (body.currency && !salaryInfo.currency) {
+        salaryInfo.currency = body.currency;
+    }
+
+    const mergedContactInfo = {
+        ...(body.contact_info || {}),
+    };
+
+    if (body.client_details && typeof body.client_details === 'object') {
+        if (body.client_details.mobile && !mergedContactInfo.mobile) mergedContactInfo.mobile = body.client_details.mobile;
+        if (body.client_details.email && !mergedContactInfo.email) mergedContactInfo.email = body.client_details.email;
+        if (body.client_details.address && !mergedContactInfo.address) mergedContactInfo.address = body.client_details.address;
+        if (body.client_details.special_details && !mergedContactInfo.special_details) {
+            mergedContactInfo.special_details = body.client_details.special_details;
+        }
+    }
+
+    return {
+        countries,
+        salary_info: salaryInfo,
+        contact_info: mergedContactInfo,
+    };
+}
+
 /**
  * Get all projects with filters
  */
@@ -256,7 +287,9 @@ router.post('/', authenticate, authorize('admin', 'supervisor'), async (req, res
             metadata
         } = req.body;
 
-        if (!title || !client_name || !industry_type || !countries || countries.length === 0) {
+        const normalized = normalizeProjectPayload(req.body);
+
+        if (!title || !client_name || !industry_type || !normalized.countries || normalized.countries.length === 0) {
             return res.status(400).json({ error: 'Title, client name, industry type, and at least one country are required' });
         }
 
@@ -271,11 +304,11 @@ router.post('/', authenticate, authorize('admin', 'supervisor'), async (req, res
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                     id, title, client_name, industry_type, description,
-                    JSON.stringify(countries), status, priority, total_positions,
+                    JSON.stringify(normalized.countries), status, priority, total_positions,
                     start_date, interview_date, end_date,
                     JSON.stringify(benefits || {}),
-                    JSON.stringify(salary_info || {}),
-                    JSON.stringify(contact_info || {}),
+                    JSON.stringify(normalized.salary_info),
+                    JSON.stringify(normalized.contact_info),
                     JSON.stringify(requirements || {}),
                     JSON.stringify(metadata || {}),
                     userId
@@ -300,11 +333,11 @@ router.post('/', authenticate, authorize('admin', 'supervisor'), async (req, res
                  RETURNING *`,
                 [
                     title, client_name, industry_type, description,
-                    JSON.stringify(countries), status, priority, total_positions,
+                    JSON.stringify(normalized.countries), status, priority, total_positions,
                     start_date, interview_date, end_date,
                     JSON.stringify(benefits || {}),
-                    JSON.stringify(salary_info || {}),
-                    JSON.stringify(contact_info || {}),
+                    JSON.stringify(normalized.salary_info),
+                    JSON.stringify(normalized.contact_info),
                     JSON.stringify(requirements || {}),
                     JSON.stringify(metadata || {}),
                     userId
@@ -330,7 +363,28 @@ router.post('/', authenticate, authorize('admin', 'supervisor'), async (req, res
 router.put('/:id', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
     try {
         const { id } = req.params;
-        const updates = req.body;
+        const updates = { ...req.body };
+
+        if (updates.country_of_recruitment && !updates.countries) {
+            updates.countries = updates.country_of_recruitment;
+        }
+
+        if (updates.currency) {
+            updates.salary_info = {
+                ...(updates.salary_info || {}),
+                currency: updates.currency,
+            };
+        }
+
+        if (updates.client_details && typeof updates.client_details === 'object') {
+            updates.contact_info = {
+                ...(updates.contact_info || {}),
+                mobile: updates.client_details.mobile || updates.contact_info?.mobile,
+                email: updates.client_details.email || updates.contact_info?.email,
+                address: updates.client_details.address || updates.contact_info?.address,
+                special_details: updates.client_details.special_details || updates.contact_info?.special_details,
+            };
+        }
 
         const allowedFields = [
             'title', 'client_name', 'industry_type', 'description', 'countries',

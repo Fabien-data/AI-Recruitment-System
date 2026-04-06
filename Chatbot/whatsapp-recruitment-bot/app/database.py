@@ -110,8 +110,14 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN confidence_score FLOAT DEFAULT 0.0"))
                 if "handoff_flag" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN handoff_flag BOOLEAN DEFAULT FALSE"))
+                if "intervention_needed" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN intervention_needed BOOLEAN DEFAULT FALSE"))
+                if "intervention_reason" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN intervention_reason TEXT"))
                 if "agent_state" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN agent_state JSON"))
+                if "cv_sync_status" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN cv_sync_status VARCHAR(20)"))
             else:
                 cols = {
                     row[0]
@@ -137,8 +143,14 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN confidence_score FLOAT DEFAULT 0.0"))
                 if "handoff_flag" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN handoff_flag BOOLEAN DEFAULT FALSE"))
+                if "intervention_needed" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN intervention_needed BOOLEAN DEFAULT FALSE"))
+                if "intervention_reason" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN intervention_reason TEXT"))
                 if "agent_state" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN agent_state JSONB DEFAULT '{}'::jsonb"))
+                if "cv_sync_status" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN cv_sync_status VARCHAR(20)"))
     except Exception as schema_err:
         logger.warning(f"Schema self-heal skipped/failed: {schema_err}")
 

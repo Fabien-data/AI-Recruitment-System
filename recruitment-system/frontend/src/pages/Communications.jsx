@@ -52,8 +52,43 @@ async function apiFetch(path, opts = {}) {
   return res.json()
 }
 
-const getActiveChats = (search) => apiFetch(`/api/communications/active-chats?search=${encodeURIComponent(search || '')}&limit=100`)
-const getTranscript = (id) => apiFetch(`/api/communications/candidate/${id}?limit=200`)
+const STAGE_OPTIONS = [
+  { value: '', label: 'All stages' },
+  { value: 'new', label: 'New' },
+  { value: 'responding', label: 'Responding' },
+  { value: 'screening', label: 'Screening' },
+  { value: 'interview', label: 'Interview' },
+  { value: 'completed', label: 'Completed' },
+]
+
+const RESPONSE_OPTIONS = [
+  { value: '', label: 'All responses' },
+  { value: 'awaiting_candidate', label: 'Awaiting Candidate' },
+  { value: 'awaiting_agent', label: 'Awaiting Agent' },
+]
+
+const getActiveChats = ({ search, conversationStage, responseStatus, dateFrom, dateTo }) => {
+  const params = new URLSearchParams()
+  params.set('limit', '100')
+  if (search) params.set('search', search)
+  if (conversationStage) params.set('conversation_stage', conversationStage)
+  if (responseStatus) params.set('response_status', responseStatus)
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  return apiFetch(`/api/communications/active-chats?${params.toString()}`)
+}
+const getTranscript = ({ id, responseStatus, dateFrom, dateTo }) => {
+  const params = new URLSearchParams()
+  params.set('limit', '200')
+  if (responseStatus) params.set('response_status', responseStatus)
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  return apiFetch(`/api/communications/candidate/${id}?${params.toString()}`)
+}
+const updateCandidateIdentity = (id, body) => apiFetch(`/api/candidates/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(body),
+})
 const takeover = (id) => apiFetch(`/api/communications/candidate/${id}/takeover`, { method: 'POST' })
 const release = (id) => apiFetch(`/api/communications/candidate/${id}/release`, { method: 'POST' })
 const sendMsg = (body) => apiFetch('/api/communications/send', {
@@ -212,7 +247,17 @@ export default function Communications() {
   const [searchParams] = useSearchParams()
   const [selectedId, setSelectedId] = useState(null)
   const [message, setMessage] = useState('')
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(searchParams.get('q') || '')
+  const [conversationStage, setConversationStage] = useState(searchParams.get('conversation_stage') || '')
+  const [responseStatus, setResponseStatus] = useState(searchParams.get('response_status') || '')
+  const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '')
+  const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '')
+  const [transcriptResponseStatus, setTranscriptResponseStatus] = useState('')
+  const [transcriptDateFrom, setTranscriptDateFrom] = useState('')
+  const [transcriptDateTo, setTranscriptDateTo] = useState('')
+  const [isEditingIdentity, setIsEditingIdentity] = useState(false)
+  const [identityNameDraft, setIdentityNameDraft] = useState('')
+  const [identityError, setIdentityError] = useState(null)
   const [chatList, setChatList] = useState([])
   const [escalatedChats, setEscalatedChats] = useState(() => new Set())
   const [transcript, setTranscript] = useState([])
@@ -230,8 +275,29 @@ export default function Communications() {
   const fileInputRef = useRef(null)
   const queryClient = useQueryClient()
 
+  const getCandidateDisplayName = useCallback((candidate) => {
+    if (!candidate) return 'Unknown'
+    return String(candidate.display_name || candidate.name || candidate.whatsapp_phone || candidate.phone || 'Unknown')
+  }, [])
+
+  const getCandidateInitial = useCallback((candidate) => {
+    const displayName = getCandidateDisplayName(candidate)
+    return displayName.charAt(0).toUpperCase() || '?'
+  }, [getCandidateDisplayName])
+
   // Selected candidate object from chatList
   const selectedCandidate = chatList.find(c => c.candidate_id === selectedId)
+
+  useEffect(() => {
+    if (!selectedCandidate) {
+      setIdentityNameDraft('')
+      setIsEditingIdentity(false)
+      return
+    }
+    setIdentityNameDraft(getCandidateDisplayName(selectedCandidate))
+    setIdentityError(null)
+    setIsEditingIdentity(false)
+  }, [selectedCandidate, getCandidateDisplayName])
 
   useEffect(() => {
     const candidateFromUrl = searchParams.get('candidate')
@@ -250,8 +316,14 @@ export default function Communications() {
 
   // ── Fetch active chat list ─────────────────────────────────────────────────
   const { data: activeChatsData, isLoading: listLoading } = useQuery({
-    queryKey: ['active-chats', search],
-    queryFn: () => getActiveChats(search),
+    queryKey: ['active-chats', search, conversationStage, responseStatus, dateFrom, dateTo],
+    queryFn: () => getActiveChats({
+      search,
+      conversationStage,
+      responseStatus,
+      dateFrom,
+      dateTo,
+    }),
     refetchInterval: 30000, // fallback poll every 30s
   })
 
@@ -263,8 +335,13 @@ export default function Communications() {
 
   // ── Fetch transcript when candidate changes ────────────────────────────────
   const { data: transcriptData, isLoading: transcriptLoading } = useQuery({
-    queryKey: ['transcript', selectedId],
-    queryFn: () => getTranscript(selectedId),
+    queryKey: ['transcript', selectedId, transcriptResponseStatus, transcriptDateFrom, transcriptDateTo],
+    queryFn: () => getTranscript({
+      id: selectedId,
+      responseStatus: transcriptResponseStatus,
+      dateFrom: transcriptDateFrom,
+      dateTo: transcriptDateTo,
+    }),
     enabled: !!selectedId,
   })
 
@@ -298,7 +375,12 @@ export default function Communications() {
     socket.on('disconnect', () => setConnected(false))
 
     socket.on('new_message', (msg) => {
-      setTranscript(prev => [...prev, msg])
+      setTranscript(prev => {
+        // Deduplicate: if an optimistic insert with the same server ID already exists, replace it
+        const exists = prev.some(m => m.id === msg.id)
+        if (exists) return prev.map(m => m.id === msg.id ? { ...msg, _optimistic: false } : m)
+        return [...prev, msg]
+      })
       // Update last message in chat list
       setChatList(prev => prev.map(c =>
         c.candidate_id === msg.candidate_id
@@ -318,7 +400,10 @@ export default function Communications() {
         sent_at: newMessage.timestamp || new Date().toISOString(),
         attachments: newMessage.attachments || [],
       }
-      setTranscript(prev => [...prev, mapped])
+      setTranscript(prev => {
+        if (prev.some(m => m.id === mapped.id)) return prev
+        return [...prev, mapped]
+      })
       setChatList(prev => prev.map(c =>
         c.candidate_id === mapped.candidate_id
           ? { ...c, last_message: mapped.content, last_message_at: mapped.sent_at, last_direction: mapped.direction }
@@ -413,6 +498,23 @@ export default function Communications() {
     onSuccess: () => queryClient.invalidateQueries(['active-chats']),
   })
 
+  const identityMut = useMutation({
+    mutationFn: ({ candidateId, name }) => updateCandidateIdentity(candidateId, { name }),
+    onSuccess: (_, vars) => {
+      setChatList(prev => prev.map(c => (
+        c.candidate_id === vars.candidateId
+          ? { ...c, name: vars.name, display_name: vars.name }
+          : c
+      )))
+      setIsEditingIdentity(false)
+      setIdentityError(null)
+      queryClient.invalidateQueries(['active-chats'])
+    },
+    onError: () => {
+      setIdentityError('Failed to save identity. Please try again.')
+    },
+  })
+
   // ── Send message ───────────────────────────────────────────────────────────
   const discardAudio = useCallback(() => {
     setAudioBlob(null)
@@ -446,7 +548,8 @@ export default function Communications() {
       }
 
       recorder.onstop = () => {
-        const blob = new Blob(mediaChunksRef.current, { type: 'audio/webm' })
+        const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg' : 'audio/webm'
+        const blob = new Blob(mediaChunksRef.current, { type: mimeType })
         if (audioUrl) URL.revokeObjectURL(audioUrl)
         setAudioBlob(blob)
         setAudioUrl(URL.createObjectURL(blob))
@@ -478,10 +581,12 @@ export default function Communications() {
       if (hasText) formData.append('message', message.trim())
 
       let optimisticType = 'text'
-      let optimisticAttachment = null
 
       if (hasAudio) {
-        formData.append('media', audioBlob, 'voice_note.webm')
+        // Use ogg for WhatsApp compatibility (webm is not supported by WhatsApp API)
+        const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg' : 'audio/webm'
+        const ext = mimeType.includes('ogg') ? 'ogg' : 'webm'
+        formData.append('media', audioBlob, `voice_note.${ext}`)
         formData.append('msgType', 'audio')
         optimisticType = 'audio'
       } else if (hasFile) {
@@ -495,14 +600,38 @@ export default function Communications() {
               : 'document'
       }
 
-      const result = await sendMsg(formData)
+      // Clear inputs immediately so user can type next message
+      const sentText = message.trim()
       setMessage('')
       discardAudio()
       if (fileInputRef.current) fileInputRef.current.value = ''
 
-      optimisticAttachment = result.attachments?.[0] || null
+      const result = await sendMsg(formData)
 
-      // Server emits websocket events; avoid duplicating optimistic bubble.
+      // Add sent message to transcript immediately (optimistic insert with real server ID)
+      const optimisticMsg = {
+        id: result.id || `temp-${Date.now()}`,
+        candidate_id: selectedId,
+        direction: 'outbound',
+        message_type: result.message_type || optimisticType,
+        content: sentText,
+        attachments: result.attachments || [],
+        sender_type: 'agent',
+        sender_name: 'You',
+        sent_at: new Date().toISOString(),
+        _optimistic: true,
+      }
+      setTranscript(prev => {
+        // Avoid duplicate if WebSocket event already arrived
+        if (prev.some(m => m.id === optimisticMsg.id)) return prev
+        return [...prev, optimisticMsg]
+      })
+
+      // Warn user if WhatsApp delivery failed (message stored but not sent to phone)
+      if (result.simulated) {
+        const detail = result.delivery_error ? `: ${result.delivery_error}` : ''
+        setSendError(`⚠️ Message saved but not delivered to WhatsApp${detail}`)
+      }
     } catch (err) {
       setSendError('Failed to send. Please try again.')
     }
@@ -536,6 +665,52 @@ export default function Communications() {
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-400 transition-all"
             />
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <select
+              value={conversationStage}
+              onChange={(e) => setConversationStage(e.target.value)}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            >
+              {STAGE_OPTIONS.map((option) => (
+                <option key={option.value || 'all'} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <select
+              value={responseStatus}
+              onChange={(e) => setResponseStatus(e.target.value)}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            >
+              {RESPONSE_OPTIONS.map((option) => (
+                <option key={option.value || 'all'} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            />
+          </div>
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setConversationStage('')
+                setResponseStatus('')
+                setDateFrom('')
+                setDateTo('')
+              }}
+              className="text-[11px] text-slate-500 hover:text-slate-700"
+            >
+              Clear filters
+            </button>
           </div>
         </div>
 
@@ -580,7 +755,7 @@ export default function Communications() {
                     'w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0',
                     c.is_human_handoff ? 'bg-indigo-100 text-indigo-700' : 'bg-primary-100 text-primary-700'
                   )}>
-                    {c.name?.charAt(0)?.toUpperCase() || '?'}
+                    {getCandidateInitial(c)}
                   </div>
 
                   <div className="flex-1 min-w-0">
@@ -606,7 +781,7 @@ export default function Communications() {
                       </div>
                     )}
                     <div className="flex items-baseline justify-between gap-1 mb-0.5">
-                      <p className="text-sm font-semibold text-slate-900 truncate">{c.name || 'Unknown'}</p>
+                      <p className="text-sm font-semibold text-slate-900 truncate">{getCandidateDisplayName(c)}</p>
                       {c.last_message_at && (
                         <span className="text-[10px] text-slate-400 shrink-0">
                           {formatDistanceToNow(new Date(c.last_message_at), { addSuffix: false })}
@@ -641,49 +816,86 @@ export default function Communications() {
       {selectedId ? (
         <div className="flex-1 flex flex-col min-w-0">
           {/* Transcript header */}
-          <div className="h-16 px-5 bg-white border-b border-slate-200 flex items-center justify-between shadow-sm shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-primary-100 flex items-center justify-center font-bold text-primary-700 text-sm">
-                {selectedCandidate?.name?.charAt(0)?.toUpperCase() || '?'}
-              </div>
-              <div>
-                <h2 className="font-semibold text-slate-900 text-sm">{selectedCandidate?.name || 'Candidate'}</h2>
-                <div className="flex items-center gap-2 text-xs text-slate-500">
-                  <span className="flex items-center gap-1"><Phone size={11} /> {selectedCandidate?.phone || selectedCandidate?.whatsapp_phone}</span>
-                  {selectedCandidate?.last_chatbot_state && (
-                    <span className="flex items-center gap-1 text-slate-400">
-                      <ChevronRight size={11} /> {selectedCandidate.last_chatbot_state.replace(/_/g, ' ')}
-                    </span>
-                  )}
+          <div className="px-5 py-3 bg-white border-b border-slate-200 shadow-sm shrink-0">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-primary-100 flex items-center justify-center font-bold text-primary-700 text-sm">
+                  {getCandidateInitial(selectedCandidate)}
                 </div>
+                <div>
+                  <h2 className="font-semibold text-slate-900 text-sm">{getCandidateDisplayName(selectedCandidate)}</h2>
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <span className="flex items-center gap-1"><Phone size={11} /> {selectedCandidate?.phone || selectedCandidate?.whatsapp_phone}</span>
+                    {selectedCandidate?.last_chatbot_state && (
+                      <span className="flex items-center gap-1 text-slate-400">
+                        <ChevronRight size={11} /> {selectedCandidate.last_chatbot_state.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Takeover / Release button */}
+              <div className="flex items-center gap-2">
+                {selectedCandidate?.is_human_handoff ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => releaseMut.mutate()}
+                    disabled={releaseMut.isPending}
+                    className="flex items-center gap-1.5 text-sm border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                  >
+                    {releaseMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Bot size={14} />}
+                    Release to Bot
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => selectedId && takeoverMut.mutate(selectedId)}
+                    disabled={takeoverMut.isPending}
+                    className="flex items-center gap-1.5 text-sm bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    {takeoverMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <UserCheck size={14} />}
+                    Take Over
+                  </Button>
+                )}
               </div>
             </div>
 
-            {/* Takeover / Release button */}
-            <div className="flex items-center gap-2">
-              {selectedCandidate?.is_human_handoff ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => releaseMut.mutate()}
-                  disabled={releaseMut.isPending}
-                  className="flex items-center gap-1.5 text-sm border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                >
-                  {releaseMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Bot size={14} />}
-                  Release to Bot
-                </Button>
-              ) : (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => selectedId && takeoverMut.mutate(selectedId)}
-                  disabled={takeoverMut.isPending}
-                  className="flex items-center gap-1.5 text-sm bg-indigo-600 hover:bg-indigo-700"
-                >
-                  {takeoverMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <UserCheck size={14} />}
-                  Take Over
-                </Button>
-              )}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <select
+                value={transcriptResponseStatus}
+                onChange={(e) => setTranscriptResponseStatus(e.target.value)}
+                className="px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              >
+                {RESPONSE_OPTIONS.map((option) => (
+                  <option key={`transcript-${option.value || 'all'}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <input
+                type="date"
+                value={transcriptDateFrom}
+                onChange={(e) => setTranscriptDateFrom(e.target.value)}
+                className="px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              />
+              <input
+                type="date"
+                value={transcriptDateTo}
+                onChange={(e) => setTranscriptDateTo(e.target.value)}
+                className="px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setTranscriptResponseStatus('')
+                  setTranscriptDateFrom('')
+                  setTranscriptDateTo('')
+                }}
+                className="text-[11px] text-slate-500 hover:text-slate-700"
+              >
+                Clear transcript filters
+              </button>
             </div>
           </div>
 
@@ -842,9 +1054,65 @@ export default function Communications() {
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Candidate Info</h3>
             <div className="flex flex-col items-center text-center">
               <div className="w-14 h-14 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-xl font-bold mb-2">
-                {selectedCandidate.name?.charAt(0)?.toUpperCase() || '?'}
+                {getCandidateInitial(selectedCandidate)}
               </div>
-              <p className="font-semibold text-slate-900">{selectedCandidate.name}</p>
+              {isEditingIdentity ? (
+                <div className="w-full">
+                  <input
+                    value={identityNameDraft}
+                    onChange={(e) => setIdentityNameDraft(e.target.value)}
+                    placeholder="Candidate name"
+                    className="w-full px-2 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+                  />
+                  <div className="mt-2 flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const trimmed = identityNameDraft.trim()
+                        if (!trimmed) {
+                          setIdentityError('Name is required.')
+                          return
+                        }
+                        setIdentityError(null)
+                        identityMut.mutate({ candidateId: selectedCandidate.candidate_id, name: trimmed })
+                      }}
+                      disabled={identityMut.isPending}
+                      className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {identityMut.isPending ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIdentityNameDraft(getCandidateDisplayName(selectedCandidate))
+                        setIdentityError(null)
+                        setIsEditingIdentity(false)
+                      }}
+                      className="text-[11px] px-2 py-1 rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {identityError && (
+                    <p className="mt-1 text-[11px] text-red-500">{identityError}</p>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <p className="font-semibold text-slate-900">{getCandidateDisplayName(selectedCandidate)}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIdentityNameDraft(getCandidateDisplayName(selectedCandidate))
+                      setIdentityError(null)
+                      setIsEditingIdentity(true)
+                    }}
+                    className="mt-1 text-[11px] text-indigo-600 hover:text-indigo-700"
+                  >
+                    Edit identity
+                  </button>
+                </>
+              )}
               <p className="text-xs text-slate-500">{selectedCandidate.phone || selectedCandidate.whatsapp_phone}</p>
             </div>
           </div>

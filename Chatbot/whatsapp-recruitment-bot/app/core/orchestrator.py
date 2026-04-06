@@ -11,8 +11,6 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.agents.intake_agent import intake_agent
 from app.agents.recovery_agent import recovery_agent
-from app.config import settings
-from app.services.intent_service import classify_message
 from app.services.cv_service import cv_service
 from app.services.language_service import language_service
 from app.services.handoff_service import handoff_service
@@ -45,23 +43,41 @@ class IntakeOrchestrator:
             db.commit()
             return await self._route_interactive_action(db, candidate, state, interactive_text)
 
-        # AI supervisor rewrite: one-pass extraction, intent, intervention, and reply.
+        # Resolve language FIRST so we can pass it to the AI supervisor.
+        resolved_language = language_service.resolve_language(
+            user_text=message_text,
+            locked_language=state.get("locked_language"),
+        )
+        self._apply_language_lock(db, candidate, state, resolved_language)
+        locked_language = state.get("locked_language") or resolved_language or "en"
+
+        # Build conversation history (last 15 messages for full context).
         history_items = []
-        for conv in reversed(crud.get_conversation_history(db, candidate.id, limit=6)):
+        for conv in reversed(crud.get_conversation_history(db, candidate.id, limit=15)):
             role = "assistant" if str(conv.message_type.value) == "bot" else "user"
             content = str(conv.message_text or "").strip()
             if content:
                 history_items.append({"role": role, "content": content})
 
+        # Pass full context to AI supervisor so it knows what's already collected/asked.
+        collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
+        asked_questions = state.get("asked_questions") if isinstance(state.get("asked_questions"), list) else []
+
         ai_decision = await run_ai_supervisor(
             user_text=message_text,
             history=history_items,
             force_applying=bool(state.get("cv_uploaded")),
+            collected_data=collected,
+            asked_questions=asked_questions,
+            locked_language=locked_language,
+            cv_just_uploaded=False,
         )
 
-        collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
-        if ai_decision.extracted_name:
+        # Merge extracted entities into collected_data and candidate model.
+        if ai_decision.extracted_name and not candidate.name:
             candidate.name = ai_decision.extracted_name
+        if ai_decision.extracted_name and not collected.get("name"):
+            collected["name"] = ai_decision.extracted_name
         if ai_decision.experience_years is not None:
             try:
                 years = int(ai_decision.experience_years)
@@ -71,8 +87,16 @@ class IntakeOrchestrator:
                 pass
         if ai_decision.job_interest:
             collected["job_role"] = ai_decision.job_interest
+        if ai_decision.country and not collected.get("country"):
+            collected["country"] = ai_decision.country
 
         state["collected_data"] = collected
+
+        # Track which field the AI just asked for (prevents re-asking).
+        if ai_decision.next_question_type:
+            if ai_decision.next_question_type not in asked_questions:
+                asked_questions.append(ai_decision.next_question_type)
+            state["asked_questions"] = asked_questions
 
         if ai_decision.intervention_needed:
             candidate.intervention_needed = True
@@ -86,67 +110,19 @@ class IntakeOrchestrator:
             db.commit()
             return ai_decision.reply_message
 
-        if candidate.name and candidate.experience_years is not None:
+        # Sync as soon as we have a name or a CV — don't wait for all fields.
+        can_sync = bool(candidate.name or collected.get("name") or state.get("cv_uploaded"))
+        if can_sync and not state.get("cv_synced"):
             try:
                 await recruitment_sync.push(candidate, db)
+                state["cv_synced"] = True
             except Exception as exc:
                 logger.warning("Recruitment sync failed during AI supervisor flow: %s", exc)
 
-        resolved_language = language_service.resolve_language(
-            user_text=message_text,
-            locked_language=state.get("locked_language"),
-        )
-        self._apply_language_lock(db, candidate, state, resolved_language)
         self._save_agent_state(candidate, state)
         db.commit()
 
         return ai_decision.reply_message
-
-        # Priority 1: CV/media messages are handled in webhook media branches.
-        # Text branch uses classifier + deterministic orchestration.
-        analysis = await classify_message(message_text)
-        self._merge_entities_from_analysis(state, analysis, message_text)
-        resolved_language = language_service.resolve_language(
-            user_text=message_text,
-            locked_language=state.get("locked_language"),
-        )
-        self._apply_language_lock(db, candidate, state, resolved_language)
-        candidate.confidence_score = float(analysis.confidence)
-
-        if analysis.intent == "gibberish" or analysis.is_gibberish:
-            state["confusion_count"] = int(state.get("confusion_count", 0)) + 1
-            self._save_agent_state(candidate, state)
-            if state["confusion_count"] >= settings.handoff_confusion_threshold:
-                state["handoff_flag"] = True
-                candidate.handoff_flag = True
-                self._save_agent_state(candidate, state)
-                await handoff_service.notify(candidate, reason="confusion_threshold")
-                crud.update_candidate_state(db, candidate.id, "human_handoff")
-                candidate.conversation_state = "human_handoff"
-            db.commit()
-            if candidate.handoff_flag:
-                return self._handoff_prompt(candidate)
-            return self._recovery_prompt(candidate)
-
-        state["confusion_count"] = 0
-        candidate.handoff_flag = False
-        self._save_agent_state(candidate, state)
-        db.commit()
-
-        # Deterministic modular routing.
-        if analysis.intent == "apply_job" or analysis.intent == "greeting":
-            return await self._route_apply_flow(db, candidate, state)
-
-        if analysis.intent == "view_jobs":
-            return await self._route_view_jobs(candidate, state)
-
-        if analysis.intent == "ask_question":
-            return await self._route_question(candidate, message_text, state)
-
-        if analysis.intent == "upload_cv":
-            return self._cv_prompt(candidate)
-
-        return self._recovery_prompt(candidate)
 
     async def process_media_message(
         self,
@@ -158,28 +134,123 @@ class IntakeOrchestrator:
         media_url: Optional[str] = None,
         source_message_type: str = "document",
     ) -> Any:
-        """CV/media priority interrupt path for modular mode."""
+        """CV/media priority interrupt path — AI-driven post-CV response."""
         candidate = crud.get_or_create_candidate(db, phone_number)
         state = self._ensure_agent_state(candidate)
 
         if media_type not in {"document", "image"}:
             return self._recovery_prompt(candidate)
 
+        # --- 1. Extract CV data ---
         extracted = await cv_service.process_cv(
             file_content=media_content,
             filename=media_filename or ("cv.jpg" if media_type == "image" else "cv.pdf"),
             media_url=media_url,
         )
 
+        # --- 2. Merge extracted data into collected_data ---
+        # Trust CV for skills and experience_years (most authoritative source).
+        # Keep chat-provided name and job_role (user's stated preference wins).
         state["cv_uploaded"] = True
         state["step"] = "cv_received"
         collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
-        collected.update({k: v for k, v in extracted.items() if v is not None})
+
+        for key, value in extracted.items():
+            if value is not None:
+                # Only overwrite if not already set via prior chat conversation
+                if key not in collected or not collected[key]:
+                    collected[key] = value
+
+        # CV is authoritative for skills and experience — always trust it
+        if extracted.get("skills"):
+            collected["skills"] = extracted["skills"]
+        if extracted.get("experience_years") is not None:
+            collected["experience_years"] = extracted["experience_years"]
+
         state["collected_data"] = collected
+
+        # --- 3. Update candidate model columns from CV ---
+        if extracted.get("name") and not candidate.name:
+            candidate.name = extracted["name"]
+        if extracted.get("experience_years") is not None and candidate.experience_years is None:
+            try:
+                candidate.experience_years = int(float(extracted["experience_years"]))
+            except Exception:
+                pass
+
         self._save_agent_state(candidate, state)
         db.commit()
 
-        return await self._route_apply_flow(db, candidate, state)
+        # --- 4. Immediate sync — don't wait for user confirmation ---
+        if not state.get("cv_synced"):
+            try:
+                cv_path = getattr(candidate, "resume_file_path", None)
+                await recruitment_sync.push(candidate, db, cv_path=cv_path)
+                state["cv_synced"] = True
+                self._save_agent_state(candidate, state)
+                db.commit()
+            except Exception as exc:
+                logger.warning("Immediate CV sync failed: %s", exc)
+
+        # --- 5. Resolve language from prior conversation state ---
+        locked_language = state.get("locked_language") or "en"
+
+        # --- 6. Load conversation history for AI context ---
+        history_items = []
+        for conv in reversed(crud.get_conversation_history(db, candidate.id, limit=15)):
+            role = "assistant" if str(conv.message_type.value) == "bot" else "user"
+            content = str(conv.message_text or "").strip()
+            if content:
+                history_items.append({"role": role, "content": content})
+
+        # --- 7. AI generates contextual post-CV response ---
+        # "[CV_UPLOADED]" sentinel tells AI this is a CV event, not a chat message.
+        asked_questions = state.get("asked_questions") if isinstance(state.get("asked_questions"), list) else []
+
+        ai_decision = await run_ai_supervisor(
+            user_text="[CV_UPLOADED]",
+            history=history_items,
+            force_applying=True,
+            collected_data=collected,
+            asked_questions=asked_questions,
+            locked_language=locked_language,
+            cv_just_uploaded=True,
+        )
+
+        # Track which field the AI is asking for next
+        if ai_decision.next_question_type:
+            if ai_decision.next_question_type not in asked_questions:
+                asked_questions.append(ai_decision.next_question_type)
+            state["asked_questions"] = asked_questions
+
+        # Merge any additional data the AI extracted
+        if ai_decision.extracted_name and not candidate.name:
+            candidate.name = ai_decision.extracted_name
+        if ai_decision.extracted_name and not collected.get("name"):
+            collected["name"] = ai_decision.extracted_name
+        if ai_decision.experience_years is not None and candidate.experience_years is None:
+            try:
+                candidate.experience_years = int(ai_decision.experience_years)
+                collected["experience_years"] = candidate.experience_years
+            except Exception:
+                pass
+        if ai_decision.country and not collected.get("country"):
+            collected["country"] = ai_decision.country
+
+        state["collected_data"] = collected
+
+        if ai_decision.intervention_needed:
+            candidate.intervention_needed = True
+            state["handoff_flag"] = True
+            candidate.handoff_flag = True
+            await handoff_service.notify(candidate, reason="ai_intervention_needed")
+            crud.update_candidate_state(db, candidate.id, "human_handoff")
+            candidate.conversation_state = "human_handoff"
+
+        self._save_agent_state(candidate, state)
+        db.commit()
+
+        return ai_decision.reply_message
 
     async def _route_apply_flow(self, db: Session, candidate, state: Dict[str, Any]) -> str:
         next_field = intake_agent.next_missing_field(state)
@@ -412,8 +483,16 @@ class IntakeOrchestrator:
                 "confusion_count": 0,
                 "handoff_flag": False,
                 "locked_language": None,
+                "asked_questions": [],
+                "cv_synced": False,
             }
             self._save_agent_state(candidate, state)
+        else:
+            # Backfill new keys for existing sessions without them
+            if "asked_questions" not in state:
+                state["asked_questions"] = []
+            if "cv_synced" not in state:
+                state["cv_synced"] = False
         return state
 
     def _apply_language_lock(self, db: Session, candidate, state: Dict[str, Any], detected_language: str) -> None:

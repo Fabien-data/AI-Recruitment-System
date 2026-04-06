@@ -12,8 +12,8 @@ import { useAuthStore } from '../stores/authStore'
 import toast from 'react-hot-toast'
 import { format } from 'date-fns'
 import { clsx } from 'clsx'
+import { COUNTRY_OPTIONS, currencyForCountry } from '../constants/countries'
 
-const COUNTRIES = ['UAE', 'Qatar', 'Oman', 'Bahrain', 'Saudi Arabia', 'Kuwait']
 const INDUSTRIES = ['Hypermarket', 'Restaurant', 'Construction', 'Healthcare', 'Hospitality', 'Manufacturing', 'Retail', 'Logistics']
 
 export default function Projects() {
@@ -26,6 +26,7 @@ export default function Projects() {
   const [priorityFilter, setPriorityFilter] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [countrySearch, setCountrySearch] = useState('')
 
   // Form state for new project
   const [formData, setFormData] = useState({
@@ -53,8 +54,10 @@ export default function Projects() {
     },
     contact_info: {
       whatsapp: '',
+      mobile: '',
       email: '',
-      address: ''
+      address: '',
+      special_details: ''
     }
   })
 
@@ -142,8 +145,10 @@ export default function Projects() {
       },
       contact_info: {
         whatsapp: '',
+        mobile: '',
         email: '',
-        address: ''
+        address: '',
+        special_details: ''
       }
     })
   }
@@ -151,11 +156,20 @@ export default function Projects() {
   const handleCountryToggle = (country) => {
     setFormData(prev => ({
       ...prev,
+      salary_info: {
+        ...prev.salary_info,
+        currency: prev.countries.length === 0 ? currencyForCountry(country) : prev.salary_info.currency
+      },
       countries: prev.countries.includes(country)
         ? prev.countries.filter(c => c !== country)
         : [...prev.countries, country]
     }))
   }
+
+  const filteredCountryOptions = COUNTRY_OPTIONS.filter(country => {
+    const q = countrySearch.trim().toLowerCase()
+    return !q || country.toLowerCase().includes(q)
+  })
 
   const projectsList = data?.data || []
   const canCreateProject = user?.role === 'admin' || user?.role === 'supervisor'
@@ -213,7 +227,7 @@ export default function Projects() {
               className="input w-full"
             >
               <option value="">All Countries</option>
-              {COUNTRIES.map(country => (
+              {COUNTRY_OPTIONS.map(country => (
                 <option key={country} value={country}>{country}</option>
               ))}
             </select>
@@ -468,11 +482,39 @@ export default function Projects() {
             <div className="flex items-center gap-2 mb-4">
               <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center font-semibold text-sm">2</div>
               <label className="text-lg font-semibold text-gray-900">
-                Target Countries <span className="text-red-500">*</span>
+                Country of Recruitment <span className="text-red-500">*</span>
               </label>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {COUNTRIES.map(country => (
+
+            <div className="mb-3">
+              <input
+                type="text"
+                value={countrySearch}
+                onChange={(e) => setCountrySearch(e.target.value)}
+                className="input w-full"
+                placeholder="Search countries..."
+                aria-label="Search countries"
+              />
+            </div>
+
+            <div className="mb-3 flex flex-wrap gap-2">
+              {formData.countries.map(country => (
+                <span key={country} className="inline-flex items-center gap-2 bg-primary-50 text-primary-700 px-3 py-1 rounded-full text-sm border border-primary-200">
+                  {country}
+                  <button
+                    type="button"
+                    onClick={() => handleCountryToggle(country)}
+                    className="text-primary-700 hover:text-primary-900"
+                    aria-label={`Remove ${country}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-56 overflow-y-auto pr-1">
+              {filteredCountryOptions.map(country => (
                 <label key={country} className={clsx(
                   "flex items-center gap-2 p-3 border-2 rounded-lg cursor-pointer transition-all",
                   formData.countries.includes(country)
@@ -507,12 +549,6 @@ export default function Projects() {
               <Input
                 type="date"
                 label="Interview Start Date"
-                value={formData.interview_date}
-                onChange={(e) => setFormData({ ...formData, interview_date: e.target.value })}
-              />
-               <Input
-                type="date"
-                label="Interview End Date"
                 value={formData.interview_date}
                 onChange={(e) => setFormData({ ...formData, interview_date: e.target.value })}
               />
@@ -601,6 +637,9 @@ export default function Projects() {
                   })}
                   className="input w-full"
                 >
+                  {formData.countries.length > 0 && (
+                    <option value={currencyForCountry(formData.countries[0])}>{currencyForCountry(formData.countries[0])} (Auto)</option>
+                  )}
                   <option value="AED">AED</option>
                   <option value="QAR">QAR</option>
                   <option value="OMR">OMR</option>
@@ -627,6 +666,15 @@ export default function Projects() {
                 onChange={(e) => setFormData({
                   ...formData,
                   contact_info: { ...formData.contact_info, whatsapp: e.target.value }
+                })}
+              />
+              <Input
+                label="Client Mobile Number"
+                placeholder="+971501234567"
+                value={formData.contact_info.mobile}
+                onChange={(e) => setFormData({
+                  ...formData,
+                  contact_info: { ...formData.contact_info, mobile: e.target.value }
                 })}
               />
               <Input
@@ -662,6 +710,19 @@ export default function Projects() {
               }}
             >
               Cancel
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Special Details</label>
+              <textarea
+                rows={3}
+                className="input w-full resize-none"
+                placeholder="Any special client notes, constraints, or instructions..."
+                value={formData.contact_info.special_details}
+                onChange={(e) => setFormData({
+                  ...formData,
+                  contact_info: { ...formData.contact_info, special_details: e.target.value }
+                })}
+              />
+            </div>
             </Button>
             <Button type="submit" loading={createMutation.isLoading}>
               Create Project
