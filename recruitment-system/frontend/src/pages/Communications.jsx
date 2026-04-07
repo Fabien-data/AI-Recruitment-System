@@ -69,7 +69,7 @@ const RESPONSE_OPTIONS = [
 
 const getActiveChats = ({ search, conversationStage, responseStatus, dateFrom, dateTo }) => {
   const params = new URLSearchParams()
-  params.set('limit', '100')
+  params.set('limit', '5000')
   if (search) params.set('search', search)
   if (conversationStage) params.set('conversation_stage', conversationStage)
   if (responseStatus) params.set('response_status', responseStatus)
@@ -79,7 +79,7 @@ const getActiveChats = ({ search, conversationStage, responseStatus, dateFrom, d
 }
 const getTranscript = ({ id, responseStatus, dateFrom, dateTo }) => {
   const params = new URLSearchParams()
-  params.set('limit', '200')
+  params.set('limit', '5000')
   if (responseStatus) params.set('response_status', responseStatus)
   if (dateFrom) params.set('date_from', dateFrom)
   if (dateTo) params.set('date_to', dateTo)

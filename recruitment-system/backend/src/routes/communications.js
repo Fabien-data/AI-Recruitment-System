@@ -140,11 +140,11 @@ function authenticateChatbot(req, res, next) {
 }
 
 // ── GET /api/communications/candidate/:id ─────────────────────────────────────
-// Returns full chronological transcript for this candidate.
+// Returns the candidate's chronological transcript.
 router.get('/candidate/:candidate_id', authenticate, async (req, res, next) => {
     try {
         const { candidate_id } = req.params;
-        const { channel, limit = 200, date_from, date_to, response_status } = req.query;
+        const { channel, limit = 5000, date_from, date_to, response_status } = req.query;
 
         const params = [candidate_id];
         let sql = adaptQuery(
@@ -175,7 +175,7 @@ router.get('/candidate/:candidate_id', authenticate, async (req, res, next) => {
             sql += ` AND c.direction = 'inbound'`;
         }
 
-        sql += ` ORDER BY c.sent_at ASC LIMIT ${parseInt(limit, 10)}`;
+        sql += ` ORDER BY c.sent_at ASC LIMIT ${Math.min(Math.max(parseInt(limit, 10) || 5000, 1), 5000)}`;
 
         const result = await query(sql, params);
         res.json(result.rows);
@@ -219,7 +219,7 @@ router.get('/history/:phone', authenticate, async (req, res, next) => {
                 FROM communications
                 WHERE candidate_id = $1
                 ORDER BY sent_at ASC
-                LIMIT 300
+                LIMIT 5000
             `),
             [candidateId]
         );
@@ -264,20 +264,20 @@ router.get('/candidate/:candidate_id/notifications', authenticate, async (req, r
 });
 
 // ── GET /api/communications/active-chats ──────────────────────────────────────
-// Returns one row per candidate who has a WhatsApp conversation,
+// Returns one row per candidate with WhatsApp conversation history,
 // sorted by most recent message. Used to populate the chat list panel.
 router.get('/active-chats', authenticate, async (req, res, next) => {
     try {
         const {
             search = '',
-            limit = 100,
+            limit = 5000,
             date_from,
             date_to,
             conversation_stage,
             response_status,
         } = req.query;
 
-        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 300);
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 5000, 1), 5000);
         const params = [];
         const filters = [];
         const addParam = (value) => {
