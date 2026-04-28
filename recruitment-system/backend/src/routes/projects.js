@@ -710,6 +710,145 @@ router.get('/:id/stats', authenticate, async (req, res, next) => {
 });
 
 /**
+ * Export project candidates/applications as CSV
+ */
+router.get('/:id/export/csv', authenticate, async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { status, job_id, date_from, date_to } = req.query;
+
+        const projectExists = await query(
+            isMySQL
+                ? 'SELECT id, title FROM projects WHERE id = ?'
+                : 'SELECT id, title FROM projects WHERE id = $1',
+            [id]
+        );
+
+        if (projectExists.rows.length === 0) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        const params = [id];
+        let whereClause = isMySQL ? ' WHERE j.project_id = ?' : ' WHERE j.project_id = $1';
+
+        const addFilter = (sqlMy, sqlPg, value) => {
+            params.push(value);
+            whereClause += isMySQL ? sqlMy : sqlPg.replace('IDX', String(params.length));
+        };
+
+        if (status) addFilter(' AND a.status = ?', ' AND a.status = $IDX', status);
+        if (job_id) addFilter(' AND a.job_id = ?', ' AND a.job_id = $IDX', job_id);
+        if (date_from) addFilter(' AND a.applied_at >= ?', ' AND a.applied_at >= $IDX', date_from);
+        if (date_to) addFilter(' AND a.applied_at <= ?', ' AND a.applied_at <= $IDX', date_to);
+
+        const exportQuery = `
+            SELECT
+                c.id AS candidate_id,
+                c.name AS candidate_name,
+                c.phone AS candidate_phone,
+                c.email AS candidate_email,
+                c.preferred_language,
+                c.source AS candidate_source,
+                p.id AS project_id,
+                p.title AS project_title,
+                p.client_name,
+                j.id AS job_id,
+                j.title AS job_title,
+                a.id AS application_id,
+                a.status AS application_status,
+                a.match_score,
+                a.applied_at,
+                a.certified_at,
+                COALESCE(
+                    (SELECT iv.scheduled_datetime
+                     FROM interview_schedules iv
+                     WHERE iv.application_id = a.id
+                     ORDER BY iv.scheduled_datetime DESC
+                     LIMIT 1),
+                    a.interview_datetime
+                ) AS interview_datetime,
+                COALESCE(
+                    (SELECT iv.location
+                     FROM interview_schedules iv
+                     WHERE iv.application_id = a.id
+                     ORDER BY iv.scheduled_datetime DESC
+                     LIMIT 1),
+                    a.interview_location
+                ) AS interview_location,
+                (SELECT iv.status
+                 FROM interview_schedules iv
+                 WHERE iv.application_id = a.id
+                 ORDER BY iv.scheduled_datetime DESC
+                 LIMIT 1) AS interview_status,
+                (SELECT cv.file_url
+                 FROM cv_files cv
+                 WHERE cv.candidate_id = c.id
+                 ORDER BY cv.is_primary DESC, cv.uploaded_at DESC
+                 LIMIT 1) AS cv_link,
+                (SELECT comm.channel
+                 FROM communications comm
+                 WHERE comm.candidate_id = c.id
+                   AND comm.direction = 'outbound'
+                 ORDER BY comm.sent_at DESC
+                 LIMIT 1) AS last_communication_channel,
+                (SELECT comm.sent_at
+                 FROM communications comm
+                 WHERE comm.candidate_id = c.id
+                   AND comm.direction = 'outbound'
+                 ORDER BY comm.sent_at DESC
+                 LIMIT 1) AS last_communication_at,
+                (SELECT CASE
+                    WHEN comm.read_at IS NOT NULL THEN 'read'
+                    WHEN comm.delivered_at IS NOT NULL THEN 'delivered'
+                    WHEN comm.sent_at IS NOT NULL THEN 'sent'
+                    ELSE 'none'
+                 END
+                 FROM communications comm
+                 WHERE comm.candidate_id = c.id
+                   AND comm.direction = 'outbound'
+                 ORDER BY comm.sent_at DESC
+                 LIMIT 1) AS communication_status
+            FROM applications a
+            JOIN candidates c ON c.id = a.candidate_id
+            JOIN jobs j ON j.id = a.job_id
+            JOIN projects p ON p.id = j.project_id
+            ${whereClause}
+            ORDER BY a.applied_at DESC
+            LIMIT 10000
+        `;
+
+        const result = await query(exportQuery, params);
+        const rows = result.rows || [];
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename=project_${projectExists.rows[0].id}_applications_export.csv`
+        );
+
+        if (rows.length === 0) {
+            return res.send('No data found\n');
+        }
+
+        const headers = Object.keys(rows[0]);
+        const escape = (value) => {
+            if (value === null || value === undefined) return '';
+            const str = String(value).replace(/"/g, '""');
+            return /[",\n]/.test(str) ? `"${str}"` : str;
+        };
+
+        const csv = [
+            headers.join(','),
+            ...rows.map((row) => headers.map((header) => escape(row[header])).join(','))
+        ].join('\n');
+
+        return res.send(csv);
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
  * Get all jobs for a specific project
  */
 router.get('/:id/jobs', authenticate, async (req, res, next) => {

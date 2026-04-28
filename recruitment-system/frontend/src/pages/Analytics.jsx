@@ -5,12 +5,10 @@ import {
   Download, RefreshCw
 } from 'lucide-react'
 import {
-  getAnalyticsOverview, getRecruiterPerformance, getAdPerformance
+  getAnalyticsOverview, getRecruiterPerformance, getAdPerformance, exportAnalyticsCsv
 } from '../api'
 import { Button } from '../components/ui/Button'
 import { StatCardSkeleton } from '../components/ui/Skeleton'
-
-const API_BASE = import.meta.env.VITE_API_URL || ''
 
 const PIPELINE_COLORS = {
   applied: 'bg-blue-400',
@@ -112,9 +110,8 @@ export default function Analytics() {
     queryFn: getAdPerformance
   })
 
-  const handleExport = () => {
-    const token = localStorage.getItem('token')
-    window.location.href = `${API_BASE}/api/analytics/export?period=${period}&token=${token}`
+  const handleExport = async () => {
+    await exportAnalyticsCsv({ period })
   }
 
   const funnel = overview?.funnel || []

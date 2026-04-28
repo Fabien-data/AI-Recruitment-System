@@ -160,6 +160,15 @@ router.put('/:id', authenticate, async (req, res, next) => {
             prescreening_location, notify_channels = ['whatsapp']
         } = req.body;
 
+        const effDt = prescreening_datetime || interview_datetime;
+        const effLoc = prescreening_location || interview_location;
+
+        if (status === 'certified' && !effDt) {
+            return res.status(400).json({
+                error: 'Interview date/time is required when certifying a candidate'
+            });
+        }
+
         const setClauses = [];
         const values = [];
         const p = () => isMySQL ? '?' : `$${values.length + 1}`;
@@ -173,9 +182,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
         }
         if (certification_notes)  { setClauses.push(`certification_notes = ${p()}`); values.push(certification_notes); }
         if (rejection_reason)     { setClauses.push(`rejection_reason = ${p()}`);    values.push(rejection_reason); }
-        const effDt = prescreening_datetime || interview_datetime;
         if (effDt)  { setClauses.push(`interview_datetime = ${p()}`); values.push(effDt); }
-        const effLoc = prescreening_location || interview_location;
         if (effLoc) { setClauses.push(`interview_location = ${p()}`); values.push(effLoc); }
         if (interview_notes) { setClauses.push(`interview_notes = ${p()}`); values.push(interview_notes); }
 
@@ -187,6 +194,35 @@ router.put('/:id', authenticate, async (req, res, next) => {
         const appResult = await query(adaptQuery('SELECT * FROM applications WHERE id = $1'), [id]);
         if (appResult.rows.length === 0) return res.status(404).json({ error: 'Application not found' });
         const application = appResult.rows[0];
+
+        if (status === 'certified' && effDt) {
+            const existingInterview = await query(
+                adaptQuery('SELECT id FROM interview_schedules WHERE application_id = $1 ORDER BY created_at DESC LIMIT 1'),
+                [application.id]
+            );
+
+            if (existingInterview.rows.length > 0) {
+                await query(
+                    adaptQuery(`
+                        UPDATE interview_schedules
+                        SET scheduled_datetime = $1,
+                            location = $2,
+                            status = 'scheduled'
+                        WHERE id = $3
+                    `),
+                    [effDt, effLoc || null, existingInterview.rows[0].id]
+                );
+            } else {
+                await query(
+                    adaptQuery(`
+                        INSERT INTO interview_schedules
+                            (id, application_id, scheduled_datetime, location, status, created_by)
+                        VALUES ($1, $2, $3, $4, 'scheduled', $5)
+                    `),
+                    [generateUUID(), application.id, effDt, effLoc || null, req.user.id]
+                );
+            }
+        }
 
         if (status) {
             const jobResult = await query(adaptQuery('SELECT title FROM jobs WHERE id = $1'), [application.job_id]);

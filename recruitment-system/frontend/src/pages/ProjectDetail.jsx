@@ -1,10 +1,10 @@
 ﻿import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { getProject, getProjectJobs, getProjectCandidates, getProjectStats } from '../api'
+import { getProject, getProjectJobs, getProjectCandidates, getProjectStats, exportProjectCsv } from '../api'
 import { 
   ArrowLeft, FolderKanban, MapPin, Calendar, Users, Briefcase, 
-  DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User
+  DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User, Download
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
@@ -179,6 +179,16 @@ export default function ProjectDetail() {
               <Users size={18} /> {project.team?.length || 0} Team Members
             </span>
           </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="inline-flex items-center gap-1"
+            onClick={() => exportProjectCsv(id)}
+          >
+            <Download size={15} /> Export CSV
+          </Button>
         </div>
       </div>
 

@@ -1095,7 +1095,7 @@ function ApplicationsTab({ applications }) {
   const [transferId, setTransferId] = useState(null)
 
   const certifyMutation = useMutation({
-    mutationFn: ({ id, notes }) => updateApplication(id, { status: 'certified', certification_notes: notes }),
+    mutationFn: ({ id, payload }) => updateApplication(id, payload),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['applications'] })
       setCertifyId(null)
@@ -1205,7 +1205,7 @@ function ApplicationsTab({ applications }) {
         <CertifyModal
           appId={certifyId}
           onClose={() => setCertifyId(null)}
-          onConfirm={(notes) => certifyMutation.mutate({ id: certifyId, notes })}
+          onConfirm={(payload) => certifyMutation.mutate({ id: certifyId, payload })}
           loading={certifyMutation.isPending}
         />
       )}
@@ -1225,6 +1225,35 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
   const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
   const [notifyEmail, setNotifyEmail] = useState(false)
   const [showPreview, setShowPreview] = useState(false)
+  const [interviewDate, setInterviewDate] = useState('')
+  const [interviewTime, setInterviewTime] = useState('')
+  const [interviewLocation, setInterviewLocation] = useState('')
+
+  const notifyChannels = [
+    notifyWhatsApp ? 'whatsapp' : null,
+    notifyEmail ? 'email' : null
+  ].filter(Boolean)
+
+  const handleSubmit = () => {
+    if (!interviewDate || !interviewTime) {
+      toast.error('Please select interview date and time before certifying')
+      return
+    }
+
+    const localDateTime = new Date(`${interviewDate}T${interviewTime}`)
+    if (Number.isNaN(localDateTime.getTime())) {
+      toast.error('Invalid interview date/time')
+      return
+    }
+
+    onConfirm({
+      status: 'certified',
+      certification_notes: notes,
+      prescreening_datetime: localDateTime.toISOString(),
+      prescreening_location: interviewLocation || null,
+      notify_channels: notifyChannels
+    })
+  }
 
   return (
     <Modal open={true} onClose={onClose} title="Certify Candidate" size="md">
@@ -1279,6 +1308,46 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
         </div>
 
         {/* Certification Remarks */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <Clock size={14} className="inline mr-1" /> Interview Date
+            </label>
+            <input
+              type="date"
+              className="input w-full"
+              value={interviewDate}
+              onChange={(e) => setInterviewDate(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <Clock size={14} className="inline mr-1" /> Interview Time
+            </label>
+            <input
+              type="time"
+              className="input w-full"
+              value={interviewTime}
+              onChange={(e) => setInterviewTime(e.target.value)}
+              required
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">
+            <MapPin size={14} className="inline mr-1" /> Interview Location
+          </label>
+          <input
+            type="text"
+            className="input w-full"
+            placeholder="Office / venue / online link"
+            value={interviewLocation}
+            onChange={(e) => setInterviewLocation(e.target.value)}
+          />
+        </div>
+
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-2">
             <MessageSquare size={14} className="inline mr-1" /> Certification Remarks (Internal)
@@ -1326,7 +1395,7 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
         <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button
-            onClick={() => onConfirm(notes)}
+            onClick={handleSubmit}
             loading={loading}
             className="gap-2"
             disabled={!notifyWhatsApp && !notifyEmail}

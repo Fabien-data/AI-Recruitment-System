@@ -6,6 +6,22 @@ export const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+function downloadBlobResponse(response, fallbackName = 'export.csv') {
+  const disposition = response.headers?.['content-disposition'] || ''
+  const match = disposition.match(/filename=([^;]+)/i)
+  const rawName = match?.[1]?.trim()?.replace(/^"|"$/g, '')
+  const fileName = rawName || fallbackName
+  const blob = new Blob([response.data], { type: response.headers?.['content-type'] || 'text/csv' })
+  const blobUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = blobUrl
+  link.setAttribute('download', fileName)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(blobUrl)
+}
+
 // Auth API
 export const login = (credentials) =>
   apiClient.post('/api/auth/login', credentials).then(res => res.data)
@@ -164,6 +180,14 @@ export const removeProjectTeam = (id, userId) =>
 export const getProjectStats = (id) =>
   apiClient.get(`/api/projects/${id}/stats`).then(res => res.data)
 
+export const exportProjectCsv = async (id, params = {}) => {
+  const response = await apiClient.get(`/api/projects/${id}/export/csv`, {
+    params,
+    responseType: 'blob'
+  })
+  downloadBlobResponse(response, `project_${id}_applications_export.csv`)
+}
+
 // Candidate Workflow APIs
 export const rejectToPool = (applicationId, data) =>
   apiClient.post(`/api/applications/${applicationId}/reject-to-pool`, data).then(res => res.data)
@@ -217,6 +241,14 @@ export const getRecruiterPerformance = (params) =>
 
 export const getAdPerformance = () =>
   apiClient.get('/api/analytics/ad-performance').then(res => res.data)
+
+export const exportAnalyticsCsv = async (params = {}) => {
+  const response = await apiClient.get('/api/analytics/export', {
+    params,
+    responseType: 'blob'
+  })
+  downloadBlobResponse(response, 'recruitment_export.csv')
+}
 
 // Duplicate detection
 export const getDuplicateCandidates = (params) =>

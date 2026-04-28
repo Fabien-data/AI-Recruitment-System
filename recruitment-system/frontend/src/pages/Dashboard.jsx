@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
 import {
-  getJobs, getCandidates, getApplications, getProjects,
   getAnalyticsOverview, getUpcomingInterviews, batchAutoAssign
 } from '../api'
 import {
@@ -96,30 +95,33 @@ function KPICard({ name, value, icon, change, changeType, isLoading, suffix = ''
 
 export default function Dashboard() {
   const navigate = useNavigate()
+
+  const formatChangeTag = (value) => {
+    if (value == null) return null
+    const num = Number(value)
+    if (Number.isNaN(num)) return null
+    return `${num >= 0 ? '+' : ''}${num}%`
+  }
   
   const { data: analytics, isLoading: isAnalyticsLoading } = useQuery({
     queryKey: ['analytics-overview'],
-    queryFn: async () => {
-      const res = await getAnalyticsOverview()
-      return res.data
-    }
+    queryFn: () => getAnalyticsOverview({ period: 30 })
   })
 
-  // Basic mock if no data to showcase Bento structure nicely
   const stats = analytics?.stats || {
-    totalApplications: 1245,
-    totalJobs: 12,
-    activeInterviews: 24,
-    totalCandidates: 8530
+    totalApplications: 0,
+    totalJobs: 0,
+    activeInterviews: 0,
+    totalCandidates: 0
   }
 
   const { data: interviews, isLoading: isInterviewsLoading } = useQuery({
     queryKey: ['upcoming-interviews'],
-    queryFn: async () => {
-      const res = await getUpcomingInterviews()
-      return res.data.slice(0, 4)
-    }
+    queryFn: async () => (await getUpcomingInterviews()).slice(0, 4)
   })
+
+  const urgentProjects = analytics?.urgent_projects || []
+  const interviewCalendar = analytics?.interview_calendar || []
 
   const [isAssigning, setIsAssigning] = useState(false)
   const handleAutoAssign = async () => {
@@ -152,14 +154,11 @@ export default function Dashboard() {
   }
 
   const COLORS = ['#6366f1', '#a855f7', '#ec4899', '#14b8a6', '#f59e0b']
-  // Mock Pipeline
-  const pipelineData = [
-    { name: 'Applied', value: 400 },
-    { name: 'Screening', value: 250 },
-    { name: 'Interview', value: 120 },
-    { name: 'Offer', value: 40 },
-    { name: 'Hired', value: 25 }
-  ]
+  const pipelineData = (analytics?.pipeline || []).map(stage => ({
+    name: stage.name,
+    value: Number(stage.count) || 0,
+    status: stage.status
+  }))
 
   return (
     <motion.div 
@@ -195,7 +194,8 @@ export default function Dashboard() {
           name="Total Applications" 
           value={stats.totalApplications} 
           icon={<FileText size={20} />} 
-          change="+18%" changeType="positive"
+          change={formatChangeTag(analytics?.applications?.change_pct)}
+          changeType={(analytics?.applications?.change_pct || 0) >= 0 ? 'positive' : 'neutral'}
           isLoading={isAnalyticsLoading}
           iconColor="text-indigo-600 bg-indigo-50"
         />
@@ -203,7 +203,8 @@ export default function Dashboard() {
           name="Active Candidates" 
           value={stats.totalCandidates} 
           icon={<Users size={20} />} 
-          change="+5%" changeType="positive"
+          change={formatChangeTag(analytics?.unique_candidates?.change_pct)}
+          changeType={(analytics?.unique_candidates?.change_pct || 0) >= 0 ? 'positive' : 'neutral'}
           isLoading={isAnalyticsLoading}
           iconColor="text-emerald-600 bg-emerald-50"
         />
@@ -211,7 +212,8 @@ export default function Dashboard() {
           name="Open Roles" 
           value={stats.totalJobs} 
           icon={<Briefcase size={20} />} 
-          change="-2" changeType="warning"
+          change={null}
+          changeType="neutral"
           isLoading={isAnalyticsLoading}
           iconColor="text-amber-600 bg-amber-50"
         />
@@ -219,7 +221,8 @@ export default function Dashboard() {
           name="Interviews Today" 
           value={stats.activeInterviews} 
           icon={<CalendarDays size={20} />} 
-          change="Urgent" changeType="neutral"
+          change={formatChangeTag(analytics?.conversion_rate?.change_pct)}
+          changeType={(analytics?.conversion_rate?.change_pct || 0) >= 0 ? 'positive' : 'neutral'}
           isLoading={isAnalyticsLoading}
           iconColor="text-purple-600 bg-purple-50"
         />
@@ -277,13 +280,13 @@ export default function Dashboard() {
               interviews.map((intv) => (
                 <div key={intv.id} className="group p-3 border border-zinc-100 rounded-2xl hover:bg-zinc-50 transition-colors cursor-pointer flex gap-3 items-center">
                   <div className="w-10 h-10 rounded-xl bg-zinc-900 text-white flex items-center justify-center flex-shrink-0 font-bold shadow-sm">
-                    {intv.candidate?.name?.charAt(0) || 'C'}
+                    {intv.candidate_name?.charAt(0) || 'C'}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-zinc-900 truncate tracking-tight">{intv.candidate?.name}</p>
+                    <p className="text-sm font-bold text-zinc-900 truncate tracking-tight">{intv.candidate_name}</p>
                     <p className="text-xs text-zinc-500 truncate flex items-center gap-1 mt-0.5">
                       <Clock size={12} />
-                      {new Date(intv.scheduled_time).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit' })}
+                      {new Date(intv.scheduled_datetime).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit' })}
                     </p>
                   </div>
                   <ChevronRight size={16} className="text-zinc-300 group-hover:text-zinc-900 transition-colors" />
@@ -293,6 +296,55 @@ export default function Dashboard() {
           </div>
         </Card>
 
+      </motion.div>
+
+      <motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="p-6 bg-white">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-zinc-900">Urgent Projects</h2>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/projects')}>Open <ChevronRight size={14} /></Button>
+          </div>
+          <div className="space-y-3">
+            {urgentProjects.length === 0 ? (
+              <p className="text-sm text-zinc-500">No urgent projects right now.</p>
+            ) : (
+              urgentProjects.map((project) => (
+                <div key={project.id} className="rounded-2xl border border-zinc-100 p-3">
+                  <p className="font-semibold text-zinc-900 truncate">{project.title}</p>
+                  <p className="text-xs text-zinc-500 mt-1">{project.client_name}</p>
+                  <div className="mt-2 text-xs text-zinc-600 flex items-center gap-3">
+                    <span>{project.total_jobs || 0} jobs</span>
+                    <span>{project.total_applications || 0} applications</span>
+                    {project.interview_date && <span>Interview: {new Date(project.interview_date).toLocaleDateString()}</span>}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
+
+        <Card className="p-6 bg-white">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-zinc-900">Interview Calendar</h2>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/interviews')}>Open <ChevronRight size={14} /></Button>
+          </div>
+          <div className="space-y-3 max-h-72 overflow-auto pr-1">
+            {interviewCalendar.length === 0 ? (
+              <p className="text-sm text-zinc-500">No interview events in the next 30 days.</p>
+            ) : (
+              interviewCalendar.slice(0, 8).map((event) => (
+                <div key={event.id} className="rounded-2xl border border-zinc-100 p-3">
+                  <p className="text-sm font-semibold text-zinc-900 truncate">{event.candidate_name} • {event.job_title}</p>
+                  <p className="text-xs text-zinc-500 mt-1">{event.project_title || 'Unassigned project'}</p>
+                  <div className="mt-2 text-xs text-zinc-600 flex flex-wrap items-center gap-3">
+                    <span className="flex items-center gap-1"><Clock size={12} />{new Date(event.scheduled_datetime).toLocaleString()}</span>
+                    <span className="flex items-center gap-1"><MapPin size={12} />{event.location || 'TBD'}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
       </motion.div>
     </motion.div>
   )
