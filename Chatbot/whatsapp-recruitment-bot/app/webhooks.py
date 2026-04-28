@@ -210,6 +210,9 @@ async def process_webhook_value(value: dict):
             f"status={status.get('status')} to={status.get('recipient_id')}"
         )
 
+    if statuses:
+        await asyncio.gather(*[_sync_delivery_status(status_obj) for status_obj in statuses])
+
     if not messages:
         logger.debug("No messages in webhook value — skipping")
         return
@@ -273,6 +276,8 @@ async def _sync_chat_message(
     content: str,
     language: str = "en",
     chatbot_state: str = "",
+    pipeline_stage: str = "",
+    whatsapp_message_id: str = "",
 ) -> None:
     """
     Push a single message (inbound customer msg or outbound bot reply)
@@ -301,6 +306,8 @@ async def _sync_chat_message(
             "message_type":  "text",
             "language":      language,
             "chatbot_state": chatbot_state,
+            "pipeline_stage": pipeline_stage or "",
+            "whatsapp_message_id": whatsapp_message_id or "",
         }
         async with httpx.AsyncClient(timeout=4.0) as client:
             resp = await client.post(
@@ -316,6 +323,42 @@ async def _sync_chat_message(
     except Exception as _sync_err:
         # Non-critical — never block message processing
         logger.debug(f"_sync_chat_message skipped: {_sync_err}")
+
+
+async def _sync_delivery_status(status_obj: dict) -> None:
+    """Forward delivery/read status updates to the recruitment backend."""
+    try:
+        msg_id = status_obj.get("id")
+        status = status_obj.get("status")
+        if not msg_id or not status:
+            return
+
+        recruitment_url = settings.recruitment_api_url or ""
+        api_key = settings.chatbot_api_key or ""
+        if not recruitment_url or not api_key:
+            return
+
+        payload = {
+            "whatsapp_message_id": msg_id,
+            "status": status,
+            "recipient_id": status_obj.get("recipient_id"),
+            "timestamp": status_obj.get("timestamp"),
+            "metadata": {
+                "conversation_id": status_obj.get("conversation", {}).get("id") if isinstance(status_obj.get("conversation"), dict) else None,
+                "pricing_category": status_obj.get("pricing", {}).get("category") if isinstance(status_obj.get("pricing"), dict) else None,
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.post(
+                f"{recruitment_url}/api/communications/status-sync",
+                headers={"x-chatbot-api-key": api_key},
+                json=payload,
+            )
+            if resp.status_code not in (200, 201):
+                logger.debug(f"status-sync returned {resp.status_code} for msg_id={msg_id}")
+    except Exception as sync_err:
+        logger.debug(f"_sync_delivery_status skipped: {sync_err}")
 
 
 async def process_single_message(message: dict, contacts: list, db):
@@ -708,6 +751,11 @@ async def process_single_message(message: dict, contacts: list, db):
             _cand = _crud.get_or_create_candidate(db, from_number)
             _lang  = getattr(_cand.language_preference, "value", "en")
             _state = _cand.conversation_state or ""
+            _outbound_msg_id = ""
+            if isinstance(result, dict):
+                _msgs = result.get("messages", [])
+                if _msgs and isinstance(_msgs, list) and isinstance(_msgs[0], dict):
+                    _outbound_msg_id = _msgs[0].get("id", "")
             _inbound_text = (
                 message.get("text", {}).get("body")
                 or message.get("document", {}).get("filename")
@@ -715,7 +763,14 @@ async def process_single_message(message: dict, contacts: list, db):
             )
             await asyncio.gather(
                 _sync_chat_message(from_number, "inbound",  _inbound_text, _lang, _state),
-                _sync_chat_message(from_number, "outbound", response_text,  _lang, _state),
+                _sync_chat_message(
+                    from_number,
+                    "outbound",
+                    response_text,
+                    _lang,
+                    _state,
+                    whatsapp_message_id=_outbound_msg_id,
+                ),
             )
         except Exception as _sc_err:
             logger.debug(f"Chat sync gather error: {_sc_err}")

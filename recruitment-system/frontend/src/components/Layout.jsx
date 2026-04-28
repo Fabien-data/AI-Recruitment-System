@@ -1,42 +1,72 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { useAuthStore } from '../stores/authStore'
-import { LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell, FileSearch, Database, FolderKanban, CalendarDays, BarChart2 } from 'lucide-react'
+import { useAuthStore, useRole } from '../stores/authStore'
+import { LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell, FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { twMerge } from 'tailwind-merge'
 
-const NAV_ITEMS = [
+// Base nav items visible to all roles
+const BASE_NAV = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/candidates', label: 'Candidates', icon: Users },
-  { to: '/cv-manager', label: 'CV Manager', icon: FileSearch },
   { to: '/jobs', label: 'Jobs', icon: Briefcase },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/applications', label: 'Applications', icon: FileText },
-  { to: '/communications', label: 'Messages', icon: MessageSquare },
   { to: '/interviews', label: 'Interviews', icon: CalendarDays },
+]
+
+// Items visible to admin + sourcing_department only
+const FULL_NAV_EXTRAS = [
+  { to: '/cv-manager', label: 'CV Manager', icon: FileSearch },
+  { to: '/communications', label: 'Messages', icon: MessageSquare },
   { to: '/analytics', label: 'Analytics', icon: BarChart2 },
+  { to: '/knowledge-base', label: 'Knowledge Base', icon: BookOpen },
   { to: '/general-pool', label: 'General Pool', icon: Database },
 ]
 
-function getPageTitle(pathname) {
-  const match = NAV_ITEMS.find(item =>
+function buildNav(role) {
+  const items = [...BASE_NAV]
+
+  if (role === 'admin' || role === 'sourcing_department') {
+    items.push(...FULL_NAV_EXTRAS)
+  } else {
+    // project_handler gets communications read-only + basic analytics
+    items.push({ to: '/communications', label: 'Messages', icon: MessageSquare })
+    items.push({ to: '/analytics', label: 'Analytics', icon: BarChart2 })
+  }
+
+  if (role === 'admin') {
+    // Admin Dashboard at top
+    items.unshift({ to: '/admin', label: 'Admin Dashboard', icon: ShieldCheck })
+  }
+
+  return items
+}
+
+function getPageTitle(pathname, navItems) {
+  const match = navItems.find(item =>
     item.end ? pathname === item.to : pathname.startsWith(item.to)
   )
-  return match?.label || 'RecruitPro'
+  if (match) return match.label
+  if (pathname.startsWith('/admin')) return 'Admin Dashboard'
+  return 'RecruitPro'
 }
 
 export default function Layout() {
   const { user, logout } = useAuthStore()
+  const { role } = useRole()
   const navigate = useNavigate()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  const navItems = buildNav(role)
 
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
 
-  const pageTitle = getPageTitle(location.pathname)
+  const pageTitle = getPageTitle(location.pathname, navItems)
 
   // Ensure sidebar closes on route change on mobile
   useEffect(() => {
@@ -88,7 +118,7 @@ export default function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 px-4 py-2 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
+          {navItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -120,7 +150,12 @@ export default function Layout() {
             </div>
             <div className="flex-1 min-w-0">
                <p className="font-semibold text-sm text-zinc-900 truncate tracking-tight">{user?.full_name}</p>
-               <p className="text-xs text-zinc-500 capitalize">{user?.role}</p>
+               <p className="text-xs text-zinc-500 capitalize">
+                 {role === 'project_handler' ? 'Project Handler'
+                   : role === 'sourcing_department' ? 'Sourcing Dept.'
+                   : role === 'admin' ? 'Administrator'
+                   : role}
+               </p>
             </div>
           </div>
           <button

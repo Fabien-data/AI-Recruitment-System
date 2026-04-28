@@ -206,6 +206,21 @@ function mapConversationStage(chatbotState, messageType, direction) {
     return 'new';
 }
 
+function isGenericCandidateName(value) {
+    const v = String(value || '').trim().toLowerCase();
+    if (!v) return true;
+    return ['unknown', 'unknown candidate', 'candidate', 'n/a', 'na'].includes(v) || v.startsWith('whatsapp ');
+}
+
+function resolvePreferredCandidateName({ providedName, parsedData, fallbackPhone }) {
+    const parsedName = String(parsedData?.name || parsedData?.full_name || '').trim();
+    const typedName = String(providedName || '').trim();
+
+    if (parsedName && !isGenericCandidateName(parsedName)) return parsedName;
+    if (typedName && !isGenericCandidateName(typedName)) return typedName;
+    return String(fallbackPhone || '').trim();
+}
+
 function parseAdditionalDocuments(rawValue) {
     if (!rawValue) return [];
     if (Array.isArray(rawValue)) return rawValue;
@@ -383,6 +398,11 @@ router.post(
         const language_register = raw_preferred_language; // keep the precise register
 
         const normalizedPhone = normalizePhone(phone);
+        const resolvedCandidateName = resolvePreferredCandidateName({
+            providedName: name,
+            parsedData: cv_parsed_data,
+            fallbackPhone: normalizedPhone,
+        });
 
         try {
             // ── Step 1: Lookup existing candidate by phone ─────────────────
@@ -491,7 +511,7 @@ router.post(
                        WHERE id = $11`;
 
                 await query(updateSQL, [
-                    name?.trim() || null,
+                    resolvedCandidateName || null,
                     email?.trim() || null,
                     preferred_language,
                     skills || null,
@@ -526,7 +546,7 @@ router.post(
                     candidateId,
                     normalizedPhone,
                     normalizedPhone,
-                    name.trim(),
+                    resolvedCandidateName,
                     email?.trim() || null,
                     source || 'whatsapp',
                     preferred_language,
@@ -965,7 +985,16 @@ router.post(
 // Body: { phone, direction, content, message_type?, language?, chatbot_state? }
 // Auth: x-chatbot-api-key header
 router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, res) => {
-    const { phone, direction, content, message_type = 'text', language = 'en', chatbot_state = '' } = req.body;
+    const {
+        phone,
+        direction,
+        content,
+        message_type = 'text',
+        language = 'en',
+        chatbot_state = '',
+        pipeline_stage,
+        whatsapp_message_id,
+    } = req.body;
 
     if (!phone || !direction || !content) {
         return res.status(400).json({ error: 'phone, direction, and content are required' });
@@ -978,7 +1007,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
     const safeContent = typeof content === 'string' ? content : JSON.stringify(content);
     const LANG_NORMALISE_MAP = { singlish: 'si', tanglish: 'ta' };
     const preferredLanguage = LANG_NORMALISE_MAP[String(language || 'en').toLowerCase()] || (language || 'en');
-    const conversationStage = mapConversationStage(chatbot_state, message_type, direction);
+    const conversationStage = pipeline_stage || mapConversationStage(chatbot_state, message_type, direction);
 
     try {
         // Look up candidate by phone — needed for candidate_id FK
@@ -997,7 +1026,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         } else {
             // Keep chat sync resilient: create a lightweight candidate shell if missing.
             candidateId = generateUUID();
-            candidateName = `WhatsApp ${normalizedPhone.slice(-6)}`;
+            candidateName = normalizedPhone;
 
             const insertCandidateSQL = isMySQL
                 ? `INSERT INTO candidates
@@ -1048,22 +1077,44 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
             detected_language: language || null,
         });
 
-        const insertSQL = isMySQL
+        const insertWithMessageIdSQL = isMySQL
             ? `INSERT INTO communications
-               (id, candidate_id, channel, direction, message_type, content, metadata)
-               VALUES (?, ?, 'whatsapp', ?, ?, ?, ?)`
+               (id, candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id)
+               VALUES (?, ?, 'whatsapp', ?, ?, ?, ?, ?)`
             : `INSERT INTO communications
-               (id, candidate_id, channel, direction, message_type, content, metadata)
-               VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6)`;
+               (id, candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id)
+               VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6, $7)`;
 
-        await query(insertSQL, [
-            commId,
-            candidateId,
-            direction,
-            message_type,
-            safeContent.slice(0, 4000),
-            metadataJson,
-        ]);
+        try {
+            await query(insertWithMessageIdSQL, [
+                commId,
+                candidateId,
+                direction,
+                message_type,
+                safeContent.slice(0, 4000),
+                metadataJson,
+                whatsapp_message_id || null,
+            ]);
+        } catch (insertErr) {
+            if (!isMissingColumnError(insertErr)) {
+                throw insertErr;
+            }
+            const fallbackInsertSQL = isMySQL
+                ? `INSERT INTO communications
+                   (id, candidate_id, channel, direction, message_type, content, metadata)
+                   VALUES (?, ?, 'whatsapp', ?, ?, ?, ?)`
+                : `INSERT INTO communications
+                   (id, candidate_id, channel, direction, message_type, content, metadata)
+                   VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6)`;
+            await query(fallbackInsertSQL, [
+                commId,
+                candidateId,
+                direction,
+                message_type,
+                safeContent.slice(0, 4000),
+                metadataJson,
+            ]);
+        }
 
         // Best-effort candidate activity updates (schema can vary by deployment).
         const primaryCandidateUpdateSQL = isMySQL
@@ -1097,10 +1148,11 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
 
         if (String(message_type || '').toLowerCase() === 'document') {
             const cvFlagSQL = isMySQL
-                ? 'UPDATE candidates SET cv_uploaded = TRUE, updated_at = NOW() WHERE id = ?'
-                : 'UPDATE candidates SET cv_uploaded = TRUE, updated_at = NOW() WHERE id = $1';
+                ? 'UPDATE candidates SET cv_uploaded = TRUE, cv_status = ?, updated_at = NOW() WHERE id = ?'
+                : 'UPDATE candidates SET cv_uploaded = TRUE, cv_status = $1, updated_at = NOW() WHERE id = $2';
             try {
-                await query(cvFlagSQL, [candidateId]);
+                const cvStatus = conversationStage === 'cv_parsed' ? 'parsed' : 'uploaded';
+                await query(cvFlagSQL, [cvStatus, candidateId]);
             } catch (cvFlagErr) {
                 // Some environments may not have this column yet.
                 if (!isMissingColumnError(cvFlagErr)) {
@@ -1125,6 +1177,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     sender_type: senderType,
                     chatbot_state: chatbot_state || null,
                     detected_language: language || null,
+                    whatsapp_message_id: whatsapp_message_id || null,
                     sent_at: new Date().toISOString(),
                 });
                 io.to(`candidate:${candidateId}`).emit('receive_message', {

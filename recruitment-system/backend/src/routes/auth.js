@@ -9,7 +9,7 @@ const { generateToken } = require('../middleware/auth');
  */
 router.post('/register', async (req, res, next) => {
     try {
-        const { email, password, full_name, role = 'recruiter' } = req.body;
+        const { email, password, full_name, role = 'project_handler' } = req.body;
         
         if (!email || !password || !full_name) {
             return res.status(400).json({ error: 'Email, password, and full name are required' });

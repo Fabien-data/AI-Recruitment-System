@@ -57,6 +57,7 @@ class Candidate(Base):
     phone_number = Column(String(20), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=True)
     email = Column(String(255), nullable=True)
+    age = Column(Integer, nullable=True)
     highest_qualification = Column(String(255), nullable=True)
     skills = Column(Text, nullable=True)
     experience_years = Column(Integer, nullable=True)

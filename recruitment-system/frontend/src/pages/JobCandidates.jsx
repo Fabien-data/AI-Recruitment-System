@@ -508,8 +508,10 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                 {/* Avatar & Basic Info */}
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
-                            {candidate.name?.charAt(0)?.toUpperCase() || '?'}
+                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-lg flex-shrink-0 overflow-hidden">
+                            {candidate.photo_url
+                              ? <img src={`${import.meta.env.VITE_API_URL || ''}${candidate.photo_url}`} alt={candidate.name} className="w-full h-full object-cover" />
+                              : candidate.name?.charAt(0)?.toUpperCase() || '?'}
                         </div>
                         <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -627,8 +629,10 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
             <div className="space-y-6">
                 {/* Header with match score */}
                 <div className="flex items-start gap-4 p-4 bg-gradient-to-r from-primary-50 to-blue-50 rounded-xl">
-                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-2xl font-bold">
-                        {candidate.name?.charAt(0)?.toUpperCase() || '?'}
+                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-2xl font-bold overflow-hidden">
+                        {candidate.photo_url
+                          ? <img src={`${import.meta.env.VITE_API_URL || ''}${candidate.photo_url}`} alt={candidate.name} className="w-full h-full object-cover" />
+                          : candidate.name?.charAt(0)?.toUpperCase() || '?'}
                     </div>
                     <div className="flex-1">
                         <h3 className="text-xl font-bold text-gray-900">{candidate.name}</h3>

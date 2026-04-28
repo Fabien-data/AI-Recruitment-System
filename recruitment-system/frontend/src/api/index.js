@@ -42,11 +42,38 @@ export const getJob = (id) =>
 export const createJob = (data) =>
   apiClient.post('/api/jobs', data).then(res => res.data)
 
+export const magicCreateJob = (formData) =>
+  apiClient.post('/api/jobs/magic-create', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then(res => res.data)
+
 export const updateJob = (id, data) =>
   apiClient.put(`/api/jobs/${id}`, data).then(res => res.data)
 
 export const deleteJob = (id) =>
   apiClient.delete(`/api/jobs/${id}`).then(res => res.data)
+
+export const refreshJobKnowledgeBase = () =>
+  apiClient.post('/api/chatbot-sync/refresh-jobs').then(res => res.data)
+
+// Knowledge Base
+export const getKnowledgeBaseEntries = (params) =>
+  apiClient.get('/api/knowledge-base', { params }).then(res => res.data)
+
+export const getKnowledgeBaseCategories = (params) =>
+  apiClient.get('/api/knowledge-base/categories', { params }).then(res => res.data)
+
+export const createKnowledgeBaseEntry = (data) =>
+  apiClient.post('/api/knowledge-base', data).then(res => res.data)
+
+export const updateKnowledgeBaseEntry = (id, data) =>
+  apiClient.put(`/api/knowledge-base/${id}`, data).then(res => res.data)
+
+export const deleteKnowledgeBaseEntry = (id) =>
+  apiClient.delete(`/api/knowledge-base/${id}`).then(res => res.data)
+
+export const importKnowledgeBaseEntries = (entries, tenant_id = null) =>
+  apiClient.post('/api/knowledge-base/import', { tenant_id, entries }).then(res => res.data)
 
 // Applications
 export const getApplications = (params) =>
@@ -197,4 +224,29 @@ export const getDuplicateCandidates = (params) =>
 
 export const mergeCandidates = (data) =>
   apiClient.post('/api/candidates/merge', data).then(res => res.data)
+
+// Candidate photo upload
+export const uploadCandidatePhoto = (id, formData) =>
+  apiClient.post(`/api/candidates/${id}/photo`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(res => res.data)
+
+// Admin APIs
+export const getAdminStats = () =>
+  apiClient.get('/api/admin/stats').then(res => res.data)
+
+export const getAdminUsers = (params) =>
+  apiClient.get('/api/admin/users', { params }).then(res => res.data)
+
+export const createAdminUser = (data) =>
+  apiClient.post('/api/admin/users', data).then(res => res.data)
+
+export const updateAdminUser = (id, data) =>
+  apiClient.put(`/api/admin/users/${id}`, data).then(res => res.data)
+
+export const deleteAdminUser = (id) =>
+  apiClient.delete(`/api/admin/users/${id}`).then(res => res.data)
+
+export const getAuditLogs = (params) =>
+  apiClient.get('/api/admin/audit-logs', { params }).then(res => res.data)
 

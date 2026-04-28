@@ -154,6 +154,12 @@ class DocumentProcessor:
         
         try:
             if ext in self.SUPPORTED_IMAGE and use_intelligent_extraction and image_url:
+                if not self._is_cv_image(image_url):
+                    logger.warning("Image rejected by pre-flight check — not a CV: %s", image_url[:60])
+                    return ProcessingResult(
+                        success=False,
+                        error_message="not_cv_image",
+                    )
                 vision_extracted = self._extract_structured_from_image_url(image_url)
                 if vision_extracted:
                     warnings = vision_extracted.warnings.copy()
@@ -235,6 +241,43 @@ class DocumentProcessor:
                 success=False,
                 error_message=f"Processing error: {str(e)}"
             )
+
+    def _is_cv_image(self, image_url: str) -> bool:
+        """
+        Pre-flight check: ask GPT-4o Vision whether the image looks like a CV/resume.
+        Returns True if it is (or if the check cannot be performed — fail-safe).
+        Returns False for selfies, group photos, or unrelated images.
+        """
+        if not self.intelligent_extractor or not getattr(self.intelligent_extractor, "openai_client", None):
+            return True  # can't verify — allow through
+        try:
+            response = self.intelligent_extractor.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Does this image contain a CV, resume, or professional document "
+                                    "showing personal or employment details? Reply with ONLY the word YES or NO."
+                                ),
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": image_url, "detail": "low"},
+                            },
+                        ],
+                    }
+                ],
+                max_tokens=5,
+            )
+            answer = (response.choices[0].message.content or "").strip().upper()
+            return answer.startswith("YES")
+        except Exception as exc:
+            logger.warning("CV image pre-flight check failed: %s — proceeding as CV", exc)
+            return True  # fail-safe: allow through if check errors
 
     def _extract_structured_from_image_url(self, image_url: str) -> Optional[ExtractedCVData]:
         """

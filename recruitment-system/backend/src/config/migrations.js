@@ -150,8 +150,10 @@ async function applyMigrations() {
         [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS detected_language VARCHAR(20)`, 'communications.detected_language'],
         [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS attachments       TEXT[]`, 'communications.attachments'],
         [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS call_recording_url TEXT`, 'communications.call_recording_url'],
+        [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS whatsapp_message_id VARCHAR(128)`, 'communications.whatsapp_message_id'],
         [`ALTER TABLE communications ADD COLUMN IF NOT EXISTS metadata          JSONB DEFAULT '{}'::jsonb`, 'communications.metadata'],
         [`CREATE INDEX IF NOT EXISTS idx_comm_candidate_sent ON communications(candidate_id, sent_at DESC)`, 'idx_comm_candidate_sent'],
+        [`CREATE INDEX IF NOT EXISTS idx_comm_wa_msg_id ON communications(whatsapp_message_id)`, 'idx_comm_wa_msg_id'],
     ];
     for (const [sql, label] of commCols) {
         await safeAlter(sql, label);
@@ -163,6 +165,10 @@ async function applyMigrations() {
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS agent_id              UUID         REFERENCES users(id) ON DELETE SET NULL`, 'candidates.agent_id'],
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS handoff_at            TIMESTAMPTZ`, 'candidates.handoff_at'],
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS handoff_released_at   TIMESTAMPTZ`, 'candidates.handoff_released_at'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS conversation_stage    VARCHAR(64)`, 'candidates.conversation_stage'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_uploaded           BOOLEAN      NOT NULL DEFAULT FALSE`, 'candidates.cv_uploaded'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_status             VARCHAR(64)`, 'candidates.cv_status'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS last_interaction      TIMESTAMPTZ`, 'candidates.last_interaction'],
         [`CREATE INDEX IF NOT EXISTS idx_candidates_handoff ON candidates(is_human_handoff) WHERE is_human_handoff = TRUE`, 'idx_candidates_handoff'],
     ];
     for (const [sql, label] of handoffCols) {

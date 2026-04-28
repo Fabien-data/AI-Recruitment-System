@@ -1,9 +1,88 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const { pool } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
-const { syncJobAsync, syncJobToChatbot } = require('./chatbot-sync');
+const { syncJobAsync } = require('./chatbot-sync');
+const { processJobFlyer } = require('../services/auto-ingest');
 const logger = require('../utils/logger');
+
+const MAX_FLYERS_PER_BATCH = 20;
+
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 15 * 1024 * 1024 },
+});
+
+function getFlyerFiles(req) {
+    if (Array.isArray(req.files) && req.files.length > 0) {
+        return req.files;
+    }
+
+    if (req.file) {
+        return [req.file];
+    }
+
+    return [];
+}
+
+async function handleMagicCreate(req, res, next) {
+    try {
+        const files = getFlyerFiles(req);
+
+        if (files.length === 0) {
+            return res.status(400).json({ error: 'No flyer image uploaded' });
+        }
+
+        const invalidFile = files.find((file) => !file.mimetype || !file.mimetype.startsWith('image/'));
+        if (invalidFile) {
+            return res.status(400).json({ error: 'Flyer must be an image file' });
+        }
+
+        const results = [];
+        const failures = [];
+
+        for (const file of files) {
+            try {
+                const result = await processJobFlyer(file.buffer, file.mimetype);
+                results.push({
+                    fileName: file.originalname,
+                    ...result,
+                });
+            } catch (error) {
+                failures.push({
+                    fileName: file.originalname,
+                    error: error.message,
+                });
+                logger.error(`Magic create failed for ${file.originalname}: ${error.message}`);
+            }
+        }
+
+        if (results.length === 0) {
+            return res.status(500).json({
+                error: 'Failed to process flyer batch',
+                failures,
+            });
+        }
+
+        res.status(201).json({
+            message: files.length === 1
+                ? 'Flyer processed successfully'
+                : `Processed ${results.length} of ${files.length} flyers successfully`,
+            totalFiles: files.length,
+            succeeded: results.length,
+            failed: failures.length,
+            results,
+            failures,
+        });
+    } catch (error) {
+        logger.error(`Magic create failed: ${error.message}`);
+        next(error);
+    }
+}
+
+router.post('/magic-create', authenticate, authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
+router.post('/auto-ingest', authenticate, authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
 
 
 /**
@@ -82,7 +161,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 /**
  * Create new job
  */
-router.post('/', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.post('/', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const {
             title,
@@ -150,7 +229,7 @@ router.post('/', authenticate, authorize('admin', 'supervisor'), async (req, res
 /**
  * Update job
  */
-router.put('/:id', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = req.body;

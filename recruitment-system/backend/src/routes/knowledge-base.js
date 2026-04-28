@@ -9,6 +9,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { authenticate, authorize } = require('../middleware/auth');
 const {
     getAllEntries,
     createEntry,
@@ -18,6 +19,8 @@ const {
     getCategories,
     searchKnowledgeBase
 } = require('../services/knowledge-base');
+
+router.use(authenticate);
 
 /**
  * GET /api/knowledge-base
@@ -101,7 +104,7 @@ router.get('/:id', async (req, res) => {
  * POST /api/knowledge-base
  * Create a new knowledge base entry
  */
-router.post('/', async (req, res) => {
+router.post('/', authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const {
             tenant_id,
@@ -148,7 +151,7 @@ router.post('/', async (req, res) => {
  * PUT /api/knowledge-base/:id
  * Update an existing entry
  */
-router.put('/:id', async (req, res) => {
+router.put('/:id', authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const { id } = req.params;
         const updates = req.body;
@@ -165,7 +168,7 @@ router.put('/:id', async (req, res) => {
  * DELETE /api/knowledge-base/:id
  * Delete an entry
  */
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const { id } = req.params;
         await deleteEntry(id);
@@ -193,7 +196,7 @@ router.delete('/:id', async (req, res) => {
  *   ]
  * }
  */
-router.post('/import', async (req, res) => {
+router.post('/import', authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const { tenant_id, entries } = req.body;
 
@@ -213,7 +216,7 @@ router.post('/import', async (req, res) => {
  * POST /api/knowledge-base/test-response
  * Test chatbot response for a given query (for debugging)
  */
-router.post('/test-response', async (req, res) => {
+router.post('/test-response', authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const { message, language = 'en', tenant_id } = req.body;
 

@@ -55,3 +55,32 @@ const token = useAuthStore.getState().token
 if (token) {
   apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`
 }
+
+// ── Role helpers ─────────────────────────────────────────────────────────────
+export const ROLES = {
+  ADMIN: 'admin',
+  PROJECT_HANDLER: 'project_handler',
+  SOURCING_DEPARTMENT: 'sourcing_department',
+}
+
+export function useRole() {
+  const user = useAuthStore((s) => s.user)
+  const role = user?.role ?? null
+
+  return {
+    role,
+    isAdmin: role === ROLES.ADMIN,
+    isProjectHandler: role === ROLES.PROJECT_HANDLER,
+    isSourcingDept: role === ROLES.SOURCING_DEPARTMENT,
+    // Can create/edit jobs and projects
+    canEdit: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT || role === ROLES.PROJECT_HANDLER,
+    // Can delete jobs (admin + sourcing)
+    canDelete: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT,
+    // Can delete candidates (admin only)
+    canDeleteCandidate: role === ROLES.ADMIN,
+    // Full analytics access
+    hasFullAnalytics: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT,
+    // Admin dashboard access
+    hasAdminDashboard: role === ROLES.ADMIN,
+  }
+}

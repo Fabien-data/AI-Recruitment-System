@@ -46,6 +46,8 @@ class CVService:
                 image_url=media_url,
             )
             if not result or not result.success:
+                if getattr(result, "error_message", None) == "not_cv_image":
+                    return {"_not_cv_image": True}
                 logger.warning("CV extraction failed for %s: %s", filename, getattr(result, "error_message", "unknown"))
                 return {}
 
@@ -92,6 +94,10 @@ class CVService:
                 country = self._extract_country_from_text(raw_text)
                 if country:
                     out["country"] = country
+
+            # Pass extraction confidence so orchestrator can gate on low-quality results
+            if result.extraction_confidence is not None:
+                out["_extraction_confidence"] = result.extraction_confidence
 
             return out
 

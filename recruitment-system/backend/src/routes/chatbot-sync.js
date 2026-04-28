@@ -1,10 +1,11 @@
-ï»¿const express = require('express');
+const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const axios = require('axios');
 const { randomUUID } = require('crypto');
 const { query } = require('../config/database');
 const { adaptQuery, isMySQL } = require('../utils/query-adapter');
+const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
 // Some deployments don't include a ../models layer; keep this route DB-driven.
@@ -24,7 +25,7 @@ const CHATBOT_API_KEY = process.env.CHATBOT_API_KEY || '';
 
 async function _postToChatbot(endpoint, body) {
     if (!CHATBOT_API_KEY) {
-        logger.warn('CHATBOT_API_KEY not set â€” skipping chatbot sync');
+        logger.warn('CHATBOT_API_KEY not set — skipping chatbot sync');
         return null;
     }
     return axios.post(`${CHATBOT_API_URL}${endpoint}`, body, {
@@ -49,7 +50,7 @@ function _buildJobContent(job) {
 async function syncJobToChatbot(job) {
     if (!job || !job.id) return;
     if (!CHATBOT_API_KEY) {
-        logger.warn('CHATBOT_API_KEY not set â€” cannot sync job to chatbot');
+        logger.warn('CHATBOT_API_KEY not set — cannot sync job to chatbot');
         return;
     }
 
@@ -94,6 +95,46 @@ async function syncJobAsync(jobId) {
 
     await syncJobToChatbot(job);
 }
+
+async function syncAllActiveJobs() {
+    const sql = `SELECT * FROM jobs WHERE status = 'active' ORDER BY created_at DESC`;
+
+    const result = await query(sql, []);
+    const jobs = result.rows || [];
+
+    let synced = 0;
+    let failed = 0;
+
+    for (const job of jobs) {
+        try {
+            await syncJobToChatbot(job);
+            synced += 1;
+        } catch (error) {
+            failed += 1;
+            logger.warn(`Failed to sync job ${job.id}: ${error.message}`);
+        }
+    }
+
+    return {
+        total: jobs.length,
+        synced,
+        failed,
+    };
+}
+
+router.post('/refresh-jobs', authenticate, authorize('admin', 'sourcing_department'), async (req, res) => {
+    try {
+        const result = await syncAllActiveJobs();
+        res.json({
+            success: true,
+            message: 'Active jobs synchronized with chatbot knowledge base',
+            ...result,
+        });
+    } catch (error) {
+        logger.error(`refresh-jobs endpoint error: ${error.message}`);
+        res.status(500).json({ error: 'Failed to refresh chatbot knowledge base' });
+    }
+});
 
 router.post('/intake', upload.single('cv_file'), async (req, res) => {
     try {
@@ -211,7 +252,7 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                     [skills.join(', '), candidate.id]
                 );
             } catch (_err) {
-                // skills column may not exist yet â€” skip silently
+                // skills column may not exist yet — skip silently
             }
         }
 
@@ -263,3 +304,4 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
 module.exports = router;
 router.syncJobAsync = syncJobAsync;
 router.syncJobToChatbot = syncJobToChatbot;
+router.syncAllActiveJobs = syncAllActiveJobs;

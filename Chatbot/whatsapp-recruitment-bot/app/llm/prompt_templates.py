@@ -144,6 +144,255 @@ Cultural & linguistic rules for Sri Lankan users:
 - When the knowledge base has no answer, reply with the register-matched NO_ANSWER_FALLBACK below."""
 
     # ─────────────────────────────────────────────────────────────────────────
+    # POST-ONBOARDING FAQ PROMPTS — Shown after profile is complete, per language
+    # Topics: registration cost, vacancies, how to apply, countries, job details,
+    #         hotline/contact, company address.
+    # ─────────────────────────────────────────────────────────────────────────
+    COMPANY_ADDRESS = "2nd Floor, No 52, Hospital St, 00100, Colombo, Sri Lanka"
+    COMPANY_MAP_LINK = "https://share.google/ILCa5LUtejx5xzl9C"
+    COMPANY_HOTLINE = "0117324324"
+
+    FAQ_TOPICS = {
+        'en': {
+            'registration_cost': (
+                "📋 *Registration & Process*\n"
+                "Registration fee: LKR 5,000 (one-time).\n"
+                "Includes: visa processing support, medical test coordination, "
+                "departure formalities & contract review.\n"
+                "📞 Call 0117324324 to start your registration."
+            ),
+            'how_to_apply': (
+                "📝 *How to Apply*\n"
+                "1️⃣ Share your CV here (already done! ✅)\n"
+                "2️⃣ Visit our office or call 0117324324 to confirm your slot.\n"
+                "3️⃣ Complete medical check & visa processing with our help.\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'available_countries': (
+                "🌍 *Countries We Place Workers In*\n"
+                "• UAE (Dubai, Abu Dhabi, Sharjah)\n"
+                "• Qatar\n"
+                "• Saudi Arabia\n"
+                "• Kuwait\n"
+                "• Malaysia\n"
+                "• Oman\n"
+                "Ask me about vacancies in any specific country!"
+            ),
+            'hotline': (
+                f"📞 *Contact Us*\n"
+                f"Hotline: {COMPANY_HOTLINE} (Mon–Sat, 8am–6pm)\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'job_details': (
+                "💼 *Job Details*\n"
+                "We place workers in UAE, Qatar, Saudi Arabia, Kuwait, Malaysia & Oman.\n"
+                "Roles include: Driver, Nurse, Electrician, Mason, Cook, Factory Worker, Security Guard, Cleaner & more.\n"
+                "Salary ranges vary by role & country — our consultants will share specific offer details after your profile review.\n"
+                f"📞 Call {COMPANY_HOTLINE} or visit us for a full vacancy list."
+            ),
+            'company_details': (
+                "🏢 *Dewan Consultants*\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"📞 {COMPANY_HOTLINE}\n"
+                f"🗺️ {COMPANY_MAP_LINK}\n"
+                "We specialize in overseas job placements for Sri Lankan workers."
+            ),
+        },
+        'si': {
+            'registration_cost': (
+                "📋 *ලියාපදිංචි ගාස්තු සහ ක්‍රියාවලිය*\n"
+                "ලියාපදිංචි ගාස්තුව: LKR 5,000 (එක් වරක් පමණි).\n"
+                "ඇතුළත්: visa processing, medical test, ගමනාගමන ලේඛන සහ contract review.\n"
+                "📞 0117324324 අමතා ලියාපදිංචිය ආරම්භ කරන්න."
+            ),
+            'how_to_apply': (
+                "📝 *Apply කරන්නේ කෙසේද?*\n"
+                "1️⃣ CV ලබා දෙන්න (සම්පූර්ණයි! ✅)\n"
+                "2️⃣ Office එකට පැමිණෙන්න හෝ 0117324324 අමතන්න.\n"
+                "3️⃣ Medical සහ visa ක්‍රියාවලිය අපේ සහාය ඇතිව.\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'available_countries': (
+                "🌍 *අප සේවා සපයන රටවල්*\n"
+                "• UAE (Dubai, Abu Dhabi, Sharjah)\n"
+                "• Qatar\n"
+                "• Saudi Arabia\n"
+                "• Kuwait\n"
+                "• Malaysia\n"
+                "• Oman\n"
+                "කිසියම් රටක vacancies ගැන ඇහිය හැකිය!"
+            ),
+            'hotline': (
+                f"📞 *අප හා සම්බන්ධ වන්න*\n"
+                f"Hotline: {COMPANY_HOTLINE} (සඳු–සෙනසුරු, ඉදිරිගෙදර 8am–6pm)\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'job_details': (
+                "💼 *රැකියා විස්තර*\n"
+                "UAE, Qatar, Saudi Arabia, Kuwait, Malaysia සහ Oman රටවල workers ලබා දෙනවා.\n"
+                "Available roles: Driver, Nurse, Electrician, Mason, Cook, Factory Worker, Security Guard, Cleaner ද ඇතුළත්.\n"
+                "Salary ranges රැකියාව සහ රටට අනුව වෙනස් — profile review කිරීමෙන් පසු consultants specific offer details share කරයි.\n"
+                f"📞 {COMPANY_HOTLINE} අමතන්න හෝ office එකට ආ vacancy list ලබාගන්න."
+            ),
+            'company_details': (
+                "🏢 *Dewan Consultants*\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"📞 {COMPANY_HOTLINE}\n"
+                f"🗺️ {COMPANY_MAP_LINK}\n"
+                "අපි ශ්‍රී ලාංකීය සේවකයින් සඳහා විදේශ රැකියා placement සේවා සපයනවා."
+            ),
+        },
+        'ta': {
+            'registration_cost': (
+                "📋 *பதிவு கட்டணம் மற்றும் செயல்முறை*\n"
+                "பதிவு கட்டணம்: LKR 5,000 (ஒருமுறை மட்டும்).\n"
+                "உள்ளடங்கும்: visa processing, medical test ஒருங்கிணைப்பு மற்றும் contract review.\n"
+                "📞 0117324324 - ஐ அழைத்து பதிவை தொடங்குங்கள்."
+            ),
+            'how_to_apply': (
+                "📝 *எப்படி Apply பண்றது?*\n"
+                "1️⃣ CV அனுப்புங்கள் (முடிந்தது! ✅)\n"
+                "2️⃣ Office-க்கு வாருங்கள் அல்லது 0117324324 அழையுங்கள்.\n"
+                "3️⃣ Medical மற்றும் visa ஐ எங்கள் உதவியுடன் முடிக்கலாம்.\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'available_countries': (
+                "🌍 *நாங்கள் placement செய்யும் நாடுகள்*\n"
+                "• UAE (Dubai, Abu Dhabi, Sharjah)\n"
+                "• Qatar\n"
+                "• Saudi Arabia\n"
+                "• Kuwait\n"
+                "• Malaysia\n"
+                "• Oman\n"
+                "எந்த நாட்டில் vacancies இருக்கிறது என்று கேளுங்கள்!"
+            ),
+            'hotline': (
+                f"📞 *எங்களை தொடர்பு கொள்ளுங்கள்*\n"
+                f"Hotline: {COMPANY_HOTLINE} (திங்கள்–சனி, காலை 8am–6pm)\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'job_details': (
+                "💼 *வேலை விவரங்கள்*\n"
+                "UAE, Qatar, Saudi Arabia, Kuwait, Malaysia மற்றும் Oman நாடுகளில் தொழிலாளர்களை நியமிக்கிறோம்.\n"
+                "கிடைக்கும் பதவிகள்: Driver, Nurse, Electrician, Mason, Cook, Factory Worker, Security Guard, Cleaner மற்றும் பலவும்.\n"
+                "Salary வேலை மற்றும் நாட்டை பொறுத்து மாறும் — profile review-க்கு பிறகு consultants specific offer details தருவார்கள்.\n"
+                f"📞 {COMPANY_HOTLINE} அழையுங்கள் அல்லது vacancy list-க்கு office வாருங்கள்."
+            ),
+            'company_details': (
+                "🏢 *Dewan Consultants*\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"📞 {COMPANY_HOTLINE}\n"
+                f"🗺️ {COMPANY_MAP_LINK}\n"
+                "இலங்கை தொழிலாளர்களுக்கு வெளிநாட்டு job placement சேவை வழங்குகிறோம்."
+            ),
+        },
+        'singlish': {
+            'registration_cost': (
+                "📋 *Registration Gattu saha Process*\n"
+                "Registration fee: LKR 5,000 (eka paarak vitharai).\n"
+                "Athulath: visa processing, medical test, gaman lekkam saha contract review.\n"
+                "📞 0117324324 call karanna registration start karanna."
+            ),
+            'how_to_apply': (
+                "📝 *Apply karanna kohomada?*\n"
+                "1️⃣ CV eka denna (hari karapu! ✅)\n"
+                "2️⃣ Office ekata enna nam 0117324324 call karanna.\n"
+                "3️⃣ Medical saha visa eka api ekka karamu.\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'available_countries': (
+                "🌍 *Api Sevakaranna Rata*\n"
+                "• UAE (Dubai, Abu Dhabi, Sharjah)\n"
+                "• Qatar\n"
+                "• Saudi Arabia\n"
+                "• Kuwait\n"
+                "• Malaysia\n"
+                "• Oman\n"
+                "Mokoma rataka vacancies thiyanawada kiyanna!"
+            ),
+            'hotline': (
+                f"📞 *Contact Details*\n"
+                f"Hotline: {COMPANY_HOTLINE} (Sandu–Senasurada, 8am–6pm)\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'job_details': (
+                "💼 *Job Details*\n"
+                "UAE, Qatar, Saudi Arabia, Kuwait, Malaysia saha Oman vatata workers yawanawa.\n"
+                "Available roles: Driver, Nurse, Electrician, Mason, Cook, Factory Worker, Security Guard, Cleaner saha aruth.\n"
+                "Salary eka job eka saha rata anuwath venas — profile review karala consultants specific offer details kiyannam.\n"
+                f"📞 {COMPANY_HOTLINE} call karanna vacancy list ganna."
+            ),
+            'company_details': (
+                "🏢 *Dewan Consultants*\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"📞 {COMPANY_HOTLINE}\n"
+                f"🗺️ {COMPANY_MAP_LINK}\n"
+                "Apita Sri Lankan workers-ta vides job placement service eka thiyenawa."
+            ),
+        },
+        'tanglish': {
+            'registration_cost': (
+                "📋 *Registration Kattanam satha Process*\n"
+                "Registration fee: LKR 5,000 (oru thadavai mattum).\n"
+                "Ulle: visa processing, medical test coordination satha contract review.\n"
+                "📞 0117324324 call pannunga registration start aagum."
+            ),
+            'how_to_apply': (
+                "📝 *Epdi Apply pannuvom?*\n"
+                "1️⃣ CV anupunga (Aagidichi! ✅)\n"
+                "2️⃣ Office-ku vaanga illa 0117324324 call pannunga.\n"
+                "3️⃣ Medical satha visa-yai engaloda help-la mudikkalam.\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'available_countries': (
+                "🌍 *Nangal Placement Seiyum Naadugal*\n"
+                "• UAE (Dubai, Abu Dhabi, Sharjah)\n"
+                "• Qatar\n"
+                "• Saudi Arabia\n"
+                "• Kuwait\n"
+                "• Malaysia\n"
+                "• Oman\n"
+                "Etha naatla vacancies irukku-nu kelunga!"
+            ),
+            'hotline': (
+                f"📞 *Contact Details*\n"
+                f"Hotline: {COMPANY_HOTLINE} (Thingal–Sani, 8am–6pm)\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"🗺️ {COMPANY_MAP_LINK}"
+            ),
+            'job_details': (
+                "💼 *Job Details*\n"
+                "UAE, Qatar, Saudi Arabia, Kuwait, Malaysia satha Oman naadugal-la workers anupurom.\n"
+                "Available roles: Driver, Nurse, Electrician, Mason, Cook, Factory Worker, Security Guard, Cleaner matrum palar.\n"
+                "Salary vela matrum naadu pathi marum — profile review pannitta consultants specific offer details solluvaanga.\n"
+                f"📞 {COMPANY_HOTLINE} call pannunga vacancy list kedaikum."
+            ),
+            'company_details': (
+                "🏢 *Dewan Consultants*\n"
+                f"📍 {COMPANY_ADDRESS}\n"
+                f"📞 {COMPANY_HOTLINE}\n"
+                f"🗺️ {COMPANY_MAP_LINK}\n"
+                "Sri Lankan workers-ku veli naadu job placement service kudukkirom."
+            ),
+        },
+    }
+
+    @classmethod
+    def get_faq_response(cls, topic: str, language: str) -> str:
+        """Return a ready-made FAQ response for the given topic and language."""
+        lang_map = cls.FAQ_TOPICS.get(language) or cls.FAQ_TOPICS.get('en', {})
+        return lang_map.get(topic, cls.NO_ANSWER_FALLBACK.get(language, cls.NO_ANSWER_FALLBACK['en']))
+
+    # ─────────────────────────────────────────────────────────────────────────
     # FALLBACK TEMPLATES — When KB has no matching answer
     # ─────────────────────────────────────────────────────────────────────────
     NO_ANSWER_FALLBACK = {
@@ -166,19 +415,19 @@ Cultural & linguistic rules for Sri Lankan users:
     }
 
     PLEASE_REPHRASE = {
-        'en':        "Nice 👍 Say it another way and I’ll keep things moving.",
-        'si':        "හොඳයි 👍 වෙන විදිහකට කියන්න, අපි ඉක්මනින් ඉදිරියට යමු.",
-        'ta':        "சரி 👍 வேற மாதிரி சொல்லுங்கள், நாம அடுத்த படிக்கு போலாம்.",
-        'singlish':  "Hari 👍 Wenath widiyata kiyapan, api next step ekata yamu.",
-        'tanglish':  "Seri 👍 Vera style-la sollunga, next step-ku move pannalaam.",
+        'en':        "Nice ✅ Say it another way and I’ll keep things moving.",
+        'si':        "හොඳයි ✅ වෙන විදිහකට කියන්න, අපි ඉක්මනින් ඉදිරියට යමු.",
+        'ta':        "சரி ✅ வேற மாதிரி சொல்லுங்கள், நாம அடுத்த படிக்கு போலாம்.",
+        'singlish':  "Hari ✅ Wenath widiyata kiyapan, api next step ekata yamu.",
+        'tanglish':  "Seri ✅ Vera style-la sollunga, next step-ku move pannalaam.",
     }
 
     CONNECT_RECRUITER = {
-        'en':        "Let me connect you with a recruiter who can answer that directly! Just a moment 🔗",
-        'si':        "Eka gena recruiter kenekwa oyawa connect karannam — dakinna! 🔗",
-        'ta':        "Atha pathi therinja recruiter kitta ungala connect panniduren — wait panunga! 🔗",
-        'singlish':  "Eka gena dannawa recruiter kenek ekka connect karannam! 🔗",
-        'tanglish':  "Pathi therinja recruiter kitta connect panniduren da! 🔗",
+        'en':        "Let me connect you with one of our recruiters who can help you directly. One moment 🔗",
+        'si':        "ඔය ගෙන හරියටම දන්නා recruiter කෙනෙකු සමග ඔබව connect කරන්නම් — ටිකක් රැදෙන්න! 🔗",
+        'ta':        "இதை நேரடியாக பதிலளிக்கக்கூடிய ஒரு recruiter-கிட்ட உங்களை connect பண்றேன் — சிறிது நேரம்! 🔗",
+        'singlish':  "Eka gena dennata passen recruiter kenek ekka connect karannam da — tikak inna! 🔗",
+        'tanglish':  "Itha pathi sari-ah therinja recruiter-kitte ungalai connect panniduren da — konjam wait pannunga! 🔗",
     }
 
     @classmethod
@@ -323,6 +572,87 @@ Cultural & linguistic rules for Sri Lankan users:
                 "Aiyoo nearly done! CV anuppenga la, PDF or Word ok 😊",
             ],
         },
+        'name': {
+            'en': [
+                "Welcome! 😊 First things first — could you tell me your full name?",
+                "Great to connect! What's your name so I can personalise things a bit? 👋",
+                "Hi! I'm Dilan from Dewan Consultants. What's your full name?",
+            ],
+            'si': [
+                "ආයුබෝවන්! 😊 ඔබේ සම්පූර්ණ නම කියන්න පුළුවන්ද?",
+                "සාදරයෙන් පිළිගනිමු! ඔබේ නම කුමක්ද? 👋",
+                "ආයුබෝවන්! මම ඩිලාන් — ඔබේ නම මොකක්ද?",
+            ],
+            'ta': [
+                "வணக்கம்! 😊 முதலில் உங்கள் முழு பெயரை சொல்ல முடியுமா?",
+                "நல்வரவு! உங்கள் பெயர் என்ன? 👋",
+                "வணக்கம்! நான் திலன் — உங்கள் பெயர் என்ன?",
+            ],
+            'singlish': [
+                "Ayubowan! 😊 First, oya name eka kiyannada?",
+                "Welcome da! Oya full name eka kiyapan la 👋",
+                "Hi! I'm Dilan — oya name eka mokada?",
+            ],
+            'tanglish': [
+                "Vanakkam! 😊 Ungal full name sollunga da?",
+                "Welcome! Peyar enna-nu sollunga la 👋",
+                "Hi! Naan Dilan — unga peyar enna?",
+            ],
+        },
+        'age': {
+            'en': [
+                "Got it! Quick one — how old are you? 🎂",
+                "And your age? Just a number is fine 😊",
+                "How old are you at the moment?",
+            ],
+            'si': [
+                "හොඳයි! ඔබට දැන් වයස කොපමණද? 🎂",
+                "ඔබේ වයස කොපමණද? ඉලක්කම හොඳටම ඇති 😊",
+                "ඔබ දැනට කීයේද?",
+            ],
+            'ta': [
+                "நன்று! உங்கள் வயது என்ன? 🎂",
+                "வயது என்ன? ஒரு எண் போதும் 😊",
+                "இப்போது உங்கள் வயது எவ்வளவு?",
+            ],
+            'singlish': [
+                "Good da! Oya age eka kiyannako? 🎂",
+                "Oya vayasa kiyapan — number ekak gahanna 😊",
+                "Dang oya age eka kiyanda?",
+            ],
+            'tanglish': [
+                "Seri da! Ungal age sollunga? 🎂",
+                "Vayasu enna — number mattum sollunga 😊",
+                "Ippo unga vayasu evvalo?",
+            ],
+        },
+        'contact_email': {
+            'en': [
+                "Almost there! 📧 We have your WhatsApp number — could you also share your email address? (e.g. yourname@gmail.com)",
+                "One more thing — what's your email? We'll use it for official correspondence 📩",
+                "What email should we reach you at for confirmations and updates?",
+            ],
+            'si': [
+                "ළඟාවෙනවා! 📧 ඔබේ WhatsApp number ලැබී ඇත — ඔබේ email address ද දෙන්න පුළුවන්ද? (e.g. yourname@gmail.com)",
+                "තවත් කුඩා දෙයක් — ඔබේ email ලිපිනය කුමක්ද? 📩",
+                "Official messages සඳහා ඔබව contact කළ හැකි email ලිපිනය කොහොමද?",
+            ],
+            'ta': [
+                "கிட்டத்தட்ட முடிந்தது! 📧 உங்கள் WhatsApp நம்பர் கிடைத்தது — உங்கள் email முகவரியும் தர முடியுமா? (e.g. yourname@gmail.com)",
+                "இன்னொரு விஷயம் — உங்கள் email முகவரி என்ன? 📩",
+                "Confirmation மற்றும் updates-க்கு எந்த email-ல் தொடர்பு கொள்ளலாம்?",
+            ],
+            'singlish': [
+                "Almost done da! 📧 WhatsApp number eka thibena — email address eka dennako? (e.g. yourname@gmail.com)",
+                "Last detail — oya email eka mokada? 📩",
+                "Official messages send karanna email eka kiyapan da 😊",
+            ],
+            'tanglish': [
+                "Almost ah! 📧 WhatsApp number irukku — email address um sollunga da? (e.g. yourname@gmail.com)",
+                "Last oru vishayam — unga email enna? 📩",
+                "Confirmation-ku email address sollunga la 😊",
+            ],
+        },
     }
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -343,9 +673,9 @@ Cultural & linguistic rules for Sri Lankan users:
                 "Perfect, got it! 📄 Just reviewing your CV quickly...",
             ],
             'application_complete': [
-                "You're all set, {name}! ✅ Your application is in our system. Our team will review everything and reach out to you soon. Best of luck! 🤞",
-                "Amazing, {name} — you're done! 🎉 Application submitted successfully. Our recruiters will be in touch. Fingers crossed! 🍀",
-                "That's it, {name}! ✅ Your application is complete. We'll review your profile and get back to you. Thanks for choosing {company_name}! 😊",
+                "You're all set, {name}! ✅ Your application is saved. Our team will review everything and reach out soon.\n\n📍 Visit us: 2nd Floor, No 52, Hospital St, 00100, Colombo\n🗺️ https://share.google/ILCa5LUtejx5xzl9C\n📞 Hotline: 0117324324\n\nBest of luck! 🤞",
+                "Amazing, {name} — you're done! 🎉 Application submitted. Our recruiters will be in touch.\n\n📍 2nd Floor, No 52, Hospital St, Colombo | 📞 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "That's it, {name}! ✅ Application complete. Thanks for choosing {company_name}! 😊\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324 | 🗺️ https://share.google/ILCa5LUtejx5xzl9C",
             ],
             'morning': [
                 "Good morning! ☀️ I'm Dilan from {company_name}. Early start — I like it!",
@@ -371,9 +701,9 @@ Cultural & linguistic rules for Sri Lankan users:
                 "ඉතා හොඳයි, මට ලැබුණා! 📄 ඔබගේ CV එක ඉක්මනින් පරීක්ෂා කරමින් පවතිනවා...",
             ],
             'application_complete': [
-                "සියල්ල සම්පූර්ණයි {name}! ✅ ඔබගේ අයදුම්පත අපගේ පද්ධතියට ඇතුළත් කර ඇත. අපගේ කණ්ඩායම මෙය පරීක්ෂා කර ඉක්මනින් ඔබව සම්බන්ධ කර ගනු ඇත. ඔබට ජය! 🤞",
-                "ඉතා හොඳයි {name} — සියල්ල අවසන්! 🎉 අයදුම්පත සාර්ථකව යොමු කරන ලදී. අපගේ නියෝජිතයින් ඔබව සම්බන්ධ කර ගනු ඇත. සුභ පැතුම්! 🍀",
-                "එපමණයි {name}! ✅ අයදුම්පත සම්පූර්ණයි. අපි ඔබගේ පැතිකඩ පරීක්ෂා කර නැවත දැනුම් දෙන්නෙමු. {company_name} තෝරා ගත්තාට ස්තූතියි! 😊",
+                "සියල්ල සම්පූර්ණයි {name}! ✅ ඔබගේ අයදුම්පත save කර ඇත. ඉක්මනින් ඔබව contact කර ගනු ඇත. ඔබට ජය! 🤞\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "ඉතා හොඳයි {name} — සියල්ල අවසන්! 🎉 අයදුම්පත සාර්ථකයි. සුභ පැතුම්! 🍀\n\n📍 2nd Floor, No 52, Hospital St, Colombo | 📞 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "එපමණයි {name}! ✅ {company_name} තෝරා ගත්තාට ස්තූතියි! 😊\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324 | 🗺️ https://share.google/ILCa5LUtejx5xzl9C",
             ],
             'awaiting_cv': [
                 "ඔබ සූදානම් වූ පසු CV එක එවන්න — PDF හෝ Word ආකෘතියෙන් නම් වඩාත් සුදුසුයි! 📎",
@@ -393,9 +723,9 @@ Cultural & linguistic rules for Sri Lankan users:
                 "நன்று, கிடைத்தது! 📄 உங்கள் CV-யை விரைவாகச் சரிபார்க்கிறேன்...",
             ],
             'application_complete': [
-                "அனைத்தும் தயார் {name}! ✅ உங்கள் விண்ணப்பம் எங்கள் கணினியில் பதிவு செய்யப்பட்டுள்ளது. எங்கள் குழு இதனைச் சரிபார்த்து விரைவில் உங்களைத் தொடர்புகொள்ளும். வாழ்த்துகள்! 🤞",
-                "அருமை {name} — வேலை முடிந்தது! 🎉 விண்ணப்பம் வெற்றிகரமாகச் சமர்ப்பிக்கப்பட்டது. எங்கள் பிரதிநிதிகள் உங்களைத் தொடர்புகொள்வார்கள். நல்வாழ்த்துகள்! 🍀",
-                "அவ்வளவுதான் {name}! ✅ விண்ணப்பம் முழுமையடைந்தது. உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்து நாங்கள் உங்களுக்குத் தெரிவிப்போம். {company_name}-ஐத் தேர்ந்தெடுத்ததற்கு நன்றி! 😊",
+                "அனைத்தும் தயார் {name}! ✅ உங்கள் விண்ணப்பம் save ஆகிவிட்டது. விரைவில் தொடர்புகொள்வோம். வாழ்த்துகள்! 🤞\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "அருமை {name} — முடிந்தது! 🎉 விண்ணப்பம் வெற்றிகரம். நல்வாழ்த்துகள்! 🍀\n\n📍 2nd Floor, No 52, Hospital St, Colombo | 📞 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "அவ்வளவுதான் {name}! ✅ {company_name}-ஐத் தேர்ந்தெடுத்ததற்கு நன்றி! 😊\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324 | 🗺️ https://share.google/ILCa5LUtejx5xzl9C",
             ],
             'awaiting_cv': [
                 "நீங்கள் தயாரானதும் உங்கள் CV-யை அனுப்பவும் — PDF அல்லது Word வடிவம் சரியாக இருக்கும்! 📎",
@@ -414,9 +744,9 @@ Cultural & linguistic rules for Sri Lankan users:
                 "Thanks da! 📋 Looking through your CV now...",
             ],
             'application_complete': [
-                "All done {name}! ✅ Your application is in the system. Our team will check and call you soon. Good luck da! 🤞",
-                "Finished {name}! 🎉 Application submitted. Our people will contact you. Fingers crossed la! 🍀",
-                "That's it {name}! ✅ Application complete. We'll review and get back to you. Thanks for choosing {company_name}! 😊",
+                "All done {name}! ✅ Application save una. Oyawa call karannam soon. Good luck da! 🤞\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "Finished {name}! 🎉 Application submit una. Apiwa call karannam. Fingers crossed la! 🍀\n\n📍 2nd Floor, No 52, Hospital St, Colombo | 📞 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "That's it {name}! ✅ {company_name} choose kala eka good choice! 😊\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324 | 🗺️ https://share.google/ILCa5LUtejx5xzl9C",
             ],
             'awaiting_cv': [
                 "Send your CV when ready da — PDF or Word is fine! 📎",
@@ -435,9 +765,9 @@ Cultural & linguistic rules for Sri Lankan users:
                 "Nandri da! 📋 CV-yai ippo paakiren...",
             ],
             'application_complete': [
-                "All set {name}! ✅ Ungal application system-la save aachu. Engal team paaittu ungalai contact pannum. Vazhtukal! 🤞",
-                "Mudinjuchu {name}! 🎉 Application submit aachu. Engal aal contact panvaan. Nalla irukatum! 🍀",
-                "Appdithaan {name}! ✅ Application complete. Ungal profile paaittu solluven. {company_name}-ai choose pannathukku nandri! 😊",
+                "All set {name}! ✅ Ungal application save aachu. Engal team contact pannum. Vazhtukal! 🤞\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "Mudinjuchu {name}! 🎉 Application submit aachu. Engal aal contact panvaan. Nalla irukatum! 🍀\n\n📍 2nd Floor, No 52, Hospital St, Colombo | 📞 0117324324\n🗺️ https://share.google/ILCa5LUtejx5xzl9C",
+                "Appdithaan {name}! ✅ {company_name}-ai choose pannathukku nandri! 😊\n\n📍 2nd Floor, No 52, Hospital St, 00100, Colombo\n📞 Hotline: 0117324324 | 🗺️ https://share.google/ILCa5LUtejx5xzl9C",
             ],
             'awaiting_cv': [
                 "Thaiyara aachu-nnu CV anuppenga — PDF or Word sari! 📎",
@@ -452,31 +782,31 @@ Cultural & linguistic rules for Sri Lankan users:
     ACKNOWLEDGMENTS = {
         'job_confirmed': {
             'en': [
-                "Great choice! 👍 ",
+                "Great choice! ✅ ",
                 "Excellent! That's a sought-after role. ",
                 "Nice, we have good demand for that! 🌟 ",
                 "Perfect, we work with clients looking for exactly that! ",
             ],
             'si': [
-                "ඉතා හොඳ තේරීමක්! 👍 ",
+                "ඉතා හොඳ තේරීමක්! ✅ ",
                 "විශිෂ්ටයි! එය දැනට ඉහළ ඉල්ලුමක් පවතින තනතුරක්. ",
                 "හොඳයි, එම ක්ෂේත්‍රය සඳහා හොඳ ඉල්ලුමක් පවතිනවා! 🌟 ",
                 "ඉතා හොඳයි, අපගේ සේවාදායකයින්ද හරියටම සොයන්නේ මෙයයි! ",
             ],
             'ta': [
-                "சிறந்த தேர்வு! 👍 ",
+                "சிறந்த தேர்வு! ✅ ",
                 "அருமை! இது தற்போது அதிக தேவை உள்ள ஒரு பதவியாகும். ",
                 "நன்று, இந்தத் துறைக்கு நல்ல வரவேற்பு உள்ளது! 🌟 ",
                 "மிக நன்று, எங்கள் வாடிக்கையாளர்களும் இதையே எதிர்பார்க்கிறார்கள்! ",
             ],
             'singlish': [
-                "Good choice da! 👍 ",
+                "Good choice! ✅ ",
                 "Nice, that role is in demand! ",
                 "Good one, we have jobs for that! 🌟 ",
                 "Perfect, our clients looking exactly for that la! ",
             ],
             'tanglish': [
-                "Nalla choice da! 👍 ",
+                "Nalla choice! ✅ ",
                 "Apdithaan, adhu romba demand-la irruku! ",
                 "Nalla, adha pathi jobs irukku! 🌟 ",
                 "Kalakkal, clients adhayae theduranga! ",
@@ -518,31 +848,31 @@ Cultural & linguistic rules for Sri Lankan users:
             'en': [
                 "That's solid experience! 💪 ",
                 "Great, that's a strong background! ",
-                "Excellent — employers will like that! 👍 ",
+                "Excellent — employers will value that! ✅ ",
                 "Good experience level! ",
             ],
             'si': [
                 "එය ඉතා හොඳ පළපුරුද්දක්! 💪 ",
                 "හොඳයි, ඔබට ශක්තිමත් පසුබිමක් තිබෙනවා! ",
-                "විශිෂ්ටයි — සේවා යෝජකයින් මීට බොහෝ කැමති වේවි! 👍 ",
+                "විශිෂ්ටයි — සේවා යෝජකයින් ඔබේ පළපුරුද්ද ඉහළ අගය කරනු ඇත! ✅ ",
                 "ඉතා හොඳ පළපුරුද්දක්! ",
             ],
             'ta': [
                 "இது ஒரு சிறந்த அனுபவம்! 💪 ",
                 "நன்று, உங்களுக்கு வலுவான பின்னணி உள்ளது! ",
-                "அருமை — நிறுவனங்கள் இதனை மிகவும் விரும்புவார்கள்! 👍 ",
+                "அருமை — நிறுவனங்கள் உங்கள் அனுபவத்தை மதிப்பிடுவார்கள்! ✅ ",
                 "சிறந்த அனுபவ நிலை! ",
             ],
             'singlish': [
                 "That's solid experience! 💪 ",
                 "Wah, strong background da! ",
-                "Employers will love that da! 👍 ",
+                "Employers will value that! ✅ ",
                 "Good experience level la! ",
             ],
             'tanglish': [
                 "Nalla experience da! 💪 ",
                 "Strong background irukku machaa! ",
-                "Companies-ku romba pudikkum — great! 👍 ",
+                "Companies-ku romba pudikkum — excellent! ✅ ",
                 "Nalla experience level! ",
             ],
         },

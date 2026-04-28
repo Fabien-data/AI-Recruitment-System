@@ -1,7 +1,7 @@
 ﻿import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { getJob } from '../api'
-import { ArrowLeft, Briefcase, MapPin, Calendar, FolderKanban } from 'lucide-react'
+import { getJob, getJobCandidates } from '../api'
+import { ArrowLeft, Briefcase, MapPin, Calendar, FolderKanban, Users, User } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -13,6 +13,12 @@ export default function JobDetail() {
   const { data: job, isLoading, error } = useQuery({
     queryKey: ['job', id],
     queryFn: () => getJob(id),
+    enabled: !!id,
+  })
+
+  const { data: candidatesData, isLoading: isCandidatesLoading } = useQuery({
+    queryKey: ['job-candidates-preview', id],
+    queryFn: () => getJobCandidates(id),
     enabled: !!id,
   })
 
@@ -50,6 +56,9 @@ export default function JobDetail() {
 
   const requirements = typeof job.requirements === 'object' ? job.requirements : {}
   const reqEntries = Object.entries(requirements)
+  const candidatePreview = Array.isArray(candidatesData?.candidates)
+    ? candidatesData.candidates.slice(0, 5)
+    : []
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
@@ -114,6 +123,56 @@ export default function JobDetail() {
               </ul>
             </Card>
           )}
+
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold text-gray-900">Candidates</h2>
+              <Link
+                to={`/jobs/${id}/candidates`}
+                className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+              >
+                View All →
+              </Link>
+            </div>
+
+            {isCandidatesLoading ? (
+              <div className="space-y-2">
+                {[...Array(3)].map((_, i) => (
+                  <Skeleton key={i} className="h-12 w-full rounded-lg" />
+                ))}
+              </div>
+            ) : candidatePreview.length > 0 ? (
+              <div className="space-y-2">
+                {candidatePreview.map((item) => {
+                  const candidate = item.candidate || {}
+                  return (
+                    <Link
+                      key={item.application_id}
+                      to={`/candidates/${candidate.id}`}
+                      className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 transition-colors group"
+                    >
+                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 overflow-hidden">
+                        {candidate.photo_url ? (
+                          <img
+                            src={`${import.meta.env.VITE_API_URL || ''}${candidate.photo_url}`}
+                            alt={candidate.name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : candidate.name?.charAt(0)?.toUpperCase() || <User size={14} />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate group-hover:text-primary-600">{candidate.name}</p>
+                        <p className="text-xs text-gray-500 truncate">{item.application_status || 'applied'}</p>
+                      </div>
+                      <span className="text-xs font-semibold text-primary-600 flex-shrink-0">{item.match_score || 0}%</span>
+                    </Link>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 py-2">No candidates assigned yet.</p>
+            )}
+          </Card>
         </div>
 
         <div className="space-y-6">
@@ -137,6 +196,15 @@ export default function JobDetail() {
                 </div>
               )}
             </dl>
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <Link
+                to={`/jobs/${id}/candidates`}
+                className="flex items-center justify-center gap-2 w-full px-4 py-2 bg-zinc-900 text-white text-sm font-semibold rounded-xl hover:bg-zinc-700 transition-colors"
+              >
+                <Users size={15} />
+                View Candidates
+              </Link>
+            </div>
           </Card>
         </div>
       </div>

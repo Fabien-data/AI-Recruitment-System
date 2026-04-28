@@ -118,6 +118,8 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN agent_state JSON"))
                 if "cv_sync_status" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN cv_sync_status VARCHAR(20)"))
+                if "age" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN age INTEGER"))
             else:
                 cols = {
                     row[0]
@@ -151,6 +153,8 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN agent_state JSONB DEFAULT '{}'::jsonb"))
                 if "cv_sync_status" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN cv_sync_status VARCHAR(20)"))
+                if "age" not in cols:
+                    conn.execute(text("ALTER TABLE candidates ADD COLUMN age INTEGER"))
     except Exception as schema_err:
         logger.warning(f"Schema self-heal skipped/failed: {schema_err}")
 

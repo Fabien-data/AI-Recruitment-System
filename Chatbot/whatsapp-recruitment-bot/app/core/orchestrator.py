@@ -63,6 +63,30 @@ class IntakeOrchestrator:
         collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
         asked_questions = state.get("asked_questions") if isinstance(state.get("asked_questions"), list) else []
 
+        # Build FAQ context when all core fields are captured (post-onboarding mode).
+        faq_context: Optional[str] = None
+        all_core_collected = (
+            collected.get("name")
+            and collected.get("job_role")
+            and (collected.get("countries") or collected.get("country"))
+            and collected.get("age") is not None
+            and collected.get("email")
+            and collected.get("experience_years") is not None
+            and state.get("cv_uploaded")
+        )
+        if all_core_collected:
+            try:
+                vacancies = vacancy_service.get_all_vacancies()
+                if vacancies:
+                    lines = []
+                    for v in vacancies[:20]:  # cap at 20 to stay within token budget
+                        title = v.get("job_title") or v.get("title") or "Unknown Role"
+                        country = v.get("country") or v.get("location") or ""
+                        lines.append(f"- {title} ({country})" if country else f"- {title}")
+                    faq_context = "\n".join(lines)
+            except Exception as _faq_exc:
+                logger.debug("FAQ vacancy fetch skipped: %s", _faq_exc)
+
         ai_decision = await run_ai_supervisor(
             user_text=message_text,
             history=history_items,
@@ -71,6 +95,8 @@ class IntakeOrchestrator:
             asked_questions=asked_questions,
             locked_language=locked_language,
             cv_just_uploaded=False,
+            faq_context=faq_context,
+            phone_number=phone_number,
         )
 
         # Merge extracted entities into collected_data and candidate model.
@@ -85,6 +111,21 @@ class IntakeOrchestrator:
                 collected["experience_years"] = years
             except Exception:
                 pass
+        if ai_decision.extracted_age is not None:
+            try:
+                age_val = int(ai_decision.extracted_age)
+                candidate.age = age_val
+                collected["age"] = age_val
+            except Exception:
+                pass
+        if ai_decision.extracted_email and not collected.get("email"):
+            candidate.email = ai_decision.extracted_email
+            collected["email"] = ai_decision.extracted_email
+        if ai_decision.extracted_countries:
+            collected["countries"] = ai_decision.extracted_countries
+            # Keep legacy single-country field as the first preference
+            if not collected.get("country") and ai_decision.extracted_countries:
+                collected["country"] = ai_decision.extracted_countries[0]
         if ai_decision.job_interest:
             collected["job_role"] = ai_decision.job_interest
         if ai_decision.country and not collected.get("country"):
@@ -119,6 +160,21 @@ class IntakeOrchestrator:
             except Exception as exc:
                 logger.warning("Recruitment sync failed during AI supervisor flow: %s", exc)
 
+        # Fire thank-you message exactly once when profile is complete.
+        if ai_decision.is_ready_to_sync and not state.get("thank_you_sent"):
+            state["thank_you_sent"] = True
+            self._save_agent_state(candidate, state)
+            db.commit()
+            from app.llm.prompt_templates import PromptTemplates  # local import to avoid circular
+            import random
+            templates = PromptTemplates.GREETINGS.get(locked_language, PromptTemplates.GREETINGS["en"])
+            closing_msgs = templates.get("application_complete", [])
+            if closing_msgs:
+                name_val = candidate.name or collected.get("name") or ""
+                return random.choice(closing_msgs).format(
+                    name=name_val, company_name="Dewan Consultants"
+                )
+
         self._save_agent_state(candidate, state)
         db.commit()
 
@@ -148,7 +204,30 @@ class IntakeOrchestrator:
             media_url=media_url,
         )
 
-        # --- 2. Merge extracted data into collected_data ---
+        # --- 1a. Reject images that are not CVs (selfies, unrelated photos) ---
+        if extracted.get("_not_cv_image"):
+            locked_language = state.get("locked_language") or "en"
+            _not_cv_msgs = {
+                "en": "That doesn't look like a CV or resume. Please upload a document or a clear photo of your CV.",
+                "si": "ඔබ යැවූ රූපය CV ලෙස හඳුනාගත නොහැකිය. කරුණාකර ඔබේ CV ලේඛනය හෝ පැහැදිලි ඡායාරූපයක් ඉදිරිපත් කරන්න.",
+                "ta": "நீங்கள் அனுப்பிய படம் CV அல்ல. உங்கள் CV ஆவணம் அல்லது தெளிவான படத்தை பதிவேற்றவும்.",
+                "singlish": "Oyage picture eka CV ekak wage nehe. Karuna karala oba CV document eka hodama upload karanna.",
+                "tanglish": "Neenga anupida picture CV mathiri theriyala. CV document-a sari-a upload pannunga.",
+            }
+            return _not_cv_msgs.get(locked_language, _not_cv_msgs["en"])
+
+        # --- 2. Gate on extraction confidence — ignore low-quality extractions ---
+        _CONFIDENCE_MIN = 0.55
+        extraction_confidence = extracted.pop("_extraction_confidence", 1.0) or 1.0
+        if extraction_confidence < _CONFIDENCE_MIN:
+            logger.warning(
+                "CV extraction confidence too low (%.2f) for %s — ignoring extracted fields",
+                extraction_confidence,
+                media_filename,
+            )
+            extracted = {}
+
+        # --- 3. Merge extracted data into collected_data ---
         # Trust CV for skills and experience_years (most authoritative source).
         # Keep chat-provided name and job_role (user's stated preference wins).
         state["cv_uploaded"] = True
@@ -156,6 +235,8 @@ class IntakeOrchestrator:
         collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
 
         for key, value in extracted.items():
+            if key.startswith("_"):
+                continue  # skip internal sentinel keys
             if value is not None:
                 # Only overwrite if not already set via prior chat conversation
                 if key not in collected or not collected[key]:
@@ -169,7 +250,7 @@ class IntakeOrchestrator:
 
         state["collected_data"] = collected
 
-        # --- 3. Update candidate model columns from CV ---
+        # --- 4. Update candidate model columns from CV ---
         if extracted.get("name") and not candidate.name:
             candidate.name = extracted["name"]
         if extracted.get("experience_years") is not None and candidate.experience_years is None:
@@ -215,6 +296,7 @@ class IntakeOrchestrator:
             asked_questions=asked_questions,
             locked_language=locked_language,
             cv_just_uploaded=True,
+            phone_number=phone_number,
         )
 
         # Track which field the AI is asking for next
@@ -234,6 +316,18 @@ class IntakeOrchestrator:
                 collected["experience_years"] = candidate.experience_years
             except Exception:
                 pass
+        if ai_decision.extracted_age is not None and not collected.get("age"):
+            try:
+                age_val = int(ai_decision.extracted_age)
+                candidate.age = age_val
+                collected["age"] = age_val
+            except Exception:
+                pass
+        if ai_decision.extracted_email and not collected.get("email"):
+            candidate.email = ai_decision.extracted_email
+            collected["email"] = ai_decision.extracted_email
+        if ai_decision.extracted_countries and not collected.get("countries"):
+            collected["countries"] = ai_decision.extracted_countries
         if ai_decision.country and not collected.get("country"):
             collected["country"] = ai_decision.country
 
@@ -246,6 +340,21 @@ class IntakeOrchestrator:
             await handoff_service.notify(candidate, reason="ai_intervention_needed")
             crud.update_candidate_state(db, candidate.id, "human_handoff")
             candidate.conversation_state = "human_handoff"
+
+        # Fire thank-you message exactly once when profile is complete.
+        if ai_decision.is_ready_to_sync and not state.get("thank_you_sent"):
+            state["thank_you_sent"] = True
+            self._save_agent_state(candidate, state)
+            db.commit()
+            from app.llm.prompt_templates import PromptTemplates  # local import to avoid circular
+            import random
+            templates = PromptTemplates.GREETINGS.get(locked_language, PromptTemplates.GREETINGS["en"])
+            closing_msgs = templates.get("application_complete", [])
+            if closing_msgs:
+                name_val = candidate.name or collected.get("name") or ""
+                return random.choice(closing_msgs).format(
+                    name=name_val, company_name="Dewan Consultants"
+                )
 
         self._save_agent_state(candidate, state)
         db.commit()
@@ -493,6 +602,16 @@ class IntakeOrchestrator:
                 state["asked_questions"] = []
             if "cv_synced" not in state:
                 state["cv_synced"] = False
+            # Fix 6: recover cv_uploaded from the DB-level resume_file_path column
+            # so the flag survives a state flush or agent_state column reset.
+            if not state.get("cv_uploaded") and getattr(candidate, "resume_file_path", None):
+                state["cv_uploaded"] = True
+        # Fix 7: if collected_data has no name (fresh or reset candidate) but asked_questions
+        # has stale entries from a prior partial session, clear them so the flow
+        # restarts from the beginning rather than jumping mid-sequence.
+        collected_check = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
+        if not collected_check.get("name") and state.get("asked_questions"):
+            state["asked_questions"] = []
         return state
 
     def _apply_language_lock(self, db: Session, candidate, state: Dict[str, Any], detected_language: str) -> None:

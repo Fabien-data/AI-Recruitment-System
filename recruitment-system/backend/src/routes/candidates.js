@@ -390,7 +390,7 @@ router.get('/duplicates', authenticate, async (req, res, next) => {
  * POST /api/candidates/merge
  * Merges merge_id into keep_id — migrates all data, soft-deletes the duplicate.
  */
-router.post('/merge', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.post('/merge', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { keep_id, merge_id } = req.body;
         if (!keep_id || !merge_id) {
@@ -404,6 +404,69 @@ router.post('/merge', authenticate, authorize('admin', 'supervisor'), async (req
         res.json(result);
     } catch (err) { next(err); }
 });
+
+// ── Photo upload ──────────────────────────────────────────────────────────────
+const multer = require('multer');
+const path = require('path');
+
+const photoUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            const uploadDir = process.env.UPLOAD_DIR
+                ? path.join(process.env.UPLOAD_DIR, 'photos')
+                : path.join(__dirname, '../../uploads/photos');
+            require('fs').mkdirSync(uploadDir, { recursive: true });
+            cb(null, uploadDir);
+        },
+        filename: (req, file, cb) => {
+            const ext = path.extname(file.originalname) || '.jpg';
+            cb(null, `candidate_${req.params.id}_${Date.now()}${ext}`);
+        },
+    }),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+    fileFilter: (req, file, cb) => {
+        if (!file.mimetype.startsWith('image/')) {
+            return cb(new Error('Only image files are allowed'));
+        }
+        cb(null, true);
+    },
+});
+
+/**
+ * POST /api/candidates/:id/photo
+ * Upload or replace the candidate's profile photo.
+ */
+router.post(
+    '/:id/photo',
+    authenticate,
+    authorize('admin', 'sourcing_department', 'project_handler'),
+    photoUpload.single('photo'),
+    async (req, res, next) => {
+        try {
+            const { id } = req.params;
+            if (!req.file) {
+                return res.status(400).json({ error: 'No photo file uploaded' });
+            }
+
+            const photoUrl = `/uploads/photos/${req.file.filename}`;
+            const placeholder = isMySQL ? '?' : '$1';
+            const idPlaceholder = isMySQL ? '?' : '$2';
+
+            const result = await query(
+                `UPDATE candidates SET photo_url = ${placeholder} WHERE id = ${idPlaceholder} RETURNING id, photo_url`,
+                [photoUrl, id]
+            );
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: 'Candidate not found' });
+            }
+
+            res.json({ photo_url: result.rows[0].photo_url });
+        } catch (error) {
+            next(error);
+        }
+    }
+);
 
 // ── Chatbot status notification helper ──────────────────────────────────────
 // Fires and forgets — does not block the API response.

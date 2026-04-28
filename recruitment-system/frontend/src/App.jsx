@@ -2,9 +2,11 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { Component } from 'react'
 import { useAuthStore } from './stores/authStore'
 import Layout from './components/Layout'
+import RoleGuard from './components/RoleGuard'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
+import AdminDashboard from './pages/AdminDashboard'
 import Candidates from './pages/Candidates'
 import CandidateDetail from './pages/CandidateDetail'
 import Jobs from './pages/Jobs'
@@ -18,6 +20,7 @@ import CVManager from './pages/CVManager'
 import Communications from './pages/Communications'
 import Interviews from './pages/Interviews'
 import Analytics from './pages/Analytics'
+import KnowledgeBase from './pages/KnowledgeBase'
 import './App.css'
 
 class ErrorBoundary extends Component {
@@ -85,6 +88,12 @@ function App() {
         <Route path="communications" element={<Communications />} />
         <Route path="interviews" element={<Interviews />} />
         <Route path="analytics" element={<Analytics />} />
+        <Route path="knowledge-base" element={<KnowledgeBase />} />
+        <Route path="admin" element={
+          <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
+            <AdminDashboard />
+          </RoleGuard>
+        } />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

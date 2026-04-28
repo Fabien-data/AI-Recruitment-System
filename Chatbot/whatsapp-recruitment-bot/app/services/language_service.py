@@ -14,16 +14,13 @@ class LanguageService:
         switch = detect_language_switch_request(user_text or "")
         if switch:
             return switch
-        detected, confidence = detect_language(user_text or "")
-        if not locked_language:
-            return detected or "en"
-
-        # Keep register stable unless we have a confident new signal.
-        # This avoids hard language-lock loops while still honoring user preference.
-        if detected and detected != locked_language and confidence >= 0.35:
-            return detected
-
-        return locked_language
+        # Once a language is locked (by a prior explicit switch request), keep it
+        # stable regardless of what detection thinks — single-word English answers
+        # like "Dubai" or "28" would otherwise flip the lock back to "en".
+        if locked_language:
+            return locked_language
+        detected, _ = detect_language(user_text or "")
+        return detected or "en"
 
 
 language_service = LanguageService()

@@ -23,6 +23,18 @@ CREATE TABLE candidates (
     last_contact_at TIMESTAMP,
     notes TEXT,
     tags TEXT[], -- Array of tags like ['urgent', 'excellent_english', 'height_borderline']
+    whatsapp_phone TEXT,
+    conversation_stage TEXT,
+    cv_uploaded BOOLEAN DEFAULT FALSE,
+    cv_status TEXT,
+    last_interaction TIMESTAMP,
+    is_human_handoff BOOLEAN DEFAULT FALSE,
+    handoff_at TIMESTAMP,
+    handoff_released_at TIMESTAMP,
+    ai_status TEXT,
+    requires_human BOOLEAN DEFAULT FALSE,
+    escalated_at TIMESTAMP,
+    escalation_reason TEXT,
     metadata JSONB DEFAULT '{}'::jsonb
 );
 
@@ -176,13 +188,19 @@ CREATE TABLE communications (
     read_at TIMESTAMP,
     responded_at TIMESTAMP,
     sent_by UUID, -- Reference to users table (for outbound)
+    sender_type TEXT,
+    sender_name TEXT,
+    chatbot_state TEXT,
+    detected_language TEXT,
     call_recording_url TEXT,
-    attachments TEXT[] -- Array of file URLs
+    attachments TEXT[], -- Array of file URLs
+    whatsapp_message_id TEXT
 );
 
 CREATE INDEX idx_communications_candidate ON communications(candidate_id);
 CREATE INDEX idx_communications_channel ON communications(channel);
 CREATE INDEX idx_communications_sent_at ON communications(sent_at DESC);
+CREATE INDEX idx_communications_whatsapp_message_id ON communications(whatsapp_message_id);
 
 -- ===============================================
 -- USERS TABLE (Recruiters/Handlers)

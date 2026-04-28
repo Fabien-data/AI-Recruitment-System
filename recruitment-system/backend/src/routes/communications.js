@@ -58,6 +58,11 @@ function validateMediaMime(file) {
     return ALLOWED_DOC_MIME_TYPES.has(file.mimetype);
 }
 
+function normalizeSortOrder(sortBy) {
+    if (String(sortBy || '').toLowerCase() === 'latest_asc') return 'ASC';
+    return 'DESC';
+}
+
 async function uploadCommunicationMedia(file, candidateId) {
     const safeName = sanitizeFileName(file.originalname);
     const objectName = `communications/${candidateId}/${Date.now()}_${safeName}`;
@@ -81,14 +86,15 @@ async function insertCommunicationMessage({
     attachmentsValue,
     metadataValue,
     callRecordingUrl,
+    whatsappMessageId,
 }) {
     try {
         await query(
             adaptQuery(`INSERT INTO communications
                 (id, candidate_id, channel, direction, message_type, content,
                  attachments, metadata, call_recording_url,
-                 sent_by, sender_type, sender_name)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`),
+                 sent_by, sender_type, sender_name, whatsapp_message_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`),
             [
                 id,
                 candidateId,
@@ -102,6 +108,7 @@ async function insertCommunicationMessage({
                 sentBy || null,
                 senderType || null,
                 senderName || null,
+                whatsappMessageId || null,
             ]
         );
     } catch (err) {
@@ -275,11 +282,25 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
             date_to,
             conversation_stage,
             response_status,
+            pipeline_stage,
+            handoff_state,
+            sort_by = 'latest_desc',
         } = req.query;
 
         const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 5000, 1), 5000);
         const params = [];
         const filters = [];
+        const pipelineStageExpr = `
+            CASE
+                WHEN COALESCE(ca.is_human_handoff, FALSE) = TRUE THEN 'human_takeover_active'
+                WHEN COALESCE(ca.requires_human, FALSE) = TRUE THEN 'pending_human_review'
+                WHEN LOWER(COALESCE(ca.cv_status, '')) = 'parsed' THEN 'cv_parsed'
+                WHEN COALESCE(ca.cv_uploaded, FALSE) = TRUE THEN 'cv_uploaded'
+                WHEN LOWER(COALESCE(la.application_status, '')) IN ('shortlisted', 'selected', 'hired', 'placed', 'rejected')
+                     OR LOWER(COALESCE(ca.status, '')) IN ('hired', 'rejected') THEN 'shortlisted_or_rejected'
+                ELSE 'bot_engaging'
+            END
+        `;
         const addParam = (value) => {
             params.push(value);
             return isMySQL ? '?' : `$${params.length}`;
@@ -299,6 +320,17 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
             filters.push(`ca.conversation_stage = ${stagePlaceholder}`);
         }
 
+        if (pipeline_stage) {
+            const pipelinePlaceholder = addParam(pipeline_stage);
+            filters.push(`${pipelineStageExpr} = ${pipelinePlaceholder}`);
+        }
+
+        if (handoff_state === 'human') {
+            filters.push(`ca.is_human_handoff = TRUE`);
+        } else if (handoff_state === 'bot') {
+            filters.push(`COALESCE(ca.is_human_handoff, FALSE) = FALSE`);
+        }
+
         if (date_from) {
             const fromPlaceholder = addParam(date_from);
             filters.push(`lm.sent_at >= ${fromPlaceholder}`);
@@ -313,9 +345,19 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
             filters.push(`lm.direction = 'outbound'`);
         } else if (response_status === 'awaiting_agent') {
             filters.push(`lm.direction = 'inbound'`);
+        } else if (response_status === 'unread') {
+            filters.push(`lm.direction = 'inbound'`);
+            filters.push(`(lm.read_at IS NULL)`);
+        } else if (response_status === 'replied') {
+            filters.push(`lm.direction = 'outbound'`);
+            filters.push(`(lm.read_at IS NOT NULL OR lm.delivered_at IS NOT NULL)`);
         }
 
+        // Show all conversation threads (ongoing + previous) by default.
+        filters.push(`lm.sent_at IS NOT NULL`);
+
         const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+        const latestOrder = normalizeSortOrder(sort_by);
 
         const sql = adaptQuery(`
             SELECT
@@ -323,6 +365,9 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 ca.name,
                 ca.phone,
                 ca.whatsapp_phone,
+                ca.email,
+                ca.preferred_language,
+                ca.notes,
                 ca.status        AS candidate_status,
                 ca.conversation_stage,
                 ca.cv_uploaded,
@@ -334,6 +379,8 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 ca.escalation_reason,
                 ca.is_human_handoff,
                 ca.agent_id,
+                COALESCE(la.application_status, '') AS latest_application_status,
+                COALESCE(la.job_title, '') AS latest_job_title,
                 u.full_name      AS agent_name,
                 lm.content       AS last_message,
                 lm.direction     AS last_direction,
@@ -341,7 +388,8 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 lm.detected_language AS last_language,
                 lm.chatbot_state AS last_chatbot_state,
                 lm.sent_at       AS last_message_at,
-                COALESCE(NULLIF(ca.name, ''), NULLIF(ca.whatsapp_phone, ''), ca.phone, 'Unknown') AS display_name,
+                COALESCE(NULLIF(ca.name, ''), NULLIF(ca.whatsapp_phone, ''), ca.phone) AS display_name,
+                ${pipelineStageExpr} AS pipeline_stage,
                 CASE
                     WHEN lm.direction = 'outbound' THEN 'awaiting_candidate'
                     ELSE 'awaiting_agent'
@@ -355,14 +403,26 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                     NULL AS sender_type,
                     NULL AS detected_language,
                     NULL AS chatbot_state,
+                    read_at,
+                    delivered_at,
                     sent_at
                 FROM communications
                 WHERE channel = 'whatsapp'
                 ORDER BY candidate_id, sent_at DESC
             ) lm ON lm.candidate_id = ca.id
+            LEFT JOIN (
+                SELECT DISTINCT ON (a.candidate_id)
+                    a.candidate_id,
+                    a.status AS application_status,
+                    j.title  AS job_title,
+                    COALESCE(a.updated_at, a.applied_at) AS last_application_at
+                FROM applications a
+                LEFT JOIN jobs j ON j.id = a.job_id
+                ORDER BY a.candidate_id, COALESCE(a.updated_at, a.applied_at) DESC
+            ) la ON la.candidate_id = ca.id
             LEFT JOIN users u ON u.id = ca.agent_id
             ${whereClause}
-            ORDER BY COALESCE(lm.sent_at, ca.created_at) DESC
+            ORDER BY COALESCE(lm.sent_at, ca.created_at) ${latestOrder}
             LIMIT ${safeLimit}
         `);
 
@@ -453,6 +513,155 @@ router.post('/escalate', authenticateChatbot, async (req, res, next) => {
 
         logger.info(`Chat escalated for candidate ${candidate.id} (${phone})`);
         return res.status(200).json({ success: true, message: 'Chat escalated to human agents.', candidate_id: candidate.id });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── POST /api/communications/status-sync ─────────────────────────────────────
+// Called by chatbot webhook worker to persist WhatsApp delivery/read updates.
+router.post('/status-sync', authenticateChatbot, async (req, res, next) => {
+    try {
+        const {
+            whatsapp_message_id,
+            status,
+            recipient_id,
+            timestamp,
+            metadata,
+        } = req.body || {};
+
+        if (!whatsapp_message_id || !status) {
+            return res.status(400).json({ error: 'whatsapp_message_id and status are required' });
+        }
+
+        const normalizedStatus = String(status).toLowerCase();
+        if (!['sent', 'delivered', 'read', 'failed'].includes(normalizedStatus)) {
+            return res.status(400).json({ error: 'status must be one of: sent, delivered, read, failed' });
+        }
+
+        const eventTime = timestamp ? new Date(Number(timestamp) * 1000) : new Date();
+        const isValidDate = !Number.isNaN(eventTime.getTime());
+        const finalEventTime = isValidDate ? eventTime : new Date();
+
+        const updateBits = [];
+        const updateParams = [];
+        const addParam = (value) => {
+            updateParams.push(value);
+            return isMySQL ? '?' : `$${updateParams.length}`;
+        };
+
+        if (normalizedStatus === 'sent') {
+            const sentAtPlaceholder = addParam(finalEventTime.toISOString());
+            updateBits.push(`sent_at = COALESCE(sent_at, ${sentAtPlaceholder})`);
+        }
+        if (normalizedStatus === 'delivered') {
+            const deliveredAtPlaceholder = addParam(finalEventTime.toISOString());
+            updateBits.push(`delivered_at = COALESCE(delivered_at, ${deliveredAtPlaceholder})`);
+        }
+        if (normalizedStatus === 'read') {
+            const readAtPlaceholder = addParam(finalEventTime.toISOString());
+            updateBits.push(`read_at = COALESCE(read_at, ${readAtPlaceholder})`);
+        }
+
+        const metadataPlaceholder = addParam(JSON.stringify({
+            latest_status: normalizedStatus,
+            status_recipient_id: recipient_id || null,
+            status_timestamp: finalEventTime.toISOString(),
+            ...(metadata && typeof metadata === 'object' ? metadata : {}),
+        }));
+        if (isMySQL) {
+            updateBits.push(`metadata = ${metadataPlaceholder}`);
+        } else {
+            updateBits.push(`metadata = COALESCE(metadata, '{}'::jsonb) || ${metadataPlaceholder}::jsonb`);
+        }
+
+        const messageIdPlaceholder = addParam(whatsapp_message_id);
+        const metadataMessageIdClause = isMySQL
+            ? `JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.whatsapp_message_id')) = ${messageIdPlaceholder}`
+            : `metadata->>'whatsapp_message_id' = ${messageIdPlaceholder}`;
+        const updateSql = adaptQuery(`
+            UPDATE communications
+            SET ${updateBits.join(', ')}
+            WHERE whatsapp_message_id = ${messageIdPlaceholder}
+               OR ${metadataMessageIdClause}
+        `);
+
+        const updateResult = await query(updateSql, updateParams);
+        const updatedRows = Number(updateResult.rowCount || 0);
+
+        return res.json({
+            success: true,
+            status: normalizedStatus,
+            whatsapp_message_id,
+            updated_rows: updatedRows,
+            matched: updatedRows > 0,
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── GET /api/communications/delivery-audit ──────────────────────────────────
+router.get('/delivery-audit', authenticate, async (req, res, next) => {
+    try {
+        const {
+            date_from,
+            date_to,
+            channel = 'whatsapp',
+        } = req.query;
+
+        const params = [];
+        const filters = ["direction = 'outbound'"];
+        const addParam = (value) => {
+            params.push(value);
+            return isMySQL ? '?' : `$${params.length}`;
+        };
+
+        if (channel) {
+            const channelPlaceholder = addParam(channel);
+            filters.push(`channel = ${channelPlaceholder}`);
+        }
+        if (date_from) {
+            const fromPlaceholder = addParam(date_from);
+            filters.push(`sent_at >= ${fromPlaceholder}`);
+        }
+        if (date_to) {
+            const toPlaceholder = addParam(date_to);
+            filters.push(`sent_at <= ${toPlaceholder}`);
+        }
+
+        const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+        const sql = adaptQuery(`
+            SELECT
+                COUNT(*) AS total_sent,
+                SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) AS delivered,
+                SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS read,
+                SUM(CASE WHEN message_type IN ('image', 'audio', 'video', 'document', 'voice') THEN 1 ELSE 0 END) AS media_sent,
+                SUM(CASE WHEN message_type IN ('image', 'audio', 'video', 'document', 'voice') AND delivered_at IS NOT NULL THEN 1 ELSE 0 END) AS media_delivered
+            FROM communications
+            ${whereClause}
+        `);
+
+        const result = await query(sql, params);
+        const row = result.rows[0] || {};
+        const total = Number(row.total_sent || 0);
+        const delivered = Number(row.delivered || 0);
+        const read = Number(row.read || 0);
+
+        return res.json({
+            channel,
+            date_from: date_from || null,
+            date_to: date_to || null,
+            totals: {
+                total_sent: total,
+                delivered,
+                read,
+                media_sent: Number(row.media_sent || 0),
+                media_delivered: Number(row.media_delivered || 0),
+                delivery_rate: total > 0 ? Number(((delivered / total) * 100).toFixed(2)) : 0,
+                read_rate: total > 0 ? Number(((read / total) * 100).toFixed(2)) : 0,
+            },
+        });
     } catch (error) {
         next(error);
     }
@@ -641,7 +850,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             if (!validateMediaMime(mediaFile)) {
                 return res.status(400).json({ error: `Unsupported media MIME type: ${mediaFile.mimetype}` });
             }
-            mediaUrl = await uploadCommunicationMedia(mediaFile, candidate_id);
+            mediaUrl = await uploadCommunicationMedia(mediaFile, resolvedCandidateId);
             finalMessageType = detectMediaType(mediaFile.mimetype, msgType);
         }
 
@@ -653,9 +862,9 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             }
             try {
                 if (mediaUrl) {
-                    await sendMediaMessage(phone, finalMessageType, mediaUrl, normalizedMessage);
+                    sendResult = await sendMediaMessage(phone, finalMessageType, mediaUrl, normalizedMessage);
                 } else {
-                    await sendTextMessage(phone, normalizedMessage);
+                    sendResult = await sendTextMessage(phone, normalizedMessage);
                 }
             } catch (err) {
                 const waError = err.response?.data?.error?.message || err.message;
@@ -697,8 +906,10 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
         const agentName = req.user?.name || req.user?.email || 'Agent';
         const messageText = normalizedMessage;
         const attachmentsValue = mediaUrl ? [mediaUrl] : [];
+        const waMessageId = sendResult?.messages?.[0]?.id || null;
         const metadataValue = JSON.stringify({
             source: 'agent_dashboard',
+            whatsapp_message_id: waMessageId,
             upload_mime_type: mediaFile?.mimetype || null,
             upload_original_name: mediaFile?.originalname || null,
             upload_size: mediaFile?.size || null,
@@ -716,6 +927,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             attachmentsValue,
             metadataValue,
             callRecordingUrl: finalMessageType === 'audio' ? mediaUrl : null,
+            whatsappMessageId: waMessageId,
         });
 
         // If a human agent responded, consider intervention resolved.
@@ -775,6 +987,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             candidate_id: resolvedCandidateId,
             simulated: sendResult.simulated || false,
             ...(sendResult.error && { delivery_error: sendResult.error }),
+            whatsapp_message_id: waMessageId,
         });
     } catch (error) {
         next(error);

@@ -28,6 +28,7 @@ import { clsx } from 'clsx'
 import { format, formatDistanceToNow } from 'date-fns'
 import { Button } from '../components/ui/Button'
 import { Skeleton } from '../components/ui/Skeleton'
+import { Modal } from '../components/ui/Modal'
 import { getCommunications, sendCommunication } from '../api'
 import { useAuthStore } from '../stores/authStore'
 
@@ -61,17 +62,43 @@ const STAGE_OPTIONS = [
   { value: 'completed', label: 'Completed' },
 ]
 
+const PIPELINE_OPTIONS = [
+  { value: '', label: 'All pipeline' },
+  { value: 'bot_engaging', label: 'Bot Engaging' },
+  { value: 'cv_uploaded', label: 'CV Uploaded' },
+  { value: 'cv_parsed', label: 'CV Parsed' },
+  { value: 'pending_human_review', label: 'Pending Human Review' },
+  { value: 'human_takeover_active', label: 'Human Takeover Active' },
+  { value: 'shortlisted_or_rejected', label: 'Shortlisted / Rejected' },
+]
+
+const HANDOFF_OPTIONS = [
+  { value: '', label: 'All owners' },
+  { value: 'bot', label: 'Bot Controlled' },
+  { value: 'human', label: 'Human Controlled' },
+]
+
+const SORT_OPTIONS = [
+  { value: 'latest_desc', label: 'Latest first' },
+  { value: 'latest_asc', label: 'Oldest first' },
+]
+
 const RESPONSE_OPTIONS = [
   { value: '', label: 'All responses' },
   { value: 'awaiting_candidate', label: 'Awaiting Candidate' },
   { value: 'awaiting_agent', label: 'Awaiting Agent' },
+  { value: 'unread', label: 'Unread' },
+  { value: 'replied', label: 'Replied' },
 ]
 
-const getActiveChats = ({ search, conversationStage, responseStatus, dateFrom, dateTo }) => {
+const getActiveChats = ({ search, conversationStage, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo }) => {
   const params = new URLSearchParams()
   params.set('limit', '5000')
   if (search) params.set('search', search)
   if (conversationStage) params.set('conversation_stage', conversationStage)
+  if (pipelineStage) params.set('pipeline_stage', pipelineStage)
+  if (handoffState) params.set('handoff_state', handoffState)
+  if (sortBy) params.set('sort_by', sortBy)
   if (responseStatus) params.set('response_status', responseStatus)
   if (dateFrom) params.set('date_from', dateFrom)
   if (dateTo) params.set('date_to', dateTo)
@@ -249,14 +276,17 @@ export default function Communications() {
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState(searchParams.get('q') || '')
   const [conversationStage, setConversationStage] = useState(searchParams.get('conversation_stage') || '')
+  const [pipelineStage, setPipelineStage] = useState(searchParams.get('pipeline_stage') || '')
+  const [handoffState, setHandoffState] = useState(searchParams.get('handoff_state') || '')
+  const [sortBy, setSortBy] = useState(searchParams.get('sort_by') || 'latest_desc')
   const [responseStatus, setResponseStatus] = useState(searchParams.get('response_status') || '')
   const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '')
   const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '')
   const [transcriptResponseStatus, setTranscriptResponseStatus] = useState('')
   const [transcriptDateFrom, setTranscriptDateFrom] = useState('')
   const [transcriptDateTo, setTranscriptDateTo] = useState('')
-  const [isEditingIdentity, setIsEditingIdentity] = useState(false)
-  const [identityNameDraft, setIdentityNameDraft] = useState('')
+  const [showEditContactModal, setShowEditContactModal] = useState(false)
+  const [editContactDraft, setEditContactDraft] = useState({ name: '', email: '', preferred_language: 'en', notes: '' })
   const [identityError, setIdentityError] = useState(null)
   const [chatList, setChatList] = useState([])
   const [escalatedChats, setEscalatedChats] = useState(() => new Set())
@@ -280,6 +310,29 @@ export default function Communications() {
     return String(candidate.display_name || candidate.name || candidate.whatsapp_phone || candidate.phone || 'Unknown')
   }, [])
 
+  const getPipelineStageLabel = useCallback((stage) => {
+    const value = String(stage || '').toLowerCase()
+    const map = {
+      bot_engaging: 'Bot Engaging',
+      cv_uploaded: 'CV Uploaded',
+      cv_parsed: 'CV Parsed',
+      pending_human_review: 'Pending Human Review',
+      human_takeover_active: 'Human Takeover Active',
+      shortlisted_or_rejected: 'Shortlisted / Rejected',
+    }
+    return map[value] || 'Bot Engaging'
+  }, [])
+
+  const getPipelineStageClasses = useCallback((stage) => {
+    const value = String(stage || '').toLowerCase()
+    if (value === 'human_takeover_active') return 'bg-indigo-100 text-indigo-700'
+    if (value === 'pending_human_review') return 'bg-amber-100 text-amber-700'
+    if (value === 'cv_uploaded') return 'bg-cyan-100 text-cyan-700'
+    if (value === 'cv_parsed') return 'bg-emerald-100 text-emerald-700'
+    if (value === 'shortlisted_or_rejected') return 'bg-violet-100 text-violet-700'
+    return 'bg-slate-100 text-slate-700'
+  }, [])
+
   const getCandidateInitial = useCallback((candidate) => {
     const displayName = getCandidateDisplayName(candidate)
     return displayName.charAt(0).toUpperCase() || '?'
@@ -290,13 +343,18 @@ export default function Communications() {
 
   useEffect(() => {
     if (!selectedCandidate) {
-      setIdentityNameDraft('')
-      setIsEditingIdentity(false)
+      setEditContactDraft({ name: '', email: '', preferred_language: 'en', notes: '' })
+      setShowEditContactModal(false)
       return
     }
-    setIdentityNameDraft(getCandidateDisplayName(selectedCandidate))
+    setEditContactDraft({
+      name: getCandidateDisplayName(selectedCandidate),
+      email: selectedCandidate.email || '',
+      preferred_language: selectedCandidate.preferred_language || 'en',
+      notes: selectedCandidate.notes || '',
+    })
     setIdentityError(null)
-    setIsEditingIdentity(false)
+    setShowEditContactModal(false)
   }, [selectedCandidate, getCandidateDisplayName])
 
   useEffect(() => {
@@ -316,10 +374,13 @@ export default function Communications() {
 
   // ── Fetch active chat list ─────────────────────────────────────────────────
   const { data: activeChatsData, isLoading: listLoading } = useQuery({
-    queryKey: ['active-chats', search, conversationStage, responseStatus, dateFrom, dateTo],
+    queryKey: ['active-chats', search, conversationStage, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo],
     queryFn: () => getActiveChats({
       search,
       conversationStage,
+      pipelineStage,
+      handoffState,
+      sortBy,
       responseStatus,
       dateFrom,
       dateTo,
@@ -499,14 +560,21 @@ export default function Communications() {
   })
 
   const identityMut = useMutation({
-    mutationFn: ({ candidateId, name }) => updateCandidateIdentity(candidateId, { name }),
+    mutationFn: ({ candidateId, payload }) => updateCandidateIdentity(candidateId, payload),
     onSuccess: (_, vars) => {
       setChatList(prev => prev.map(c => (
         c.candidate_id === vars.candidateId
-          ? { ...c, name: vars.name, display_name: vars.name }
+          ? {
+            ...c,
+            name: vars.payload.name,
+            email: vars.payload.email,
+            preferred_language: vars.payload.preferred_language,
+            notes: vars.payload.notes,
+            display_name: vars.payload.name || c.whatsapp_phone || c.phone,
+          }
           : c
       )))
-      setIsEditingIdentity(false)
+      setShowEditContactModal(false)
       setIdentityError(null)
       queryClient.invalidateQueries(['active-chats'])
     },
@@ -677,12 +745,30 @@ export default function Communications() {
               ))}
             </select>
             <select
+              value={pipelineStage}
+              onChange={(e) => setPipelineStage(e.target.value)}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            >
+              {PIPELINE_OPTIONS.map((option) => (
+                <option key={`pipeline-${option.value || 'all'}`} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <select
               value={responseStatus}
               onChange={(e) => setResponseStatus(e.target.value)}
               className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             >
               {RESPONSE_OPTIONS.map((option) => (
                 <option key={option.value || 'all'} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <select
+              value={handoffState}
+              onChange={(e) => setHandoffState(e.target.value)}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            >
+              {HANDOFF_OPTIONS.map((option) => (
+                <option key={`handoff-${option.value || 'all'}`} value={option.value}>{option.label}</option>
               ))}
             </select>
             <input
@@ -697,12 +783,24 @@ export default function Communications() {
               onChange={(e) => setDateTo(e.target.value)}
               className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="col-span-2 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={`sort-${option.value}`} value={option.value}>{option.label}</option>
+              ))}
+            </select>
           </div>
           <div className="mt-2 flex justify-end">
             <button
               type="button"
               onClick={() => {
                 setConversationStage('')
+                setPipelineStage('')
+                setHandoffState('')
+                setSortBy('latest_desc')
                 setResponseStatus('')
                 setDateFrom('')
                 setDateTo('')
@@ -802,6 +900,9 @@ export default function Communications() {
                           AI Hold
                         </span>
                       )}
+                      <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(c.pipeline_stage))}>
+                        {getPipelineStageLabel(c.pipeline_stage)}
+                      </span>
                       {c.last_language && <LangBadge lang={c.last_language} />}
                     </div>
                   </div>
@@ -824,6 +925,11 @@ export default function Communications() {
                 </div>
                 <div>
                   <h2 className="font-semibold text-slate-900 text-sm">{getCandidateDisplayName(selectedCandidate)}</h2>
+                  <div className="mt-1">
+                    <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(selectedCandidate?.pipeline_stage))}>
+                      {getPipelineStageLabel(selectedCandidate?.pipeline_stage)}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-2 text-xs text-slate-500">
                     <span className="flex items-center gap-1"><Phone size={11} /> {selectedCandidate?.phone || selectedCandidate?.whatsapp_phone}</span>
                     {selectedCandidate?.last_chatbot_state && (
@@ -1056,63 +1162,23 @@ export default function Communications() {
               <div className="w-14 h-14 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-xl font-bold mb-2">
                 {getCandidateInitial(selectedCandidate)}
               </div>
-              {isEditingIdentity ? (
-                <div className="w-full">
-                  <input
-                    value={identityNameDraft}
-                    onChange={(e) => setIdentityNameDraft(e.target.value)}
-                    placeholder="Candidate name"
-                    className="w-full px-2 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-                  />
-                  <div className="mt-2 flex items-center justify-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const trimmed = identityNameDraft.trim()
-                        if (!trimmed) {
-                          setIdentityError('Name is required.')
-                          return
-                        }
-                        setIdentityError(null)
-                        identityMut.mutate({ candidateId: selectedCandidate.candidate_id, name: trimmed })
-                      }}
-                      disabled={identityMut.isPending}
-                      className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
-                    >
-                      {identityMut.isPending ? 'Saving...' : 'Save'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIdentityNameDraft(getCandidateDisplayName(selectedCandidate))
-                        setIdentityError(null)
-                        setIsEditingIdentity(false)
-                      }}
-                      className="text-[11px] px-2 py-1 rounded border border-slate-300 text-slate-600 hover:bg-slate-50"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  {identityError && (
-                    <p className="mt-1 text-[11px] text-red-500">{identityError}</p>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <p className="font-semibold text-slate-900">{getCandidateDisplayName(selectedCandidate)}</p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIdentityNameDraft(getCandidateDisplayName(selectedCandidate))
-                      setIdentityError(null)
-                      setIsEditingIdentity(true)
-                    }}
-                    className="mt-1 text-[11px] text-indigo-600 hover:text-indigo-700"
-                  >
-                    Edit identity
-                  </button>
-                </>
-              )}
+              <p className="font-semibold text-slate-900">{getCandidateDisplayName(selectedCandidate)}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditContactDraft({
+                    name: getCandidateDisplayName(selectedCandidate),
+                    email: selectedCandidate.email || '',
+                    preferred_language: selectedCandidate.preferred_language || 'en',
+                    notes: selectedCandidate.notes || '',
+                  })
+                  setIdentityError(null)
+                  setShowEditContactModal(true)
+                }}
+                className="mt-1 text-[11px] text-indigo-600 hover:text-indigo-700"
+              >
+                Edit contact
+              </button>
               <p className="text-xs text-slate-500">{selectedCandidate.phone || selectedCandidate.whatsapp_phone}</p>
             </div>
           </div>
@@ -1151,6 +1217,13 @@ export default function Communications() {
               </div>
             )}
 
+            <div className="flex items-center gap-2 text-slate-600">
+              <div className="w-3 h-3 rounded-full bg-slate-200 shrink-0" />
+              <span className={clsx('text-[11px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(selectedCandidate.pipeline_stage))}>
+                {getPipelineStageLabel(selectedCandidate.pipeline_stage)}
+              </span>
+            </div>
+
             {/* Last activity */}
             {selectedCandidate.last_message_at && (
               <div className="flex items-center gap-2 text-slate-600">
@@ -1183,6 +1256,102 @@ export default function Communications() {
           </div>
         </div>
       )}
+
+      <Modal
+        open={showEditContactModal && Boolean(selectedCandidate)}
+        onClose={() => {
+          setShowEditContactModal(false)
+          setIdentityError(null)
+        }}
+        title="Edit Contact"
+        size="sm"
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!selectedCandidate) return
+            const trimmedName = editContactDraft.name.trim()
+            if (!trimmedName) {
+              setIdentityError('Name is required.')
+              return
+            }
+
+            setIdentityError(null)
+            identityMut.mutate({
+              candidateId: selectedCandidate.candidate_id,
+              payload: {
+                name: trimmedName,
+                email: editContactDraft.email.trim() || null,
+                preferred_language: editContactDraft.preferred_language,
+                notes: editContactDraft.notes.trim() || null,
+              },
+            })
+          }}
+          className="space-y-3"
+        >
+          <div>
+            <label className="block text-xs text-slate-600 mb-1">Name</label>
+            <input
+              value={editContactDraft.name}
+              onChange={(e) => setEditContactDraft(prev => ({ ...prev, name: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              placeholder="Candidate name"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-600 mb-1">Email</label>
+            <input
+              value={editContactDraft.email}
+              onChange={(e) => setEditContactDraft(prev => ({ ...prev, email: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              placeholder="Email address"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-600 mb-1">Preferred language</label>
+            <select
+              value={editContactDraft.preferred_language}
+              onChange={(e) => setEditContactDraft(prev => ({ ...prev, preferred_language: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            >
+              <option value="en">English</option>
+              <option value="si">Sinhala</option>
+              <option value="ta">Tamil</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-600 mb-1">Notes</label>
+            <textarea
+              value={editContactDraft.notes}
+              onChange={(e) => setEditContactDraft(prev => ({ ...prev, notes: e.target.value }))}
+              rows={3}
+              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              placeholder="Add recruiter notes"
+            />
+          </div>
+
+          {identityError && <p className="text-xs text-red-500">{identityError}</p>}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setShowEditContactModal(false)
+                setIdentityError(null)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={identityMut.isPending}>
+              {identityMut.isPending ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   )
 }

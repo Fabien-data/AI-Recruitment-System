@@ -21,7 +21,7 @@ router.get('/status', authenticate, async (req, res, next) => {
  * GET /api/gmail/auth
  * Start OAuth2 flow - returns auth URL
  */
-router.get('/auth', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.get('/auth', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const authUrl = gmailService.getAuthUrl();
         res.json({ 
@@ -71,7 +71,7 @@ router.get('/oauth/callback', async (req, res, next) => {
  * POST /api/gmail/disconnect
  * Disconnect Gmail account
  */
-router.post('/disconnect', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.post('/disconnect', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         await gmailService.disconnect();
         res.json({ success: true, message: 'Gmail disconnected successfully' });
@@ -119,7 +119,7 @@ router.get('/emails', authenticate, async (req, res, next) => {
  * POST /api/gmail/process
  * Manually trigger email processing
  */
-router.post('/process', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.post('/process', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         // Import the email processor
         const { processNewEmails } = require('../jobs/emailProcessor');

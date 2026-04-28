@@ -1,11 +1,13 @@
 ﻿import { useParams, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { getCandidate } from '../api'
-import { ArrowLeft, User, Mail, Phone, FileText, Briefcase, MessageSquare, ClipboardList, CheckSquare, Square, Download } from 'lucide-react'
+import { useRef } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { getCandidate, uploadCandidatePhoto } from '../api'
+import { ArrowLeft, User, Mail, Phone, FileText, Briefcase, MessageSquare, ClipboardList, CheckSquare, Square, Download, Camera } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
+import { useRole } from '../stores/authStore'
 import { format } from 'date-fns'
 
 function getDocumentCategory(cv) {
@@ -27,11 +29,28 @@ function resolveDocumentUrl(cv) {
 
 export default function CandidateDetail() {
   const { id } = useParams()
+  const qc = useQueryClient()
+  const { canEdit } = useRole()
+  const photoInputRef = useRef(null)
+
   const { data: candidate, isLoading, error } = useQuery({
     queryKey: ['candidate', id],
     queryFn: () => getCandidate(id),
     enabled: !!id,
   })
+
+  const photoMutation = useMutation({
+    mutationFn: (formData) => uploadCandidatePhoto(id, formData),
+    onSuccess: () => qc.invalidateQueries(['candidate', id]),
+  })
+
+  function handlePhotoChange(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const fd = new FormData()
+    fd.append('photo', file)
+    photoMutation.mutate(fd)
+  }
 
   if (isLoading) {
     return (
@@ -77,21 +96,59 @@ export default function CandidateDetail() {
         <ArrowLeft size={20} aria-hidden /> Back to Candidates
       </Link>
 
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">{candidate.name || 'Unknown'}</h1>
-          <div className="flex flex-wrap items-center gap-4 mt-2 text-gray-600">
-            <span className="inline-flex items-center gap-1">
-              <Phone size={18} aria-hidden /> {candidate.phone}
-            </span>
-            {candidate.email && (
-              <span className="inline-flex items-center gap-1">
-                <Mail size={18} aria-hidden /> {candidate.email}
-              </span>
+      <div className="flex flex-col sm:flex-row sm:items-start gap-6 mb-8">
+        {/* Photo */}
+        <div className="relative flex-shrink-0">
+          <div className="w-24 h-24 rounded-3xl overflow-hidden bg-zinc-100 border border-zinc-200 shadow-sm flex items-center justify-center">
+            {candidate.photo_url ? (
+              <img
+                src={`${import.meta.env.VITE_API_URL || ''}${candidate.photo_url}`}
+                alt={candidate.name}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <User size={36} className="text-zinc-300" />
             )}
           </div>
+          {canEdit && (
+            <>
+              <button
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={photoMutation.isPending}
+                className="absolute -bottom-2 -right-2 w-8 h-8 bg-zinc-900 text-white rounded-full flex items-center justify-center shadow-md hover:bg-zinc-700 transition-colors disabled:opacity-50"
+                title="Upload photo"
+              >
+                <Camera size={14} />
+              </button>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoChange}
+              />
+            </>
+          )}
         </div>
-        <Badge status={candidate.status} className="text-sm" />
+
+        {/* Name + status */}
+        <div className="flex-1 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">{candidate.name || 'Unknown'}</h1>
+            <div className="flex flex-wrap items-center gap-4 mt-2 text-gray-600">
+              <span className="inline-flex items-center gap-1">
+                <Phone size={18} aria-hidden /> {candidate.phone}
+              </span>
+              {candidate.email && (
+                <span className="inline-flex items-center gap-1">
+                  <Mail size={18} aria-hidden /> {candidate.email}
+                </span>
+              )}
+            </div>
+          </div>
+          <Badge status={candidate.status} className="text-sm" />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -266,7 +266,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 /**
  * Create new project
  */
-router.post('/', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.post('/', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const {
             title,
@@ -360,7 +360,7 @@ router.post('/', authenticate, authorize('admin', 'supervisor'), async (req, res
 /**
  * Update project
  */
-router.put('/:id', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = { ...req.body };
@@ -579,7 +579,7 @@ router.get('/:id/candidates', authenticate, async (req, res, next) => {
 /**
  * Assign team members to project
  */
-router.post('/:id/assign-team', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.post('/:id/assign-team', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { user_id, role } = req.body;
@@ -639,7 +639,7 @@ router.post('/:id/assign-team', authenticate, authorize('admin', 'supervisor'), 
 /**
  * Remove team member from project
  */
-router.delete('/:id/team/:userId', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.delete('/:id/team/:userId', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id, userId } = req.params;
 
@@ -772,7 +772,7 @@ router.get('/:id/jobs', authenticate, async (req, res, next) => {
 /**
  * Create a new job for a specific project
  */
-router.post('/:id/jobs', authenticate, authorize('admin', 'supervisor'), async (req, res, next) => {
+router.post('/:id/jobs', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const { id: project_id } = req.params;
         const {

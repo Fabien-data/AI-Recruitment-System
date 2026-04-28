@@ -3,6 +3,19 @@ const { pool } = require('../config/database');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
+// Canonical role names
+const ROLES = {
+    ADMIN: 'admin',
+    PROJECT_HANDLER: 'project_handler',
+    SOURCING_DEPARTMENT: 'sourcing_department',
+};
+
+// Backwards-compat alias map (old DB values → new values)
+const ROLE_ALIAS = {
+    recruiter: ROLES.PROJECT_HANDLER,
+    supervisor: ROLES.SOURCING_DEPARTMENT,
+};
+
 /**
  * Authentication middleware
  */
@@ -26,7 +39,10 @@ async function authenticate(req, res, next) {
             return res.status(401).json({ error: 'Invalid token' });
         }
 
-        req.user = result.rows[0];
+        const u = result.rows[0];
+        // Normalise legacy role values so old rows still work
+        u.role = ROLE_ALIAS[u.role] || u.role;
+        req.user = u;
         next();
     } catch (error) {
         if (error.name === 'JsonWebTokenError') {
@@ -67,5 +83,6 @@ module.exports = {
     authenticate,
     authorize,
     generateToken,
-    JWT_SECRET
+    JWT_SECRET,
+    ROLES,
 };

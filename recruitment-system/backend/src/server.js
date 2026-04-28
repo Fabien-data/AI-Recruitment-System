@@ -16,6 +16,7 @@ const applicationsRouter = require('./routes/applications');
 const communicationsRouter = require('./routes/communications');
 const webhooksRouter = require('./routes/webhooks');
 const authRouter = require('./routes/auth');
+const adminRouter = require('./routes/admin');
 const gmailRouter = require('./routes/gmail');
 const mockDataRouter = require('./routes/mock-data');
 const autoAssignRouter = require('./routes/auto-assign');
@@ -145,6 +146,7 @@ app.use(auditMiddleware);
 
 // API Routes
 app.use('/api/auth', authRouter);
+app.use('/api/admin', adminRouter);
 app.use('/api/candidates', candidatesRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/projects', projectsRouter); // Projects management

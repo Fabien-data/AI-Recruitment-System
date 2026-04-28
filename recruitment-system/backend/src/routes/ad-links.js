@@ -49,7 +49,7 @@ function buildMetaAdUrl(phoneNumber, adRef) {
 router.post(
     '/generate',
     authenticate,
-    authorize('admin', 'supervisor'),
+    authorize('admin', 'sourcing_department'),
     async (req, res) => {
         const { job_id, project_id, campaign_name } = req.body;
 
@@ -273,7 +273,7 @@ router.get('/:ad_ref', authenticate, async (req, res) => {
 router.patch(
     '/:ad_ref/toggle',
     authenticate,
-    authorize('admin', 'supervisor'),
+    authorize('admin', 'sourcing_department'),
     async (req, res) => {
         const { ad_ref } = req.params;
 

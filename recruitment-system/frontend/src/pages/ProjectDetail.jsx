@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getProject, getProjectJobs, getProjectCandidates, getProjectStats } from '../api'
 import { 
   ArrowLeft, FolderKanban, MapPin, Calendar, Users, Briefcase, 
-  DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus
+  DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
@@ -13,6 +13,72 @@ import { Button } from '../components/ui/Button'
 import { CreateJobModal } from '../components/CreateJobModal'
 import { format } from 'date-fns'
 import { useAuthStore } from '../stores/authStore'
+
+function ProjectCandidateList({ projectId, jobFilter }) {
+  const params = jobFilter ? { job_id: jobFilter, limit: 8 } : { limit: 8 }
+  const { data, isLoading } = useQuery({
+    queryKey: ['project-candidates', projectId, jobFilter],
+    queryFn: () => getProjectCandidates(projectId, params),
+    enabled: !!projectId,
+  })
+
+  const candidates = Array.isArray(data) ? data : (data?.candidates || data?.data || [])
+  const groupedCandidates = candidates.reduce((acc, candidate) => {
+    const jobTitle = candidate.job_title || 'Unassigned Job'
+    if (!acc[jobTitle]) acc[jobTitle] = []
+    acc[jobTitle].push(candidate)
+    return acc
+  }, {})
+  const groupedEntries = Object.entries(groupedCandidates)
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        {[...Array(3)].map((_, i) => (
+          <Skeleton key={i} className="h-12 w-full rounded-lg" />
+        ))}
+      </div>
+    )
+  }
+
+  if (!candidates.length) {
+    return <p className="text-center text-gray-500 py-6 text-sm">No candidates assigned yet</p>
+  }
+
+  return (
+    <div className="space-y-4">
+      {groupedEntries.map(([jobTitle, jobCandidates]) => (
+        <div key={jobTitle}>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">{jobTitle}</h3>
+          <div className="space-y-2">
+            {jobCandidates.map((c) => (
+              <Link
+                key={`${jobTitle}-${c.id || c.candidate_id}`}
+                to={`/candidates/${c.id || c.candidate_id}`}
+                className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 transition-colors group"
+              >
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 overflow-hidden">
+                  {c.photo_url
+                    ? <img src={`${import.meta.env.VITE_API_URL || ''}${c.photo_url}`} alt={c.name} className="w-full h-full object-cover" />
+                    : (c.name?.charAt(0)?.toUpperCase() || <User size={14} />)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate group-hover:text-primary-600">{c.name}</p>
+                  <p className="text-xs text-gray-500 truncate">{c.application_status || c.status || 'applied'}</p>
+                </div>
+                {c.match_score != null && (
+                  <span className="text-xs font-semibold text-primary-600 flex-shrink-0">
+                    {c.match_score}%
+                  </span>
+                )}
+              </Link>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export default function ProjectDetail() {
   const { id } = useParams()
@@ -228,7 +294,7 @@ export default function ProjectDetail() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Jobs in Project</h2>
               <div className="flex gap-2">
-                {(user?.role === 'admin' || user?.role === 'supervisor') && (
+                {(user?.role === 'admin' || user?.role === 'sourcing_department') && (
                   <Button
                     variant="primary"
                     size="sm"
@@ -273,7 +339,7 @@ export default function ProjectDetail() {
             ) : (
               <div className="text-center py-8">
                 <p className="text-gray-500 mb-3">No jobs linked to this project yet</p>
-                {(user?.role === 'admin' || user?.role === 'supervisor') && (
+                {(user?.role === 'admin' || user?.role === 'sourcing_department') && (
                   <Button
                     variant="primary"
                     size="sm"
@@ -292,50 +358,52 @@ export default function ProjectDetail() {
           <Card>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Candidates</h2>
-              {project.jobs && project.jobs.length > 1 && (
-                <select
-                  value={candidatesJobFilter}
-                  onChange={(e) => setCandidatesJobFilter(e.target.value)}
-                  className="text-sm border-gray-300 rounded-lg"
-                >
-                  <option value="">All Jobs</option>
-                  {project.jobs.map((job) => (
-                    <option key={job.id} value={job.id}>{job.title}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-            
-            {stats.unique_candidates > 0 ? (
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="p-3 bg-blue-50 rounded-lg">
-                    <p className="text-xs text-blue-600 mb-1">Total</p>
-                    <p className="text-xl font-bold text-blue-900">{stats.total_applications || 0}</p>
-                  </div>
-                  <div className="p-3 bg-yellow-50 rounded-lg">
-                    <p className="text-xs text-yellow-600 mb-1">Screening</p>
-                    <p className="text-xl font-bold text-yellow-900">{stats.screening_count || 0}</p>
-                  </div>
-                  <div className="p-3 bg-purple-50 rounded-lg">
-                    <p className="text-xs text-purple-600 mb-1">Interview</p>
-                    <p className="text-xl font-bold text-purple-900">{stats.interview_count || 0}</p>
-                  </div>
-                  <div className="p-3 bg-green-50 rounded-lg">
-                    <p className="text-xs text-green-600 mb-1">Selected</p>
-                    <p className="text-xl font-bold text-green-900">{stats.selected_count || 0}</p>
-                  </div>
-                </div>
+              <div className="flex items-center gap-3">
+                {project.jobs && project.jobs.length > 1 && (
+                  <select
+                    value={candidatesJobFilter}
+                    onChange={(e) => setCandidatesJobFilter(e.target.value)}
+                    className="text-sm border border-gray-300 rounded-lg px-2 py-1"
+                  >
+                    <option value="">All Jobs</option>
+                    {project.jobs.map((job) => (
+                      <option key={job.id} value={job.id}>{job.title}</option>
+                    ))}
+                  </select>
+                )}
                 <Link
                   to={`/applications?project_id=${id}`}
-                  className="block text-center text-primary-600 hover:text-primary-700 font-medium text-sm py-2"
+                  className="text-sm text-primary-600 hover:text-primary-700 font-medium"
                 >
-                  View All Candidates →
+                  View All →
                 </Link>
               </div>
-            ) : (
-              <p className="text-center text-gray-500 py-8">No candidates assigned yet</p>
+            </div>
+
+            {/* Pipeline stats */}
+            {stats.total_applications > 0 && (
+              <div className="grid grid-cols-4 gap-2 mb-4">
+                <div className="p-2 bg-blue-50 rounded-lg text-center">
+                  <p className="text-xs text-blue-600">Total</p>
+                  <p className="text-lg font-bold text-blue-900">{stats.total_applications}</p>
+                </div>
+                <div className="p-2 bg-yellow-50 rounded-lg text-center">
+                  <p className="text-xs text-yellow-600">Screening</p>
+                  <p className="text-lg font-bold text-yellow-900">{stats.screening_count || 0}</p>
+                </div>
+                <div className="p-2 bg-purple-50 rounded-lg text-center">
+                  <p className="text-xs text-purple-600">Interview</p>
+                  <p className="text-lg font-bold text-purple-900">{stats.interview_count || 0}</p>
+                </div>
+                <div className="p-2 bg-green-50 rounded-lg text-center">
+                  <p className="text-xs text-green-600">Selected</p>
+                  <p className="text-lg font-bold text-green-900">{stats.selected_count || 0}</p>
+                </div>
+              </div>
             )}
+
+            {/* Candidate cards */}
+            <ProjectCandidateList projectId={id} jobFilter={candidatesJobFilter} />
           </Card>
         </div>
 
