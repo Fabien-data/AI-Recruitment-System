@@ -3,11 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { useDropzone } from 'react-dropzone'
 import { getJobs, magicCreateJob, refreshJobKnowledgeBase } from '../api'
-import { Briefcase, FolderKanban, Sparkles, UploadCloud, RefreshCw, Loader2 } from 'lucide-react'
+import { Briefcase, FolderKanban, Plus, Sparkles, UploadCloud, RefreshCw, Loader2 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { Card } from '../components/ui/Card'
+import { CreateJobModal } from '../components/CreateJobModal'
 import toast from 'react-hot-toast'
 
 const MAX_FLYERS_PER_BATCH = 20
@@ -16,6 +17,7 @@ export default function Jobs() {
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState('active')
   const [categoryFilter, setCategoryFilter] = useState('')
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [uploadState, setUploadState] = useState({
     isProcessing: false,
     filenames: [],
@@ -127,6 +129,10 @@ export default function Jobs() {
           >
             {refreshMutation.isPending ? <Loader2 size={16} /> : <RefreshCw size={16} />}
             Refresh Knowledge Base
+          </Button>
+          <Button variant="secondary" onClick={() => setIsCreateModalOpen(true)}>
+            <Plus size={16} />
+            Create Job Manually
           </Button>
           <Button variant="primary" onClick={open}>
             <Sparkles size={16} />
@@ -299,6 +305,12 @@ export default function Jobs() {
             <Briefcase className="mx-auto h-12 w-12 text-gray-300 mb-2" aria-hidden />
             <p className="font-medium">No jobs found</p>
             <p className="text-sm mt-1">Adjust your filters or create a new job.</p>
+            <div className="mt-4 flex justify-center">
+              <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+                <Plus size={16} />
+                Create Job Manually
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -361,6 +373,11 @@ export default function Jobs() {
           </div>
         )}
       </div>
+
+      <CreateJobModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+      />
     </div>
   )
 }

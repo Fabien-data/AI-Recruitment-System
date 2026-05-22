@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { createProjectJob } from '../api'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { createJob, createProjectJob, getProjects } from '../api'
 import { Modal } from '../components/ui/Modal'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
@@ -22,6 +22,16 @@ const JOB_CATEGORIES = [
 
 export function CreateJobModal({ projectId, isOpen, onClose }) {
   const queryClient = useQueryClient()
+  const allowProjectSelection = !projectId
+  const [selectedProjectId, setSelectedProjectId] = useState('')
+
+  const { data: projectsData } = useQuery({
+    queryKey: ['projects', { limit: 200 }],
+    queryFn: () => getProjects({ limit: 200 }),
+    enabled: allowProjectSelection && isOpen,
+  })
+  const projectsList = projectsData?.data || projectsData || []
+
   const [formData, setFormData] = useState({
     title: '',
     category: '',
@@ -47,11 +57,22 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
   })
 
   const createMutation = useMutation({
-    mutationFn: (data) => createProjectJob(projectId, data),
+    mutationFn: (data) => {
+      if (projectId) {
+        return createProjectJob(projectId, data)
+      }
+      return createJob({ ...data, project_id: selectedProjectId })
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries(['project', projectId])
-      queryClient.invalidateQueries(['project-jobs', projectId])
+      if (projectId) {
+        queryClient.invalidateQueries(['project', projectId])
+        queryClient.invalidateQueries(['project-jobs', projectId])
+      } else if (selectedProjectId) {
+        queryClient.invalidateQueries(['project', selectedProjectId])
+        queryClient.invalidateQueries(['project-jobs', selectedProjectId])
+      }
       queryClient.invalidateQueries(['jobs'])
+      queryClient.invalidateQueries(['projects'])
       toast.success('Job created successfully')
       onClose()
       resetForm()
@@ -85,13 +106,21 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
         height_tolerance: 2
       }
     })
+    if (allowProjectSelection) {
+      setSelectedProjectId('')
+    }
   }
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    
+
     if (!formData.title || !formData.category) {
       toast.error('Please fill in all required fields')
+      return
+    }
+
+    if (allowProjectSelection && !selectedProjectId) {
+      toast.error('Please select a project for this job')
       return
     }
 
@@ -139,10 +168,36 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       size="xl"
     >
       <form onSubmit={handleSubmit} className="space-y-6">
+        {allowProjectSelection && (
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Project</h3>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Project <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={selectedProjectId}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+                className="input w-full"
+                required
+              >
+                <option value="">Select a project</option>
+                {projectsList.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.title || project.name}
+                    {project.client_name ? ` — ${project.client_name}` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">Jobs must belong to an existing project.</p>
+            </div>
+          </div>
+        )}
+
         {/* Basic Information */}
         <div className="space-y-4">
           <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Basic Information</h3>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
