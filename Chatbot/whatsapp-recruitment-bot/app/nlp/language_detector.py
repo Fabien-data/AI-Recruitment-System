@@ -393,10 +393,12 @@ class LanguageDetector:
     }}
     
     # Confidence threshold above which we promote to singlish/tanglish register
-    # PDF spec: lower to 0.15 to improve code-mix detection
     _REGISTER_THRESHOLD = 0.15
-    _INSTANT_LOCK_CONFIDENCE = 0.60  # Instant-lock when single strong token found
-    _MIN_DICT_MATCHES = 1            # 1 strong domain token is enough
+    # Require higher confidence AND more dictionary matches before locking to a
+    # register — 1 word like "driver" or "hari" (which also appears in English)
+    # must not permanently lock the conversation into Singlish/Tanglish.
+    _INSTANT_LOCK_CONFIDENCE = 0.70
+    _MIN_DICT_MATCHES = 3  # Need at least 3 distinct register words before locking
     
     def __init__(self):
         self.default_language = "en"
@@ -514,14 +516,16 @@ class LanguageDetector:
         
         total_words = max(len(words), 1)
         
-        # Instant-lock: single strong domain token is enough when score meets threshold
+        # Lock to a register only when BOTH the match count AND confidence bar are met.
+        # The old `or singlish_score >= 1` shortcut let a single word like "driver"
+        # permanently lock an English speaker into Singlish — removed.
         if singlish_score > tamil_score and singlish_score >= self._MIN_DICT_MATCHES:
             confidence = min(singlish_score / total_words * 2, 0.9)
-            if confidence >= self._INSTANT_LOCK_CONFIDENCE or singlish_score >= 1:
+            if confidence >= self._INSTANT_LOCK_CONFIDENCE:
                 return "singlish", max(confidence, self._REGISTER_THRESHOLD)
         elif tamil_score > singlish_score and tamil_score >= self._MIN_DICT_MATCHES:
             confidence = min(tamil_score / total_words * 2, 0.9)
-            if confidence >= self._INSTANT_LOCK_CONFIDENCE or tamil_score >= 1:
+            if confidence >= self._INSTANT_LOCK_CONFIDENCE:
                 return "tanglish", max(confidence, self._REGISTER_THRESHOLD)
         
         return self.default_language, 0.0

@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { pool } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
-const { syncJobAsync } = require('./chatbot-sync');
+const { syncJobAsync, syncJobDeleteAsync } = require('./chatbot-sync');
 const { processJobFlyer } = require('../services/auto-ingest');
 const logger = require('../utils/logger');
 
@@ -300,14 +300,12 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) =
             return res.status(404).json({ error: 'Job not found' });
         }
 
-        const deleted = result.rows[0];
-        // Remove from chatbot knowledge base in background
-        const axios = require('axios');
-        const chatbotUrl = process.env.CHATBOT_API_URL || 'http://localhost:8000';
-        const apiKey = process.env.CHATBOT_API_KEY || '';
-        axios.post(`${chatbotUrl}/api/knowledge/delete`, { doc_id: `job_${id}` }, {
-            headers: { 'x-chatbot-api-key': apiKey }, timeout: 5000
-        }).catch(err => logger.warn(`Failed to remove job ${id} from chatbot KB: ${err.message}`));
+        // Enqueue delete on the outbox — survives chatbot restarts and is retried.
+        try {
+            await syncJobDeleteAsync(id);
+        } catch (syncErr) {
+            logger.warn(`Job ${id} deleted but outbox enqueue failed: ${syncErr.message}`);
+        }
         res.json({ message: 'Job deleted successfully' });
     } catch (error) {
         next(error);

@@ -10,6 +10,10 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
+const { pool } = require('../config/database');
+const chatbotOutbox = require('../services/chatbot-outbox');
+const { buildFaqPayload } = require('../services/chatbot-payloads');
+const logger = require('../utils/logger');
 const {
     getAllEntries,
     createEntry,
@@ -21,6 +25,46 @@ const {
 } = require('../services/knowledge-base');
 
 router.use(authenticate);
+
+async function _enqueueFaqUpsert(entryId) {
+    if (!entryId) return;
+    try {
+        const result = await pool.query('SELECT * FROM knowledge_base WHERE id = $1', [entryId]);
+        const row = result.rows[0];
+        if (!row) return;
+        if (row.is_active === false) {
+            await chatbotOutbox.enqueue({
+                doc_id: `faq_${row.id}`,
+                doc_type: 'faq',
+                operation: 'delete',
+                payload: { doc_id: `faq_${row.id}` },
+            });
+            return;
+        }
+        await chatbotOutbox.enqueue({
+            doc_id: `faq_${row.id}`,
+            doc_type: 'faq',
+            operation: 'upsert',
+            payload: buildFaqPayload(row),
+        });
+    } catch (err) {
+        logger.warn(`FAQ outbox enqueue failed for ${entryId}: ${err.message}`);
+    }
+}
+
+async function _enqueueFaqDelete(entryId) {
+    if (!entryId) return;
+    try {
+        await chatbotOutbox.enqueue({
+            doc_id: `faq_${entryId}`,
+            doc_type: 'faq',
+            operation: 'delete',
+            payload: { doc_id: `faq_${entryId}` },
+        });
+    } catch (err) {
+        logger.warn(`FAQ outbox delete enqueue failed for ${entryId}: ${err.message}`);
+    }
+}
 
 /**
  * GET /api/knowledge-base
@@ -140,6 +184,9 @@ router.post('/', authorize('admin', 'sourcing_department'), async (req, res) => 
             created_by: req.user?.id || null
         });
 
+        // Push to chatbot via outbox — runs alongside the response.
+        _enqueueFaqUpsert(entry.id);
+
         res.status(201).json(entry);
     } catch (error) {
         console.error('Create entry error:', error);
@@ -157,6 +204,7 @@ router.put('/:id', authorize('admin', 'sourcing_department'), async (req, res) =
         const updates = req.body;
 
         const entry = await updateEntry(id, updates);
+        _enqueueFaqUpsert(id);
         res.json(entry);
     } catch (error) {
         console.error('Update entry error:', error);
@@ -172,6 +220,7 @@ router.delete('/:id', authorize('admin', 'sourcing_department'), async (req, res
     try {
         const { id } = req.params;
         await deleteEntry(id);
+        _enqueueFaqDelete(id);
         res.json({ success: true, message: 'Entry deleted' });
     } catch (error) {
         console.error('Delete entry error:', error);
@@ -205,6 +254,23 @@ router.post('/import', authorize('admin', 'sourcing_department'), async (req, re
         }
 
         const result = await bulkImport(entries, tenant_id || null);
+        // Enqueue every active entry so the bulk import is reflected in the bot.
+        // We don't have the new IDs from bulkImport, so trigger a reconcile by
+        // calling the outbox's reconcile path on the next tick.
+        try {
+            const recent = await pool.query(
+                `SELECT id FROM knowledge_base
+                 WHERE COALESCE(is_active, TRUE) = TRUE
+                 ORDER BY created_at DESC
+                 LIMIT $1`,
+                [entries.length || 0]
+            );
+            for (const row of recent.rows || []) {
+                _enqueueFaqUpsert(row.id);
+            }
+        } catch (err) {
+            logger.warn(`Bulk import outbox enqueue best-effort failed: ${err.message}`);
+        }
         res.json(result);
     } catch (error) {
         console.error('Bulk import error:', error);

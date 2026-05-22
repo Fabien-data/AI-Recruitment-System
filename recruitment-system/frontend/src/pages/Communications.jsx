@@ -22,7 +22,7 @@ import {
   MessageSquare, Search, Send, Phone, Mail, Bot, User,
   UserCheck, RefreshCw, Globe, Briefcase, MapPin, Clock,
   ChevronRight, AlertCircle, Wifi, WifiOff, Loader2,
-  Mic, Square, Trash2, Paperclip
+  Mic, Square, Trash2, Paperclip, Wand2
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { format, formatDistanceToNow } from 'date-fns'
@@ -297,6 +297,8 @@ export default function Communications() {
   const [isRecording, setIsRecording] = useState(false)
   const [audioBlob, setAudioBlob] = useState(null)
   const [audioUrl, setAudioUrl] = useState(null)
+  const [sendChannel, setSendChannel] = useState('whatsapp') // 'whatsapp' | 'email' | 'both'
+  const [msgContext, setMsgContext] = useState(null)           // { application, interview }
   const socketRef = useRef(null)
   const bottomRef = useRef(null)
   const mediaRecorderRef = useRef(null)
@@ -371,6 +373,40 @@ export default function Communications() {
       || String(candidate.ai_status || '').toLowerCase() === 'requires intervention'
       || (phone && escalatedChats.has(phone))
   }, [escalatedChats])
+
+  // ── Fetch candidate message context (job + interview) when selection changes ──
+  const { data: contextData } = useQuery({
+    queryKey: ['candidate-context', selectedId],
+    queryFn: () => apiFetch(`/api/communications/candidate/${selectedId}/context`),
+    enabled: !!selectedId,
+    staleTime: 60000,
+  })
+  useEffect(() => {
+    setMsgContext(contextData || null)
+  }, [contextData])
+
+  const buildDefaultMessage = useCallback(() => {
+    if (!msgContext) return ''
+    const { application, interview } = msgContext
+    const parts = []
+    if (application?.job_title) {
+      parts.push(`Regarding your application for the position of ${application.job_title}.`)
+      if (application.job_description_snippet) {
+        parts.push(application.job_description_snippet.trim())
+      }
+    }
+    if (interview?.scheduled_datetime) {
+      const dt = new Date(interview.scheduled_datetime)
+      const dateStr = dt.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+      const timeStr = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      parts.push(`Your interview is scheduled for ${dateStr} at ${timeStr}.`)
+      if (interview.interview_job_title && interview.interview_job_title !== application?.job_title) {
+        parts.push(`Role: ${interview.interview_job_title}.`)
+      }
+      if (interview.location) parts.push(`Location: ${interview.location}.`)
+    }
+    return parts.join('\n\n')
+  }, [msgContext])
 
   // ── Fetch active chat list ─────────────────────────────────────────────────
   const { data: activeChatsData, isLoading: listLoading } = useQuery({
@@ -645,17 +681,27 @@ export default function Communications() {
     try {
       const formData = new FormData()
       formData.append('candidate_id', selectedId)
-      formData.append('channel', 'whatsapp')
+      // Map UI channel selector to backend `channels` field
+      if (sendChannel === 'both') {
+        formData.append('channels', 'whatsapp,email')
+      } else {
+        formData.append('channel', sendChannel)
+      }
       if (hasText) formData.append('message', message.trim())
+      // Add email subject when sending via email channel
+      if (sendChannel === 'email' || sendChannel === 'both') {
+        const subject = msgContext?.application?.job_title
+          ? `Message from Dewan Recruitment — ${msgContext.application.job_title}`
+          : 'Message from Dewan Recruitment'
+        formData.append('email_subject', subject)
+      }
 
       let optimisticType = 'text'
-
       if (hasAudio) {
         // Use ogg for WhatsApp compatibility (webm is not supported by WhatsApp API)
         const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg' : 'audio/webm'
         const ext = mimeType.includes('ogg') ? 'ogg' : 'webm'
-        formData.append('media', audioBlob, `voice_note.${ext}`)
-        formData.append('msgType', 'audio')
+        formData.append('audio', new Blob(mediaChunksRef.current, { type: mimeType }), `voice-note.${ext}`)
         optimisticType = 'audio'
       } else if (hasFile) {
         formData.append('media', fileToUpload)
@@ -695,10 +741,12 @@ export default function Communications() {
         return [...prev, optimisticMsg]
       })
 
-      // Warn user if WhatsApp delivery failed (message stored but not sent to phone)
+      // Warn user about any delivery failures per channel
       if (result.simulated) {
-        const detail = result.delivery_error ? `: ${result.delivery_error}` : ''
-        setSendError(`⚠️ Message saved but not delivered to WhatsApp${detail}`)
+        const errors = result.delivery_errors || {}
+        const parts = Object.entries(errors).map(([ch, msg]) => `${ch}: ${msg}`)
+        const detail = parts.length > 0 ? ` (${parts.join('; ')})` : ''
+        setSendError(`⚠️ Message saved but delivery failed${detail}`)
       }
     } catch (err) {
       setSendError('Failed to send. Please try again.')
@@ -1048,6 +1096,57 @@ export default function Communications() {
                   <AlertCircle size={12} /> {sendError}
                 </div>
               )}
+
+              {/* Channel selector + template prefill */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] text-slate-400 font-medium">Send via:</span>
+                {[
+                  { value: 'whatsapp', label: 'WhatsApp' },
+                  { value: 'email', label: 'Email', disabled: !selectedCandidate.email },
+                  { value: 'both', label: 'Both', disabled: !selectedCandidate.email },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    disabled={opt.disabled}
+                    onClick={() => setSendChannel(opt.value)}
+                    className={clsx(
+                      'text-[11px] px-2.5 py-1 rounded-full border font-medium transition-colors',
+                      sendChannel === opt.value
+                        ? 'bg-indigo-600 border-indigo-600 text-white'
+                        : 'border-slate-200 text-slate-500 hover:border-indigo-400 hover:text-indigo-600',
+                      opt.disabled && 'opacity-40 cursor-not-allowed',
+                    )}
+                    title={opt.disabled ? 'Candidate has no email address' : undefined}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+                {msgContext && buildDefaultMessage() && (
+                  <button
+                    type="button"
+                    onClick={() => setMessage(buildDefaultMessage())}
+                    className="ml-auto flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-800"
+                    title="Prefill with job/interview details"
+                  >
+                    <Wand2 size={12} /> Use template
+                  </button>
+                )}
+              </div>
+
+              {/* Job/interview context hint */}
+              {msgContext?.application?.job_title && (
+                <div className="text-[10px] text-slate-400 mb-1.5 flex items-center gap-1">
+                  <Briefcase size={10} />
+                  {msgContext.application.job_title}
+                  {msgContext.interview?.scheduled_datetime && (
+                    <span className="ml-1 text-emerald-600">
+                      · Interview {format(new Date(msgContext.interview.scheduled_datetime), 'dd MMM HH:mm')}
+                    </span>
+                  )}
+                </div>
+              )}
+
               <form onSubmit={handleSend} className="flex items-end gap-2">
 
                 {isRecording ? (

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import uuid
 from typing import Optional, Dict, Any
 
 import httpx
@@ -84,10 +85,15 @@ class RecruitmentSyncService:
         headers: Dict[str, str] = {}
         if CHATBOT_API_KEY:
             headers["x-chatbot-api-key"] = CHATBOT_API_KEY
+        headers["x-trace-id"] = str(uuid.uuid4())[:8]
         return headers
 
     def _idempotency_key(self, payload: Dict[str, Any]) -> str:
-        raw = json.dumps(payload, sort_keys=True, default=str)
+        # Key on phone only — full-payload hashing caused new keys whenever
+        # mutable fields like name changed mid-conversation, producing duplicate
+        # CRM records for the same candidate.
+        phone = payload.get("phone", "unknown")
+        raw = f"phone:{phone}:v1"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     async def _post_payload(self, payload: Dict[str, Any], cv_path: Optional[str]) -> tuple[bool, Optional[str]]:
@@ -98,15 +104,19 @@ class RecruitmentSyncService:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 if cv_path and os.path.exists(cv_path):
-                    with open(cv_path, "rb") as file_handle:
-                        files = {
-                            "cv_file": (
-                                os.path.basename(cv_path),
-                                file_handle,
-                                "application/pdf",
-                            )
-                        }
-                        response = await client.post(url, data=data, files=files, headers=headers)
+                    # Read file fully into memory before the async post so the
+                    # context manager does not close the handle mid-upload.
+                    with open(cv_path, "rb") as fh:
+                        file_bytes = fh.read()
+                    mime = "application/pdf"
+                    if cv_path.lower().endswith((".jpg", ".jpeg", ".png")):
+                        mime = "image/jpeg"
+                    elif cv_path.lower().endswith(".docx"):
+                        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    files = {
+                        "cv_file": (os.path.basename(cv_path), file_bytes, mime)
+                    }
+                    response = await client.post(url, data=data, files=files, headers=headers)
                 else:
                     response = await client.post(url, data=data, headers=headers)
 
@@ -156,6 +166,16 @@ class RecruitmentSyncService:
     ) -> bool:
         """Send candidate data and (optionally) the CV file to the CRM."""
         if not SYNC_ENABLED:
+            return False
+
+        # Don't sync until we know the candidate's job interest — a "General"
+        # placeholder makes job matching useless in the CRM.
+        job_interest = self._resolve_job_interest(candidate)
+        if not job_interest or job_interest.strip().lower() in ("general", ""):
+            logger.info(
+                "Sync deferred for %s — job_role not yet collected",
+                candidate.phone_number,
+            )
             return False
 
         payload = self._build_payload(candidate)

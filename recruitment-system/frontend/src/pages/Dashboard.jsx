@@ -61,7 +61,7 @@ function KPICard({ name, value, icon, change, changeType, isLoading, suffix = ''
   const isWarning = changeType === 'warning'
 
   return (
-    <Card className={twMerge("p-6 flex flex-col justify-between h-40", bgClass)}>
+    <Card className={twMerge("p-6 flex min-h-[10rem] flex-col justify-between gap-4", bgClass)}>
       <div className="flex items-center justify-between mb-2">
         <div className={twMerge("p-2.5 rounded-2xl bg-zinc-100 shadow-sm", iconColor)}>
           {icon}
@@ -87,7 +87,7 @@ function KPICard({ name, value, icon, change, changeType, isLoading, suffix = ''
             <AnimatedNumber value={typeof value === 'number' ? value : parseFloat(value) || 0} suffix={suffix} />
           </p>
         )}
-        <p className="text-sm font-medium text-zinc-500 mt-1">{name}</p>
+        <p className="mt-1 text-sm font-medium leading-snug text-zinc-500">{name}</p>
       </div>
     </Card>
   )
@@ -232,7 +232,7 @@ export default function Dashboard() {
       <motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Pipeline Chart - Takes up 2 cols */}
-        <Card className="p-6 lg:col-span-2 flex flex-col relative overflow-hidden bg-white">
+        <Card className="relative flex flex-col bg-white p-6 lg:col-span-2">
           <div className="flex justify-between items-center mb-6 z-10">
             <div>
               <h2 className="text-lg font-bold text-zinc-900">Pipeline Conversion</h2>
@@ -240,12 +240,20 @@ export default function Dashboard() {
             </div>
             <Button variant="ghost" size="sm">Report <ChevronRight size={14} /></Button>
           </div>
-          <div className="flex-1 min-h-[250px] z-10">
+          <div className="z-10 min-h-[280px] flex-1">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={pipelineData} margin={{ top: 20, right: 0, left: -20, bottom: 0 }} layout="vertical">
+              <BarChart data={pipelineData} margin={{ top: 12, right: 16, left: 12, bottom: 0 }} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E4E4E7" />
                 <XAxis type="number" hide />
-                <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{fill: '#71717A', fontSize: 13, fontWeight: 500}} />
+                <YAxis
+                  dataKey="name"
+                  type="category"
+                  width={112}
+                  tickMargin={10}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#71717A', fontSize: 13, fontWeight: 500 }}
+                />
                 <Tooltip cursor={{fill: '#F4F4F5'}} contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 8px 30px rgba(0,0,0,0.08)'}} />
                 <Bar dataKey="value" radius={[0, 12, 12, 0]} barSize={28}>
                   {pipelineData.map((entry, index) => (

@@ -75,30 +75,31 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
     try {
         const jobsSQL = isMySQL
             ? `SELECT j.id, j.title, j.category, j.status, j.salary_range,
-                      j.requirements, j.positions_available,
-                      p.id as project_id, p.countries, p.benefits, p.interview_date
+                      j.requirements, j.positions_available, j.location, j.description,
+                      p.id as project_id, p.countries, p.benefits, p.salary_info,
+                      p.interview_date, p.start_date, p.title as project_title
                FROM jobs j
                LEFT JOIN projects p ON j.project_id = p.id
                WHERE j.status = 'active'
                ORDER BY j.created_at DESC`
             : `SELECT j.id, j.title, j.category, j.status, j.salary_range,
-                      j.requirements, j.positions_available,
-                      p.id as project_id, p.countries, p.benefits, p.interview_date
+                      j.requirements, j.positions_available, j.location, j.description,
+                      p.id as project_id, p.countries, p.benefits, p.salary_info,
+                      p.interview_date, p.start_date, p.title as project_title
                FROM jobs j
                LEFT JOIN projects p ON j.project_id = p.id
                WHERE j.status = 'active'
                ORDER BY j.created_at DESC`;
 
         const result = await query(jobsSQL, []);
+        const _parseJsonSafe = (v, fallback) => {
+            if (!v) return fallback;
+            if (typeof v === 'object') return v;
+            try { return JSON.parse(v); } catch { return fallback; }
+        };
+
         const jobs = result.rows.map(job => {
-            let requirements = {};
-            if (job.requirements) {
-                try {
-                    requirements = typeof job.requirements === 'string'
-                        ? JSON.parse(job.requirements)
-                        : job.requirements;
-                } catch (e) { /* ignore parse error */ }
-            }
+            const requirements = _parseJsonSafe(job.requirements, {});
             return {
                 job_id: job.id,
                 title: job.title,
@@ -106,8 +107,16 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
                 status: job.status,
                 salary_range: job.salary_range,
                 positions_available: job.positions_available,
+                location: job.location || '',
+                description: job.description || '',
                 project_id: job.project_id,
                 requirements,
+                countries:      _parseJsonSafe(job.countries, []),
+                benefits:       _parseJsonSafe(job.benefits, {}),
+                salary_info:    _parseJsonSafe(job.salary_info, {}),
+                start_date:     job.start_date     || null,
+                interview_date: job.interview_date || null,
+                project_title:  job.project_title  || null,
             };
         });
 

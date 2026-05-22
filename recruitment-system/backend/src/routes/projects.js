@@ -4,7 +4,43 @@ const { query, generateUUID } = require('../config/database');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate, authorize } = require('../middleware/auth');
 const { syncJobAsync } = require('./chatbot-sync');
+const chatbotOutbox = require('../services/chatbot-outbox');
+const { buildProjectPayload } = require('../services/chatbot-payloads');
 const logger = require('../utils/logger');
+
+async function _enqueueProjectUpsert(projectId) {
+    if (!projectId) return;
+    try {
+        const result = await query(
+            isMySQL ? 'SELECT * FROM projects WHERE id = ?' : 'SELECT * FROM projects WHERE id = $1',
+            [projectId]
+        );
+        const row = result.rows && result.rows[0];
+        if (!row) return;
+        await chatbotOutbox.enqueue({
+            doc_id: `project_${row.id}`,
+            doc_type: 'project_desc',
+            operation: 'upsert',
+            payload: buildProjectPayload(row),
+        });
+    } catch (err) {
+        logger.warn(`Project outbox enqueue failed for ${projectId}: ${err.message}`);
+    }
+}
+
+async function _enqueueProjectDelete(projectId) {
+    if (!projectId) return;
+    try {
+        await chatbotOutbox.enqueue({
+            doc_id: `project_${projectId}`,
+            doc_type: 'project_desc',
+            operation: 'delete',
+            payload: { doc_id: `project_${projectId}` },
+        });
+    } catch (err) {
+        logger.warn(`Project outbox delete enqueue failed for ${projectId}: ${err.message}`);
+    }
+}
 
 function normalizeProjectPayload(body = {}) {
     const countriesInput = body.countries || body.country_of_recruitment || [];
@@ -323,6 +359,7 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
             );
 
             const result = await query('SELECT * FROM projects WHERE id = ?', [id]);
+            _enqueueProjectUpsert(id);
             res.status(201).json(result.rows[0]);
         } else {
             const result = await query(
@@ -350,6 +387,7 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
                 [result.rows[0].id, userId, 'owner', userId]
             );
 
+            _enqueueProjectUpsert(result.rows[0].id);
             res.status(201).json(result.rows[0]);
         }
     } catch (error) {
@@ -440,8 +478,10 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
             res.json(result.rows[0]);
         }
 
-        // Re-sync all active jobs in this project so the chatbot picks up
-        // updated benefits, salary_info, interview_date, etc. — non-blocking.
+        // Re-sync the project itself + cascade to all active jobs so the
+        // chatbot picks up updated benefits, salary_info, interview_date, etc.
+        // All paths go through the outbox — survives chatbot restarts.
+        _enqueueProjectUpsert(id);
         setImmediate(async () => {
             try {
                 const jobsSQL = isMySQL
@@ -450,11 +490,11 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
                 const jobsResult = await query(jobsSQL, [id]);
                 for (const job of jobsResult.rows) {
                     await syncJobAsync(job.id).catch(err =>
-                        logger.warn(`Project update: chatbot sync failed for job ${job.id}: ${err.message}`)
+                        logger.warn(`Project update: outbox enqueue failed for job ${job.id}: ${err.message}`)
                     );
                 }
                 if (jobsResult.rows.length > 0) {
-                    logger.info(`Project ${id} update: re-synced ${jobsResult.rows.length} jobs to chatbot KB`);
+                    logger.info(`Project ${id} update: enqueued ${jobsResult.rows.length} jobs for chatbot resync`);
                 }
             } catch (err) {
                 logger.warn(`Project ${id} update: chatbot job re-sync failed: ${err.message}`);
@@ -472,6 +512,12 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) =
     try {
         const { id } = req.params;
 
+        // Snapshot affected jobs so we can re-sync their now-detached state to the bot.
+        const affectedJobs = await query(
+            isMySQL ? 'SELECT id FROM jobs WHERE project_id = ?' : 'SELECT id FROM jobs WHERE project_id = $1',
+            [id]
+        );
+
         // Set project_id to NULL for all related jobs before deleting
         await query(
             isMySQL ? 'UPDATE jobs SET project_id = NULL WHERE project_id = ?' : 'UPDATE jobs SET project_id = NULL WHERE project_id = $1',
@@ -482,6 +528,17 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) =
             isMySQL ? 'DELETE FROM projects WHERE id = ?' : 'DELETE FROM projects WHERE id = $1 RETURNING *',
             [id]
         );
+
+        // Push removal to chatbot + re-sync any orphaned jobs so their cached
+        // project metadata is cleared.
+        _enqueueProjectDelete(id);
+        setImmediate(async () => {
+            for (const job of affectedJobs.rows || []) {
+                await syncJobAsync(job.id).catch(err =>
+                    logger.warn(`Project delete: outbox enqueue failed for orphaned job ${job.id}: ${err.message}`)
+                );
+            }
+        });
 
         if (isMySQL) {
             res.json({ message: 'Project deleted successfully', id });

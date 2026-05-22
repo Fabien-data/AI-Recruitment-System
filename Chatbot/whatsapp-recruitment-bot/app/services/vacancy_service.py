@@ -162,6 +162,11 @@ class VacancyService:
                 "country": countries[0] if countries else country,
                 "location": str(job.get("location") or ""),
                 "requirements": requirements,
+                "countries":      countries,
+                "benefits":       job.get("benefits") or {},
+                "start_date":     job.get("start_date"),
+                "interview_date": job.get("interview_date"),
+                "project_title":  job.get("project_title"),
             })
         return out
 
@@ -237,7 +242,11 @@ class VacancyService:
             if pg_jobs:
                 return pg_jobs
 
-        logger.warning("VacancyService: all layers exhausted — no jobs found")
+        logger.critical(
+            "VACANCY_CACHE_EMPTY: All 3 fetch layers (cache, REST API, PostgreSQL) returned zero jobs. "
+            "Candidates are receiving a generic fallback. "
+            "Check RECRUITMENT_API_URL and database connectivity immediately."
+        )
         return []
 
     async def _fetch_from_rest_api(self, entities: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -603,6 +612,10 @@ class VacancyService:
                 exp = req.get("experience_years") or req.get("min_experience")
                 if exp:
                     parts.append(f"Min experience: {exp} yrs")
+                if j.get("start_date"):
+                    parts.append(f"Start: {j['start_date']}")
+                if j.get("interview_date"):
+                    parts.append(f"Interview: {j['interview_date']}")
                 job_summary_lines.append(" | ".join(parts))
 
             jobs_data_str = "\n".join(f"- {line}" for line in job_summary_lines)

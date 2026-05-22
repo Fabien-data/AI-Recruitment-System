@@ -1,12 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const path = require('path');
 const axios = require('axios');
 const { randomUUID } = require('crypto');
 const { query } = require('../config/database');
 const { adaptQuery, isMySQL } = require('../utils/query-adapter');
 const { authenticate, authorize } = require('../middleware/auth');
+const { normalizePhone } = require('../utils/phone');
 const logger = require('../utils/logger');
+const chatbotOutbox = require('../services/chatbot-outbox');
+const { buildJobPayload } = require('../services/chatbot-payloads');
 
 // Some deployments don't include a ../models layer; keep this route DB-driven.
 let Candidate;
@@ -22,10 +26,25 @@ const upload = multer({ dest: 'uploads/cvs/' });
 
 const CHATBOT_API_URL = process.env.CHATBOT_API_URL || 'http://localhost:8000';
 const CHATBOT_API_KEY = process.env.CHATBOT_API_KEY || '';
+    
+function isPlaceholderCandidateName(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return true;
+    return ['unknown', 'unknown candidate', 'candidate', 'pending ai extraction', 'n/a', 'na'].includes(normalized)
+        || normalized.startsWith('whatsapp ');
+}
+
+function resolveCandidateSyncName(phone, name) {
+    const explicitName = String(name || '').trim();
+    if (explicitName && !isPlaceholderCandidateName(explicitName)) {
+        return explicitName;
+    }
+    return String(phone || '').trim() || 'Pending AI Extraction';
+}
 
 async function _postToChatbot(endpoint, body) {
     if (!CHATBOT_API_KEY) {
-        logger.warn('CHATBOT_API_KEY not set — skipping chatbot sync');
+        logger.warn('CHATBOT_API_KEY not set ï¿½ skipping chatbot sync');
         return null;
     }
     return axios.post(`${CHATBOT_API_URL}${endpoint}`, body, {
@@ -34,91 +53,73 @@ async function _postToChatbot(endpoint, body) {
     });
 }
 
-function _buildJobContent(job) {
-    const requirements = typeof job.requirements === 'string'
-        ? job.requirements
-        : JSON.stringify(job.requirements || {}, null, 2);
-    return [
-        job.title ? `Title: ${job.title}` : null,
-        job.description || null,
-        requirements && requirements !== '{}' ? `Requirements: ${requirements}` : null,
-        job.salary_range ? `Salary: ${job.salary_range}` : null,
-        job.location ? `Location: ${job.location}` : null,
-    ].filter(Boolean).join('\n\n');
+async function _loadJobWithProject(jobId) {
+    const sql = isMySQL
+        ? `SELECT j.*, p.countries, p.benefits, p.salary_info,
+                  p.start_date, p.interview_date, p.title as project_title
+           FROM jobs j LEFT JOIN projects p ON j.project_id = p.id
+           WHERE j.id = ? LIMIT 1`
+        : `SELECT j.*, p.countries, p.benefits, p.salary_info,
+                  p.start_date, p.interview_date, p.title as project_title
+           FROM jobs j LEFT JOIN projects p ON j.project_id = p.id
+           WHERE j.id = $1 LIMIT 1`;
+    const result = await query(sql, [jobId]);
+    return (result.rows && result.rows[0]) || null;
 }
 
+/**
+ * Push a single job to the chatbot â€” historically a direct HTTP call, now goes
+ * through the outbox so it survives chatbot restarts and gets retried on
+ * failure. Signature preserved for back-compat with existing callers.
+ */
 async function syncJobToChatbot(job) {
     if (!job || !job.id) return;
-    if (!CHATBOT_API_KEY) {
-        logger.warn('CHATBOT_API_KEY not set — cannot sync job to chatbot');
-        return;
-    }
-
-    const payload = {
+    await chatbotOutbox.enqueue({
         doc_id: `job_${job.id}`,
         doc_type: 'job_desc',
-        title: job.title || 'Job',
-        content: _buildJobContent(job),
-        metadata: {
-            job_id: job.id,
-            project_id: job.project_id,
-            category: job.category,
-            status: job.status,
-            requirements: job.requirements,
-            salary_range: job.salary_range,
-            location: job.location,
-            description: job.description,
-            positions_available: job.positions_available,
-        },
-    };
-
-    await _postToChatbot('/api/knowledge/upsert', payload);
+        operation: 'upsert',
+        payload: buildJobPayload(job),
+    });
 }
 
+/**
+ * Look up a job (with project context) and enqueue an upsert or delete based
+ * on its status. This is the canonical hook every job mutation calls.
+ */
 async function syncJobAsync(jobId) {
     if (!jobId) return;
+    const job = await _loadJobWithProject(jobId);
+    if (!job) return;
 
-    const sql = isMySQL
-        ? `SELECT * FROM jobs WHERE id = ? LIMIT 1`
-        : `SELECT * FROM jobs WHERE id = $1 LIMIT 1`;
-
-    const result = await query(sql, [jobId]);
-    if (!result.rows || result.rows.length === 0) {
-        return;
-    }
-
-    const job = result.rows[0];
     if (job.status && job.status !== 'active') {
-        await _postToChatbot('/api/knowledge/delete', { doc_id: `job_${job.id}` });
+        await chatbotOutbox.enqueue({
+            doc_id: `job_${job.id}`,
+            doc_type: 'job_desc',
+            operation: 'delete',
+            payload: { doc_id: `job_${job.id}` },
+        });
         return;
     }
-
     await syncJobToChatbot(job);
 }
 
+async function syncJobDeleteAsync(jobId) {
+    if (!jobId) return;
+    await chatbotOutbox.enqueue({
+        doc_id: `job_${jobId}`,
+        doc_type: 'job_desc',
+        operation: 'delete',
+        payload: { doc_id: `job_${jobId}` },
+    });
+}
+
 async function syncAllActiveJobs() {
-    const sql = `SELECT * FROM jobs WHERE status = 'active' ORDER BY created_at DESC`;
-
-    const result = await query(sql, []);
-    const jobs = result.rows || [];
-
-    let synced = 0;
-    let failed = 0;
-
-    for (const job of jobs) {
-        try {
-            await syncJobToChatbot(job);
-            synced += 1;
-        } catch (error) {
-            failed += 1;
-            logger.warn(`Failed to sync job ${job.id}: ${error.message}`);
-        }
-    }
-
+    const stats = await chatbotOutbox.fullResync();
     return {
-        total: jobs.length,
-        synced,
-        failed,
+        total: stats.jobs + stats.projects + stats.faqs,
+        synced: stats.jobs + stats.projects + stats.faqs,
+        failed: 0,
+        breakdown: stats,
     };
 }
 
@@ -136,12 +137,69 @@ router.post('/refresh-jobs', authenticate, authorize('admin', 'sourcing_departme
     }
 });
 
+/**
+ * POST /api/chatbot-sync/full-resync
+ * Re-enqueue every active job, project, and FAQ. Used by the admin
+ * "Resync chatbot" button after a CRM migration or chatbot redeploy.
+ */
+router.post('/full-resync', authenticate, authorize('admin', 'sourcing_department'), async (req, res) => {
+    try {
+        const stats = await chatbotOutbox.fullResync();
+        res.json({
+            success: true,
+            message: 'Full resync enqueued â€” worker is draining now',
+            ...stats,
+        });
+    } catch (error) {
+        logger.error(`full-resync endpoint error: ${error.message}`);
+        res.status(500).json({ error: 'Failed to enqueue full resync' });
+    }
+});
+
+/**
+ * GET /api/chatbot-sync/outbox-status
+ * Aggregated counts of outbox rows by status â€” for admin monitoring.
+ */
+router.get('/outbox-status', authenticate, authorize('admin', 'sourcing_department'), async (req, res) => {
+    try {
+        const result = await query(
+            `SELECT status, COUNT(*)::int AS count, MAX(updated_at) AS most_recent
+             FROM chatbot_sync_outbox
+             GROUP BY status`,
+            []
+        );
+        res.json({ rows: result.rows || [] });
+    } catch (error) {
+        logger.error(`outbox-status error: ${error.message}`);
+        res.status(500).json({ error: 'Failed to read outbox status' });
+    }
+});
+
+router.post('/general-knowledge', authenticate, authorize('admin', 'sourcing_department'), async (req, res) => {
+    try {
+        const { key, category, data, description } = req.body;
+        if (!key || !category || !data) {
+            return res.status(400).json({ error: 'key, category, and data are required' });
+        }
+        const result = await _postToChatbot('/api/knowledge/general', {
+            key,
+            category,
+            data,
+            description: description || null,
+        });
+        res.json({ success: true, key, chatbot_response: result ? result.data : null });
+    } catch (error) {
+        logger.error(`general-knowledge sync error: ${error.message}`);
+        res.status(500).json({ error: 'Failed to push general knowledge to chatbot' });
+    }
+});
+
 router.post('/intake', upload.single('cv_file'), async (req, res) => {
+    const traceId = req.headers['x-trace-id'] || 'no-trace';
     try {
         // The Python bot sends metadata as a JSON string in 'payload'
         const payload = JSON.parse(req.body.payload);
         const {
-            phone,
             name,
             experience_years,
             job_interest,
@@ -152,14 +210,22 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
             email,
         } = payload;
 
+        const phone = normalizePhone(payload.phone);
+        if (!phone) {
+            return res.status(400).json({ error: 'Missing or invalid phone number' });
+        }
+
+        logger.info(`[${traceId}] Intake for phone: ${phone}`);
+
         const resolvedJobInterest = job_interest || job_role || 'General';
+        const resolvedCandidateName = resolveCandidateSyncName(phone, name);
 
         // 1. Create or update candidate by phone
         let candidate;
         if (Candidate && typeof Candidate.upsert === 'function') {
             [candidate] = await Candidate.upsert({
                 phone,
-                name: name || 'Pending AI Extraction',
+                name: resolvedCandidateName,
                 experience_years: experience_years !== undefined && experience_years !== null ? experience_years : null,
                 status: 'screening',
                 job_interest: resolvedJobInterest,
@@ -186,7 +252,7 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                         WHERE id = $4
                     `),
                     [
-                        name || 'Pending AI Extraction',
+                        resolvedCandidateName,
                         experience_years !== undefined && experience_years !== null ? experience_years : null,
                         resolvedJobInterest,
                         candidateId,
@@ -227,7 +293,7 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                     [
                         candidateId,
                         phone,
-                        name || 'Pending AI Extraction',
+                        resolvedCandidateName,
                         experience_years !== undefined && experience_years !== null ? experience_years : null,
                         resolvedJobInterest,
                     ]
@@ -249,20 +315,22 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
             try {
                 await query(
                     adaptQuery('UPDATE candidates SET skills = $1 WHERE id = $2'),
-                    [skills.join(', '), candidate.id]
+                    [isMySQL ? skills.slice(0, 20).join(', ') : skills.slice(0, 20), candidate.id]
                 );
             } catch (_err) {
-                // skills column may not exist yet — skip silently
+                // skills column may not exist yet ï¿½ skip silently
             }
         }
 
         // 3. Attach the CV file if it exists
         if (req.file) {
+            // Sanitise filename to prevent path-traversal attacks
+            const safeOriginalName = path.basename(req.file.originalname || 'cv_upload');
             if (CVFile && typeof CVFile.create === 'function') {
                 await CVFile.create({
                     candidate_id: candidate.id,
                     file_path: req.file.path,
-                    original_name: req.file.originalname,
+                    original_name: safeOriginalName,
                     ocr_status: 'pending',
                 });
             } else {
@@ -276,7 +344,7 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                         randomUUID(),
                         candidate.id,
                         req.file.path,
-                        req.file.originalname,
+                        safeOriginalName,
                         req.file.mimetype || 'application/octet-stream',
                     ]
                 );
@@ -303,5 +371,6 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
 
 module.exports = router;
 router.syncJobAsync = syncJobAsync;
+router.syncJobDeleteAsync = syncJobDeleteAsync;
 router.syncJobToChatbot = syncJobToChatbot;
 router.syncAllActiveJobs = syncAllActiveJobs;

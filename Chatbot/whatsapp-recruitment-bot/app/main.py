@@ -14,7 +14,7 @@ from app.config import settings
 from app.database import init_db
 from app.webhooks import router as webhook_router
 from app.health import router as health_router
-from app.knowledge import router as knowledge_router, bootstrap_job_cache, start_cache_refresh_task
+from app.knowledge import router as knowledge_router, bootstrap_job_cache, start_cache_refresh_task, load_persisted_knowledge
 from app import __version__
 
 # Configure logging
@@ -42,6 +42,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
     
+    # Load any persisted knowledge (FAQs, projects, general store) so the bot
+    # can answer general inquiries even before the CRM bootstrap completes.
+    try:
+        load_persisted_knowledge()
+    except Exception as e:
+        logger.warning(f"Persisted knowledge load failed (non-fatal): {e}")
+
     # Bootstrap job cache from recruitment system
     cache_refresh_task = None
     try:

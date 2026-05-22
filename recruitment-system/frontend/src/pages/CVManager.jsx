@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   getCandidates,
   getCandidate,
@@ -96,6 +96,7 @@ const REMARK_TYPES = [
 ]
 
 export default function CVManager() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [page, setPage] = useState(1)
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
@@ -110,6 +111,24 @@ export default function CVManager() {
     const t = setTimeout(() => setSearch(searchInput), DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [searchInput])
+
+  const candidateIdFromQuery = searchParams.get('candidate')
+
+  useEffect(() => {
+    if (!candidateIdFromQuery) return
+    setSelectedCandidate((currentCandidate) => {
+      if (currentCandidate?.id === candidateIdFromQuery) return currentCandidate
+      return { id: candidateIdFromQuery, name: 'Candidate' }
+    })
+  }, [candidateIdFromQuery])
+
+  const handleCloseReview = () => {
+    setSelectedCandidate(null)
+    if (!candidateIdFromQuery) return
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('candidate')
+    setSearchParams(nextParams, { replace: true })
+  }
 
   const { data: candidatesData, isLoading: isLoadingCandidates, refetch } = useQuery({
     queryKey: ['candidates', { page, search, status: statusFilter, source: sourceFilter }],
@@ -420,7 +439,7 @@ export default function CVManager() {
       {selectedCandidate && (
         <CVReviewModal
           candidate={selectedCandidate}
-          onClose={() => setSelectedCandidate(null)}
+          onClose={handleCloseReview}
         />
       )}
     </div>
@@ -498,7 +517,7 @@ function CVReviewModal({ candidate, onClose }) {
   ]
 
   return (
-    <Modal open={true} onClose={onClose} title={`Review: ${candidate.name}`} size="lg">
+    <Modal open={true} onClose={onClose} title={`Review: ${candidate.name || 'Candidate'}`} size="lg">
       {/* Tab Navigation */}
       <div className="flex gap-1 mb-6 border-b border-gray-200 overflow-x-auto">
         {tabs.map(tab => {

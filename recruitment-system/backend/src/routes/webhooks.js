@@ -43,45 +43,67 @@ router.get('/whatsapp', (req, res) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Webhook forwarding queue
+//
+// Meta requires HTTP 200 within 20 seconds.  We must return 200 immediately,
+// but we cannot afford to drop messages if the Python bot is temporarily down
+// (e.g. during a Cloud Run cold start or a rolling deploy).
+//
+// Solution: enqueue the payload in memory the moment it arrives, return 200,
+// then drain the queue in the background with exponential backoff.  Messages
+// are retried up to MAX_RETRIES times before being marked failed.
+// ─────────────────────────────────────────────────────────────────────────────
+const _webhookQueue = [];
+const _MAX_RETRIES  = 10;
+let   _draining     = false;
+
+async function _forwardToChatbot(payload, attempt = 1) {
+    const chatbotUrl = (process.env.CHATBOT_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+    await axios.post(`${chatbotUrl}/webhook/whatsapp`, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 12000,
+    });
+}
+
+async function _drainWebhookQueue() {
+    if (_draining) return;
+    _draining = true;
+    while (_webhookQueue.length > 0) {
+        const item = _webhookQueue[0];
+        try {
+            await _forwardToChatbot(item.payload, item.attempts);
+            _webhookQueue.shift();
+            logger.info(`[WhatsApp] Webhook forwarded (attempt ${item.attempts})`);
+        } catch (err) {
+            item.attempts += 1;
+            if (item.attempts > _MAX_RETRIES) {
+                logger.error(`[WhatsApp] Dropping webhook after ${_MAX_RETRIES} failed attempts: ${err.message}`);
+                _webhookQueue.shift();
+            } else {
+                // Exponential backoff: 1 s, 2 s, 4 s … capped at 30 s
+                const delay = Math.min(1000 * Math.pow(2, item.attempts - 1), 30000);
+                logger.warn(`[WhatsApp] Forward failed (attempt ${item.attempts}), retrying in ${delay}ms: ${err.message}`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+    _draining = false;
+}
+
 /**
  * WhatsApp webhook handler
  */
-router.post('/whatsapp', async (req, res) => {
-    // Acknowledge receipt immediately — Meta requires HTTP 200 within 20 seconds.
+router.post('/whatsapp', (req, res) => {
+    // Return 200 to Meta immediately — required within 20 seconds.
     res.sendStatus(200);
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Proxy to Python chatbot
-    // ─────────────────────────────────────────────────────────────────────────
-    // All WhatsApp intelligence (trilingual NLP, GPT-4o RAG, full state
-    // machine, CV parsing with confidence scores, ad-click detection, and
-    // automatic candidate push to /api/chatbot/intake) lives in the Python bot.
-    //
-    // This handler is now a thin forwarding proxy: it receives the webhook
-    // from Meta and forwards the raw JSON body to the Python bot's endpoint.
-    // The Python bot processes the message asynchronously and sends the
-    // WhatsApp reply directly to the user via the Meta API.
-    //
-    // Integration routes remain UNCHANGED:
-    //   POST /api/chatbot/intake       ← Python bot pushes completed candidates here
-    //   GET  /api/public/job-context   ← Python bot fetches ad job context here
-    //   POST /api/chatbot-sync/job     ← Recruitment system pushes new jobs to Python KB
-    // ─────────────────────────────────────────────────────────────────────────
-    const chatbotUrl = (process.env.CHATBOT_API_URL || 'http://localhost:8000').replace(/\/$/, '');
-
-    try {
-        logger.info(`[WhatsApp] Forwarding webhook → ${chatbotUrl}/webhook/whatsapp`);
-        await axios.post(`${chatbotUrl}/webhook/whatsapp`, req.body, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 10000
-        });
-        logger.info('[WhatsApp] Webhook forwarded to Python chatbot successfully');
-    } catch (error) {
-        // HTTP 200 has already been sent to Meta — this error will NOT cause
-        // Meta to retry. Log it clearly so the issue is easy to diagnose.
-        logger.error(`[WhatsApp] Failed to forward to Python chatbot at ${chatbotUrl}: ${error.message}`);
-        logger.error('[WhatsApp] Fix: ensure CHATBOT_API_URL is set in .env and the Python chatbot is running (pip install -r requirements.txt && python -m uvicorn app.main:app --port 8000).');
-    }
+    // Enqueue and drain asynchronously so messages are never silently dropped
+    // when the Python chatbot is temporarily unavailable.
+    _webhookQueue.push({ payload: req.body, attempts: 1 });
+    _drainWebhookQueue().catch(err =>
+        logger.error(`[WhatsApp] Queue drain error: ${err.message}`)
+    );
 });
 
 /**
@@ -354,10 +376,28 @@ Keep responses concise. Be friendly and professional.`;
 // HELPER FUNCTIONS
 // ===============================================
 
+function isPlaceholderCandidateName(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return true;
+    return ['unknown', 'unknown candidate', 'candidate', 'pending ai extraction', 'n/a', 'na'].includes(normalized)
+        || normalized.startsWith('whatsapp ');
+}
+
+function resolveCandidateInsertName(identifier, source, name) {
+    const explicitName = String(name || '').trim();
+    if (explicitName && !isPlaceholderCandidateName(explicitName)) {
+        return explicitName;
+    }
+    if (source === 'whatsapp' || /^\+?\d+$/.test(String(identifier || '').trim())) {
+        return String(identifier || '').trim();
+    }
+    return explicitName || `New ${source || 'candidate'}`;
+}
+
 /**
  * Get or create candidate by phone/identifier
  */
-async function getOrCreateCandidate(identifier, source, name = 'Unknown Candidate') {
+async function getOrCreateCandidate(identifier, source, name = '') {
     try {
         // Try to find existing candidate
         const queriedCandidate = await pool.query(
@@ -369,11 +409,13 @@ async function getOrCreateCandidate(identifier, source, name = 'Unknown Candidat
             return queriedCandidate.rows[0];
         }
 
+        const resolvedName = resolveCandidateInsertName(identifier, source, name);
+
         // Create new candidate
         const insertResult = await pool.query(
             `INSERT INTO candidates (phone, source, status, name)
              VALUES ($1, $2, 'new', $3) RETURNING id`,
-            [identifier, source, name]
+            [identifier, source, resolvedName]
         );
 
         // Fetch the newly created candidate

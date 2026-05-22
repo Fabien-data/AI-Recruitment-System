@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { getCandidates, createCandidate, getDuplicateCandidates, mergeCandidates } from '../api'
+import { getCandidates, createCandidate, getDuplicateCandidates, mergeCandidates, getProjects } from '../api'
 import { Search, Plus, Users, GitMerge, AlertTriangle } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -19,9 +19,10 @@ export default function Candidates() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const [language, setLanguage] = useState('')
+  const [projectIds, setProjectIds] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
   const [reviewCandidateId, setReviewCandidateId] = useState(null)
-  const [form, setForm] = useState({ name: '', phone: '', email: '', source: 'web', preferred_language: 'en', notes: '' })
+  const [form, setForm] = useState({ name: '', phone: '', email: '', age: '', source: 'web', preferred_language: 'en', notes: '' })
   const [showDuplicates, setShowDuplicates] = useState(false)
 
   const queryClient = useQueryClient()
@@ -32,8 +33,20 @@ export default function Candidates() {
   }, [searchInput])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['candidates', { page, search, status, language }],
-    queryFn: () => getCandidates({ page, search, status, language: language || undefined })
+    queryKey: ['candidates', { page, search, status, language, projectIds }],
+    queryFn: () =>
+      getCandidates({
+        page,
+        search,
+        status,
+        language: language || undefined,
+        project_ids: projectIds.length ? projectIds.join(',') : undefined,
+      })
+  })
+
+  const { data: activeProjectsData } = useQuery({
+    queryKey: ['projects', 'active', 'candidate-filter'],
+    queryFn: () => getProjects({ page: 1, limit: 200, status: 'active' }),
   })
 
   const { data: duplicatesData = [], isLoading: duplicatesLoading, refetch: refetchDuplicates } = useQuery({
@@ -57,7 +70,7 @@ export default function Candidates() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['candidates'] })
       setModalOpen(false)
-      setForm({ name: '', phone: '', email: '', source: 'web', preferred_language: 'en', notes: '' })
+      setForm({ name: '', phone: '', email: '', age: '', source: 'web', preferred_language: 'en', notes: '' })
       toast.success('Candidate added')
     },
     onError: (err) => {
@@ -71,11 +84,21 @@ export default function Candidates() {
       toast.error('Name and phone are required')
       return
     }
-    createMutation.mutate(form)
+    const payload = {
+      ...form,
+      age: form.age === '' ? undefined : Number.parseInt(form.age, 10),
+    }
+    createMutation.mutate(payload)
+  }
+
+  const handleProjectFilterChange = (e) => {
+    const values = Array.from(e.target.selectedOptions).map((opt) => opt.value)
+    setProjectIds(values)
   }
 
   const candidatesList = data?.data || []
   const pagination = data?.pagination
+  const activeProjects = activeProjectsData?.data || []
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
@@ -128,13 +151,26 @@ export default function Candidates() {
             <option value="si">Sinhala</option>
             <option value="ta">Tamil</option>
           </select>
+          <select
+            value={projectIds}
+            multiple
+            onChange={handleProjectFilterChange}
+            className="input w-full sm:w-72 h-28"
+            aria-label="Filter by ongoing projects"
+          >
+            {activeProjects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.title}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
       {/* Table */}
       <div className="card overflow-hidden">
         {isLoading ? (
-          <TableSkeleton rows={8} cols={6} />
+          <TableSkeleton rows={8} cols={7} />
         ) : candidatesList.length === 0 ? (
           <div className="py-12 text-center text-gray-500">
             <Users className="mx-auto h-12 w-12 text-gray-300 mb-2" aria-hidden />
@@ -151,6 +187,7 @@ export default function Candidates() {
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Name</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Age</th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Phone</th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Email</th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Source</th>
@@ -166,6 +203,7 @@ export default function Candidates() {
                       onClick={() => setReviewCandidateId(candidate.id)}
                     >
                       <td className="py-3 px-4 font-medium text-gray-900">{candidate.name || 'Unknown'}</td>
+                      <td className="py-3 px-4 text-gray-600">{candidate.age ?? '-'}</td>
                       <td className="py-3 px-4 text-gray-600">{candidate.phone}</td>
                       <td className="py-3 px-4 text-gray-600">{candidate.email || '-'}</td>
                       <td className="py-3 px-4">
@@ -306,6 +344,15 @@ export default function Candidates() {
             value={form.email}
             onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
             placeholder="email@example.com"
+          />
+          <Input
+            label="Age"
+            type="number"
+            min="1"
+            max="120"
+            value={form.age}
+            onChange={(e) => setForm((f) => ({ ...f, age: e.target.value }))}
+            placeholder="Candidate age"
           />
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>

@@ -72,6 +72,13 @@ export const deleteJob = (id) =>
 export const refreshJobKnowledgeBase = () =>
   apiClient.post('/api/chatbot-sync/refresh-jobs').then(res => res.data)
 
+// Resync ALL knowledge (jobs + projects + FAQs) to the chatbot via the outbox.
+export const fullResyncChatbot = () =>
+  apiClient.post('/api/chatbot-sync/full-resync').then(res => res.data)
+
+export const getChatbotOutboxStatus = () =>
+  apiClient.get('/api/chatbot-sync/outbox-status').then(res => res.data)
+
 // Knowledge Base
 export const getKnowledgeBaseEntries = (params) =>
   apiClient.get('/api/knowledge-base', { params }).then(res => res.data)

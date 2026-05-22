@@ -187,6 +187,38 @@ async function applyMigrations() {
         await safeAlter(sql, label);
     }
 
+    // ── Migration 012: chatbot_sync_outbox — realtime knowledge sync to bot ───
+    // Outbox pattern: every job/project/FAQ change writes a row; a background
+    // worker drains it and POSTs to the chatbot. Survives chatbot restarts,
+    // retries with exponential backoff, and self-heals via the reconciler.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS chatbot_sync_outbox (
+            id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            doc_id        VARCHAR(128) NOT NULL,
+            doc_type      VARCHAR(32)  NOT NULL,
+            operation     VARCHAR(16)  NOT NULL,
+            payload       JSONB        NOT NULL,
+            status        VARCHAR(16)  NOT NULL DEFAULT 'pending',
+            attempts      INT          NOT NULL DEFAULT 0,
+            last_error    TEXT,
+            created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            synced_at     TIMESTAMPTZ
+        )
+    `, 'chatbot_sync_outbox table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_outbox_pending ON chatbot_sync_outbox (status, updated_at) WHERE status IN ('pending','failed')`,
+        'idx_outbox_pending'
+    );
+    await safeAlter(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_pending_per_doc ON chatbot_sync_outbox (doc_id, operation) WHERE status = 'pending'`,
+        'idx_outbox_pending_per_doc'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_outbox_doc_synced ON chatbot_sync_outbox (doc_id, synced_at DESC) WHERE status = 'sent'`,
+        'idx_outbox_doc_synced'
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 

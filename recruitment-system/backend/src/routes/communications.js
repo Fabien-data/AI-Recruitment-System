@@ -21,6 +21,7 @@ const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
+const { normalizePhone } = require('../utils/phone');
 const logger = require('../utils/logger');
 const { uploadToGCS } = require('../utils/gcs-upload');
 
@@ -123,6 +124,75 @@ async function insertCommunicationMessage({
             [id, candidateId, channel, direction, messageType, content, sentBy || null]
         );
     }
+}
+
+/**
+ * Resolve the most relevant job application and upcoming interview for a candidate.
+ * Used to pre-populate the default outreach message in the portal.
+ */
+async function getCandidateMessageContext(candidateId) {
+    const appResult = await query(
+        adaptQuery(`
+            SELECT a.id AS application_id, j.title AS job_title,
+                   SUBSTRING(COALESCE(j.description, ''), 1, 300) AS job_description_snippet,
+                   a.status AS application_status
+            FROM applications a
+            JOIN jobs j ON j.id = a.job_id
+            WHERE a.candidate_id = $1
+              AND LOWER(a.status) NOT IN ('rejected', 'withdrawn')
+            ORDER BY COALESCE(a.updated_at, a.applied_at) DESC
+            LIMIT 1
+        `),
+        [candidateId]
+    );
+
+    // Prefer next upcoming interview; fall back to most recent past one.
+    // Production schema stores interviews in interview_schedules linked via applications.
+    const upcomingResult = await query(
+        adaptQuery(`
+            SELECT iv.id,
+                   j.title AS interview_job_title,
+                   iv.scheduled_datetime,
+                   iv.location,
+                   iv.status
+            FROM interview_schedules iv
+            JOIN applications a ON a.id = iv.application_id
+            LEFT JOIN jobs j ON j.id = a.job_id
+            WHERE a.candidate_id = $1
+              AND iv.scheduled_datetime >= NOW()
+              AND iv.status NOT IN ('cancelled', 'rejected')
+            ORDER BY iv.scheduled_datetime ASC
+            LIMIT 1
+        `),
+        [candidateId]
+    );
+
+    let interview = upcomingResult.rows[0] || null;
+
+    if (!interview) {
+        const pastResult = await query(
+            adaptQuery(`
+                SELECT iv.id,
+                       j.title AS interview_job_title,
+                       iv.scheduled_datetime,
+                       iv.location,
+                       iv.status
+                FROM interview_schedules iv
+                JOIN applications a ON a.id = iv.application_id
+                LEFT JOIN jobs j ON j.id = a.job_id
+                WHERE a.candidate_id = $1
+                ORDER BY iv.scheduled_datetime DESC
+                LIMIT 1
+            `),
+            [candidateId]
+        );
+        interview = pastResult.rows[0] || null;
+    }
+
+    return {
+        application: appResult.rows[0] || null,
+        interview,
+    };
 }
 
 function authenticateChatbot(req, res, next) {
@@ -265,6 +335,19 @@ router.get('/candidate/:candidate_id/notifications', authenticate, async (req, r
             [candidate_id]
         );
         res.json(result.rows);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── GET /api/communications/candidate/:id/context ────────────────────────────
+// Returns the latest active application (job title + short description) and
+// nearest interview for the candidate. Used by the portal to prefill messages.
+router.get('/candidate/:candidate_id/context', authenticate, async (req, res, next) => {
+    try {
+        const { candidate_id } = req.params;
+        const context = await getCandidateMessageContext(candidate_id);
+        res.json(context);
     } catch (error) {
         next(error);
     }
@@ -797,19 +880,49 @@ router.post('/candidate/:candidate_id/release', authenticate, async (req, res, n
 });
 
 // ── POST /api/communications/send ─────────────────────────────────────────────
-// Agent manually sends a WhatsApp message to a candidate.
-// If not already in handoff, automatically triggers takeover first.
+// Agent manually sends a message to a candidate on one or more channels.
+// Accepts `channel` (single: 'whatsapp'|'email'|'sms') OR
+//         `channels` (comma-separated / array) to send to multiple channels.
+// WhatsApp: supports text + media (image/audio/video/document via GCS)
+// Email:    supports text body + the same uploaded file as an attachment
+// SMS:      text only
 router.post('/send', authenticate, upload.single('media'), async (req, res, next) => {
     try {
-        const { candidate_id, phone, channel = 'whatsapp', message = '', text = '', msgType, sender = 'agent' } = req.body;
+        const {
+            candidate_id,
+            phone,
+            channel,
+            channels: rawChannels,
+            message = '',
+            text = '',
+            msgType,
+            sender = 'agent',
+            email_subject,
+        } = req.body;
         const mediaFile = req.file;
         const normalizedMessage = String(message || text || '').trim();
         const hasText = Boolean(normalizedMessage);
 
-        let resolvedCandidateId = candidate_id;
+        // Resolve which channels to send on
+        let targetChannels;
+        if (rawChannels) {
+            targetChannels = Array.isArray(rawChannels)
+                ? rawChannels
+                : String(rawChannels).split(',').map(s => s.trim()).filter(Boolean);
+        } else {
+            targetChannels = [String(channel || 'whatsapp')];
+        }
+        // Deduplicate + normalise
+        targetChannels = [...new Set(targetChannels.map(c => c.toLowerCase()))];
+        const validChannels = new Set(['whatsapp', 'email', 'sms']);
+        const badChannels = targetChannels.filter(c => !validChannels.has(c));
+        if (badChannels.length > 0) {
+            return res.status(400).json({ error: `Unsupported channel(s): ${badChannels.join(', ')}. Supported: whatsapp, email, sms` });
+        }
 
+        let resolvedCandidateId = candidate_id;
         if (!resolvedCandidateId && phone) {
-            const normalizedPhone = String(phone).replace(/[\s\-()]/g, '');
+            const normalizedPhone = normalizePhone(phone) || String(phone).replace(/[\s\-()]/g, '');
             const foundCandidate = await query(
                 adaptQuery(`
                     SELECT id
@@ -828,7 +941,6 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
         if (!resolvedCandidateId) {
             return res.status(400).json({ error: 'candidate_id or phone is required' });
         }
-
         if (!hasText && !mediaFile) {
             return res.status(400).json({ error: 'message or media file is required' });
         }
@@ -840,12 +952,11 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
         if (candidateResult.rows.length === 0) {
             return res.status(404).json({ error: 'Candidate not found' });
         }
-
         const candidate = candidateResult.rows[0];
-        let sendResult = { simulated: false };
+
+        // ── Upload media to GCS once (reused by both WhatsApp and as email attachment) ──
         let mediaUrl = null;
         let finalMessageType = 'text';
-
         if (mediaFile) {
             if (!validateMediaMime(mediaFile)) {
                 return res.status(400).json({ error: `Unsupported media MIME type: ${mediaFile.mimetype}` });
@@ -854,62 +965,87 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             finalMessageType = detectMediaType(mediaFile.mimetype, msgType);
         }
 
-        if (channel === 'whatsapp') {
-            const { sendTextMessage, sendMediaMessage } = require('../services/whatsapp');
-            const phone = candidate.phone || candidate.whatsapp_phone;
-            if (!phone) {
-                return res.status(400).json({ error: 'Candidate has no phone number. Cannot send WhatsApp message.' });
-            }
-            try {
-                if (mediaUrl) {
-                    sendResult = await sendMediaMessage(phone, finalMessageType, mediaUrl, normalizedMessage);
-                } else {
-                    sendResult = await sendTextMessage(phone, normalizedMessage);
+        // ── Dispatch per channel ─────────────────────────────────────────────
+        const channelResults = {};
+
+        for (const ch of targetChannels) {
+            channelResults[ch] = { simulated: false };
+
+            if (ch === 'whatsapp') {
+                const { sendTextMessage, sendMediaMessage } = require('../services/whatsapp');
+                const waPhone = candidate.whatsapp_phone || candidate.phone;
+                if (!waPhone) {
+                    channelResults[ch] = { simulated: true, error: 'Candidate has no phone number' };
+                    continue;
                 }
-            } catch (err) {
-                const waError = err.response?.data?.error?.message || err.message;
-                logger.warn(`WhatsApp send failed for ${phone}: ${waError}`);
-                sendResult.simulated = true;
-                sendResult.error = waError;
-            }
-        } else if (channel === 'sms') {
-            if (mediaUrl) {
-                return res.status(400).json({ error: 'SMS channel does not support media attachments in this endpoint' });
-            }
-            const { sendSMS } = require('../services/sms');
-            sendResult = await sendSMS(candidate.phone, message);
-        } else if (channel === 'email') {
-            if (mediaUrl) {
-                return res.status(400).json({ error: 'Email media attachments are not supported by this endpoint yet' });
-            }
-            if (candidate.email) {
+                try {
+                    let waResult;
+                    if (mediaUrl) {
+                        waResult = await sendMediaMessage(waPhone.replace(/[^0-9]/g, ''), finalMessageType, mediaUrl, normalizedMessage);
+                    } else {
+                        waResult = await sendTextMessage(waPhone.replace(/[^0-9]/g, ''), normalizedMessage);
+                    }
+                    channelResults[ch].messages = waResult?.messages;
+                    channelResults[ch].whatsapp_message_id = waResult?.messages?.[0]?.id || null;
+                } catch (err) {
+                    const waError = err.response?.data?.error?.message || err.message;
+                    logger.warn(`WhatsApp send failed for ${waPhone}: ${waError}`);
+                    channelResults[ch].simulated = true;
+                    channelResults[ch].error = waError;
+                }
+
+            } else if (ch === 'email') {
+                if (!candidate.email) {
+                    channelResults[ch] = { simulated: true, error: 'Candidate has no email address' };
+                    continue;
+                }
                 try {
                     const gmailService = require('../services/gmail');
-                    const isConnected = await gmailService.isConnected();
-                    if (isConnected) {
-                        await gmailService.sendAutoReply(candidate.email, 'Message from Dewan Recruitment', candidate.name);
-                    } else {
-                        sendResult.simulated = true;
+                    const gmailConnected = await gmailService.isConnected();
+                    if (!gmailConnected) {
+                        channelResults[ch] = { simulated: true, error: 'Gmail not connected. Complete OAuth flow first.' };
+                        continue;
                     }
+                    const subject = email_subject
+                        ? String(email_subject).trim().slice(0, 200)
+                        : 'Message from Dewan Recruitment';
+                    const attachments = mediaFile
+                        ? [{ buffer: mediaFile.buffer, filename: mediaFile.originalname, mimeType: mediaFile.mimetype }]
+                        : [];
+                    await gmailService.sendEmail(candidate.email, subject, normalizedMessage, attachments);
                 } catch (err) {
-                    sendResult.simulated = true;
+                    logger.warn(`Email send failed for ${candidate.email}: ${err.message}`);
+                    channelResults[ch].simulated = true;
+                    channelResults[ch].error = err.message;
                 }
-            } else {
-                return res.status(400).json({ error: 'Candidate has no email address' });
+
+            } else if (ch === 'sms') {
+                if (mediaUrl) {
+                    channelResults[ch] = { simulated: true, error: 'SMS channel does not support media attachments' };
+                    continue;
+                }
+                try {
+                    const { sendSMS } = require('../services/sms');
+                    await sendSMS(candidate.phone, normalizedMessage);
+                } catch (err) {
+                    logger.warn(`SMS send failed: ${err.message}`);
+                    channelResults[ch].simulated = true;
+                    channelResults[ch].error = err.message;
+                }
             }
-        } else {
-            return res.status(400).json({ error: 'Invalid channel. Supported: whatsapp, sms, email' });
         }
 
-        // Store the message in communications
+        // ── Persist one communications row (primary channel is first target) ─
+        const primaryChannel = targetChannels[0];
         const commId = generateUUID();
         const agentName = req.user?.name || req.user?.email || 'Agent';
-        const messageText = normalizedMessage;
         const attachmentsValue = mediaUrl ? [mediaUrl] : [];
-        const waMessageId = sendResult?.messages?.[0]?.id || null;
+        const primaryWaId = channelResults['whatsapp']?.whatsapp_message_id || null;
         const metadataValue = JSON.stringify({
             source: 'agent_dashboard',
-            whatsapp_message_id: waMessageId,
+            channels: targetChannels,
+            channel_results: channelResults,
+            whatsapp_message_id: primaryWaId,
             upload_mime_type: mediaFile?.mimetype || null,
             upload_original_name: mediaFile?.originalname || null,
             upload_size: mediaFile?.size || null,
@@ -917,30 +1053,50 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
         await insertCommunicationMessage({
             id: commId,
             candidateId: resolvedCandidateId,
-            channel,
+            channel: primaryChannel,
             direction: 'outbound',
             messageType: finalMessageType,
-            content: messageText,
+            content: normalizedMessage,
             sentBy: req.user.id,
             senderType: 'agent',
             senderName: agentName,
             attachmentsValue,
             metadataValue,
             callRecordingUrl: finalMessageType === 'audio' ? mediaUrl : null,
-            whatsappMessageId: waMessageId,
+            whatsappMessageId: primaryWaId,
         });
 
-        // If a human agent responded, consider intervention resolved.
-        await query(
-            adaptQuery(`
-                UPDATE candidates
-                SET intervention_needed = FALSE,
-                    intervention_reason = NULL,
-                    updated_at = NOW()
-                WHERE id = $1
-            `),
-            [resolvedCandidateId]
-        );
+        // Clear intervention flag now that an agent has responded.
+        // Keep backward compatibility across older/newer candidate schemas.
+        try {
+            await query(
+                adaptQuery(`
+                    UPDATE candidates
+                    SET intervention_needed = FALSE,
+                        intervention_reason = NULL,
+                        updated_at = NOW()
+                    WHERE id = $1
+                `),
+                [resolvedCandidateId]
+            );
+        } catch (clearErr) {
+            const msg = String(clearErr?.message || '').toLowerCase();
+            const schemaMismatch = msg.includes('column') || msg.includes('does not exist') || msg.includes('unknown column');
+            if (!schemaMismatch) {
+                throw clearErr;
+            }
+
+            await query(
+                adaptQuery(`
+                    UPDATE candidates
+                    SET requires_human = FALSE,
+                        escalation_reason = NULL,
+                        updated_at = NOW()
+                    WHERE id = $1
+                `),
+                [resolvedCandidateId]
+            );
+        }
 
         // Broadcast via WebSocket
         try {
@@ -950,10 +1106,10 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
                 const msgPayload = {
                     id: commId,
                     candidate_id: resolvedCandidateId,
-                    channel,
+                    channel: primaryChannel,
                     direction: 'outbound',
                     message_type: finalMessageType,
-                    content: messageText,
+                    content: normalizedMessage,
                     attachments: attachmentsValue,
                     sender_type: sender || 'agent',
                     sender_name: agentName,
@@ -965,12 +1121,12 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
                     candidate_id: resolvedCandidateId,
                     phone: candidate.phone || candidate.whatsapp_phone,
                     sender: sender || 'agent',
-                    text: messageText,
+                    text: normalizedMessage,
                     timestamp: new Date().toISOString(),
                     message_type: finalMessageType,
                     attachments: attachmentsValue,
                 });
-                const chatPreview = messageText
+                const chatPreview = normalizedMessage
                     || (mediaUrl ? `[${finalMessageType.toUpperCase()}]` : '');
                 io.emit('chat_activity', { candidate_id: resolvedCandidateId, last_message: chatPreview.slice(0, 80), ts: new Date().toISOString() });
             }
@@ -978,16 +1134,26 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
             logger.debug(`send WS emit skipped: ${wsErr.message}`);
         }
 
+        // Build per-channel simulated/error summary for the UI
+        const anySimulated = Object.values(channelResults).some(r => r.simulated);
+        const deliveryErrors = Object.fromEntries(
+            Object.entries(channelResults)
+                .filter(([, r]) => r.error)
+                .map(([ch, r]) => [ch, r.error])
+        );
+
         return res.status(201).json({
             id: commId,
             direction: 'outbound',
-            content: messageText,
+            content: normalizedMessage,
             message_type: finalMessageType,
             attachments: attachmentsValue,
             candidate_id: resolvedCandidateId,
-            simulated: sendResult.simulated || false,
-            ...(sendResult.error && { delivery_error: sendResult.error }),
-            whatsapp_message_id: waMessageId,
+            channels: targetChannels,
+            channel_results: channelResults,
+            simulated: anySimulated,
+            ...(Object.keys(deliveryErrors).length > 0 && { delivery_errors: deliveryErrors }),
+            whatsapp_message_id: primaryWaId,
         });
     } catch (error) {
         next(error);

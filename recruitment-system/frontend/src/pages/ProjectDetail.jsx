@@ -55,16 +55,16 @@ function ProjectCandidateList({ projectId, jobFilter }) {
               <Link
                 key={`${jobTitle}-${c.id || c.candidate_id}`}
                 to={`/candidates/${c.id || c.candidate_id}`}
-                className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 transition-colors group"
+                className="group flex items-start gap-3 rounded-xl p-3 transition-colors hover:bg-gray-50"
               >
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 overflow-hidden">
                   {c.photo_url
                     ? <img src={`${import.meta.env.VITE_API_URL || ''}${c.photo_url}`} alt={c.name} className="w-full h-full object-cover" />
                     : (c.name?.charAt(0)?.toUpperCase() || <User size={14} />)}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate group-hover:text-primary-600">{c.name}</p>
-                  <p className="text-xs text-gray-500 truncate">{c.application_status || c.status || 'applied'}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium leading-tight text-gray-900 break-words group-hover:text-primary-600">{c.name}</p>
+                  <p className="mt-1 text-xs leading-snug text-gray-500 break-words">{c.application_status || c.status || 'applied'}</p>
                 </div>
                 {c.match_score != null && (
                   <span className="text-xs font-semibold text-primary-600 flex-shrink-0">
@@ -160,8 +160,8 @@ export default function ProjectDetail() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
         <div>
-          <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-3xl font-bold text-gray-900">{project.title}</h1>
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-bold text-gray-900 break-words">{project.title}</h1>
             <Badge status={project.status} />
             <Badge status={project.priority} />
           </div>
@@ -326,13 +326,13 @@ export default function ProjectDetail() {
                   <Link
                     key={job.id}
                     to={`/jobs/${job.id}`}
-                    className="block p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                    className="block rounded-lg border border-gray-200 p-4 transition-colors hover:bg-gray-50"
                   >
-                    <div className="flex items-start justify-between mb-2">
+                    <div className="mb-2 flex items-start justify-between gap-3">
                       <h3 className="font-medium text-gray-900">{job.title}</h3>
                       <Badge status={job.status} />
                     </div>
-                    <div className="flex items-center gap-4 text-sm text-gray-600">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-600">
                       <span className="inline-flex items-center gap-1">
                         <Briefcase size={14} /> {job.category}
                       </span>
@@ -368,12 +368,12 @@ export default function ProjectDetail() {
           <Card>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Candidates</h2>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center justify-end gap-3">
                 {project.jobs && project.jobs.length > 1 && (
                   <select
                     value={candidatesJobFilter}
                     onChange={(e) => setCandidatesJobFilter(e.target.value)}
-                    className="text-sm border border-gray-300 rounded-lg px-2 py-1"
+                    className="max-w-full rounded-lg border border-gray-300 px-2 py-1 text-sm"
                   >
                     <option value="">All Jobs</option>
                     {project.jobs.map((job) => (
@@ -392,20 +392,20 @@ export default function ProjectDetail() {
 
             {/* Pipeline stats */}
             {stats.total_applications > 0 && (
-              <div className="grid grid-cols-4 gap-2 mb-4">
-                <div className="p-2 bg-blue-50 rounded-lg text-center">
+              <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+                <div className="rounded-lg bg-blue-50 p-3 text-center">
                   <p className="text-xs text-blue-600">Total</p>
                   <p className="text-lg font-bold text-blue-900">{stats.total_applications}</p>
                 </div>
-                <div className="p-2 bg-yellow-50 rounded-lg text-center">
+                <div className="rounded-lg bg-yellow-50 p-3 text-center">
                   <p className="text-xs text-yellow-600">Screening</p>
                   <p className="text-lg font-bold text-yellow-900">{stats.screening_count || 0}</p>
                 </div>
-                <div className="p-2 bg-purple-50 rounded-lg text-center">
+                <div className="rounded-lg bg-purple-50 p-3 text-center">
                   <p className="text-xs text-purple-600">Interview</p>
                   <p className="text-lg font-bold text-purple-900">{stats.interview_count || 0}</p>
                 </div>
-                <div className="p-2 bg-green-50 rounded-lg text-center">
+                <div className="rounded-lg bg-green-50 p-3 text-center">
                   <p className="text-xs text-green-600">Selected</p>
                   <p className="text-lg font-bold text-green-900">{stats.selected_count || 0}</p>
                 </div>
@@ -462,14 +462,14 @@ export default function ProjectDetail() {
             {project.team && project.team.length > 0 ? (
               <div className="space-y-3">
                 {project.team.map((member) => (
-                  <div key={member.id} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <div key={member.id} className="flex items-start gap-3 rounded-lg bg-gray-50 p-3">
                     <div className="w-10 h-10 bg-primary-100 text-primary-700 rounded-full flex items-center justify-center font-medium">
                       {member.full_name?.charAt(0)?.toUpperCase()}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 truncate">{member.full_name}</p>
-                      <p className="text-xs text-gray-500 truncate">{member.email}</p>
-                      <div className="flex items-center gap-2 mt-1">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium leading-tight text-gray-900 break-words">{member.full_name}</p>
+                      <p className="mt-1 text-xs leading-snug text-gray-500 break-words">{member.email}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Badge status={member.user_role} className="text-xs" />
                         <span className="text-xs text-gray-500 capitalize">• {member.role}</span>
                       </div>

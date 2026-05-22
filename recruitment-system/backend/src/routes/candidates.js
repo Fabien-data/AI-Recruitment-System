@@ -3,9 +3,75 @@ const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const { adaptQuery, isMySQL } = require('../utils/query-adapter');
+const { normalizePhone } = require('../utils/phone');
 const axios = require('axios');
 const logger = require('../utils/logger');
 const { resolveCvAccessUrl } = require('../utils/cv-url');
+
+function parseCandidateMetadata(metadata) {
+    if (!metadata) return {};
+    if (typeof metadata === 'object') return metadata;
+    try {
+        return JSON.parse(metadata);
+    } catch (_error) {
+        return {};
+    }
+}
+
+function isPlaceholderCandidateName(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return true;
+    return [
+        'unknown',
+        'unknown candidate',
+        'candidate',
+        'pending ai extraction',
+        'n/a',
+        'na',
+    ].includes(normalized) || normalized.startsWith('whatsapp ');
+}
+
+function resolveCandidateDisplayName(candidate, metadata = parseCandidateMetadata(candidate?.metadata)) {
+    const preferredNames = [
+        metadata?.application_form?.full_name,
+        metadata?.full_name,
+        metadata?.name,
+        candidate?.name,
+    ];
+
+    const explicitName = preferredNames
+        .map((value) => String(value || '').trim())
+        .find((value) => value && !isPlaceholderCandidateName(value));
+
+    return explicitName || String(candidate?.phone || candidate?.whatsapp_phone || candidate?.name || 'Unknown Candidate').trim();
+}
+
+function normalizeCandidateRecord(candidate) {
+    const metadata = parseCandidateMetadata(candidate?.metadata);
+    const displayName = resolveCandidateDisplayName(candidate, metadata);
+    const parsedAge = Number(metadata?.age);
+    const age = Number.isFinite(parsedAge) ? parsedAge : null;
+
+    return {
+        ...candidate,
+        metadata,
+        display_name: displayName,
+        name: displayName,
+        age,
+    };
+}
+
+function normalizeAgeInput(value) {
+    if (value === undefined) return { hasValue: false, age: null };
+    if (value === null || String(value).trim() === '') return { hasValue: true, age: null };
+
+    const age = Number.parseInt(String(value), 10);
+    if (!Number.isFinite(age) || age <= 0 || age > 120) {
+        return { hasValue: true, invalid: true, age: null };
+    }
+
+    return { hasValue: true, age };
+}
 
 /**
  * Get all candidates with filters and pagination
@@ -20,6 +86,8 @@ router.get('/', authenticate, async (req, res, next) => {
             source,
             search,
             language,
+            project_id,
+            project_ids,
             intervention_needed
         } = req.query;
 
@@ -44,6 +112,41 @@ router.get('/', authenticate, async (req, res, next) => {
             const normLang = LANG_NORM[language] || language;
             whereClause += isMySQL ? ' AND preferred_language = ?' : ` AND preferred_language = $${params.length + 1}`;
             params.push(normLang);
+        }
+
+        const parsedProjectIds = Array.isArray(project_ids)
+            ? project_ids
+            : String(project_ids || '')
+                .split(',')
+                .map((value) => value.trim())
+                .filter(Boolean);
+
+        const selectedProjectIds = [...new Set([
+            ...(project_id ? [String(project_id).trim()] : []),
+            ...parsedProjectIds,
+        ].filter(Boolean))];
+
+        if (selectedProjectIds.length > 0) {
+            const inPlaceholders = selectedProjectIds
+                .map((_, idx) => (isMySQL ? '?' : `$${params.length + idx + 1}`))
+                .join(', ');
+
+            whereClause += isMySQL
+                ? ` AND EXISTS (
+                        SELECT 1
+                        FROM applications a
+                        JOIN jobs j ON a.job_id = j.id
+                        WHERE a.candidate_id = candidates.id
+                          AND j.project_id IN (${inPlaceholders})
+                    )`
+                : ` AND EXISTS (
+                        SELECT 1
+                        FROM applications a
+                        JOIN jobs j ON a.job_id = j.id
+                        WHERE a.candidate_id = candidates.id
+                          AND j.project_id IN (${inPlaceholders})
+                    )`;
+            params.push(...selectedProjectIds);
         }
 
         if (search) {
@@ -81,7 +184,7 @@ router.get('/', authenticate, async (req, res, next) => {
         const result = await query(listQuery, listParams);
 
         res.json({
-            data: result.rows,
+            data: result.rows.map(normalizeCandidateRecord),
             pagination: {
                 page: parseInt(page),
                 limit: parseInt(limit),
@@ -117,12 +220,14 @@ router.get('/:id', authenticate, async (req, res, next) => {
         // Extract age / height / language_register from JSONB metadata so the frontend doesn't need to dig  
         let metadata = {};
         try {
-            metadata = candidate.metadata
-                ? (typeof candidate.metadata === 'string' ? JSON.parse(candidate.metadata) : candidate.metadata)
-                : {};
+            metadata = parseCandidateMetadata(candidate.metadata);
         } catch (_) {}
+        const displayName = resolveCandidateDisplayName(candidate, metadata);
         candidate = {
             ...candidate,
+            metadata,
+            display_name: displayName,
+            name: displayName,
             age: metadata.age ?? null,
             height_cm: metadata.height_cm ?? null,
             // Expose the precise language register (singlish/tanglish/si/ta/en)
@@ -207,20 +312,38 @@ router.post('/', authenticate, async (req, res, next) => {
             email,
             source = 'manual',
             preferred_language = 'en',
-            notes
+            notes,
+            age,
         } = req.body;
 
         if (!name || !phone) {
             return res.status(400).json({ error: 'Name and phone are required' });
         }
 
+        const normalizedPhone = normalizePhone(phone) || String(phone).trim();
+
+        const ageInput = normalizeAgeInput(age);
+        if (ageInput.invalid) {
+            return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
+        }
+
+        const metadata = parseCandidateMetadata(req.body?.metadata);
+        if (ageInput.hasValue) {
+            if (ageInput.age === null) {
+                delete metadata.age;
+            } else {
+                metadata.age = ageInput.age;
+            }
+        }
+        const metadataPayload = Object.keys(metadata).length ? metadata : null;
+
         if (isMySQL) {
             // MySQL: Insert then select
             const id = generateUUID();
             await query(
-                `INSERT INTO candidates (id, name, phone, email, source, preferred_language, notes, status)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 'new')`,
-                [id, name, phone, email, source, preferred_language, notes]
+                `INSERT INTO candidates (id, name, phone, email, source, preferred_language, notes, metadata, status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new')`,
+                [id, name, normalizedPhone, email, source, preferred_language, notes, metadataPayload ? JSON.stringify(metadataPayload) : null]
             );
 
             const result = await query('SELECT * FROM candidates WHERE id = ?', [id]);
@@ -228,10 +351,10 @@ router.post('/', authenticate, async (req, res, next) => {
         } else {
             // PostgreSQL: Use RETURNING
             const result = await query(
-                `INSERT INTO candidates (name, phone, email, source, preferred_language, notes, status)
-                 VALUES ($1, $2, $3, $4, $5, $6, 'new')
+                `INSERT INTO candidates (name, phone, email, source, preferred_language, notes, metadata, status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'new')
                  RETURNING *`,
-                [name, phone, email, source, preferred_language, notes]
+                [name, normalizedPhone, email, source, preferred_language, notes, metadataPayload]
             );
             res.status(201).json(result.rows[0]);
         }
@@ -254,6 +377,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
         const allowedFields = ['name', 'email', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
         const setClause = [];
         const values = [];
+        const hasAgeInPayload = Object.prototype.hasOwnProperty.call(updates, 'age');
 
         Object.keys(updates).forEach(key => {
             if (allowedFields.includes(key)) {
@@ -270,6 +394,38 @@ router.put('/:id', authenticate, async (req, res, next) => {
                 }
             }
         });
+
+        if (hasAgeInPayload) {
+            const placeholder = isMySQL ? '?' : '$1';
+            const existingCandidateResult = await query(
+                `SELECT metadata FROM candidates WHERE id = ${placeholder}`,
+                [id]
+            );
+
+            if (existingCandidateResult.rows.length === 0) {
+                return res.status(404).json({ error: 'Candidate not found' });
+            }
+
+            const metadata = parseCandidateMetadata(existingCandidateResult.rows[0]?.metadata);
+            const ageInput = normalizeAgeInput(updates.age);
+            if (ageInput.invalid) {
+                return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
+            }
+
+            if (ageInput.age === null) {
+                delete metadata.age;
+            } else {
+                metadata.age = ageInput.age;
+            }
+
+            if (isMySQL) {
+                setClause.push('metadata = ?');
+                values.push(JSON.stringify(metadata));
+            } else {
+                setClause.push(`metadata = $${values.length + 1}`);
+                values.push(metadata);
+            }
+        }
 
         if (setClause.length === 0) {
             return res.status(400).json({ error: 'No valid fields to update' });

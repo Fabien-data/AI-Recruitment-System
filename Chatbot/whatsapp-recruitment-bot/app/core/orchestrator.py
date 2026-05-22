@@ -17,6 +17,7 @@ from app.services.handoff_service import handoff_service
 from app.services.job_matching_service import job_matching_service
 from app.services.recruitment_sync import recruitment_sync
 from app.services.vacancy_service import vacancy_service
+from app.nlp.language_detector import detect_language_switch_request
 from app.utils.candidate_validator import run_ai_supervisor
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,31 @@ logger = logging.getLogger(__name__)
 
 class IntakeOrchestrator:
     """Core brain that routes candidate messages with explicit priorities."""
+
+    def _candidate_language(self, candidate) -> str:
+        """Resolve candidate language safely across new and legacy schemas."""
+        extracted = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
+        register = extracted.get("language_register") or extracted.get("agent_state", {}).get("reply_register")
+        if register:
+            return str(register).lower()
+
+        language_pref = getattr(candidate, "language_preference", None)
+        language_value = getattr(language_pref, "value", language_pref)
+        if language_value:
+            return str(language_value).lower()
+
+        legacy_pref = getattr(candidate, "preferred_language", None)
+        legacy_value = getattr(legacy_pref, "value", legacy_pref)
+        if legacy_value:
+            return str(legacy_value).lower()
+
+        return "en"
+
+    def _conversation_role(self, conversation) -> str:
+        """Map stored message type to LLM role without assuming Enum shape."""
+        raw_type = getattr(conversation, "message_type", None)
+        normalized = str(getattr(raw_type, "value", raw_type) or "").strip().lower()
+        return "assistant" if normalized in {"bot", "assistant"} else "user"
 
     async def process_text_message(
         self,
@@ -43,27 +69,50 @@ class IntakeOrchestrator:
             db.commit()
             return await self._route_interactive_action(db, candidate, state, interactive_text)
 
-        # Resolve language FIRST so we can pass it to the AI supervisor.
+        # Detect whether this message is an explicit language-switch request so
+        # the lock can be updated; otherwise the existing lock is preserved.
+        is_explicit_switch = bool(detect_language_switch_request(message_text or ""))
         resolved_language = language_service.resolve_language(
             user_text=message_text,
             locked_language=state.get("locked_language"),
         )
-        self._apply_language_lock(db, candidate, state, resolved_language)
+        prev_locked = state.get("locked_language")
+        self._apply_language_lock(
+            db, candidate, state, resolved_language, is_explicit_switch=is_explicit_switch
+        )
         locked_language = state.get("locked_language") or resolved_language or "en"
-
-        # Build conversation history (last 15 messages for full context).
-        history_items = []
-        for conv in reversed(crud.get_conversation_history(db, candidate.id, limit=15)):
-            role = "assistant" if str(conv.message_type.value) == "bot" else "user"
-            content = str(conv.message_text or "").strip()
-            if content:
-                history_items.append({"role": role, "content": content})
 
         # Pass full context to AI supervisor so it knows what's already collected/asked.
         collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
         asked_questions = state.get("asked_questions") if isinstance(state.get("asked_questions"), list) else []
 
+        # Mark the field that was asked in the PREVIOUS turn as "asked" BEFORE
+        # calling the AI — this is the fix for repeated-field re-asking.
+        prev_question = state.get("next_question_type")
+        if prev_question and prev_question not in asked_questions:
+            asked_questions.append(prev_question)
+
+        # Build conversation history (last 15 messages for full context).
+        history_items = []
+        for conv in reversed(crud.get_conversation_history(db, candidate.id, limit=15)):
+            role = self._conversation_role(conv)
+            content = str(conv.message_text or "").strip()
+            if content:
+                history_items.append({"role": role, "content": content})
+
+        # If the language just changed, inject a marker so the AI understands
+        # why the register of historical messages differs from the current one.
+        if is_explicit_switch and prev_locked and prev_locked != locked_language:
+            history_items.append({
+                "role": "system",
+                "content": (
+                    f"[Language preference updated to: {locked_language}. "
+                    f"All replies from this point MUST be in {locked_language}.]"
+                ),
+            })
+
         # Build FAQ context when all core fields are captured (post-onboarding mode).
+        # Cap at 8 vacancies with a one-line summary to avoid blowing the token budget.
         faq_context: Optional[str] = None
         all_core_collected = (
             collected.get("name")
@@ -79,10 +128,14 @@ class IntakeOrchestrator:
                 vacancies = vacancy_service.get_all_vacancies()
                 if vacancies:
                     lines = []
-                    for v in vacancies[:20]:  # cap at 20 to stay within token budget
+                    for v in vacancies[:8]:
                         title = v.get("job_title") or v.get("title") or "Unknown Role"
                         country = v.get("country") or v.get("location") or ""
-                        lines.append(f"- {title} ({country})" if country else f"- {title}")
+                        salary = v.get("salary_range") or v.get("salary") or ""
+                        line = f"- {title} | {country}"
+                        if salary:
+                            line += f" | {salary}"
+                        lines.append(line)
                     faq_context = "\n".join(lines)
             except Exception as _faq_exc:
                 logger.debug("FAQ vacancy fetch skipped: %s", _faq_exc)
@@ -133,11 +186,13 @@ class IntakeOrchestrator:
 
         state["collected_data"] = collected
 
-        # Track which field the AI just asked for (prevents re-asking).
-        if ai_decision.next_question_type:
-            if ai_decision.next_question_type not in asked_questions:
-                asked_questions.append(ai_decision.next_question_type)
-            state["asked_questions"] = asked_questions
+        # Store next_question_type so the NEXT turn can pre-load it into asked_questions
+        # before calling the AI (this is the fix for repeated-field loops).
+        state["next_question_type"] = ai_decision.next_question_type
+        # Also add it to asked_questions now as a belt-and-suspenders guard.
+        if ai_decision.next_question_type and ai_decision.next_question_type not in asked_questions:
+            asked_questions.append(ai_decision.next_question_type)
+        state["asked_questions"] = list(dict.fromkeys(asked_questions))  # deduplicate
 
         if ai_decision.intervention_needed:
             candidate.intervention_needed = True
@@ -279,7 +334,7 @@ class IntakeOrchestrator:
         # --- 6. Load conversation history for AI context ---
         history_items = []
         for conv in reversed(crud.get_conversation_history(db, candidate.id, limit=15)):
-            role = "assistant" if str(conv.message_type.value) == "bot" else "user"
+            role = self._conversation_role(conv)
             content = str(conv.message_text or "").strip()
             if content:
                 history_items.append({"role": role, "content": content})
@@ -397,7 +452,7 @@ class IntakeOrchestrator:
                 return jobs_payload
             return "Great. Your profile is ready."
 
-        lang = getattr(candidate.language_preference, "value", "en")
+        lang = self._candidate_language(candidate)
         return intake_agent.job_role_prompt(lang)
 
     async def _route_view_jobs(self, candidate, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -446,7 +501,7 @@ class IntakeOrchestrator:
     async def _route_question(self, candidate, user_text: str, state: Dict[str, Any]) -> str:
         state["step"] = "answering_questions"
         self._save_agent_state(candidate, state)
-        language = getattr(candidate.language_preference, "value", "en")
+        language = self._candidate_language(candidate)
         return await vacancy_service.search_and_refine(
             user_message=user_text,
             language=language,
@@ -564,25 +619,25 @@ class IntakeOrchestrator:
         return None
 
     def _country_prompt(self, candidate) -> str:
-        lang = getattr(candidate.language_preference, "value", "en")
+        lang = self._candidate_language(candidate)
         return intake_agent.country_prompt(lang)
 
     def _experience_prompt(self, candidate) -> str:
-        lang = getattr(candidate.language_preference, "value", "en")
+        lang = self._candidate_language(candidate)
         return intake_agent.experience_prompt(lang)
 
     def _cv_prompt(self, candidate) -> str:
-        lang = getattr(candidate.language_preference, "value", "en")
+        lang = self._candidate_language(candidate)
         return intake_agent.cv_prompt(lang)
 
     def _handoff_prompt(self, candidate) -> str:
-        lang = getattr(candidate.language_preference, "value", "en")
+        lang = self._candidate_language(candidate)
         return recovery_agent.handoff_prompt(lang)
 
     def _ensure_agent_state(self, candidate) -> Dict[str, Any]:
         state = candidate.agent_state if isinstance(candidate.agent_state, dict) else None
         if state is None:
-            extracted = candidate.extracted_data or {}
+            extracted = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
             state = extracted.get("agent_state") if isinstance(extracted.get("agent_state"), dict) else None
         if not isinstance(state, dict):
             state = {
@@ -606,25 +661,37 @@ class IntakeOrchestrator:
             # so the flag survives a state flush or agent_state column reset.
             if not state.get("cv_uploaded") and getattr(candidate, "resume_file_path", None):
                 state["cv_uploaded"] = True
-        # Fix 7: if collected_data has no name (fresh or reset candidate) but asked_questions
-        # has stale entries from a prior partial session, clear them so the flow
-        # restarts from the beginning rather than jumping mid-sequence.
+        # Only clear asked_questions if collected_data is completely empty (a truly
+        # new session).  Do NOT clear it just because name is missing — that would
+        # reset the question tracker mid-conversation after a restart.
         collected_check = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
-        if not collected_check.get("name") and state.get("asked_questions"):
+        if not collected_check and not state.get("asked_questions"):
             state["asked_questions"] = []
         return state
 
-    def _apply_language_lock(self, db: Session, candidate, state: Dict[str, Any], detected_language: str) -> None:
+    def _apply_language_lock(
+        self,
+        db: Session,
+        candidate,
+        state: Dict[str, Any],
+        detected_language: str,
+        is_explicit_switch: bool = False,
+    ) -> None:
         if not detected_language:
             return
         state["reply_register"] = detected_language
-        if not state.get("locked_language") or state.get("locked_language") != detected_language:
-            state["locked_language"] = detected_language
-            self._save_agent_state(candidate, state)
-            try:
-                crud.update_candidate_language(db, candidate.id, detected_language)
-            except Exception as exc:
-                logger.debug("Language lock update fallback: %s", exc)
+        existing_lock = state.get("locked_language")
+        # Once a lock exists, only an explicit "speak Tamil / switch to Singlish"
+        # request from the user may change it.  Single-word answers like "Dubai"
+        # or "28" must never flip the lock back to English.
+        if existing_lock and not is_explicit_switch:
+            return
+        state["locked_language"] = detected_language
+        self._save_agent_state(candidate, state)
+        try:
+            crud.update_candidate_language(db, candidate.id, detected_language)
+        except Exception as exc:
+            logger.debug("Language lock update fallback: %s", exc)
 
     def _save_agent_state(self, candidate, state: Dict[str, Any]) -> None:
         # Avoid sharing the same MutableDict instance across two JSON columns.
@@ -633,12 +700,13 @@ class IntakeOrchestrator:
         safe_state = dict(state or {})
         candidate.agent_state = dict(safe_state)
 
-        extracted = dict(candidate.extracted_data or {})
+        extracted_source = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
+        extracted = dict(extracted_source)
         extracted["agent_state"] = dict(safe_state)
         candidate.extracted_data = extracted
 
     def _recovery_prompt(self, candidate) -> str:
-        lang = getattr(candidate.language_preference, "value", "en")
+        lang = self._candidate_language(candidate)
         return recovery_agent.recovery_prompt(lang)
 
 

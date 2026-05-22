@@ -378,10 +378,16 @@ async def process_single_message(message: dict, contacts: list, db):
     def _candidate_register(phone: str) -> str:
         cand = crud.get_or_create_candidate(db, phone)
         extracted = cand.extracted_data if isinstance(cand.extracted_data, dict) else {}
+        language_pref = getattr(cand, "language_preference", None)
+        language_value = getattr(language_pref, "value", language_pref)
+        if not language_value:
+            legacy_pref = getattr(cand, "preferred_language", None)
+            language_value = getattr(legacy_pref, "value", legacy_pref)
         return (
             extracted.get("language_register")
             or extracted.get("agent_state", {}).get("reply_register")
-            or getattr(cand.language_preference, "value", "en")
+            or language_value
+            or "en"
         )
 
     async def _safe_process_message(**kwargs):
@@ -421,7 +427,12 @@ async def process_single_message(message: dict, contacts: list, db):
                 db.rollback()
             except Exception:
                 pass
-            logger.error(f"message_router processing failed: {exc}")
+            logger.exception(
+                "message_router processing failed for %s (type=%s): %s",
+                kwargs.get("phone_number"),
+                kwargs.get("source_message_type", "text"),
+                exc,
+            )
             return "I’m here to help — could you send that once more? I’ll continue from where we left off."
 
     message_id   = message.get("id")
@@ -841,12 +852,17 @@ async def candidate_status_webhook(
         candidate = db.query(Candidate).filter(
             Candidate.phone_number == phone
         ).first()
-        lang = "en"
-        if candidate:
-            extracted = candidate.extracted_data or {}
-            lang = extracted.get("language_register") or getattr(
-                candidate.language_preference, "value", "en"
+        if not candidate:
+            logger.warning(
+                "Status webhook: no candidate found for phone %s — aborting", phone
             )
+            db.close()
+            return {"ok": False, "reason": "candidate_not_found"}
+        lang = "en"
+        extracted = candidate.extracted_data or {}
+        lang = extracted.get("language_register") or getattr(
+            candidate.language_preference, "value", "en"
+        )
         db.close()
     except Exception as e:
         logger.warning(f"Could not look up language for {phone}: {e}")

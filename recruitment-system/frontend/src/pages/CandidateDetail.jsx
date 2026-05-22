@@ -2,13 +2,23 @@
 import { useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getCandidate, uploadCandidatePhoto } from '../api'
-import { ArrowLeft, User, Mail, Phone, FileText, Briefcase, MessageSquare, ClipboardList, CheckSquare, Square, Download, Camera } from 'lucide-react'
+import { ArrowLeft, User, Mail, Phone, FileText, Briefcase, MessageSquare, ClipboardList, CheckSquare, Square, Download, Camera, FolderKanban, Globe } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
 import { useRole } from '../stores/authStore'
 import { format } from 'date-fns'
+
+const LANGUAGE_LABELS = {
+  en: 'English',
+  si: 'Sinhala',
+  ta: 'Tamil',
+  singlish: 'Singlish',
+  tanglish: 'Tanglish',
+}
+
+const INACTIVE_APPLICATION_STATUSES = new Set(['rejected', 'withdrawn', 'dropped', 'archived'])
 
 function getDocumentCategory(cv) {
   if (cv?.document_category) return cv.document_category
@@ -20,11 +30,33 @@ function getDocumentCategory(cv) {
   }
 }
 
+const PENDING_URL = '__pending__'
+
 function resolveDocumentUrl(cv) {
   const raw = cv?.resolved_file_url || cv?.file_url || ''
-  if (!raw || raw.startsWith('chatbot://')) return null
+  if (!raw) return null
+  if (raw.startsWith('chatbot://')) return PENDING_URL
   if (raw.startsWith('http')) return raw
   return `${import.meta.env.VITE_API_URL || ''}${raw}`
+}
+
+function parseCandidateMetadata(metadata) {
+  if (!metadata) return {}
+  if (typeof metadata === 'object') return metadata
+  try {
+    return JSON.parse(metadata)
+  } catch {
+    return {}
+  }
+}
+
+function getCandidateLanguageLabel(candidate, metadata) {
+  const code = metadata?.language_register || candidate?.preferred_language || 'en'
+  return LANGUAGE_LABELS[code] || String(code).toUpperCase()
+}
+
+function getPrimaryApplication(applications) {
+  return applications.find((application) => !INACTIVE_APPLICATION_STATUSES.has(String(application?.status || '').toLowerCase())) || applications[0] || null
 }
 
 export default function CandidateDetail() {
@@ -83,12 +115,18 @@ export default function CandidateDetail() {
     )
   }
 
+  const metadata = parseCandidateMetadata(candidate.metadata)
   const documents = candidate.cvs || []
   const cvs = documents.filter((doc) => getDocumentCategory(doc) === 'cv')
   const additionalDocuments = documents.filter((doc) => getDocumentCategory(doc) === 'additional')
   const applications = candidate.applications || []
   const communications = candidate.communications || []
-  const applicationForm = candidate.metadata?.application_form || {}
+  const applicationForm = metadata.application_form || {}
+  const primaryApplication = getPrimaryApplication(applications)
+  const candidateAge = candidate.age || metadata.age || applicationForm.age || null
+  const latestCv = cvs[0] || null
+  const latestCvUrl = latestCv ? resolveDocumentUrl(latestCv) : null
+  const languageLabel = getCandidateLanguageLabel(candidate, metadata)
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
@@ -96,58 +134,111 @@ export default function CandidateDetail() {
         <ArrowLeft size={20} aria-hidden /> Back to Candidates
       </Link>
 
-      <div className="flex flex-col sm:flex-row sm:items-start gap-6 mb-8">
-        {/* Photo */}
-        <div className="relative flex-shrink-0">
-          <div className="w-24 h-24 rounded-3xl overflow-hidden bg-zinc-100 border border-zinc-200 shadow-sm flex items-center justify-center">
-            {candidate.photo_url ? (
-              <img
-                src={`${import.meta.env.VITE_API_URL || ''}${candidate.photo_url}`}
-                alt={candidate.name}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <User size={36} className="text-zinc-300" />
-            )}
-          </div>
-          {canEdit && (
-            <>
-              <button
-                type="button"
-                onClick={() => photoInputRef.current?.click()}
-                disabled={photoMutation.isPending}
-                className="absolute -bottom-2 -right-2 w-8 h-8 bg-zinc-900 text-white rounded-full flex items-center justify-center shadow-md hover:bg-zinc-700 transition-colors disabled:opacity-50"
-                title="Upload photo"
-              >
-                <Camera size={14} />
-              </button>
-              <input
-                ref={photoInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handlePhotoChange}
-              />
-            </>
-          )}
-        </div>
-
-        {/* Name + status */}
-        <div className="flex-1 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">{candidate.name || 'Unknown'}</h1>
-            <div className="flex flex-wrap items-center gap-4 mt-2 text-gray-600">
-              <span className="inline-flex items-center gap-1">
-                <Phone size={18} aria-hidden /> {candidate.phone}
-              </span>
-              {candidate.email && (
-                <span className="inline-flex items-center gap-1">
-                  <Mail size={18} aria-hidden /> {candidate.email}
-                </span>
+      <div className="mb-8 flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+        <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
+          <div className="relative flex-shrink-0">
+            <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-3xl border border-zinc-200 bg-zinc-100 shadow-sm">
+              {candidate.photo_url ? (
+                <img
+                  src={`${import.meta.env.VITE_API_URL || ''}${candidate.photo_url}`}
+                  alt={candidate.name}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <User size={36} className="text-zinc-300" />
               )}
             </div>
+            {canEdit && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  disabled={photoMutation.isPending}
+                  className="absolute -bottom-2 -right-2 flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-white shadow-md transition-colors hover:bg-zinc-700 disabled:opacity-50"
+                  title="Upload photo"
+                >
+                  <Camera size={14} />
+                </button>
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handlePhotoChange}
+                />
+              </>
+            )}
           </div>
-          <Badge status={candidate.status} className="text-sm" />
+
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-start gap-3">
+              <h1 className="text-3xl font-bold text-gray-900 break-words">{candidate.name || candidate.phone || 'Unknown'}</h1>
+              <Badge status={candidate.status} className="text-sm" />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 text-gray-600">
+              <span className="inline-flex items-center gap-1">
+                <Phone size={18} aria-hidden /> {candidate.phone || '-'}
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <Mail size={18} aria-hidden /> {candidate.email || 'No email provided'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Source</p>
+                <p className="mt-2 text-sm font-medium text-gray-900 break-words">{candidate.source || 'Unknown'}</p>
+              </div>
+              <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Preferred Language</p>
+                <p className="mt-2 text-sm font-medium text-gray-900 break-words">{languageLabel}</p>
+              </div>
+              <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Age</p>
+                <p className="mt-2 text-sm font-medium text-gray-900">{candidateAge ? `${candidateAge} years` : 'Not available'}</p>
+              </div>
+              <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Application Status</p>
+                <div className="mt-2">
+                  {primaryApplication ? (
+                    <Badge status={primaryApplication.status} className="text-xs" />
+                  ) : (
+                    <span className="text-sm font-medium text-gray-500">Not assigned</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3 xl:justify-end">
+          <Link
+            to={`/communications?candidate=${candidate.id}`}
+            className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700"
+          >
+            <MessageSquare size={16} aria-hidden /> Go to Chat
+          </Link>
+          <Link
+            to={`/cv-manager?candidate=${candidate.id}`}
+            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+          >
+            <FileText size={16} aria-hidden /> Open CV Manager
+          </Link>
+          {latestCvUrl === PENDING_URL ? (
+            <span className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700">
+              CV processing...
+            </span>
+          ) : latestCvUrl ? (
+            <a
+              href={latestCvUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              <Download size={16} aria-hidden /> View Latest CV
+            </a>
+          ) : null}
         </div>
       </div>
 
@@ -159,12 +250,24 @@ export default function CandidateDetail() {
             </h2>
             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div>
+                <dt className="text-gray-500">Phone number</dt>
+                <dd className="font-medium text-gray-900 break-words">{candidate.phone || '-'}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Email</dt>
+                <dd className="font-medium text-gray-900 break-words">{candidate.email || 'No email provided'}</dd>
+              </div>
+              <div>
                 <dt className="text-gray-500">Source</dt>
                 <dd className="font-medium text-gray-900">{candidate.source}</dd>
               </div>
               <div>
                 <dt className="text-gray-500">Preferred language</dt>
-                <dd className="font-medium text-gray-900">{candidate.preferred_language || 'en'}</dd>
+                <dd className="font-medium text-gray-900">{languageLabel}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Age</dt>
+                <dd className="font-medium text-gray-900">{candidateAge ? `${candidateAge} years` : '-'}</dd>
               </div>
               <div>
                 <dt className="text-gray-500">Created</dt>
@@ -319,7 +422,9 @@ export default function CandidateDetail() {
                     return (
                       <li key={cv.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
                         <span className="text-gray-700">{cv.file_name || 'CV'}</span>
-                        {url && (
+                        {url === PENDING_URL ? (
+                          <span className="text-xs text-amber-600 italic">CV processing — check back in a moment</span>
+                        ) : url ? (
                           <div className="flex items-center gap-3">
                             <a
                               href={url}
@@ -339,7 +444,7 @@ export default function CandidateDetail() {
                               <Download size={14} aria-hidden /> Download
                             </a>
                           </div>
-                        )}
+                        ) : null}
                       </li>
                     )
                   })}
@@ -407,6 +512,103 @@ export default function CandidateDetail() {
 
         <div className="space-y-6">
           <Card>
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-gray-900">
+              <FolderKanban size={20} aria-hidden /> Current Assignment
+            </h2>
+            {primaryApplication ? (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Project</p>
+                  {primaryApplication.project_id ? (
+                    <Link to={`/projects/${primaryApplication.project_id}`} className="mt-2 inline-block text-sm font-medium text-primary-600 hover:text-primary-700 break-words">
+                      {primaryApplication.project_title || 'Untitled project'}
+                    </Link>
+                  ) : (
+                    <p className="mt-2 text-sm font-medium text-gray-900">Unassigned project</p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assigned Job</p>
+                  <Link to={`/jobs/${primaryApplication.job_id}`} className="mt-2 inline-block text-sm font-medium text-primary-600 hover:text-primary-700 break-words">
+                    {primaryApplication.job_title || 'Untitled job'}
+                  </Link>
+                  {primaryApplication.job_category && (
+                    <p className="mt-1 text-xs text-gray-500">{primaryApplication.job_category}</p>
+                  )}
+                </div>
+                <div className="rounded-xl bg-gray-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Application Status</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge status={primaryApplication.status} className="text-xs" />
+                    {primaryApplication.match_score != null && (
+                      <span className="text-xs font-medium text-gray-500">Match score: {primaryApplication.match_score}%</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No job or project assignment yet.</p>
+            )}
+          </Card>
+
+          <Card>
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-gray-900">
+              <FileText size={20} aria-hidden /> Latest CV
+            </h2>
+            {latestCv ? (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm font-medium text-gray-900 break-words">{latestCv.file_name || 'CV Document'}</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {latestCv.uploaded_at ? `Uploaded ${format(new Date(latestCv.uploaded_at), 'MMM d, yyyy')}` : 'Uploaded'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {latestCvUrl ? (
+                    <>
+                      <a
+                        href={latestCvUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100"
+                      >
+                        View CV
+                      </a>
+                      <a
+                        href={latestCvUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download={latestCv.file_name || 'cv'}
+                        className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200"
+                      >
+                        <Download size={14} aria-hidden /> Download CV
+                      </a>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-500">This CV record does not have a downloadable file link yet.</p>
+                  )}
+                </div>
+                <Link
+                  to={`/cv-manager?candidate=${candidate.id}`}
+                  className="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
+                >
+                  Open this candidate in CV Manager
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm text-gray-500">No CV uploaded yet.</p>
+                <Link
+                  to={`/cv-manager?candidate=${candidate.id}`}
+                  className="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
+                >
+                  Open this candidate in CV Manager
+                </Link>
+              </div>
+            )}
+          </Card>
+
+          <Card>
             <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
               <Briefcase size={20} aria-hidden /> Applications
             </h2>
@@ -415,12 +617,27 @@ export default function CandidateDetail() {
             ) : (
               <ul className="space-y-3">
                 {applications.map((app) => (
-                  <li key={app.id} className="p-3 bg-gray-50 rounded-lg">
-                    <Link to={`/jobs/${app.job_id}`} className="font-medium text-primary-600 hover:text-primary-700">
-                      {app.job_title}
-                    </Link>
-                    <p className="text-xs text-gray-500 mt-1">{app.job_category}</p>
-                    <Badge status={app.status} className="mt-2 text-xs" />
+                  <li key={app.id} className="rounded-lg bg-gray-50 p-3">
+                    <div className="space-y-2">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Project</p>
+                        {app.project_id ? (
+                          <Link to={`/projects/${app.project_id}`} className="mt-1 inline-block text-sm font-medium text-primary-600 hover:text-primary-700 break-words">
+                            {app.project_title || 'Untitled project'}
+                          </Link>
+                        ) : (
+                          <p className="mt-1 text-sm text-gray-900">Unassigned project</p>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Job</p>
+                        <Link to={`/jobs/${app.job_id}`} className="mt-1 inline-block text-sm font-medium text-primary-600 hover:text-primary-700 break-words">
+                          {app.job_title}
+                        </Link>
+                        <p className="mt-1 text-xs text-gray-500">{app.job_category || 'Job role'}</p>
+                      </div>
+                    </div>
+                    <Badge status={app.status} className="mt-3 text-xs" />
                   </li>
                 ))}
               </ul>

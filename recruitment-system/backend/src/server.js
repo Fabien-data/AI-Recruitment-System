@@ -218,6 +218,14 @@ applyMigrations()
             initWebSocket(server);
             logger.info('🔌 WebSocket (Socket.io) server ready');
 
+            // ── Start chatbot knowledge sync worker (outbox drain + reconcile)
+            try {
+                const chatbotSyncWorker = require('./workers/chatbot-sync-worker');
+                chatbotSyncWorker.start();
+            } catch (err) {
+                logger.warn(`chatbot-sync-worker failed to start: ${err.message}`);
+            }
+
             // n8n Integration Mode
             if (USE_N8N_FOR_EMAIL) {
                 logger.info('📧 Email processing: HANDLED BY n8n workflows');

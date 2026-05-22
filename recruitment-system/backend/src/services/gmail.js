@@ -62,6 +62,9 @@ async function loadTokens() {
     }
 }
 
+// Module-level lock prevents concurrent token writes from corrupting the file.
+let _tokenRefreshLock = null;
+
 /**
  * Get authenticated Gmail client
  */
@@ -70,18 +73,33 @@ async function getGmailClient() {
     if (!tokens) {
         throw new Error('Gmail not authenticated. Please complete OAuth flow first.');
     }
-    
+
     const oAuth2Client = createOAuth2Client();
     oAuth2Client.setCredentials(tokens);
-    
-    // Handle token refresh
-    oAuth2Client.on('tokens', async (newTokens) => {
-        const existingTokens = await loadTokens();
-        const updatedTokens = { ...existingTokens, ...newTokens };
-        await fs.writeFile(TOKEN_PATH, JSON.stringify(updatedTokens, null, 2));
-        logger.info('Gmail tokens refreshed');
+
+    // Handle token refresh — serialised through a promise lock so that
+    // concurrent requests don't interleave writes to the token file.
+    oAuth2Client.on('tokens', (newTokens) => {
+        const doRefresh = async () => {
+            const existingTokens = await loadTokens();
+            const updatedTokens = { ...existingTokens, ...newTokens };
+            await fs.writeFile(TOKEN_PATH, JSON.stringify(updatedTokens, null, 2));
+            logger.info('Gmail tokens refreshed');
+        };
+
+        if (_tokenRefreshLock) {
+            _tokenRefreshLock = _tokenRefreshLock.then(doRefresh).catch((err) => {
+                logger.error('Gmail token refresh error:', err.message);
+            });
+        } else {
+            _tokenRefreshLock = doRefresh().catch((err) => {
+                logger.error('Gmail token refresh error:', err.message);
+            }).finally(() => {
+                _tokenRefreshLock = null;
+            });
+        }
     });
-    
+
     return google.gmail({ version: 'v1', auth: oAuth2Client });
 }
 
@@ -364,6 +382,68 @@ async function addLabel(messageId, labelName) {
 }
 
 /**
+ * Send an outbound email from the connected Gmail account.
+ *
+ * @param {string} to            - Recipient email address
+ * @param {string} subject       - Email subject line
+ * @param {string} body          - Plain-text body (agent's message)
+ * @param {Array}  [attachments] - Optional array of { buffer: Buffer, filename: string, mimeType: string }
+ * @returns {Promise<boolean>}
+ */
+async function sendEmail(to, subject, body, attachments = []) {
+    const gmail = await getGmailClient();
+
+    const boundary = `boundary_${Date.now().toString(36)}`;
+    const lines = [];
+
+    lines.push(`To: ${to}`);
+    lines.push(`Subject: ${subject}`);
+    lines.push('MIME-Version: 1.0');
+
+    if (attachments.length === 0) {
+        lines.push('Content-Type: text/plain; charset=utf-8');
+        lines.push('');
+        lines.push(body);
+    } else {
+        lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+        lines.push('');
+        lines.push(`--${boundary}`);
+        lines.push('Content-Type: text/plain; charset=utf-8');
+        lines.push('');
+        lines.push(body);
+        for (const att of attachments) {
+            const safeName = String(att.filename || 'attachment').replace(/[^\w.\-]/g, '_');
+            const b64 = att.buffer.toString('base64');
+            lines.push(`--${boundary}`);
+            lines.push(`Content-Type: ${att.mimeType || 'application/octet-stream'}; name="${safeName}"`);
+            lines.push(`Content-Disposition: attachment; filename="${safeName}"`);
+            lines.push('Content-Transfer-Encoding: base64');
+            lines.push('');
+            // Split base64 into 76-char lines per RFC 2045
+            for (let i = 0; i < b64.length; i += 76) {
+                lines.push(b64.slice(i, i + 76));
+            }
+        }
+        lines.push(`--${boundary}--`);
+    }
+
+    const raw = lines.join('\r\n');
+    const encodedEmail = Buffer.from(raw)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+    await gmail.users.messages.send({
+        userId: 'me',
+        requestBody: { raw: encodedEmail },
+    });
+
+    logger.info(`Email sent to ${to} — subject: ${subject}`);
+    return true;
+}
+
+/**
  * Disconnect Gmail (revoke tokens)
  */
 async function disconnect() {
@@ -395,6 +475,7 @@ module.exports = {
     fetchUnreadEmailsWithAttachments,
     downloadAttachment,
     sendAutoReply,
+    sendEmail,
     markAsRead,
     addLabel,
     disconnect,

@@ -15,16 +15,35 @@ logger = logging.getLogger(__name__)
 class CVService:
     """Extract structured candidate data from uploaded CV/image content."""
 
-    _KNOWN_COUNTRIES = [
-        "uae",
-        "qatar",
-        "saudi",
-        "kuwait",
-        "oman",
-        "malaysia",
-        "south korea",
-        "korea",
-    ]
+    # Maps city/alias → canonical country name.
+    # Covers the most common Gulf + Asian destinations for Sri Lankan workers.
+    _COUNTRY_ALIASES: Dict[str, str] = {
+        # UAE
+        "uae": "UAE", "dubai": "UAE", "abu dhabi": "UAE", "abudhabi": "UAE",
+        "sharjah": "UAE", "ajman": "UAE", "ras al khaimah": "UAE",
+        "fujairah": "UAE", "umm al quwain": "UAE",
+        # Qatar
+        "qatar": "Qatar", "doha": "Qatar",
+        # Saudi Arabia
+        "saudi": "Saudi Arabia", "saudi arabia": "Saudi Arabia",
+        "ksa": "Saudi Arabia", "riyadh": "Saudi Arabia", "jeddah": "Saudi Arabia",
+        "mecca": "Saudi Arabia", "medina": "Saudi Arabia", "khobar": "Saudi Arabia",
+        "dammam": "Saudi Arabia",
+        # Kuwait
+        "kuwait": "Kuwait", "kuwait city": "Kuwait",
+        # Oman
+        "oman": "Oman", "muscat": "Oman", "salalah": "Oman", "sohar": "Oman",
+        # Bahrain
+        "bahrain": "Bahrain", "manama": "Bahrain",
+        # Malaysia
+        "malaysia": "Malaysia", "kuala lumpur": "Malaysia", "kl": "Malaysia",
+        "johor": "Malaysia", "penang": "Malaysia",
+        # South Korea
+        "south korea": "South Korea", "korea": "South Korea", "seoul": "South Korea",
+        # Other
+        "singapore": "Singapore", "japan": "Japan", "tokyo": "Japan",
+        "maldives": "Maldives", "male": "Maldives",
+    }
 
     async def process_cv(
         self,
@@ -106,13 +125,10 @@ class CVService:
     def _extract_country_from_text(self, text: str) -> Optional[str]:
         if not text:
             return None
-        for name in self._KNOWN_COUNTRIES:
-            if re.search(r"\b" + re.escape(name) + r"\b", text):
-                if name == "uae":
-                    return "United Arab Emirates"
-                if name in {"south korea", "korea"}:
-                    return "South Korea"
-                return name.title()
+        text_lower = text.lower()
+        for alias, canonical in self._COUNTRY_ALIASES.items():
+            if re.search(r"\b" + re.escape(alias) + r"\b", text_lower):
+                return canonical
         return None
 
 

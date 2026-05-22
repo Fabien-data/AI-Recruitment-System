@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, RefreshCw, BookOpen, Trash2, Edit3, Loader2, Languages } from 'lucide-react'
+import { Plus, Search, RefreshCw, BookOpen, Trash2, Edit3, Loader2, Languages, RadioTower } from 'lucide-react'
 import toast from 'react-hot-toast'
 import Papa from 'papaparse'
 import { Badge } from '../components/ui/Badge'
@@ -12,6 +12,7 @@ import { TableSkeleton } from '../components/ui/Skeleton'
 import {
   createKnowledgeBaseEntry,
   deleteKnowledgeBaseEntry,
+  fullResyncChatbot,
   getKnowledgeBaseCategories,
   getKnowledgeBaseEntries,
   importKnowledgeBaseEntries,
@@ -395,6 +396,17 @@ export default function KnowledgeBase() {
     onError: (error) => toast.error(error.response?.data?.error || 'Failed to import entries'),
   })
 
+  const resyncMutation = useMutation({
+    mutationFn: fullResyncChatbot,
+    onSuccess: (result) => {
+      const j = result?.jobs ?? 0
+      const p = result?.projects ?? 0
+      const f = result?.faqs ?? 0
+      toast.success(`Resync queued — jobs ${j} · projects ${p} · FAQs ${f}`)
+    },
+    onError: (error) => toast.error(error.response?.data?.error || 'Failed to enqueue resync'),
+  })
+
   const entries = entriesQuery.data?.entries || []
   const pagination = entriesQuery.data?.pagination
   const categories = categoriesQuery.data || []
@@ -457,6 +469,15 @@ export default function KnowledgeBase() {
           <Button variant="secondary" onClick={() => entriesQuery.refetch()} loading={entriesQuery.isFetching}>
             {entriesQuery.isFetching ? <Loader2 size={16} /> : <RefreshCw size={16} />}
             Refresh
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => resyncMutation.mutate()}
+            loading={resyncMutation.isPending}
+            title="Re-enqueue every active job, project, and FAQ to the chatbot"
+          >
+            <RadioTower size={16} />
+            Resync Chatbot
           </Button>
           <Button variant="secondary" onClick={() => setImportOpen(true)}>
             <BookOpen size={16} />

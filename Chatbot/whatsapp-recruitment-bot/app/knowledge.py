@@ -29,12 +29,79 @@ class KnowledgeDeleteRequest(BaseModel):
     doc_id: str = Field(..., description="Unique document identifier to delete")
 
 
+class GeneralKnowledgeUpsertRequest(BaseModel):
+    key: str = Field(..., description="Unique knowledge key, e.g. 'company_info', 'registration_fee'")
+    category: str = Field(..., description="Category: company_info | faq | process | contact")
+    data: Dict[str, Any] = Field(..., description="Arbitrary key-value payload")
+    description: Optional[str] = Field(None, description="Human-readable description")
+
+
 # In-memory job cache — hydrated at startup and refreshed every CACHE_REFRESH_INTERVAL_SECS
 job_cache: Dict[str, Dict[str, Any]] = {}
+
+# General knowledge store — company info, FAQs, registration fees, office details.
+# Populated at runtime via POST /api/knowledge/general from the CRM, and now
+# persisted to disk so a chatbot restart doesn't drop the knowledge until the
+# CRM reconciler catches up.
+general_knowledge_store: Dict[str, Any] = {}
+
+# FAQ cache: doc_id -> {faq_id, title, content, metadata, updated_at}
+# Populated when the CRM pushes a doc_type='faq' via /api/knowledge/upsert.
+# Surfaced via /api/knowledge/inventory for the CRM reconciler.
+faq_cache: Dict[str, Dict[str, Any]] = {}
+
+# Project cache: same shape, doc_type='project_desc'.
+project_cache: Dict[str, Dict[str, Any]] = {}
+
+# Persistence directory: relative to the bot's working dir.
+_KNOWLEDGE_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+_GENERAL_STORE_PATH = os.path.join(_KNOWLEDGE_DATA_DIR, "general_knowledge.json")
+_FAQ_CACHE_PATH     = os.path.join(_KNOWLEDGE_DATA_DIR, "faq_cache.json")
+_PROJECT_CACHE_PATH = os.path.join(_KNOWLEDGE_DATA_DIR, "project_cache.json")
 
 # Track last refresh time (epoch seconds) so we can serve stale-while-revalidate
 _cache_last_refreshed: float = 0.0
 CACHE_REFRESH_INTERVAL_SECS: int = 300  # 5 minutes
+
+
+def _atomic_write_json(path: str, payload: Dict[str, Any]) -> None:
+    """Write JSON to `path` atomically (write to .tmp then rename)."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, default=str)
+        os.replace(tmp, path)
+    except Exception as e:
+        logger.warning(f"Failed to persist {path}: {e}")
+
+
+def _load_json_file(path: str) -> Dict[str, Any]:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.warning(f"Failed to load {path}: {e}")
+        return {}
+
+
+def load_persisted_knowledge() -> None:
+    """
+    Hydrate general_knowledge_store / faq_cache / project_cache from disk.
+    Call once from the FastAPI lifespan before bootstrap_job_cache so the bot
+    can answer FAQ-level questions even if the CRM is briefly unreachable.
+    """
+    global general_knowledge_store, faq_cache, project_cache
+    general_knowledge_store.update(_load_json_file(_GENERAL_STORE_PATH))
+    faq_cache.update(_load_json_file(_FAQ_CACHE_PATH))
+    project_cache.update(_load_json_file(_PROJECT_CACHE_PATH))
+    logger.info(
+        f"Persisted knowledge loaded: general={len(general_knowledge_store)} "
+        f"faqs={len(faq_cache)} projects={len(project_cache)}"
+    )
 
 
 def is_cache_stale() -> bool:
@@ -142,6 +209,12 @@ async def bootstrap_job_cache() -> int:
                 "salary_range": job.get("salary_range"),
                 "location": job.get("location", ""),
                 "description": job.get("description", ""),
+                "countries":      job.get("countries") or [],
+                "benefits":       job.get("benefits") or {},
+                "salary_info":    job.get("salary_info") or {},
+                "start_date":     job.get("start_date"),
+                "interview_date": job.get("interview_date"),
+                "project_title":  job.get("project_title"),
             }
             loaded_count += 1
 
@@ -232,30 +305,78 @@ async def upsert_knowledge(
         # We still return 202-like response so recruitment system isn't blocked on vector infra
         logger.warning(f"Document {body.doc_id} was not indexed successfully into vector DB.")
 
-    # Update in-memory job cache when we recognise a job document
+    # Update in-memory caches based on doc_type so the orchestrator can serve
+    # answers directly (without a Pinecone round-trip) and the /inventory
+    # endpoint can report what the bot has.
     metadata = body.metadata or {}
-    job_id = metadata.get("job_id")
-    if body.doc_type.startswith("job") and job_id:
-        raw_req = metadata.get("requirements")
-        if isinstance(raw_req, str):
-            try:
-                requirements = json.loads(raw_req) if raw_req else {}
-            except Exception:
-                requirements = {}
-        else:
-            requirements = raw_req if isinstance(raw_req, dict) else {}
-        job_cache[job_id] = {
-            "job_id": job_id,
+    now_ts = time.time()
+
+    if body.doc_type.startswith("job"):
+        job_id = metadata.get("job_id")
+        if job_id:
+            raw_req = metadata.get("requirements")
+            if isinstance(raw_req, str):
+                try:
+                    requirements = json.loads(raw_req) if raw_req else {}
+                except Exception:
+                    requirements = {}
+            else:
+                requirements = raw_req if isinstance(raw_req, dict) else {}
+            job_cache[job_id] = {
+                "job_id": job_id,
+                "project_id": metadata.get("project_id"),
+                "title": body.title,
+                "category": metadata.get("category"),
+                "status": metadata.get("status"),
+                "requirements": requirements,
+                "salary_range": metadata.get("salary_range"),
+                "location": metadata.get("location", ""),
+                "description": metadata.get("description", ""),
+                "countries":      metadata.get("countries") or [],
+                "benefits":       metadata.get("benefits") or {},
+                "salary_info":    metadata.get("salary_info") or {},
+                "start_date":     metadata.get("start_date"),
+                "interview_date": metadata.get("interview_date"),
+                "project_title":  metadata.get("project_title"),
+                "updated_at":     now_ts,
+            }
+            logger.info(f"✅ Job cache instantly updated for job_id={job_id} title={body.title!r}")
+
+    elif body.doc_type == "faq":
+        faq_cache[body.doc_id] = {
+            "doc_id": body.doc_id,
+            "faq_id": metadata.get("faq_id"),
+            "title": body.title,
+            "content": body.content,
+            "category": metadata.get("category"),
+            "keywords": metadata.get("keywords") or [],
+            "priority": metadata.get("priority", 0),
+            "languages": metadata.get("languages") or ["en"],
+            "metadata": metadata,
+            "updated_at": now_ts,
+        }
+        _atomic_write_json(_FAQ_CACHE_PATH, faq_cache)
+        logger.info(f"✅ FAQ cache updated: {body.doc_id} ({metadata.get('category')})")
+
+    elif body.doc_type == "project_desc":
+        project_cache[body.doc_id] = {
+            "doc_id": body.doc_id,
             "project_id": metadata.get("project_id"),
             "title": body.title,
-            "category": metadata.get("category"),
+            "content": body.content,
+            "client_name": metadata.get("client_name"),
+            "industry_type": metadata.get("industry_type"),
             "status": metadata.get("status"),
-            "requirements": requirements,
-            "salary_range": metadata.get("salary_range"),
-            "location": metadata.get("location", ""),
-            "description": metadata.get("description", ""),
+            "countries": metadata.get("countries") or [],
+            "benefits": metadata.get("benefits") or {},
+            "salary_info": metadata.get("salary_info") or {},
+            "contact_info": metadata.get("contact_info") or {},
+            "start_date": metadata.get("start_date"),
+            "interview_date": metadata.get("interview_date"),
+            "updated_at": now_ts,
         }
-        logger.info(f"✅ Job cache instantly updated for job_id={job_id} title={body.title!r}")
+        _atomic_write_json(_PROJECT_CACHE_PATH, project_cache)
+        logger.info(f"✅ Project cache updated: {body.doc_id} title={body.title!r}")
 
     return {
         "status": "ok",
@@ -276,12 +397,22 @@ async def delete_knowledge(
 
     deleted = rag_engine.delete_document(body.doc_id)
 
-    # Clean job cache if applicable
+    # Clean local caches mirroring the doc_id prefix used by the CRM enqueue.
     if body.doc_id.startswith("job_"):
         job_id = body.doc_id.replace("job_", "", 1)
         if job_id in job_cache:
             job_cache.pop(job_id, None)
             logger.info(f"Job cache entry removed for job_id={job_id}")
+    elif body.doc_id.startswith("faq_"):
+        if body.doc_id in faq_cache:
+            faq_cache.pop(body.doc_id, None)
+            _atomic_write_json(_FAQ_CACHE_PATH, faq_cache)
+            logger.info(f"FAQ cache entry removed: {body.doc_id}")
+    elif body.doc_id.startswith("project_"):
+        if body.doc_id in project_cache:
+            project_cache.pop(body.doc_id, None)
+            _atomic_write_json(_PROJECT_CACHE_PATH, project_cache)
+            logger.info(f"Project cache entry removed: {body.doc_id}")
 
     return {
         "status": "ok",
@@ -291,12 +422,57 @@ async def delete_knowledge(
 
 
 def get_job_cache() -> Dict[str, Dict[str, Any]]:
-    """
-    Expose job cache for use by the chatbot engine.
-
-    For now this is in-memory and process-local, which is sufficient for demos.
-    """
+    """Expose job cache for use by the chatbot engine."""
     return job_cache
+
+
+def get_general_knowledge() -> Dict[str, Any]:
+    """Expose general knowledge store for use by the chatbot engine."""
+    return general_knowledge_store
+
+
+@router.post("/general")
+async def upsert_general_knowledge(
+    body: GeneralKnowledgeUpsertRequest,
+    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False),
+):
+    """
+    Upsert a general knowledge entry (company info, FAQs, registration details).
+    Called by the CRM whenever admin updates company or process information.
+    The store is process-local; the CRM should re-push on chatbot restart.
+    """
+    _require_api_key(x_chatbot_api_key)
+
+    general_knowledge_store[body.key] = {
+        "key": body.key,
+        "category": body.category,
+        "data": body.data,
+        "description": body.description,
+        "updated_at": time.time(),
+    }
+    _atomic_write_json(_GENERAL_STORE_PATH, general_knowledge_store)
+    logger.info(f"General knowledge upserted: key={body.key!r} category={body.category!r}")
+
+    content_str = f"{body.description or body.key}: {json.dumps(body.data)}"
+    try:
+        rag_engine.index_document(
+            doc_id=f"general_{body.key}",
+            text=content_str,
+            metadata={"doc_type": "general_knowledge", "key": body.key, "category": body.category},
+        )
+    except Exception as e:
+        logger.warning(f"RAG indexing failed for general knowledge key={body.key!r}: {e}")
+
+    return {"status": "ok", "key": body.key}
+
+
+@router.get("/general")
+async def list_general_knowledge(
+    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False),
+):
+    """List all stored general knowledge entries (CRM admin debug)."""
+    _require_api_key(x_chatbot_api_key)
+    return {"entries": list(general_knowledge_store.values()), "count": len(general_knowledge_store)}
 
 
 @router.post("/refresh-cache")
@@ -311,4 +487,64 @@ async def refresh_cache_endpoint(
     _require_api_key(x_chatbot_api_key)
     count = await bootstrap_job_cache()
     return {"status": "ok", "jobs_loaded": count}
+
+
+@router.get("/health/job-cache")
+async def job_cache_health():
+    """
+    Returns current job cache size, status, and last refresh timestamp.
+    Unauthenticated — safe for internal health checks and monitoring.
+    """
+    cache_size = len(job_cache)
+    last_refresh_ts = _cache_last_refreshed
+    age_secs = time.time() - last_refresh_ts if last_refresh_ts else None
+    return {
+        "cached_jobs": cache_size,
+        "status": "ok" if cache_size > 0 else "empty",
+        "last_refresh_epoch": last_refresh_ts or None,
+        "cache_age_seconds": round(age_secs, 1) if age_secs is not None else None,
+        "refresh_interval_seconds": CACHE_REFRESH_INTERVAL_SECS,
+    }
+
+
+@router.get("/inventory")
+async def knowledge_inventory(
+    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False)
+):
+    """
+    Report what knowledge the bot currently has. Used by the CRM reconciler
+    to diff against its own tables and re-push any stale or missing rows.
+
+    Shape: {
+      jobs:     [{ doc_id: 'job_<id>',     updated_at: <epoch> }, ...],
+      faqs:     [{ doc_id: 'faq_<id>',     updated_at: <epoch> }, ...],
+      projects: [{ doc_id: 'project_<id>', updated_at: <epoch> }, ...],
+      counts: { jobs, faqs, projects, general_knowledge }
+    }
+    """
+    _require_api_key(x_chatbot_api_key)
+
+    jobs_inv = [
+        {"doc_id": f"job_{jid}", "updated_at": entry.get("updated_at")}
+        for jid, entry in job_cache.items()
+    ]
+    faqs_inv = [
+        {"doc_id": did, "updated_at": entry.get("updated_at")}
+        for did, entry in faq_cache.items()
+    ]
+    projects_inv = [
+        {"doc_id": did, "updated_at": entry.get("updated_at")}
+        for did, entry in project_cache.items()
+    ]
+    return {
+        "jobs": jobs_inv,
+        "faqs": faqs_inv,
+        "projects": projects_inv,
+        "counts": {
+            "jobs": len(job_cache),
+            "faqs": len(faq_cache),
+            "projects": len(project_cache),
+            "general_knowledge": len(general_knowledge_store),
+        },
+    }
 

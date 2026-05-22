@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -8,8 +9,53 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.knowledge import get_general_knowledge, get_job_cache
 
 logger = logging.getLogger(__name__)
+
+
+def _get_company_faq_block() -> str:
+    """
+    Build the company FAQ block shown to candidates in post-onboarding mode.
+    Reads live values from general_knowledge_store (pushed from CRM) with
+    hardcoded defaults as fallback so the first deploy works out of the box.
+    """
+    gk = get_general_knowledge()
+
+    ci       = (gk.get("company_info") or {}).get("data", {})
+    hotline  = ci.get("hotline") or "0117324324"
+    address  = ci.get("address") or "2nd Floor, No 52, Hospital St, 00100, Colombo, Sri Lanka"
+    maps_url = ci.get("maps_url") or "https://share.google/ILCa5LUtejx5xzl9C"
+
+    reg        = (gk.get("registration_fee") or {}).get("data", {})
+    fee_amount = reg.get("amount") or "LKR 5,000"
+    fee_desc   = reg.get("description") or (
+        "one-time; includes visa processing support, medical test coordination, "
+        "departure formalities & contract review"
+    )
+
+    # Derive countries dynamically from live job cache (most accurate source)
+    live_countries: list = []
+    for job in get_job_cache().values():
+        if job.get("status") == "active":
+            for c in (job.get("countries") or []):
+                if c and c not in live_countries:
+                    live_countries.append(c)
+    gk_countries = (gk.get("active_countries") or {}).get("data", {}).get("list", [])
+    countries_list = live_countries or gk_countries or [
+        "UAE (Dubai/Abu Dhabi/Sharjah)", "Qatar", "Saudi Arabia", "Kuwait", "Malaysia", "Oman"
+    ]
+    countries_str = ", ".join(countries_list)
+
+    return (
+        f"- Registration cost and process: {fee_amount} registration fee ({fee_desc}).\n"
+        f"- How to apply: 1) Share CV (done ✅) 2) Visit office or call {hotline} to confirm slot "
+        f"3) Complete medical check & visa with our help.\n"
+        f"- Available countries: {countries_str}.\n"
+        f"- Hotline / contact agent: {hotline} (Monday–Saturday 8am–6pm Sri Lanka time).\n"
+        f"- Company address: {address}\n"
+        f"- Google Maps: {maps_url}"
+    )
 
 
 class AIConversationState(BaseModel):
@@ -152,33 +198,37 @@ def _build_system_prompt(
         missing.append("email")
     if collected_data.get("experience_years") is None:
         missing.append("experience_years")
-    if not collected_data.get("cv_uploaded"):
+    # Check both key variants — orchestrator stores as "cv_uploaded", legacy as "cv"
+    if not (collected_data.get("cv_uploaded") or collected_data.get("cv")):
         missing.append("cv")
     missing_str = ", ".join(missing) if missing else "NOTHING — all data collected, ready to sync"
 
     # --- Post-onboarding FAQ mode ---
     is_post_onboarding = not missing  # All data collected
     faq_section = ""
-    if is_post_onboarding or faq_context:
+    # Only enter full FAQ mode when BOTH conditions are true.  If vacancies exist
+    # but the profile is incomplete, show them as reference only — keep collecting.
+    if is_post_onboarding and faq_context:
+        _company_block = _get_company_faq_block()
+        _hotline = (get_general_knowledge().get("company_info") or {}).get("data", {}).get("hotline") or "0117324324"
         faq_section = f"""
 POST-ONBOARDING MODE — The candidate's profile is complete. Switch to helpful FAQ mode.
 You can now answer questions about:
-- Registration cost and process: LKR 5,000 registration fee (one-time); includes visa processing support, medical test coordination, departure formalities & contract review.
-- How to apply: 1) Share CV (done ✅) 2) Visit office or call 0117324324 to confirm slot 3) Complete medical check & visa with our help.
-- Available countries: UAE (Dubai/Abu Dhabi/Sharjah), Qatar, Saudi Arabia, Kuwait, Malaysia, Oman.
+{_company_block}
 - Job details / vacancies: Roles include Driver, Nurse, Electrician, Mason, Cook, Factory Worker, Security Guard, Cleaner and more. Use LIVE VACANCY DATA below if provided.
-- Hotline / contact agent: 0117324324 (Monday–Saturday 8am–6pm Sri Lanka time).
-- Company address: 2nd Floor, No 52, Hospital St, 00100, Colombo, Sri Lanka.
-- Google Maps: https://share.google/ILCa5LUtejx5xzl9C
 {f"LIVE VACANCY DATA:{chr(10)}{faq_context}" if faq_context else ""}
 RULES FOR FAQ MODE:
 - Answer ANY question the candidate asks using the information above. No question should go unanswered.
 - If live vacancy data is provided, use it to give specific vacancy counts and job titles.
 - Keep replies concise (1–3 sentences). End every reply with one helpful call-to-action.
-- NEVER say "I don't know" — if unsure, invite them to call 0117324324.
+- NEVER say "I don't know" — if unsure, invite them to call {_hotline}.
 - ALWAYS reply in the candidate's exact language register (Sinhala script / Tamil script / Singlish / Tanglish / English).
 - Do NOT introduce the onboarding closing message again if it was already sent.
 """
+    elif faq_context and not is_post_onboarding:
+        # Vacancies loaded but profile is still incomplete — reference them without
+        # switching to FAQ mode so we keep collecting missing fields.
+        faq_section = f"\nAVAILABLE JOBS (for context only — continue collecting profile fields first):\n{faq_context}\n"
 
     # --- CV confirmation section ---
     cv_section = ""
@@ -241,7 +291,9 @@ extracted_name, experience_years, extracted_age, extracted_email, extracted_coun
 
 
 def _fallback_reply() -> str:
-    return "Thanks for your message. Could you please tell me your name and what job you are looking for?"
+    # Neutral — does not ask for a specific field so we don't reset the
+    # conversation state when the LLM is temporarily unavailable.
+    return "Sorry, I'm having a small technical issue right now. Please give me a moment and try sending your message again. 🙏"
 
 
 async def run_ai_supervisor(
@@ -289,20 +341,26 @@ async def run_ai_supervisor(
     last_exc: Optional[Exception] = None
     for model_name in model_candidates:
         try:
-            response = await client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                response_format={"type": "json_object"},
-                temperature=0.4,
-                max_completion_tokens=450,
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.4,
+                    max_completion_tokens=450,
+                ),
+                timeout=15.0,
             )
             content = response.choices[0].message.content or "{}"
             return AIConversationState.model_validate_json(content)
+        except asyncio.TimeoutError:
+            last_exc = asyncio.TimeoutError(model_name)
+            logger.warning("AI supervisor model %s timed out after 15 s", model_name)
         except Exception as exc:
             last_exc = exc
             logger.warning("AI supervisor model %s failed, trying next: %s", model_name, exc)
 
-    logger.error("All supervisor models failed; using static fallback")
+    logger.error("All supervisor models failed; using neutral holding reply")
     return AIConversationState(
         extracted_name=None,
         experience_years=None,
@@ -311,6 +369,8 @@ async def run_ai_supervisor(
         extracted_countries=None,
         job_interest=None,
         country=None,
+        # Neutral holding message — does NOT ask for any field so the
+        # conversation state is preserved and the user can retry.
         reply_message=_fallback_reply(),
         is_ready_to_sync=False,
         intervention_needed=False,
