@@ -552,13 +552,22 @@ class VacancyService:
                 or ""
             )
 
-        urgent = [j for j in active if j.get("is_urgent")]
+        # urgency_level (added in CRM migration 020) supersedes the legacy
+        # is_urgent boolean. Treat top_urgent + urgent as "urgent" for the
+        # no-match fallback; situational + normal as background.
+        def _is_urgent_job(j: Dict[str, Any]) -> bool:
+            level = j.get("urgency_level")
+            if level:
+                return level in ("urgent", "top_urgent")
+            return bool(j.get("is_urgent"))
+
+        urgent = [j for j in active if _is_urgent_job(j)]
         urgent.sort(key=_ts, reverse=True)
         if len(urgent) >= limit:
             return urgent[: max(1, min(limit, 10))]
 
         # Top up with the most recent non-urgent jobs when there aren't enough urgent ones.
-        non_urgent = [j for j in active if not j.get("is_urgent")]
+        non_urgent = [j for j in active if not _is_urgent_job(j)]
         non_urgent.sort(key=_ts, reverse=True)
         combined = urgent + non_urgent
         return combined[: max(1, min(limit, 10))]

@@ -42,7 +42,7 @@ import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
 import { Skeleton } from '../components/ui/Skeleton'
 import { apiClient } from '../api'
-import { updateApplication, transferApplication, getJobs, rejectToPool, batchCertifyApplications } from '../api'
+import { updateApplication, transferApplication, getJobs, rejectToPool, batchCertifyApplications, batchAutoAssign } from '../api'
 import toast from 'react-hot-toast'
 
 // API functions for auto-assign
@@ -58,6 +58,7 @@ export default function JobCandidates() {
     const [showCertifyModal, setShowCertifyModal] = useState(false)
     const [showTransferModal, setShowTransferModal] = useState(false)
     const [showRejectModal, setShowRejectModal] = useState(false)
+    const [showApproveModal, setShowApproveModal] = useState(false)
     const [showMessagePreview, setShowMessagePreview] = useState(false)
     const [statusFilter, setStatusFilter] = useState('')
     const [selectedIds, setSelectedIds] = useState(new Set())
@@ -188,6 +189,14 @@ export default function JobCandidates() {
                 />
             </div>
 
+            {/* Diagnostic banner: empty pipeline for a freshly-created (AI-ingested
+                or otherwise) job. The "View Candidates not working" complaint
+                is almost always this: auto-assign never ran for the new job, so
+                no applications exist. Surface the cause + one-click fix. */}
+            {candidates.length === 0 && (
+                <EmptyPipelineBanner jobId={jobId} onScanned={() => queryClient.invalidateQueries({ queryKey: ['job-candidates', jobId] })} />
+            )}
+
             {/* Candidates List */}
             <div className="card overflow-hidden">
                 <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 flex justify-between items-center">
@@ -237,6 +246,10 @@ export default function JobCandidates() {
                                 onReject={() => {
                                     setSelectedCandidate(candidateData)
                                     setShowRejectModal(true)
+                                }}
+                                onApprove={() => {
+                                    setSelectedCandidate(candidateData)
+                                    setShowApproveModal(true)
                                 }}
                             />
                         ))}
@@ -326,7 +339,132 @@ export default function JobCandidates() {
                     }}
                 />
             )}
+
+            {/* Approve Modal — fills 1 position, auto-completes job when last seat fills */}
+            {showApproveModal && selectedCandidate && (
+                <ApproveModal
+                    data={selectedCandidate}
+                    job={job}
+                    positionsRemaining={Math.max(0, (job.positions_available || 0) - (job.positions_filled || 0))}
+                    onClose={() => {
+                        setShowApproveModal(false)
+                        setSelectedCandidate(null)
+                    }}
+                    onSuccess={() => {
+                        queryClient.invalidateQueries({ queryKey: ['job-candidates', jobId] })
+                        queryClient.invalidateQueries({ queryKey: ['job', jobId] })
+                        queryClient.invalidateQueries({ queryKey: ['jobs'] })
+                    }}
+                />
+            )}
         </div>
+    )
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// EmptyPipelineBanner — "View Candidates not working" turns out to be
+// auto-assign never having run for this job. Offer a one-click scan.
+// ──────────────────────────────────────────────────────────────────────────
+function EmptyPipelineBanner({ jobId, onScanned }) {
+    const [scanning, setScanning] = useState(false)
+    return (
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/40 dark:bg-amber-950/30">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-0.5 h-5 w-5 text-amber-600 dark:text-amber-400" />
+                    <div className="text-sm text-amber-900 dark:text-amber-200">
+                        <p className="font-medium">No candidates have been auto-assigned to this job yet.</p>
+                        <p className="mt-1 text-amber-800/80 dark:text-amber-200/80">
+                            Run an auto-assignment scan to match existing candidates against this job's requirements.
+                        </p>
+                    </div>
+                </div>
+                <Button
+                    variant="secondary"
+                    onClick={async () => {
+                        setScanning(true)
+                        try {
+                            const result = await batchAutoAssign(50, 'new')
+                            toast.success(`Scan complete — ${result.assigned || 0} candidates assigned`)
+                            onScanned?.()
+                        } catch (err) {
+                            toast.error(err.response?.data?.error || 'Auto-assignment scan failed')
+                        } finally {
+                            setScanning(false)
+                        }
+                    }}
+                    disabled={scanning}
+                >
+                    {scanning ? 'Scanning…' : 'Auto-Assign Now'}
+                </Button>
+            </div>
+        </div>
+    )
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// ApproveModal — sets application.status='selected'. Backend cascade
+// auto-completes the job when the last seat fills (see applications.js).
+// ──────────────────────────────────────────────────────────────────────────
+function ApproveModal({ data, job, positionsRemaining, onClose, onSuccess }) {
+    const candidate = data.candidate || {}
+    const [submitting, setSubmitting] = useState(false)
+
+    const disabled = job.status !== 'active' || positionsRemaining <= 0 || data.application_status === 'selected'
+
+    const handleApprove = async () => {
+        if (disabled) return
+        setSubmitting(true)
+        try {
+            await updateApplication(data.application_id, {
+                status: 'selected',
+                notify_channels: ['whatsapp'],
+            })
+            toast.success(`${candidate.name} approved for ${job.title}`)
+            onSuccess?.()
+            onClose()
+        } catch (err) {
+            toast.error(err.response?.data?.error || 'Failed to approve candidate')
+        } finally {
+            setSubmitting(false)
+        }
+    }
+
+    return (
+        <Modal open onClose={onClose} title="Approve candidate for this job" size="md">
+            <div className="space-y-4">
+                <div className="rounded-xl bg-zinc-50 dark:bg-zinc-800/40 p-4">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center text-white text-sm font-bold">
+                            {candidate.name?.charAt(0)?.toUpperCase() || 'C'}
+                        </div>
+                        <div className="min-w-0">
+                            <p className="font-medium text-zinc-900 dark:text-zinc-100 truncate">{candidate.name}</p>
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{candidate.phone || candidate.email}</p>
+                        </div>
+                    </div>
+                </div>
+                <p className="text-sm text-zinc-700 dark:text-zinc-300">
+                    Approving will fill <strong>1 of {positionsRemaining}</strong> remaining position{positionsRemaining === 1 ? '' : 's'}
+                    {' '}for <strong>{job.title}</strong> and notify the candidate via WhatsApp.
+                </p>
+                {disabled && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+                        {job.status !== 'active'
+                            ? `Job is ${job.status}. Set it back to Active before approving.`
+                            : data.application_status === 'selected'
+                                ? 'This candidate has already been approved.'
+                                : 'No positions remain on this job.'}
+                    </div>
+                )}
+                <div className="flex justify-end gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                    <Button variant="secondary" onClick={onClose} disabled={submitting}>Cancel</Button>
+                    <Button onClick={handleApprove} disabled={disabled || submitting}>
+                        {submitting ? 'Approving…' : 'Approve Candidate'}
+                    </Button>
+                </div>
+            </div>
+        </Modal>
     )
 }
 
@@ -488,7 +626,7 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
     )
 }
 
-function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCertify, onTransfer, onReject }) {
+function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCertify, onTransfer, onReject, onApprove }) {
     const { candidate, match_score, match_details, application_status, certified_at } = data
 
     const getScoreColor = (score) => {
@@ -596,9 +734,18 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                         <Eye size={14} />
                         Quick View
                     </Button>
-                    {application_status !== 'certified' && application_status !== 'rejected' ? (
+                    {application_status === 'selected' || application_status === 'placed' ? (
+                        <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1 px-2 font-medium">
+                            <Award size={12} />
+                            Approved
+                        </span>
+                    ) : application_status !== 'certified' && application_status !== 'rejected' ? (
                         <>
-                            <Button size="sm" onClick={onCertify} className="gap-1">
+                            <Button size="sm" onClick={onApprove} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white">
+                                <Award size={14} />
+                                Approve
+                            </Button>
+                            <Button variant="secondary" size="sm" onClick={onCertify} className="gap-1">
                                 <CheckCircle size={14} />
                                 Certify
                             </Button>
@@ -612,10 +759,16 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                             </Button>
                         </>
                     ) : application_status === 'certified' ? (
-                        <span className="text-xs text-green-600 flex items-center gap-1 px-2 font-medium">
-                            <CheckCircle2 size={12} />
-                            Certified {certified_at && new Date(certified_at).toLocaleDateString()}
-                        </span>
+                        <>
+                            <Button size="sm" onClick={onApprove} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white">
+                                <Award size={14} />
+                                Approve
+                            </Button>
+                            <span className="text-xs text-green-600 flex items-center gap-1 px-2 font-medium">
+                                <CheckCircle2 size={12} />
+                                Certified {certified_at && new Date(certified_at).toLocaleDateString()}
+                            </span>
+                        </>
                     ) : (
                         <span className="text-xs text-red-500 flex items-center gap-1 px-2">
                             <XCircle size={12} />

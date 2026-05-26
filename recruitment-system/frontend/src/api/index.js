@@ -63,6 +63,14 @@ export const magicCreateJob = (formData) =>
     headers: { 'Content-Type': 'multipart/form-data' }
   }).then(res => res.data)
 
+// Review-first AI ingestion: parses the flyer and returns extracted fields
+// for the agent to review/edit. Nothing is written to the DB until the
+// FlyerReviewModal calls createProject + createJob.
+export const extractJobFlyers = (formData) =>
+  apiClient.post('/api/jobs/extract', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then(res => res.data)
+
 export const updateJob = (id, data) =>
   apiClient.put(`/api/jobs/${id}`, data).then(res => res.data)
 

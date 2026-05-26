@@ -77,11 +77,21 @@ CREATE TABLE jobs (
     description TEXT,
     requirements JSONB NOT NULL DEFAULT '{}'::jsonb, -- Min/max criteria
     wiggle_room JSONB DEFAULT '{}'::jsonb, -- Tolerance settings
-    status TEXT DEFAULT 'active', -- 'active', 'paused', 'closed', 'filled'
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active','inactive','complete','future','pending_review')),
+    urgency_level VARCHAR(20) NOT NULL DEFAULT 'normal'
+        CHECK (urgency_level IN ('top_urgent','urgent','situational','normal')),
+    is_urgent BOOLEAN NOT NULL DEFAULT FALSE, -- DEPRECATED: derived from urgency_level, kept for chatbot back-compat
+    country VARCHAR(100),                     -- ISO 3166-1 English name
+    country_code CHAR(2),                     -- ISO 3166-1 alpha-2
+    domain VARCHAR(20)
+        CHECK (domain IS NULL OR domain IN ('middle_east','europe')),
+    required_fields_schema JSONB DEFAULT '{}'::jsonb,
     positions_available INTEGER DEFAULT 1,
-    positions_filled INTEGER DEFAULT 0,
+    positions_filled INTEGER DEFAULT 0,       -- DEPRECATED: derived on read from applications, kept for legacy reads
     salary_range TEXT,
     location TEXT,
+    project_id UUID REFERENCES projects(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by UUID, -- Reference to users table
@@ -91,6 +101,9 @@ CREATE TABLE jobs (
 CREATE INDEX idx_jobs_status ON jobs(status);
 CREATE INDEX idx_jobs_category ON jobs(category);
 CREATE INDEX idx_jobs_created_at ON jobs(created_at DESC);
+CREATE INDEX idx_jobs_urgency ON jobs(urgency_level) WHERE urgency_level <> 'normal';
+CREATE INDEX idx_jobs_domain ON jobs(domain) WHERE domain IS NOT NULL;
+CREATE INDEX idx_jobs_country_code ON jobs(country_code) WHERE country_code IS NOT NULL;
 
 -- ===============================================
 -- PROJECTS TABLE

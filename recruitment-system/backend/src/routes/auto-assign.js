@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { pool, withTransaction } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
+const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
 const logger = require('../utils/logger');
 
 /**
@@ -182,9 +183,14 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
 
         const candidate = candidateResult.rows[0];
 
-        // Get all active jobs
+        // Get all active jobs with at least one open seat (derived from
+        // applications, not the deprecated stored positions_filled column).
         const jobsResult = await pool.query(
-            `SELECT * FROM jobs WHERE status = 'active' AND (positions_available - COALESCE(positions_filled, 0)) > 0`
+            `SELECT j.*, ${POSITIONS_FILLED_SELECT}
+             FROM jobs j
+             ${POSITIONS_FILLED_JOIN}
+             WHERE j.status = 'active'
+               AND GREATEST(0, COALESCE(j.positions_available, 0) - pf.positions_filled) > 0`
         );
 
         // Get existing applications for this candidate
@@ -280,7 +286,11 @@ router.post('/batch', authenticate, async (req, res, next) => {
         for (const candidate of candidatesResult.rows) {
             // Get active jobs with positions
             const jobsResult = await pool.query(
-                `SELECT * FROM jobs WHERE status = 'active' AND (positions_available - COALESCE(positions_filled, 0)) > 0`
+                `SELECT j.*, ${POSITIONS_FILLED_SELECT}
+                 FROM jobs j
+                 ${POSITIONS_FILLED_JOIN}
+                 WHERE j.status = 'active'
+                   AND GREATEST(0, COALESCE(j.positions_available, 0) - pf.positions_filled) > 0`
             );
 
             // Get existing applications
@@ -508,9 +518,12 @@ router.get('/candidate/:id/alternatives', authenticate, async (req, res, next) =
         const existingJobIds = existingApps.rows.map(a => a.job_id);
 
         const jobsResult = await pool.query(
-            `SELECT j.*, p.title as project_name FROM jobs j
+            `SELECT j.*, ${POSITIONS_FILLED_SELECT}, p.title as project_name
+             FROM jobs j
              LEFT JOIN projects p ON j.project_id = p.id
-             WHERE j.status = 'active' AND (j.positions_available - COALESCE(j.positions_filled, 0)) > 0`
+             ${POSITIONS_FILLED_JOIN}
+             WHERE j.status = 'active'
+               AND GREATEST(0, COALESCE(j.positions_available, 0) - pf.positions_filled) > 0`
         );
 
         const scored = jobsResult.rows

@@ -208,6 +208,7 @@ async def bootstrap_job_cache() -> int:
             elif not isinstance(schema, dict):
                 schema = {}
 
+            urgency_level = job.get("urgency_level") or "normal"
             job_cache[job_id] = {
                 "job_id": job_id,
                 "project_id": job.get("project_id"),
@@ -224,7 +225,18 @@ async def bootstrap_job_cache() -> int:
                 "start_date":     job.get("start_date"),
                 "interview_date": job.get("interview_date"),
                 "project_title":  job.get("project_title"),
-                "is_urgent":      bool(job.get("is_urgent")),
+                # Structured urgency replaces the boolean is_urgent. The bool
+                # is kept (derived) for back-compat with any downstream filter.
+                "urgency_level":  urgency_level,
+                "is_urgent":      urgency_level in ("urgent", "top_urgent") or bool(job.get("is_urgent")),
+                # Geographic targeting (added in CRM migration 020)
+                "country":        job.get("country"),
+                "country_code":   job.get("country_code"),
+                "domain":         job.get("domain"),
+                # Live position counts
+                "positions_available":  job.get("positions_available"),
+                "positions_filled":     job.get("positions_filled"),
+                "positions_remaining":  job.get("positions_remaining"),
                 "required_fields_schema": schema,
                 "created_at":     job.get("created_at"),
                 "updated_at":     job.get("updated_at"),
@@ -344,6 +356,7 @@ async def upsert_knowledge(
             elif not isinstance(schema, dict):
                 schema = {}
 
+            urgency_level = metadata.get("urgency_level") or "normal"
             job_cache[job_id] = {
                 "job_id": job_id,
                 "project_id": metadata.get("project_id"),
@@ -360,7 +373,18 @@ async def upsert_knowledge(
                 "start_date":     metadata.get("start_date"),
                 "interview_date": metadata.get("interview_date"),
                 "project_title":  metadata.get("project_title"),
-                "is_urgent":      bool(metadata.get("is_urgent")),
+                # Structured urgency (urgency_level) supersedes is_urgent. The
+                # bool is preserved (derived) so the legacy filter still works.
+                "urgency_level":  urgency_level,
+                "is_urgent":      urgency_level in ("urgent", "top_urgent") or bool(metadata.get("is_urgent")),
+                # Geographic targeting (CRM migration 020)
+                "country":        metadata.get("country"),
+                "country_code":   metadata.get("country_code"),
+                "domain":         metadata.get("domain"),
+                # Live position counts (computed in the CRM via LATERAL join)
+                "positions_available":  metadata.get("positions_available"),
+                "positions_filled":     metadata.get("positions_filled"),
+                "positions_remaining":  metadata.get("positions_remaining"),
                 "required_fields_schema": schema,
                 "updated_at":     now_ts,
             }

@@ -186,9 +186,16 @@ async function reconcile() {
     try {
         const jobsSQL = `
             SELECT j.*, p.countries, p.benefits, p.salary_info,
-                   p.start_date, p.interview_date, p.title AS project_title
+                   p.start_date, p.interview_date, p.title AS project_title,
+                   pf.positions_filled,
+                   GREATEST(0, COALESCE(j.positions_available, 0) - pf.positions_filled) AS positions_remaining
             FROM jobs j
             LEFT JOIN projects p ON j.project_id = p.id
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*)::int AS positions_filled
+                FROM applications a
+                WHERE a.job_id = j.id AND a.status IN ('selected','placed')
+            ) pf ON TRUE
             LEFT JOIN LATERAL (
                 SELECT MAX(synced_at) AS last_synced
                 FROM chatbot_sync_outbox o
@@ -292,8 +299,16 @@ async function fullResync() {
 
     const jobs = await query(
         `SELECT j.*, p.countries, p.benefits, p.salary_info,
-                p.start_date, p.interview_date, p.title AS project_title
-         FROM jobs j LEFT JOIN projects p ON j.project_id = p.id
+                p.start_date, p.interview_date, p.title AS project_title,
+                pf.positions_filled,
+                GREATEST(0, COALESCE(j.positions_available, 0) - pf.positions_filled) AS positions_remaining
+         FROM jobs j
+         LEFT JOIN projects p ON j.project_id = p.id
+         LEFT JOIN LATERAL (
+             SELECT COUNT(*)::int AS positions_filled
+             FROM applications a
+             WHERE a.job_id = j.id AND a.status IN ('selected','placed')
+         ) pf ON TRUE
          WHERE j.status = 'active'`,
         []
     );

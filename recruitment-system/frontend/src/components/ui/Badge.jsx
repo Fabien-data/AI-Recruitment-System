@@ -11,6 +11,11 @@ const statusMap = {
   paused: 'badge badge-paused',
   closed: 'badge badge-closed',
   filled: 'badge badge-closed',
+  // New job statuses (post migration 020)
+  inactive: 'badge bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700',
+  complete: 'badge bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/50',
+  future: 'badge bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/50',
+  pending_review: 'badge bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50',
   applied: 'badge badge-new',
   certified: 'badge badge-screening',
   interview_scheduled: 'badge badge-interview',

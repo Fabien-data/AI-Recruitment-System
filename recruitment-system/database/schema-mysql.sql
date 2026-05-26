@@ -77,9 +77,15 @@ CREATE TABLE IF NOT EXISTS jobs (
     description TEXT,
     requirements JSON NOT NULL DEFAULT ('{}'),
     wiggle_room JSON DEFAULT ('{}'),
-    status VARCHAR(50) DEFAULT 'active' COMMENT 'active, paused, closed, filled',
+    status VARCHAR(50) NOT NULL DEFAULT 'active' COMMENT 'active, inactive, complete, future, pending_review',
+    urgency_level VARCHAR(20) NOT NULL DEFAULT 'normal' COMMENT 'top_urgent, urgent, situational, normal',
+    is_urgent BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'DEPRECATED: derived from urgency_level',
+    country VARCHAR(100),
+    country_code CHAR(2),
+    domain VARCHAR(20) COMMENT 'middle_east, europe',
+    required_fields_schema JSON DEFAULT ('{}'),
     positions_available INT DEFAULT 1,
-    positions_filled INT DEFAULT 0,
+    positions_filled INT DEFAULT 0 COMMENT 'DEPRECATED: derived from applications',
     salary_range VARCHAR(100),
     location VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -91,6 +97,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     INDEX idx_jobs_category (category),
     INDEX idx_jobs_tenant (tenant_id),
     INDEX idx_jobs_project (project_id),
+    INDEX idx_jobs_urgency (urgency_level),
+    INDEX idx_jobs_domain (domain),
+    INDEX idx_jobs_country_code (country_code),
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE SET NULL
 );
 

@@ -28,6 +28,28 @@ function _toObject(v) {
 
 /* ───────────────────────────────── JOBS ───────────────────────────────────── */
 
+function _domainLabel(domain) {
+    if (domain === 'middle_east') return 'Middle East';
+    if (domain === 'europe') return 'Europe';
+    return null;
+}
+
+function _urgencyLabel(level) {
+    if (level === 'top_urgent') return 'Top Urgent';
+    if (level === 'urgent') return 'Urgent';
+    if (level === 'situational') return 'Situational';
+    return null;
+}
+
+function _computePositionsRemaining(job) {
+    if (job.positions_remaining != null && Number.isFinite(Number(job.positions_remaining))) {
+        return Math.max(0, Number(job.positions_remaining));
+    }
+    const available = Number(job.positions_available) || 0;
+    const filled = Number(job.positions_filled) || 0;
+    return Math.max(0, available - filled);
+}
+
 function _buildJobContent(job) {
     const requirements = typeof job.requirements === 'string'
         ? job.requirements
@@ -35,6 +57,9 @@ function _buildJobContent(job) {
     const countries  = _toArray(job.countries);
     const benefits   = _toObject(job.benefits);
     const salaryInfo = _toObject(job.salary_info);
+    const urgencyLabel = _urgencyLabel(job.urgency_level);
+    const domainLabel  = _domainLabel(job.domain);
+    const positionsRemaining = _computePositionsRemaining(job);
     return [
         job.title ? `Title: ${job.title}` : null,
         job.description || null,
@@ -42,6 +67,10 @@ function _buildJobContent(job) {
         job.salary_range ? `Salary: ${job.salary_range}` : null,
         Object.keys(salaryInfo).length ? `Salary info: ${JSON.stringify(salaryInfo)}` : null,
         job.location ? `Location: ${job.location}` : null,
+        job.country ? `Country: ${job.country}` : null,
+        domainLabel ? `Region: ${domainLabel}` : null,
+        urgencyLabel ? `Urgency: ${urgencyLabel}` : null,
+        positionsRemaining > 0 ? `Open positions: ${positionsRemaining}` : null,
         countries.length ? `Countries: ${countries.join(', ')}` : null,
         Object.keys(benefits).length ? `Benefits: ${JSON.stringify(benefits)}` : null,
         job.start_date ? `Start Date: ${job.start_date}` : null,
@@ -55,6 +84,8 @@ function _buildJobContent(job) {
  * standard `SELECT j.*, p.countries, p.benefits, ... FROM jobs j LEFT JOIN projects p`.
  */
 function buildJobPayload(job) {
+    const positionsRemaining = _computePositionsRemaining(job);
+    const urgency_level = job.urgency_level || 'normal';
     return {
         doc_id: `job_${job.id}`,
         doc_type: 'job_desc',
@@ -70,6 +101,17 @@ function buildJobPayload(job) {
             location: job.location,
             description: job.description,
             positions_available: job.positions_available,
+            positions_filled: Number(job.positions_filled) || 0,
+            positions_remaining: positionsRemaining,
+            // Geographic + urgency targeting
+            country: job.country || null,
+            country_code: job.country_code || null,
+            domain: job.domain || null,
+            urgency_level,
+            // DEPRECATED: kept so chatbot Pinecone filters still match until
+            // the bot is redeployed to read urgency_level. Derived strictly
+            // from urgency_level so it cannot drift.
+            is_urgent: urgency_level === 'urgent' || urgency_level === 'top_urgent',
             countries:       _toArray(job.countries),
             benefits:        _toObject(job.benefits),
             salary_info:     _toObject(job.salary_info),

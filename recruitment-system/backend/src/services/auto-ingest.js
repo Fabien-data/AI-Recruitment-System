@@ -2,6 +2,7 @@ const { ImageAnnotatorClient } = require('@google-cloud/vision');
 const { openai } = require('../config/openai');
 const { withTransaction, generateUUID } = require('../config/database');
 const { adaptQuery, isMySQL } = require('../utils/query-adapter');
+const { resolveCountry } = require('../utils/countries');
 const logger = require('../utils/logger');
 const { syncJobAsync } = require('../routes/chatbot-sync');
 
@@ -29,7 +30,10 @@ Schema:
       "title": "Exact job title",
       "category": "Job category",
       "department": "Department or team",
-      "location": "Location",
+      "location": "Specific city or facility",
+      "country": "Full English country name (e.g. 'United Arab Emirates', 'Romania')",
+      "country_code": "ISO 3166-1 alpha-2 country code if confident, else null",
+      "domain": "'middle_east' if the country is in the Gulf/Levant/Arabian peninsula, 'europe' if EU/UK/EFTA/Balkans, else null",
       "type": "Full-time, contract, part-time, etc.",
       "description": "Role summary",
       "requirements_text": "A readable summary of all requirements and bullet points",
@@ -45,8 +49,8 @@ Schema:
       },
       "salary_range": "Salary text or 'Not specified'",
       "positions_available": 1,
-      "confidence_score": 0.0,
-      "status": "active"
+      "urgency_level": "'top_urgent' | 'urgent' | 'situational' | 'normal' — infer from words like 'immediate', 'urgent', 'asap', 'walk-in tomorrow'; default 'normal'",
+      "confidence_score": 0.0
     }
   ],
   "confidence_score": 0.0
@@ -54,9 +58,10 @@ Schema:
 
 Guidelines:
 - Always return jobs as an array. If the flyer contains one role, return a one-item array.
-- If a detail is missing, use a sensible null or "Not specified" value.
+- If a detail is missing, use null (or "Not specified" for salary_range only).
 - Keep requirements structured so downstream matching works reliably.
-- Use confidence_score to reflect how trustworthy the extraction is.
+- Use confidence_score (0-1) to reflect how trustworthy the extraction is.
+- DO NOT invent a country if the flyer is ambiguous — leave country/country_code/domain null.
 `;
 
 function stripCodeFences(text) {
@@ -155,7 +160,18 @@ function inferProjectCountryList(project, jobs) {
     return [jobLocations[0]];
 }
 
-function normalizeJobPayload(job, extractedConfidence = 0) {
+const VALID_URGENCY = new Set(['top_urgent', 'urgent', 'situational', 'normal']);
+
+function normalizeUrgency(value) {
+    const lower = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (lower === 'top_urgent' || lower === 'topurgent' || lower === 'critical') return 'top_urgent';
+    if (lower === 'urgent') return 'urgent';
+    if (lower === 'situational') return 'situational';
+    return VALID_URGENCY.has(lower) ? lower : 'normal';
+}
+
+function normalizeJobPayload(job, extractedConfidence = 0, options = {}) {
+    const { forceReview = false } = options;
     const rawConfidence = Number(job.confidence_score ?? extractedConfidence ?? 0);
     const confidence = Number.isFinite(rawConfidence) ? rawConfidence : 0;
 
@@ -165,15 +181,30 @@ function normalizeJobPayload(job, extractedConfidence = 0) {
 
     const requirementsText = job.requirements_text || job.requirements_summary || '';
     const category = job.category || inferCategory(job.title, job.department, job.type);
-    const status = confidence > 0 && confidence < LIVE_CONFIDENCE_THRESHOLD
+    // forceReview is set by the new /extract path so agent review is mandatory.
+    // Legacy /magic-create path keeps the confidence-threshold gating.
+    const status = forceReview
         ? 'pending_review'
-        : (job.status || 'active');
+        : (confidence > 0 && confidence < LIVE_CONFIDENCE_THRESHOLD
+            ? 'pending_review'
+            : (job.status || 'active'));
+
+    const urgency_level = normalizeUrgency(job.urgency_level);
+    const geo = resolveCountry({
+        name: job.country,
+        code: job.country_code,
+        domain: job.domain,
+    });
 
     return {
         title: job.title || 'Untitled role',
         category,
         department: job.department || category,
         location: job.location || 'Not specified',
+        country: geo.country,
+        country_code: geo.country_code,
+        domain: geo.domain,
+        urgency_level,
         type: job.type || 'Full-time',
         description: job.description || requirementsText || '',
         requirements: {
@@ -198,7 +229,7 @@ function normalizeJobPayload(job, extractedConfidence = 0) {
     };
 }
 
-function normalizeExtractionPayload(payload) {
+function normalizeExtractionPayload(payload, options = {}) {
     const projectInput = payload?.project || {};
     const jobsInput = Array.isArray(payload?.jobs)
         ? payload.jobs
@@ -206,7 +237,7 @@ function normalizeExtractionPayload(payload) {
             ? [payload.job]
             : [];
 
-    const jobs = jobsInput.map(job => normalizeJobPayload(job, payload?.confidence_score));
+    const jobs = jobsInput.map(job => normalizeJobPayload(job, payload?.confidence_score, options));
     const confidence_score = Number.isFinite(Number(payload?.confidence_score))
         ? Number(payload.confidence_score)
         : (jobs.length > 0
@@ -436,6 +467,37 @@ async function processJobFlyer(imageBuffer, mimeType = 'image/jpeg') {
     };
 }
 
+/**
+ * Extract structured job data from a flyer WITHOUT writing to the database.
+ *
+ * Used by POST /api/jobs/extract — the per-file review queue calls this for
+ * each upload, shows the agent an editable form, and saves via the regular
+ * POST /api/jobs (with project picker) only after every required field is
+ * filled. This is what replaces the auto-saving behaviour of magic-create.
+ *
+ * The returned `jobs` array has every job pinned to status='pending_review'
+ * regardless of confidence — the agent decides whether to promote to active.
+ */
+async function extractJobFlyer(imageBuffer, mimeType = 'image/jpeg') {
+    if (!Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+        throw new Error('A valid flyer image buffer is required');
+    }
+
+    const rawExtraction = await extractWithFallback(imageBuffer, mimeType);
+    const normalized = normalizeExtractionPayload(rawExtraction, { forceReview: true });
+
+    if (normalized.jobs.length === 0) {
+        throw new Error('No jobs were detected in the uploaded flyer');
+    }
+
+    return {
+        confidence_score: normalized.confidence_score,
+        project: normalized.project,
+        jobs: normalized.jobs,
+    };
+}
+
 module.exports = {
     processJobFlyer,
+    extractJobFlyer,
 };

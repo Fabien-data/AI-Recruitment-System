@@ -4,6 +4,9 @@ import { createJob, createProjectJob, getProjects } from '../api'
 import { Modal } from '../components/ui/Modal'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
+import { CountrySelect } from '../components/jobs/CountrySelect'
+import { URGENCY_OPTIONS } from '../components/jobs/UrgencyPill'
+import { defaultDomainForCountry } from '../constants/countries'
 import toast from 'react-hot-toast'
 
 const JOB_CATEGORIES = [
@@ -39,8 +42,12 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
     positions_available: 1,
     salary_range: '',
     location: '',
+    country: '',
+    country_code: '',
+    domain: '',
+    urgency_level: 'normal',
+    status: 'active',
     deadline: '',
-    is_urgent: false,
     required_fields_schema_text: '',
     requirements: {
       min_age: '',
@@ -57,6 +64,21 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       height_tolerance: 2
     }
   })
+
+  // When the user picks a country, auto-fill the domain only if they haven't
+  // explicitly chosen one yet. They can still override afterwards.
+  const handleCountryChange = (country) => {
+    if (!country) {
+      setFormData((prev) => ({ ...prev, country: '', country_code: '', domain: prev.domain }))
+      return
+    }
+    setFormData((prev) => ({
+      ...prev,
+      country: country.name,
+      country_code: country.code,
+      domain: prev.domain || country.domain_default || '',
+    }))
+  }
 
   const SCHEMA_TEMPLATE = JSON.stringify({
     name: { mandatory: true },
@@ -98,8 +120,12 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       positions_available: 1,
       salary_range: '',
       location: '',
+      country: '',
+      country_code: '',
+      domain: '',
+      urgency_level: 'normal',
+      status: 'active',
       deadline: '',
-      is_urgent: false,
       required_fields_schema_text: '',
       requirements: {
         min_age: '',
@@ -126,6 +152,15 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
 
     if (!formData.title || !formData.category) {
       toast.error('Please fill in all required fields')
+      return
+    }
+
+    if (!formData.country) {
+      toast.error('Country is required')
+      return
+    }
+    if (!formData.domain) {
+      toast.error('Domain (Middle East or Europe) is required')
       return
     }
 
@@ -301,13 +336,72 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Application Deadline</label>
-            <Input
-              type="date"
-              value={formData.deadline}
-              onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
-            />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Application Deadline</label>
+              <Input
+                type="date"
+                value={formData.deadline}
+                onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <select
+                value={formData.status}
+                onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                className="input w-full"
+              >
+                <option value="active">Active</option>
+                <option value="future">Future</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Active jobs sync to the chatbot. Future jobs stay hidden until promoted.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Region & Urgency */}
+        <div className="space-y-4">
+          <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Region & Urgency</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Country <span className="text-red-500">*</span>
+              </label>
+              <CountrySelect
+                value={formData.country_code || formData.country}
+                onChange={handleCountryChange}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Domain <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={formData.domain}
+                onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
+                className="input w-full"
+              >
+                <option value="">Select region</option>
+                <option value="middle_east">Middle East</option>
+                <option value="europe">Europe</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">Auto-suggested from country.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Urgency Level</label>
+              <select
+                value={formData.urgency_level}
+                onChange={(e) => setFormData({ ...formData, urgency_level: e.target.value })}
+                className="input w-full"
+              >
+                {URGENCY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
@@ -453,22 +547,6 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
           <p className="text-sm text-gray-600">
             Controls how the WhatsApp chatbot surfaces this job and which questions it asks candidates.
           </p>
-
-          <div className="flex items-start gap-2">
-            <input
-              id="job-is-urgent"
-              type="checkbox"
-              checked={formData.is_urgent}
-              onChange={(e) => setFormData({ ...formData, is_urgent: e.target.checked })}
-              className="mt-1"
-            />
-            <label htmlFor="job-is-urgent" className="text-sm">
-              <span className="font-medium text-gray-800">Mark as URGENT</span>
-              <p className="text-xs text-gray-500">
-                When no exact match is found for a candidate, the chatbot will offer urgent jobs first.
-              </p>
-            </label>
-          </div>
 
           <div>
             <div className="flex items-center justify-between mb-1">

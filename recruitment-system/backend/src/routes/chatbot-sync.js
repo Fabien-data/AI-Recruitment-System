@@ -10,7 +10,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { normalizePhone } = require('../utils/phone');
 const logger = require('../utils/logger');
 const chatbotOutbox = require('../services/chatbot-outbox');
-const { buildJobPayload } = require('../services/chatbot-payloads');
+const { buildJobPayload, buildProjectPayload } = require('../services/chatbot-payloads');
+const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
 
 // Some deployments don't include a ../models layer; keep this route DB-driven.
 let Candidate;
@@ -54,17 +55,48 @@ async function _postToChatbot(endpoint, body) {
 }
 
 async function _loadJobWithProject(jobId) {
+    // MySQL deployments don't get derived positions_filled (no LATERAL); the
+    // legacy stored column is the fallback there. Postgres uses the shared
+    // join so positions_filled and positions_remaining are always live.
     const sql = isMySQL
         ? `SELECT j.*, p.countries, p.benefits, p.salary_info,
                   p.start_date, p.interview_date, p.title as project_title
            FROM jobs j LEFT JOIN projects p ON j.project_id = p.id
            WHERE j.id = ? LIMIT 1`
-        : `SELECT j.*, p.countries, p.benefits, p.salary_info,
+        : `SELECT j.*, ${POSITIONS_FILLED_SELECT},
+                  p.countries, p.benefits, p.salary_info,
                   p.start_date, p.interview_date, p.title as project_title
-           FROM jobs j LEFT JOIN projects p ON j.project_id = p.id
+           FROM jobs j
+           LEFT JOIN projects p ON j.project_id = p.id
+           ${POSITIONS_FILLED_JOIN}
            WHERE j.id = $1 LIMIT 1`;
     const result = await query(sql, [jobId]);
     return (result.rows && result.rows[0]) || null;
+}
+
+/**
+ * Re-enqueue a project upsert. Used by the jobs route when a job's project_id
+ * changes — both the old and the new project rows in the chatbot KB need to
+ * refresh so they no longer reference / now reference the moved job.
+ */
+async function syncProjectAsync(projectId) {
+    if (!projectId) return;
+    try {
+        const sql = isMySQL
+            ? 'SELECT * FROM projects WHERE id = ? LIMIT 1'
+            : 'SELECT * FROM projects WHERE id = $1 LIMIT 1';
+        const result = await query(sql, [projectId]);
+        const row = result.rows && result.rows[0];
+        if (!row) return;
+        await chatbotOutbox.enqueue({
+            doc_id: `project_${row.id}`,
+            doc_type: 'project_desc',
+            operation: 'upsert',
+            payload: buildProjectPayload(row),
+        });
+    } catch (err) {
+        logger.warn(`syncProjectAsync failed for ${projectId}: ${err.message}`);
+    }
 }
 
 /**
@@ -374,3 +406,4 @@ router.syncJobAsync = syncJobAsync;
 router.syncJobDeleteAsync = syncJobDeleteAsync;
 router.syncJobToChatbot = syncJobToChatbot;
 router.syncAllActiveJobs = syncAllActiveJobs;
+router.syncProjectAsync = syncProjectAsync;

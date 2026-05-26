@@ -368,6 +368,73 @@ async function applyMigrations() {
     await safeAlter(`CREATE INDEX IF NOT EXISTS idx_lead_call_events_lead   ON lead_call_events(lead_id) WHERE lead_id IS NOT NULL`, 'idx_lead_call_events_lead');
     await safeAlter(`CREATE INDEX IF NOT EXISTS idx_lead_call_events_occurred ON lead_call_events(occurred_at DESC)`, 'idx_lead_call_events_occurred');
 
+    // ── Migration 020: jobs schema overhaul ──────────────────────────────────
+    // Introduces structured urgency_level (replacing the is_urgent boolean),
+    // country + country_code + domain (middle_east|europe) for geographic
+    // targeting in the chatbot, and a new 4-value status enum
+    // (active|inactive|complete|future) with pending_review kept as an
+    // admin-only sub-state for low-confidence AI ingestions.
+    //
+    // Order matters: backfill data BEFORE adding CHECK constraints, otherwise
+    // existing rows (paused/closed/filled) abort the constraint creation.
+    // is_urgent is intentionally kept as a deprecated column for one release
+    // so the chatbot Pinecone metadata (keyed on is_urgent today) keeps
+    // working until the chatbot is redeployed reading urgency_level.
+
+    // Step 1: add new columns (idempotent)
+    const jobsOverhaulCols = [
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS urgency_level VARCHAR(20) NOT NULL DEFAULT 'normal'`, 'jobs.urgency_level'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS country       VARCHAR(100)`, 'jobs.country'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS country_code  CHAR(2)`, 'jobs.country_code'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS domain        VARCHAR(20)`, 'jobs.domain'],
+    ];
+    for (const [sql, label] of jobsOverhaulCols) {
+        await safeAlter(sql, label);
+    }
+
+    // Step 2: backfill status values (run BEFORE adding CHECK).
+    // UPDATEs are idempotent — WHERE clauses no longer match after first run.
+    await safeAlter(`UPDATE jobs SET status = 'inactive' WHERE status = 'paused'`, 'jobs.status backfill paused→inactive');
+    await safeAlter(`UPDATE jobs SET status = 'complete' WHERE status IN ('closed','filled')`, 'jobs.status backfill closed/filled→complete');
+
+    // Step 3: backfill urgency_level from legacy is_urgent
+    await safeAlter(
+        `UPDATE jobs SET urgency_level = 'urgent' WHERE is_urgent = TRUE AND urgency_level = 'normal'`,
+        'jobs.urgency_level backfill from is_urgent'
+    );
+
+    // Step 4: add CHECK constraints (safeAlter swallows "already exists")
+    await safeAlter(
+        `ALTER TABLE jobs ADD CONSTRAINT jobs_urgency_level_chk CHECK (urgency_level IN ('top_urgent','urgent','situational','normal'))`,
+        'jobs_urgency_level_chk'
+    );
+    await safeAlter(
+        `ALTER TABLE jobs ADD CONSTRAINT jobs_domain_chk CHECK (domain IS NULL OR domain IN ('middle_east','europe'))`,
+        'jobs_domain_chk'
+    );
+    await safeAlter(
+        `ALTER TABLE jobs ADD CONSTRAINT jobs_status_chk CHECK (status IN ('active','inactive','complete','future','pending_review'))`,
+        'jobs_status_chk'
+    );
+
+    // Step 5: indexes (partial, only where useful)
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_jobs_urgency ON jobs(urgency_level) WHERE urgency_level <> 'normal'`,
+        'idx_jobs_urgency'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_jobs_domain ON jobs(domain) WHERE domain IS NOT NULL`,
+        'idx_jobs_domain'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_jobs_country_code ON jobs(country_code) WHERE country_code IS NOT NULL`,
+        'idx_jobs_country_code'
+    );
+
+    // Step 6: drop the now-redundant idx_jobs_is_urgent (replaced by idx_jobs_urgency).
+    // The is_urgent column itself stays for one release as a deprecated shim.
+    await safeAlter(`DROP INDEX IF EXISTS idx_jobs_is_urgent`, 'drop idx_jobs_is_urgent');
+
     logger.info('✅ Startup migrations complete.');
 }
 

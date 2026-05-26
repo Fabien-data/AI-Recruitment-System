@@ -5,6 +5,7 @@ const { adaptQuery, isMySQL } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
 const { calculateMatchScore } = require('../config/openai');
 const notifications = require('../services/notifications');
+const { syncJobAsync } = require('./chatbot-sync');
 const logger = require('../utils/logger');
 
 /**
@@ -221,6 +222,59 @@ router.put('/:id', authenticate, async (req, res, next) => {
                     `),
                     [generateUUID(), application.id, effDt, effLoc || null, req.user.id]
                 );
+            }
+        }
+
+        // Approval cascade: when status transitions to selected/placed, the
+        // derived positions_filled count on the job increases. If the job is
+        // now fully staffed, flip its status to 'complete' and re-sync the
+        // chatbot KB so the bot stops offering it. Audit-logged for traceability.
+        if (status === 'selected' || status === 'placed') {
+            try {
+                const fillCheck = await query(
+                    adaptQuery(`
+                        SELECT j.id AS job_id, j.status AS job_status, j.positions_available,
+                               (SELECT COUNT(*)::int FROM applications a
+                                WHERE a.job_id = j.id AND a.status IN ('selected','placed')) AS filled
+                        FROM jobs j
+                        WHERE j.id = $1
+                    `),
+                    [application.job_id]
+                );
+                const jobRow = fillCheck.rows[0];
+                if (jobRow && jobRow.job_status === 'active'
+                    && Number(jobRow.filled) >= Number(jobRow.positions_available || 0)
+                    && Number(jobRow.positions_available || 0) > 0) {
+                    await query(
+                        adaptQuery(`UPDATE jobs SET status = 'complete', updated_at = NOW() WHERE id = $1`),
+                        [jobRow.job_id]
+                    );
+                    logger.info(`Job ${jobRow.job_id} auto-completed: all ${jobRow.positions_available} positions filled`);
+                }
+                // Re-sync the job to chatbot regardless — positions_remaining changed.
+                await syncJobAsync(application.job_id);
+            } catch (cascadeErr) {
+                logger.warn(`Approval cascade failed for application ${id}: ${cascadeErr.message}`);
+            }
+
+            // Audit log
+            try {
+                await query(
+                    adaptQuery(`
+                        INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, changes)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                    `),
+                    [
+                        generateUUID(),
+                        req.user.id,
+                        'application_approved',
+                        'application',
+                        application.id,
+                        JSON.stringify({ new_status: status, job_id: application.job_id }),
+                    ]
+                );
+            } catch (auditErr) {
+                logger.warn(`Audit log failed for approval ${id}: ${auditErr.message}`);
             }
         }
 
