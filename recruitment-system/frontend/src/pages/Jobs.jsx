@@ -149,7 +149,7 @@ export default function Jobs() {
       <Card className="mb-6 overflow-hidden">
         <div
           {...getRootProps()}
-          className={`group relative rounded-3xl border border-dashed p-6 md:p-8 transition-all duration-300 ${isDragActive ? 'border-zinc-900 bg-zinc-50' : 'border-zinc-200 bg-white hover:border-zinc-400 hover:bg-zinc-50/70'}`}
+          className={`group relative rounded-3xl border border-dashed p-6 md:p-8 transition-all duration-300 ${isDragActive ? 'border-zinc-900 bg-zinc-50' : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/40/70'}`}
         >
           <input {...getInputProps()} />
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
@@ -182,7 +182,7 @@ export default function Jobs() {
 
             <div className="flex flex-col items-start gap-3 lg:items-end">
               <div className="flex items-center gap-3 rounded-3xl bg-zinc-950 px-4 py-3 text-white shadow-lg">
-                <div className="rounded-2xl bg-white/10 p-2">
+                <div className="rounded-2xl bg-white dark:bg-zinc-900/10 p-2">
                   <UploadCloud size={18} />
                 </div>
                 <div>
@@ -197,8 +197,8 @@ export default function Jobs() {
           </div>
 
           {uploadState.isProcessing && (
-            <div className="absolute inset-0 flex items-center justify-center rounded-3xl bg-white/80 backdrop-blur-sm">
-              <div className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 shadow-lg">
+            <div className="absolute inset-0 flex items-center justify-center rounded-3xl bg-white dark:bg-zinc-900/80 backdrop-blur-sm">
+              <div className="flex items-center gap-3 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-3 shadow-lg">
                 <Loader2 className="h-5 w-5 animate-spin text-zinc-900" />
                 <div>
                   <p className="text-sm font-semibold text-zinc-900">AI is analyzing the flyer</p>
@@ -211,7 +211,7 @@ export default function Jobs() {
       </Card>
 
       {uploadState.result && (
-        <Card className="mb-6 p-5 border-zinc-200 bg-zinc-50/80">
+        <Card className="mb-6 p-5 border-zinc-200 dark:border-zinc-800 bg-zinc-50/80">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">Latest ingestion</p>
@@ -226,7 +226,7 @@ export default function Jobs() {
             </div>
             <div className="flex flex-wrap gap-2">
               {(uploadState.result.results || []).map((item, index) => (
-                <span key={`${item.fileName}-${index}`} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-700 shadow-sm border border-zinc-200">
+                <span key={`${item.fileName}-${index}`} className="rounded-full bg-white dark:bg-zinc-900 px-3 py-1 text-xs font-medium text-zinc-700 shadow-sm border border-zinc-200 dark:border-zinc-800">
                   {item.fileName} · {item.jobs?.length || 0} job(s)
                 </span>
               ))}
@@ -239,10 +239,10 @@ export default function Jobs() {
           )}
 
           {uploadResultItems.length > 0 && (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-zinc-200 bg-white">
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
               <table className="w-full min-w-[560px]">
                 <thead>
-                  <tr className="border-b border-zinc-200 bg-zinc-50">
+                  <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50">
                     <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">File</th>
                     <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">Status</th>
                     <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">Jobs Created</th>
@@ -273,7 +273,7 @@ export default function Jobs() {
       <div className="card mb-6">
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Status</label>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -288,7 +288,7 @@ export default function Jobs() {
             </select>
           </div>
           <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Category</label>
             <input
               type="text"
               placeholder="e.g. security, hospitality"
@@ -299,7 +299,7 @@ export default function Jobs() {
             />
           </div>
           <div className="flex items-end">
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
+            <label className="flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 cursor-pointer">
               <input
                 type="checkbox"
                 checked={urgentOnly}
@@ -316,8 +316,8 @@ export default function Jobs() {
         {isLoading ? (
           <TableSkeleton rows={6} cols={6} />
         ) : jobsList.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">
-            <Briefcase className="mx-auto h-12 w-12 text-gray-300 mb-2" aria-hidden />
+          <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
+            <Briefcase className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" aria-hidden />
             <p className="font-medium">No jobs found</p>
             <p className="text-sm mt-1">Adjust your filters or create a new job.</p>
             <div className="mt-4 flex justify-center">
@@ -331,19 +331,19 @@ export default function Jobs() {
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Title</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Category</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Project</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Positions</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Actions</th>
+                <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Title</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Category</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Project</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Status</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Positions</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {jobsList.map((job) => (
-                  <tr key={job.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="py-3 px-4 font-medium text-gray-900">
+                  <tr key={job.id} className="border-b border-zinc-100 dark:border-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors">
+                    <td className="py-3 px-4 font-medium text-zinc-900 dark:text-zinc-50">
                       <div className="flex items-center gap-2">
                         <span>{job.title}</span>
                         {job.is_urgent && (
@@ -353,7 +353,7 @@ export default function Jobs() {
                         )}
                       </div>
                     </td>
-                    <td className="py-3 px-4 text-gray-600">{job.category}</td>
+                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{job.category}</td>
                     <td className="py-3 px-4">
                       {job.project_title ? (
                         <Link 
@@ -364,13 +364,13 @@ export default function Jobs() {
                           <span>{job.project_title}</span>
                         </Link>
                       ) : (
-                        <span className="text-gray-400 text-sm">-</span>
+                        <span className="text-zinc-400 dark:text-zinc-500 text-sm">-</span>
                       )}
                     </td>
                     <td className="py-3 px-4">
                       <Badge status={job.status} />
                     </td>
-                    <td className="py-3 px-4 text-gray-600">
+                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">
                       {job.positions_filled ?? 0} / {job.positions_available ?? 1}
                     </td>
                     <td className="py-3 px-4">
@@ -381,10 +381,10 @@ export default function Jobs() {
                         >
                           View Candidates
                         </Link>
-                        <span className="text-gray-300">|</span>
+                        <span className="text-zinc-300 dark:text-zinc-600">|</span>
                         <Link
                           to={`/jobs/${job.id}`}
-                          className="text-gray-500 hover:text-gray-700 font-medium text-sm"
+                          className="text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300 font-medium text-sm"
                         >
                           Details
                         </Link>

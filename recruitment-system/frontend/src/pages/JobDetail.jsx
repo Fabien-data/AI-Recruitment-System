@@ -45,7 +45,7 @@ export default function JobDetail() {
           <ArrowLeft size={20} /> Back to Jobs
         </Link>
         <div className="card text-center py-12">
-          <p className="text-gray-600 font-medium">Job not found</p>
+          <p className="text-zinc-600 dark:text-zinc-400 font-medium">Job not found</p>
           <Link to="/jobs">
             <Button variant="primary" className="mt-4">Back to Jobs</Button>
           </Link>
@@ -83,8 +83,8 @@ export default function JobDetail() {
 
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">{job.title}</h1>
-          <div className="flex flex-wrap items-center gap-4 mt-2 text-gray-600">
+          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">{job.title}</h1>
+          <div className="flex flex-wrap items-center gap-4 mt-2 text-zinc-600 dark:text-zinc-400">
             <span className="inline-flex items-center gap-1">
               <Briefcase size={18} aria-hidden /> {job.category}
             </span>
@@ -106,17 +106,17 @@ export default function JobDetail() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <Card>
-            <h2 className="text-lg font-semibold text-gray-900 mb-3">Description</h2>
-            <p className="text-gray-600 whitespace-pre-wrap">{job.description || 'No description provided.'}</p>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">Description</h2>
+            <p className="text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{job.description || 'No description provided.'}</p>
           </Card>
 
           {reqEntries.length > 0 && (
             <Card>
-              <h2 className="text-lg font-semibold text-gray-900 mb-3">Requirements</h2>
-              <ul className="space-y-2 text-gray-600">
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">Requirements</h2>
+              <ul className="space-y-2 text-zinc-600 dark:text-zinc-400">
                 {reqEntries.map(([key, value]) => (
                   <li key={key} className="flex gap-2">
-                    <span className="font-medium text-gray-700 capitalize">{key.replace(/_/g, ' ')}:</span>
+                    <span className="font-medium text-zinc-700 dark:text-zinc-300 capitalize">{key.replace(/_/g, ' ')}:</span>
                     <span>{Array.isArray(value) ? value.join(', ') : String(value)}</span>
                   </li>
                 ))}
@@ -126,7 +126,7 @@ export default function JobDetail() {
 
           <Card>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-semibold text-gray-900">Candidates</h2>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Candidates</h2>
               <Link
                 to={`/jobs/${id}/candidates`}
                 className="text-sm text-primary-600 hover:text-primary-700 font-medium"
@@ -161,8 +161,8 @@ export default function JobDetail() {
                         ) : candidate.name?.charAt(0)?.toUpperCase() || <User size={14} />}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate group-hover:text-primary-600">{candidate.name}</p>
-                        <p className="text-xs text-gray-500 truncate">{item.application_status || 'applied'}</p>
+                        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50 truncate group-hover:text-primary-600">{candidate.name}</p>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{item.application_status || 'applied'}</p>
                       </div>
                       <span className="text-xs font-semibold text-primary-600 flex-shrink-0">{item.match_score || 0}%</span>
                     </Link>
@@ -170,29 +170,29 @@ export default function JobDetail() {
                 })}
               </div>
             ) : (
-              <p className="text-sm text-gray-500 py-2">No candidates assigned yet.</p>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400 py-2">No candidates assigned yet.</p>
             )}
           </Card>
         </div>
 
         <div className="space-y-6">
           <Card>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Summary</h2>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">Summary</h2>
             <dl className="space-y-3">
               <div>
-                <dt className="text-sm text-gray-500">Positions</dt>
-                <dd className="font-medium text-gray-900">{job.positions_filled ?? 0} / {job.positions_available ?? 1} filled</dd>
+                <dt className="text-sm text-zinc-500 dark:text-zinc-400">Positions</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50">{job.positions_filled ?? 0} / {job.positions_available ?? 1} filled</dd>
               </div>
               {job.salary_range && (
                 <div>
-                  <dt className="text-sm text-gray-500">Salary range</dt>
-                  <dd className="font-medium text-gray-900">{job.salary_range}</dd>
+                  <dt className="text-sm text-zinc-500 dark:text-zinc-400">Salary range</dt>
+                  <dd className="font-medium text-zinc-900 dark:text-zinc-50">{job.salary_range}</dd>
                 </div>
               )}
               {job.application_count != null && (
                 <div>
-                  <dt className="text-sm text-gray-500">Applications</dt>
-                  <dd className="font-medium text-gray-900">{job.application_count}</dd>
+                  <dt className="text-sm text-zinc-500 dark:text-zinc-400">Applications</dt>
+                  <dd className="font-medium text-zinc-900 dark:text-zinc-50">{job.application_count}</dd>
                 </div>
               )}
             </dl>

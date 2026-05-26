@@ -24,7 +24,7 @@ const ROLE_COLORS = {
 
 function StatCard({ icon: Icon, label, value, sub, color = 'bg-zinc-900 text-white' }) {
   return (
-    <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 p-6 flex items-start gap-4 shadow-sm hover:shadow-md transition-shadow">
+    <div className="bg-white dark:bg-zinc-900 dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 p-6 flex items-start gap-4 shadow-sm hover:shadow-md transition-shadow">
       <div className={`w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 ${color}`}>
         <Icon size={20} />
       </div>
@@ -136,7 +136,7 @@ export default function AdminDashboard() {
       )}
 
       {/* User Management */}
-      <section className="bg-white rounded-3xl border border-zinc-200/60 shadow-sm overflow-hidden">
+      <section className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-6 py-5 border-b border-zinc-100">
           <h2 className="text-base font-bold text-zinc-900">User Management</h2>
           <button
@@ -284,7 +284,7 @@ export default function AdminDashboard() {
       </section>
 
       {/* Audit Log */}
-      <section className="bg-white rounded-3xl border border-zinc-200/60 shadow-sm overflow-hidden">
+      <section className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b border-zinc-100">
           <h2 className="text-base font-bold text-zinc-900">Recent Activity</h2>
           <p className="text-xs text-zinc-400 mt-0.5">Last 30 system events</p>

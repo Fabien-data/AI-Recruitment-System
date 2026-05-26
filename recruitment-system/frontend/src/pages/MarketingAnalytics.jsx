@@ -45,7 +45,7 @@ function formatDate(iso) {
 function Delta({ value, isPercentPoints }) {
   if (value == null) return <span className="text-zinc-400 text-xs">—</span>
   const Icon = value > 0 ? TrendingUp : value < 0 ? TrendingDown : Minus
-  const color = value > 0 ? 'text-emerald-600' : value < 0 ? 'text-red-600' : 'text-zinc-500'
+  const color = value > 0 ? 'text-emerald-600' : value < 0 ? 'text-red-600' : 'text-zinc-500 dark:text-zinc-400'
   const fmt = isPercentPoints ? PERCENT_PP(value) : `${value > 0 ? '+' : ''}${(value * 100).toFixed(0)}%`
   return (
     <span className={`inline-flex items-center gap-1 text-xs font-semibold ${color}`}>
@@ -58,13 +58,13 @@ function KpiCard({ icon: Icon, label, value, delta, deltaIsPercentPoints, hint }
   return (
     <Card className="p-5">
       <div className="flex items-start justify-between mb-3">
-        <div className="w-9 h-9 rounded-xl bg-zinc-100 flex items-center justify-center text-zinc-700">
+        <div className="w-9 h-9 rounded-xl bg-zinc-100 flex items-center justify-center text-zinc-700 dark:text-zinc-300">
           <Icon size={16} />
         </div>
         <Delta value={delta} isPercentPoints={deltaIsPercentPoints} />
       </div>
-      <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">{label}</p>
-      <p className="text-2xl font-bold text-zinc-900 tracking-tight mt-1">{value}</p>
+      <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">{label}</p>
+      <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 tracking-tight mt-1">{value}</p>
       {hint && <p className="text-xs text-zinc-400 mt-1">{hint}</p>}
     </Card>
   )
@@ -136,7 +136,7 @@ export default function MarketingAnalytics() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      <Link to="/marketing-hub" className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 mb-4 transition-colors">
+      <Link to="/marketing-hub" className="inline-flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-50 mb-4 transition-colors">
         <ArrowLeft size={14} /> Back to leads
       </Link>
 
@@ -155,8 +155,8 @@ export default function MarketingAnalytics() {
                   onClick={() => setRange(r.value)}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition-colors ${
                     range === r.value
-                      ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 shadow-sm'
-                      : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                      ? 'bg-white dark:bg-zinc-900 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 dark:text-zinc-50 shadow-sm'
+                      : 'text-zinc-500 dark:text-zinc-400 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-50 dark:hover:text-zinc-100'
                   }`}
                 >
                   {r.label}
@@ -204,7 +204,7 @@ export default function MarketingAnalytics() {
       {/* Top row: Funnel + Time series */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
         <Card className="p-5 lg:col-span-1">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Funnel</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Funnel</h2>
           {funnelChartData.length === 0 ? (
             <p className="text-sm text-zinc-400">No data yet</p>
           ) : (
@@ -230,7 +230,7 @@ export default function MarketingAnalytics() {
         </Card>
 
         <Card className="p-5 lg:col-span-2">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Daily activity</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Daily activity</h2>
           {chartData.length === 0 ? (
             <p className="text-sm text-zinc-400">No data yet</p>
           ) : (
@@ -263,13 +263,13 @@ export default function MarketingAnalytics() {
       {/* Second row: by-source + time-to-stage */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         <Card className="p-5">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">By source</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">By source</h2>
           {bySource.length === 0 ? (
             <p className="text-sm text-zinc-400">No data yet</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-zinc-500">
+                <thead className="text-zinc-500 dark:text-zinc-400">
                   <tr>
                     <th className="text-left font-semibold pb-2">Source</th>
                     <th className="text-right font-semibold pb-2">Leads</th>
@@ -281,11 +281,11 @@ export default function MarketingAnalytics() {
                 <tbody>
                   {bySource.map((row) => (
                     <tr key={row.source_slug || 'unknown'} className="border-t border-zinc-100">
-                      <td className="py-2 text-zinc-900">{row.source_label}</td>
-                      <td className="py-2 text-right font-mono text-zinc-700">{row.total}</td>
-                      <td className="py-2 text-right font-mono text-zinc-700">{row.qualified}</td>
+                      <td className="py-2 text-zinc-900 dark:text-zinc-50">{row.source_label}</td>
+                      <td className="py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">{row.total}</td>
+                      <td className="py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">{row.qualified}</td>
                       <td className="py-2 text-right font-mono text-emerald-700">{row.converted}</td>
-                      <td className="py-2 text-right font-mono font-semibold text-zinc-900">{PERCENT(row.conversion_rate)}</td>
+                      <td className="py-2 text-right font-mono font-semibold text-zinc-900 dark:text-zinc-50">{PERCENT(row.conversion_rate)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -295,7 +295,7 @@ export default function MarketingAnalytics() {
         </Card>
 
         <Card className="p-5">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Time to convert</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Time to convert</h2>
           {timeToStage.length === 0 ? (
             <p className="text-sm text-zinc-400">No conversions in range</p>
           ) : (
@@ -317,13 +317,13 @@ export default function MarketingAnalytics() {
       {/* Third row: agent leaderboard + cohort */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="p-5">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Agent leaderboard</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Agent leaderboard</h2>
           {byAgent.length === 0 ? (
             <p className="text-sm text-zinc-400">No agent activity in range</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-zinc-500">
+                <thead className="text-zinc-500 dark:text-zinc-400">
                   <tr>
                     <th className="text-left font-semibold pb-2">Agent</th>
                     <th className="text-right font-semibold pb-2">Leads</th>
@@ -335,11 +335,11 @@ export default function MarketingAnalytics() {
                 <tbody>
                   {byAgent.map((row) => (
                     <tr key={row.agent_id} className="border-t border-zinc-100">
-                      <td className="py-2 text-zinc-900">{row.agent_name}</td>
-                      <td className="py-2 text-right font-mono text-zinc-700">{row.leads_assigned}</td>
+                      <td className="py-2 text-zinc-900 dark:text-zinc-50">{row.agent_name}</td>
+                      <td className="py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">{row.leads_assigned}</td>
                       <td className="py-2 text-right font-mono text-emerald-700">{row.converted}</td>
-                      <td className="py-2 text-right font-mono text-zinc-700">{row.calls_handled}</td>
-                      <td className="py-2 text-right font-mono font-semibold text-zinc-900">{PERCENT(row.conversion_rate)}</td>
+                      <td className="py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">{row.calls_handled}</td>
+                      <td className="py-2 text-right font-mono font-semibold text-zinc-900 dark:text-zinc-50">{PERCENT(row.conversion_rate)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -349,13 +349,13 @@ export default function MarketingAnalytics() {
         </Card>
 
         <Card className="p-5">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Weekly cohort retention</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Weekly cohort retention</h2>
           {cohort.length === 0 ? (
             <p className="text-sm text-zinc-400">No data yet</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-zinc-500">
+                <thead className="text-zinc-500 dark:text-zinc-400">
                   <tr>
                     <th className="text-left font-semibold pb-2">Week of</th>
                     <th className="text-right font-semibold pb-2">Leads</th>
@@ -367,12 +367,12 @@ export default function MarketingAnalytics() {
                 <tbody>
                   {cohort.map((row) => (
                     <tr key={row.week} className="border-t border-zinc-100">
-                      <td className="py-2 text-zinc-900">{formatDate(row.week)}</td>
-                      <td className="py-2 text-right font-mono text-zinc-700">{row.total}</td>
-                      <td className="py-2 text-right font-mono text-zinc-700">
+                      <td className="py-2 text-zinc-900 dark:text-zinc-50">{formatDate(row.week)}</td>
+                      <td className="py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">{row.total}</td>
+                      <td className="py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
                         {row.contacted} <span className="text-zinc-400 text-xs ml-1">({PERCENT(row.contacted / row.total)})</span>
                       </td>
-                      <td className="py-2 text-right font-mono text-zinc-700">
+                      <td className="py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
                         {row.qualified} <span className="text-zinc-400 text-xs ml-1">({PERCENT(row.qualified / row.total)})</span>
                       </td>
                       <td className="py-2 text-right font-mono text-emerald-700">

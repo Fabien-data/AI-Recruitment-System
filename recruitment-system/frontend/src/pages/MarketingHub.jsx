@@ -101,19 +101,19 @@ export default function MarketingHub() {
       <Card className="p-4 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="relative md:col-span-1">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search name, phone, NIC…"
-              className="w-full pl-9 pr-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
+              className="w-full pl-9 pr-3 py-2 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
             />
           </div>
           <select
             value={stage}
             onChange={(e) => { setStage(e.target.value); setPage(1) }}
-            className="px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
+            className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
           >
             {STAGE_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -122,7 +122,7 @@ export default function MarketingHub() {
           <select
             value={sourceId}
             onChange={(e) => { setSourceId(e.target.value); setPage(1) }}
-            className="px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
+            className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
           >
             <option value="">All sources</option>
             {sources.map((s) => (
@@ -139,15 +139,15 @@ export default function MarketingHub() {
         ) : leads.length === 0 ? (
           <div className="p-12 text-center">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-zinc-100 mb-3">
-              <Phone size={20} className="text-zinc-400" />
+              <Phone size={20} className="text-zinc-400 dark:text-zinc-500" />
             </div>
-            <h3 className="text-base font-semibold text-zinc-900">No leads yet</h3>
-            <p className="text-sm text-zinc-500 mt-1">Press <strong>New Lead</strong> to register a caller.</p>
+            <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">No leads yet</h3>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 dark:text-zinc-500 mt-1">Press <strong>New Lead</strong> to register a caller.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-zinc-50/70 text-zinc-500">
+              <thead className="bg-zinc-50 dark:bg-zinc-900/60/70 text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
                 <tr>
                   <th className="text-left font-semibold px-4 py-3">Name</th>
                   <th className="text-left font-semibold px-4 py-3">Phone</th>
@@ -163,12 +163,12 @@ export default function MarketingHub() {
                   <tr
                     key={lead.id}
                     onClick={() => navigate(`/marketing-hub/${lead.id}`)}
-                    className="border-t border-zinc-100 hover:bg-zinc-50 cursor-pointer transition-colors"
+                    className="border-t border-zinc-100 hover:bg-zinc-50 dark:bg-zinc-900/60 cursor-pointer transition-colors"
                   >
-                    <td className="px-4 py-3 font-semibold text-zinc-900">{lead.full_name}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-zinc-700">{lead.phone}</td>
-                    <td className="px-4 py-3 text-zinc-600">{lead.source_label || '—'}</td>
-                    <td className="px-4 py-3 text-zinc-600">
+                    <td className="px-4 py-3 font-semibold text-zinc-900 dark:text-zinc-50">{lead.full_name}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-zinc-700 dark:text-zinc-300">{lead.phone}</td>
+                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400 dark:text-zinc-500">{lead.source_label || '—'}</td>
+                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400 dark:text-zinc-500">
                       <div className="flex items-center gap-2">
                         <span className="truncate max-w-[200px]">
                           {lead.preferred_job_title || lead.preferred_job_text || '—'}
@@ -183,8 +183,8 @@ export default function MarketingHub() {
                         {lead.stage}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 text-zinc-600">{lead.assigned_agent_name || '—'}</td>
-                    <td className="px-4 py-3 text-zinc-500">{formatDate(lead.last_contacted_at || lead.created_at)}</td>
+                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400 dark:text-zinc-500">{lead.assigned_agent_name || '—'}</td>
+                    <td className="px-4 py-3 text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">{formatDate(lead.last_contacted_at || lead.created_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -193,8 +193,8 @@ export default function MarketingHub() {
         )}
 
         {pagination && pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-100 bg-zinc-50/50">
-            <span className="text-xs text-zinc-500">
+          <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-100 bg-zinc-50 dark:bg-zinc-900/60/50">
+            <span className="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
               Page {pagination.page} of {pagination.totalPages} — {pagination.total} leads
             </span>
             <div className="flex gap-1">
@@ -202,7 +202,7 @@ export default function MarketingHub() {
                 type="button"
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="px-2 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 dark:text-zinc-500 hover:bg-zinc-50 dark:bg-zinc-900/60 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <ChevronLeft size={14} />
               </button>
@@ -210,7 +210,7 @@ export default function MarketingHub() {
                 type="button"
                 disabled={page >= pagination.totalPages}
                 onClick={() => setPage((p) => p + 1)}
-                className="px-2 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 dark:text-zinc-500 hover:bg-zinc-50 dark:bg-zinc-900/60 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <ChevronRight size={14} />
               </button>

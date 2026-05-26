@@ -117,7 +117,7 @@ export default function Applications() {
 
       <Card className="p-4 sm:p-5 mb-6">
         <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2 text-gray-800">
+          <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200">
             <ListFilter size={18} aria-hidden />
             <h2 className="text-base font-semibold">Filters</h2>
           </div>
@@ -208,8 +208,8 @@ export default function Applications() {
         {isLoading ? (
           <TableSkeleton rows={6} cols={6} />
         ) : list.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">
-            <FileText className="mx-auto h-12 w-12 text-gray-300 mb-2" aria-hidden />
+          <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
+            <FileText className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" aria-hidden />
             <p className="font-medium">No applications yet</p>
             <p className="text-sm mt-1">Applications will appear when candidates apply to jobs.</p>
           </div>
@@ -217,33 +217,33 @@ export default function Applications() {
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Candidate</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Job</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Project</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Applied</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Actions</th>
+                <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Candidate</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Job</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Project</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Status</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Applied</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {list.map((app) => (
                   <tr key={app.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="py-3 px-4 font-medium text-gray-900">
+                    <td className="py-3 px-4 font-medium text-zinc-900 dark:text-zinc-50">
                       <Link to={`/candidates/${app.candidate_id}`} className="text-primary-600 hover:text-primary-700">
                         {app.candidate_name || 'Candidate'}
                       </Link>
                     </td>
-                    <td className="py-3 px-4 text-gray-600">
+                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">
                       <Link to={`/jobs/${app.job_id}`} className="text-primary-600 hover:text-primary-700">
                         {app.job_title || 'Job'}
                       </Link>
                     </td>
-                    <td className="py-3 px-4 text-gray-600">{app.project_title || '-'}</td>
+                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{app.project_title || '-'}</td>
                     <td className="py-3 px-4">
                       <Badge status={app.status} />
                     </td>
-                    <td className="py-3 px-4 text-gray-600">
+                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">
                       {app.applied_at ? new Date(app.applied_at).toLocaleDateString() : '-'}
                     </td>
                     <td className="py-3 px-4">

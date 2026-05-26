@@ -40,14 +40,14 @@ function KpiCard({ label, value, change, icon: Icon, color }) {
     <div className="card hover:shadow-card-hover transition-shadow">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-sm font-medium text-gray-600">{label}</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
+          <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">{label}</p>
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 mt-1">{value}</p>
         </div>
         <div className={`p-3 rounded-full ${color}`}>
           <Icon size={20} className="text-white" />
         </div>
       </div>
-      <div className="mt-3 flex items-center gap-2 text-sm text-gray-500">
+      <div className="mt-3 flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
         <ChangeTag value={change} />
         <span>vs previous period</span>
       </div>
@@ -59,8 +59,8 @@ function FunnelBar({ status, count, maxCount }) {
   const pct = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0
   return (
     <div className="flex items-center gap-3">
-      <div className="w-28 text-sm text-gray-700 capitalize truncate">{status.replace('_', ' ')}</div>
-      <div className="flex-1 bg-gray-100 rounded-full h-5 overflow-hidden">
+      <div className="w-28 text-sm text-zinc-700 dark:text-zinc-300 capitalize truncate">{status.replace('_', ' ')}</div>
+      <div className="flex-1 bg-zinc-100 dark:bg-zinc-800 rounded-full h-5 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${PIPELINE_COLORS[status] || 'bg-gray-400'}`}
           style={{ width: `${pct}%` }}
@@ -72,22 +72,22 @@ function FunnelBar({ status, count, maxCount }) {
 }
 
 function WeeklyChart({ data }) {
-  if (!data?.length) return <p className="text-sm text-gray-400">No weekly data available</p>
+  if (!data?.length) return <p className="text-sm text-zinc-400 dark:text-zinc-500">No weekly data available</p>
   const maxApps = Math.max(...data.map(d => parseInt(d.applications || 0, 10)), 1)
   return (
     <div className="space-y-2">
       {data.map((d, i) => (
         <div key={i} className="flex items-center gap-3 text-sm">
-          <div className="w-20 text-xs text-gray-500 text-right">
+          <div className="w-20 text-xs text-zinc-500 dark:text-zinc-400 text-right">
             {new Date(d.week).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
           </div>
-          <div className="flex-1 bg-gray-100 rounded h-4">
+          <div className="flex-1 bg-zinc-100 dark:bg-zinc-800 rounded h-4">
             <div
               className="bg-blue-400 h-full rounded"
               style={{ width: `${Math.round((parseInt(d.applications, 10) / maxApps) * 100)}%` }}
             />
           </div>
-          <div className="w-8 text-xs text-gray-700">{d.applications}</div>
+          <div className="w-8 text-xs text-zinc-700 dark:text-zinc-300">{d.applications}</div>
         </div>
       ))}
     </div>
@@ -131,7 +131,7 @@ export default function Analytics() {
             <select
               value={period}
               onChange={e => setPeriod(e.target.value)}
-              className="border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+              className="border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
             >
               <option value="7">Last 7 days</option>
               <option value="30">Last 30 days</option>
@@ -199,9 +199,9 @@ export default function Analytics() {
             Pipeline Funnel
           </h2>
           {overviewLoading ? (
-            <p className="text-sm text-gray-400">Loading...</p>
+            <p className="text-sm text-zinc-400 dark:text-zinc-500">Loading...</p>
           ) : funnel.length === 0 ? (
-            <p className="text-sm text-gray-400">No data available</p>
+            <p className="text-sm text-zinc-400 dark:text-zinc-500">No data available</p>
           ) : (
             <div className="space-y-2">
               {funnel.map(f => (
@@ -215,7 +215,7 @@ export default function Analytics() {
         <div className="card">
           <h2 className="text-lg font-semibold mb-4">Weekly Applications</h2>
           {overviewLoading ? (
-            <p className="text-sm text-gray-400">Loading...</p>
+            <p className="text-sm text-zinc-400 dark:text-zinc-500">Loading...</p>
           ) : (
             <WeeklyChart data={overview?.weekly_trend} />
           )}
@@ -226,13 +226,13 @@ export default function Analytics() {
       <div className="card mb-6">
         <h2 className="text-lg font-semibold mb-4">Recruiter Performance</h2>
         {recruiterLoading ? (
-          <p className="text-sm text-gray-400">Loading...</p>
+          <p className="text-sm text-zinc-400 dark:text-zinc-500">Loading...</p>
         ) : recruiterPerf.length === 0 ? (
-          <p className="text-sm text-gray-400">No data available</p>
+          <p className="text-sm text-zinc-400 dark:text-zinc-500">No data available</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-gray-500 border-b">
+              <thead className="text-left text-zinc-500 dark:text-zinc-400 border-b">
                 <tr>
                   <th className="pb-2 font-medium">Recruiter</th>
                   <th className="pb-2 font-medium text-right">Candidates Certified</th>
@@ -244,7 +244,7 @@ export default function Analytics() {
                   <tr key={r.user_id}>
                     <td className="py-2">{r.full_name}</td>
                     <td className="py-2 text-right font-medium">{r.total_certified || 0}</td>
-                    <td className="py-2 text-right text-gray-600">{r.avg_hours_to_certify ?? '—'}h</td>
+                    <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">{r.avg_hours_to_certify ?? '—'}h</td>
                   </tr>
                 ))}
               </tbody>
@@ -259,7 +259,7 @@ export default function Analytics() {
           <h2 className="text-lg font-semibold mb-4">Ad Performance</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-gray-500 border-b">
+              <thead className="text-left text-zinc-500 dark:text-zinc-400 border-b">
                 <tr>
                   <th className="pb-2 font-medium">Campaign</th>
                   <th className="pb-2 font-medium">Job</th>
@@ -273,12 +273,12 @@ export default function Analytics() {
                 {adPerf.map(ad => (
                   <tr key={ad.id}>
                     <td className="py-2">{ad.campaign_name || ad.ad_ref}</td>
-                    <td className="py-2 text-gray-600">{ad.job_title || '—'}</td>
+                    <td className="py-2 text-zinc-600 dark:text-zinc-400">{ad.job_title || '—'}</td>
                     <td className="py-2 text-right">{ad.clicks}</td>
                     <td className="py-2 text-right">{ad.conversions}</td>
                     <td className="py-2 text-right font-medium">{ad.conversion_rate_pct}%</td>
                     <td className="py-2 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${ad.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                      <span className={`px-2 py-0.5 rounded-full text-xs ${ad.is_active ? 'bg-green-100 text-green-700' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400'}`}>
                         {ad.is_active ? 'Active' : 'Paused'}
                       </span>
                     </td>

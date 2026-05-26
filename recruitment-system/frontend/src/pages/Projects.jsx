@@ -195,7 +195,7 @@ export default function Projects() {
       <div className="card mb-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Search</label>
             <input
               type="text"
               placeholder="Search projects..."
@@ -205,7 +205,7 @@ export default function Projects() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Status</label>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -220,7 +220,7 @@ export default function Projects() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Country</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Country</label>
             <select
               value={countryFilter}
               onChange={(e) => setCountryFilter(e.target.value)}
@@ -233,7 +233,7 @@ export default function Projects() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Industry</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Industry</label>
             <select
               value={industryFilter}
               onChange={(e) => setIndustryFilter(e.target.value)}
@@ -246,7 +246,7 @@ export default function Projects() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Priority</label>
             <select
               value={priorityFilter}
               onChange={(e) => setPriorityFilter(e.target.value)}
@@ -266,8 +266,8 @@ export default function Projects() {
         {isLoading ? (
           <TableSkeleton rows={6} cols={8} />
         ) : projectsList.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">
-            <FolderKanban className="mx-auto h-12 w-12 text-gray-300 mb-2" />
+          <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
+            <FolderKanban className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" />
             <p className="font-medium">No projects found</p>
             <p className="text-sm mt-1">Create your first project to get started.</p>
           </div>
@@ -275,17 +275,17 @@ export default function Projects() {
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Project</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Client</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Countries</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Industry</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Priority</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Positions</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Interview Date</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Team</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Actions</th>
+                <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Project</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Client</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Countries</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Industry</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Status</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Priority</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Positions</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Interview Date</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Team</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -295,13 +295,13 @@ export default function Projects() {
                     : project.countries
                   
                   return (
-                    <tr key={project.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                    <tr key={project.id} className="border-b border-zinc-100 dark:border-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors">
                       <td className="py-3 px-4">
-                        <Link to={`/projects/${project.id}`} className="font-medium text-gray-900 hover:text-primary-600">
+                        <Link to={`/projects/${project.id}`} className="font-medium text-zinc-900 dark:text-zinc-50 hover:text-primary-600">
                           {project.title}
                         </Link>
                       </td>
-                      <td className="py-3 px-4 text-gray-600">{project.client_name}</td>
+                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{project.client_name}</td>
                       <td className="py-3 px-4">
                         <div className="flex flex-wrap gap-1">
                           {countries?.slice(0, 2).map((country) => (
@@ -310,33 +310,33 @@ export default function Projects() {
                             </span>
                           ))}
                           {countries?.length > 2 && (
-                            <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
+                            <span className="text-xs px-2 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-md">
                               +{countries.length - 2}
                             </span>
                           )}
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-gray-600 text-sm">{project.industry_type}</td>
+                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 text-sm">{project.industry_type}</td>
                       <td className="py-3 px-4">
                         <Badge status={project.status} />
                       </td>
                       <td className="py-3 px-4">
                         <Badge status={project.priority} />
                       </td>
-                      <td className="py-3 px-4 text-gray-600">
+                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{project.filled_positions || 0}</span>
                           <span className="text-gray-400">/</span>
                           <span>{project.total_positions || 0}</span>
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-gray-600 text-sm">
+                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 text-sm">
                         {project.interview_date ? format(new Date(project.interview_date), 'MMM dd, yyyy') : '-'}
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-1">
                           <Users size={16} className="text-gray-400" />
-                          <span className="text-sm text-gray-600">{project.team_count || 0}</span>
+                          <span className="text-sm text-zinc-600 dark:text-zinc-400">{project.team_count || 0}</span>
                         </div>
                       </td>
                       <td className="py-3 px-4">
@@ -349,8 +349,8 @@ export default function Projects() {
                           </Link>
                           {project.job_count > 0 && (
                             <>
-                              <span className="text-gray-300">|</span>
-                              <div className="flex items-center gap-1 text-gray-500 text-sm">
+                              <span className="text-zinc-300 dark:text-zinc-600">|</span>
+                              <div className="flex items-center gap-1 text-zinc-500 dark:text-zinc-400 text-sm">
                                 <Briefcase size={14} />
                                 <span>{project.job_count}</span>
                               </div>
@@ -358,7 +358,7 @@ export default function Projects() {
                           )}
                           {canDeleteProject && (
                             <>
-                              <span className="text-gray-300">|</span>
+                              <span className="text-zinc-300 dark:text-zinc-600">|</span>
                               <button
                                 onClick={() => handleDelete(project.id)}
                                 className="text-red-600 hover:text-red-700"
@@ -382,7 +382,7 @@ export default function Projects() {
       {/* Pagination */}
       {data?.pagination && data.pagination.totalPages > 1 && (
         <div className="mt-6 flex items-center justify-between">
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
             Page {data.pagination.page} of {data.pagination.totalPages}
           </p>
           <div className="flex gap-2">
@@ -416,10 +416,10 @@ export default function Projects() {
       >
         <form onSubmit={handleSubmit} className="space-y-8">
           {/* Basic Information */}
-          <div className="space-y-4 pb-6 border-b border-gray-200">
+          <div className="space-y-4 pb-6 border-b border-zinc-200 dark:border-zinc-800">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center font-semibold text-sm">1</div>
-              <h3 className="text-lg font-semibold text-gray-900">Basic Information</h3>
+              <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Basic Information</h3>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Input
@@ -437,7 +437,7 @@ export default function Projects() {
                 onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
               />
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
                   Industry Type <span className="text-red-500">*</span>
                 </label>
                 <select
@@ -453,7 +453,7 @@ export default function Projects() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Priority</label>
                 <select
                   value={formData.priority}
                   onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
@@ -466,7 +466,7 @@ export default function Projects() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Description</label>
               <textarea
                 rows={3}
                 placeholder="Project description..."
@@ -478,10 +478,10 @@ export default function Projects() {
           </div>
 
           {/* Countries */}
-          <div className="pb-6 border-b border-gray-200">
+          <div className="pb-6 border-b border-zinc-200 dark:border-zinc-800">
             <div className="flex items-center gap-2 mb-4">
               <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center font-semibold text-sm">2</div>
-              <label className="text-lg font-semibold text-gray-900">
+              <label className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
                 Country of Recruitment <span className="text-red-500">*</span>
               </label>
             </div>
@@ -519,7 +519,7 @@ export default function Projects() {
                   "flex items-center gap-2 p-3 border-2 rounded-lg cursor-pointer transition-all",
                   formData.countries.includes(country)
                     ? "border-primary-500 bg-primary-50 shadow-sm"
-                    : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                    : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
                 )}>
                   <input
                     type="checkbox"
@@ -527,17 +527,17 @@ export default function Projects() {
                     onChange={() => handleCountryToggle(country)}
                     className="rounded text-primary-600 focus:ring-primary-500 w-4 h-4"
                   />
-                  <span className="text-sm font-medium text-gray-700">{country}</span>
+                  <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{country}</span>
                 </label>
               ))}
             </div>
           </div>
 
           {/* Timeline */}
-          <div className="space-y-4 pb-6 border-b border-gray-200">
+          <div className="space-y-4 pb-6 border-b border-zinc-200 dark:border-zinc-800">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center font-semibold text-sm">3</div>
-              <h3 className="text-lg font-semibold text-gray-900">Timeline</h3>
+              <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Timeline</h3>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Input
@@ -562,10 +562,10 @@ export default function Projects() {
           </div>
 
           {/* Positions & Benefits */}
-          <div className="space-y-4 pb-6 border-b border-gray-200">
+          <div className="space-y-4 pb-6 border-b border-zinc-200 dark:border-zinc-800">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center font-semibold text-sm">4</div>
-              <h3 className="text-lg font-semibold text-gray-900">Positions & Benefits</h3>
+              <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Positions & Benefits</h3>
             </div>
             <Input
               type="number"
@@ -575,14 +575,14 @@ export default function Projects() {
               onChange={(e) => setFormData({ ...formData, total_positions: parseInt(e.target.value) || 0 })}
             />
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-3">Benefits Included</label>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">Benefits Included</label>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 {['accommodation', 'transport', 'meals', 'visa', 'ticket'].map(benefit => (
                   <label key={benefit} className={clsx(
                     "flex items-center gap-2 p-3 border-2 rounded-lg cursor-pointer transition-all",
                     formData.benefits[benefit]
                       ? "border-primary-500 bg-primary-50"
-                      : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                      : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
                   )}>
                     <input
                       type="checkbox"
@@ -593,7 +593,7 @@ export default function Projects() {
                       })}
                       className="rounded text-primary-600 focus:ring-primary-500 w-4 h-4"
                     />
-                    <span className="text-sm font-medium text-gray-700 capitalize">{benefit}</span>
+                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300 capitalize">{benefit}</span>
                   </label>
                 ))}
               </div>
@@ -601,10 +601,10 @@ export default function Projects() {
           </div>
 
           {/* Salary Range */}
-          <div className="space-y-4 pb-6 border-b border-gray-200">
+          <div className="space-y-4 pb-6 border-b border-zinc-200 dark:border-zinc-800">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center font-semibold text-sm">5</div>
-              <h3 className="text-lg font-semibold text-gray-900">Salary Information</h3>
+              <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Salary Information</h3>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Input
@@ -628,7 +628,7 @@ export default function Projects() {
                 })}
               />
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Currency</label>
                 <select
                   value={formData.salary_info.currency}
                   onChange={(e) => setFormData({
@@ -656,7 +656,7 @@ export default function Projects() {
           <div className="space-y-4 pb-6">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center font-semibold text-sm">6</div>
-              <h3 className="text-lg font-semibold text-gray-900">Contact Information</h3>
+              <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Contact Information</h3>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Input
@@ -700,7 +700,7 @@ export default function Projects() {
           </div>
 
           {/* Actions */}
-          <div className="flex justify-end gap-3 pt-6 border-t-2 border-gray-200 bg-gray-50 -mx-6 -mb-6 px-6 py-4 rounded-b-xl sticky bottom-0">
+          <div className="flex justify-end gap-3 pt-6 border-t-2 border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 -mx-6 -mb-6 px-6 py-4 rounded-b-xl sticky bottom-0">
             <Button
               type="button"
               variant="secondary"
@@ -711,7 +711,7 @@ export default function Projects() {
             >
               Cancel
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Special Details</label>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Special Details</label>
               <textarea
                 rows={3}
                 className="input w-full resize-none"

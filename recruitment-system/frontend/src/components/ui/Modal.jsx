@@ -40,7 +40,7 @@ export function Modal({ open, onClose, title, children, size = 'md' }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="absolute inset-0 bg-primary-950/40 backdrop-blur-md dark:bg-black/60"
+            className="absolute inset-0 bg-primary-950/50 backdrop-blur-md dark:bg-black/70"
             onClick={onClose}
             aria-hidden="true"
           />

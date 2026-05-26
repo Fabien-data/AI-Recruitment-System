@@ -96,7 +96,7 @@ export default function GeneralPool() {
             {/* Search */}
             <div className="card mb-6">
                 <div className="relative max-w-md">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 pointer-events-none" size={20} />
                     <input
                         type="text"
                         placeholder="Search candidates by name, phone, or email..."
@@ -134,8 +134,8 @@ export default function GeneralPool() {
 
             {/* Candidates List */}
             <div className="card overflow-hidden">
-                <div className="p-4 border-b border-gray-200 bg-gray-50">
-                    <h2 className="font-semibold text-gray-900">
+                <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
+                    <h2 className="font-semibold text-zinc-900 dark:text-zinc-50">
                         Pool Candidates ({filteredCandidates.length})
                     </h2>
                 </div>
@@ -143,8 +143,8 @@ export default function GeneralPool() {
                 {isLoading ? (
                     <TableSkeleton rows={8} cols={5} />
                 ) : filteredCandidates.length === 0 ? (
-                    <div className="py-12 text-center text-gray-500">
-                        <Database className="mx-auto h-12 w-12 text-gray-300 mb-2" />
+                    <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
+                        <Database className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" />
                         <p className="font-medium">No candidates in pool</p>
                         <p className="text-sm mt-1">
                             {candidates.length === 0
@@ -157,36 +157,36 @@ export default function GeneralPool() {
                         <div className="overflow-x-auto">
                             <table className="w-full">
                                 <thead>
-                                    <tr className="border-b border-gray-200 bg-gray-50">
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Candidate</th>
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Contact</th>
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Skills</th>
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Added</th>
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Actions</th>
+                                    <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
+                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Candidate</th>
+                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Contact</th>
+                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Skills</th>
+                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Added</th>
+                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {filteredCandidates.map((candidate) => (
-                                        <tr key={candidate.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                                        <tr key={candidate.id} className="border-b border-zinc-100 dark:border-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors">
                                             <td className="py-4 px-4">
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white font-semibold">
                                                         {candidate.name?.charAt(0)?.toUpperCase() || '?'}
                                                     </div>
                                                     <div>
-                                                        <p className="font-medium text-gray-900">{candidate.name}</p>
-                                                        <p className="text-xs text-gray-500">via {candidate.source}</p>
+                                                        <p className="font-medium text-zinc-900 dark:text-zinc-50">{candidate.name}</p>
+                                                        <p className="text-xs text-zinc-500 dark:text-zinc-400">via {candidate.source}</p>
                                                     </div>
                                                 </div>
                                             </td>
                                             <td className="py-4 px-4">
-                                                <p className="text-gray-900 flex items-center gap-1">
-                                                    <Phone size={12} className="text-gray-400" />
+                                                <p className="text-zinc-900 dark:text-zinc-50 flex items-center gap-1">
+                                                    <Phone size={12} className="text-zinc-400 dark:text-zinc-500" />
                                                     {candidate.phone}
                                                 </p>
                                                 {candidate.email && (
-                                                    <p className="text-sm text-gray-500 flex items-center gap-1">
-                                                        <Mail size={12} className="text-gray-400" />
+                                                    <p className="text-sm text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
+                                                        <Mail size={12} className="text-zinc-400 dark:text-zinc-500" />
                                                         {candidate.email}
                                                     </p>
                                                 )}
@@ -199,17 +199,17 @@ export default function GeneralPool() {
                                                         </span>
                                                     ))}
                                                     {(candidate.tags || []).length === 0 && (
-                                                        <span className="text-xs text-gray-400 italic">No skills tagged</span>
+                                                        <span className="text-xs text-zinc-400 dark:text-zinc-500 italic">No skills tagged</span>
                                                     )}
                                                 </div>
                                                 {candidate.remarks && (
-                                                    <p className="text-xs text-gray-500 mt-1 truncate max-w-[200px]" title={candidate.remarks}>
+                                                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 truncate max-w-[200px]" title={candidate.remarks}>
                                                         📝 {candidate.remarks}
                                                     </p>
                                                 )}
                                             </td>
                                             <td className="py-4 px-4">
-                                                <span className="text-sm text-gray-600 flex items-center gap-1">
+                                                <span className="text-sm text-zinc-600 dark:text-zinc-400 flex items-center gap-1">
                                                     <Calendar size={12} />
                                                     {new Date(candidate.updated_at || candidate.created_at).toLocaleDateString()}
                                                 </span>
@@ -244,8 +244,8 @@ export default function GeneralPool() {
 
                         {/* Pagination */}
                         {pagination && pagination.totalPages > 1 && (
-                            <div className="flex justify-between items-center px-4 py-3 border-t border-gray-200">
-                                <p className="text-sm text-gray-600">
+                            <div className="flex justify-between items-center px-4 py-3 border-t border-zinc-200 dark:border-zinc-800">
+                                <p className="text-sm text-zinc-600 dark:text-zinc-400">
                                     Showing {((page - 1) * 20) + 1} to {Math.min(page * 20, pagination.total)} of {pagination.total}
                                 </p>
                                 <div className="flex gap-2">
@@ -312,11 +312,11 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
     return (
         <Modal open={true} onClose={onClose} title={`Pool Candidate: ${candidate.name}`} size="lg">
             {/* Tab Navigation */}
-            <div className="flex gap-1 mb-6 border-b border-gray-200">
+            <div className="flex gap-1 mb-6 border-b border-zinc-200 dark:border-zinc-800">
                 <button
                     className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${activeTab === 'overview'
                             ? 'border-primary-600 text-primary-600'
-                            : 'border-transparent text-gray-500 hover:text-gray-700'
+                            : 'border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300'
                         }`}
                     onClick={() => setActiveTab('overview')}
                 >
@@ -326,7 +326,7 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                 <button
                     className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${activeTab === 'assign'
                             ? 'border-primary-600 text-primary-600'
-                            : 'border-transparent text-gray-500 hover:text-gray-700'
+                            : 'border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300'
                         }`}
                     onClick={() => setActiveTab('assign')}
                 >
@@ -344,8 +344,8 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                                 {candidate.name?.charAt(0)?.toUpperCase() || '?'}
                             </div>
                             <div className="flex-1">
-                                <h3 className="text-xl font-semibold text-gray-900">{candidate.name}</h3>
-                                <div className="mt-2 flex flex-wrap gap-4 text-sm text-gray-600">
+                                <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{candidate.name}</h3>
+                                <div className="mt-2 flex flex-wrap gap-4 text-sm text-zinc-600 dark:text-zinc-400">
                                     <span className="flex items-center gap-1">
                                         <Phone size={14} />
                                         {candidate.phone}
@@ -362,27 +362,27 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
 
                     {/* Details */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="p-4 bg-gray-50 rounded-lg">
-                            <p className="text-xs text-gray-500 uppercase">Source</p>
-                            <p className="font-semibold text-gray-900">{candidate.source}</p>
+                        <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400 uppercase">Source</p>
+                            <p className="font-semibold text-zinc-900 dark:text-zinc-50">{candidate.source}</p>
                         </div>
-                        <div className="p-4 bg-gray-50 rounded-lg">
-                            <p className="text-xs text-gray-500 uppercase">Experience</p>
-                            <p className="font-semibold text-gray-900">{metadata.experience_years || 0} years</p>
+                        <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400 uppercase">Experience</p>
+                            <p className="font-semibold text-zinc-900 dark:text-zinc-50">{metadata.experience_years || 0} years</p>
                         </div>
-                        <div className="p-4 bg-gray-50 rounded-lg">
-                            <p className="text-xs text-gray-500 uppercase">Height</p>
-                            <p className="font-semibold text-gray-900">{metadata.height_cm ? `${metadata.height_cm} cm` : 'N/A'}</p>
+                        <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400 uppercase">Height</p>
+                            <p className="font-semibold text-zinc-900 dark:text-zinc-50">{metadata.height_cm ? `${metadata.height_cm} cm` : 'N/A'}</p>
                         </div>
-                        <div className="p-4 bg-gray-50 rounded-lg">
-                            <p className="text-xs text-gray-500 uppercase">Age</p>
-                            <p className="font-semibold text-gray-900">{metadata.age ? `${metadata.age} years` : 'N/A'}</p>
+                        <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400 uppercase">Age</p>
+                            <p className="font-semibold text-zinc-900 dark:text-zinc-50">{metadata.age ? `${metadata.age} years` : 'N/A'}</p>
                         </div>
                     </div>
 
                     {/* Skills */}
                     <div>
-                        <h4 className="text-sm font-semibold text-gray-700 mb-2">Skills & Tags</h4>
+                        <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Skills & Tags</h4>
                         <div className="flex flex-wrap gap-2">
                             {(candidate.tags || []).map((tag, i) => (
                                 <span key={i} className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">
@@ -390,20 +390,20 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                                 </span>
                             ))}
                             {(!candidate.tags || candidate.tags.length === 0) && (
-                                <span className="text-gray-500 text-sm">No skills/tags added</span>
+                                <span className="text-zinc-500 dark:text-zinc-400 text-sm">No skills/tags added</span>
                             )}
                         </div>
                     </div>
 
                     {/* CV */}
                     <div>
-                        <h4 className="text-sm font-semibold text-gray-700 mb-2">CV / Documents</h4>
-                        <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex items-center justify-between">
+                        <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">CV / Documents</h4>
+                        <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 flex items-center justify-between">
                             <div className="flex items-center gap-3">
                                 <FileText className="text-purple-500" size={24} />
                                 <div>
-                                    <span className="text-sm font-medium text-gray-700">{candidate.name}_CV.pdf</span>
-                                    <p className="text-xs text-gray-500">Uploaded via {candidate.source}</p>
+                                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{candidate.name}_CV.pdf</span>
+                                    <p className="text-xs text-zinc-500 dark:text-zinc-400">Uploaded via {candidate.source}</p>
                                 </div>
                             </div>
                             <div className="flex gap-2">
@@ -422,7 +422,7 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                     {/* Notes */}
                     {candidate.notes && (
                         <div>
-                            <h4 className="text-sm font-semibold text-gray-700 mb-2">Notes</h4>
+                            <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Notes</h4>
                             <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm">
                                 {candidate.notes}
                             </div>
@@ -432,7 +432,7 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                     {/* Chatbot Remarks — saved when the WhatsApp bot routed this lead to the general pool */}
                     {candidate.remarks && (
                         <div>
-                            <h4 className="text-sm font-semibold text-gray-700 mb-2">Chatbot Remarks</h4>
+                            <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Chatbot Remarks</h4>
                             <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-sm whitespace-pre-wrap">
                                 {candidate.remarks}
                             </div>
@@ -442,20 +442,20 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                     {/* Preferences Timeline — every preference the candidate declared, when */}
                     {Array.isArray(candidate.preferences_log) && candidate.preferences_log.length > 0 && (
                         <div>
-                            <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                            <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
                                 Preferences History ({candidate.preferences_log.length})
                             </h4>
-                            <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+                            <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg divide-y divide-gray-100">
                                 {candidate.preferences_log.map((entry, i) => (
                                     <div key={i} className="px-4 py-2 text-sm flex items-start justify-between gap-3">
-                                        <div className="text-gray-700">
+                                        <div className="text-zinc-700 dark:text-zinc-300">
                                             <span className="font-medium">{entry.job_role || '—'}</span>
-                                            {entry.country && <span className="text-gray-500"> · {entry.country}</span>}
-                                            {entry.experience_years != null && <span className="text-gray-500"> · {entry.experience_years}y</span>}
-                                            {entry.source && <span className="text-xs text-gray-400 ml-2">({entry.source})</span>}
+                                            {entry.country && <span className="text-zinc-500 dark:text-zinc-400"> · {entry.country}</span>}
+                                            {entry.experience_years != null && <span className="text-zinc-500 dark:text-zinc-400"> · {entry.experience_years}y</span>}
+                                            {entry.source && <span className="text-xs text-zinc-400 dark:text-zinc-500 ml-2">({entry.source})</span>}
                                         </div>
                                         {entry.ts && (
-                                            <span className="text-xs text-gray-400 whitespace-nowrap">
+                                            <span className="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
                                                 {new Date(entry.ts).toLocaleString()}
                                             </span>
                                         )}
@@ -466,7 +466,7 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                     )}
 
                     {/* Actions */}
-                    <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                    <div className="flex justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                         <Button variant="secondary" onClick={onClose}>Close</Button>
                         <Button onClick={() => setActiveTab('assign')} className="gap-1">
                             <ArrowRight size={16} />
@@ -551,12 +551,12 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
 
             {/* Manual Assignment */}
             <div>
-                <h3 className="font-semibold text-gray-900 mb-3">Or Manually Assign to a Job</h3>
+                <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-3">Or Manually Assign to a Job</h3>
 
                 {jobs.length === 0 ? (
-                    <div className="text-center py-8 bg-gray-50 rounded-lg">
-                        <Briefcase className="mx-auto h-10 w-10 text-gray-300 mb-2" />
-                        <p className="text-gray-500">No active jobs available</p>
+                    <div className="text-center py-8 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
+                        <Briefcase className="mx-auto h-10 w-10 text-zinc-300 dark:text-zinc-600 mb-2" />
+                        <p className="text-zinc-500 dark:text-zinc-400">No active jobs available</p>
                     </div>
                 ) : (
                     <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
@@ -565,7 +565,7 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
                                 key={job.id}
                                 className={`flex items-center gap-4 p-4 border rounded-lg cursor-pointer transition-all ${selectedJobId === job.id
                                         ? 'border-primary-500 bg-primary-50'
-                                        : 'border-gray-200 hover:border-gray-300'
+                                        : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
                                     }`}
                             >
                                 <input
@@ -577,8 +577,8 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
                                     className="sr-only"
                                 />
                                 <div className="flex-1">
-                                    <h4 className="font-medium text-gray-900">{job.title}</h4>
-                                    <p className="text-sm text-gray-500">{job.category} • {job.positions_available - (job.positions_filled || 0)} positions available</p>
+                                    <h4 className="font-medium text-zinc-900 dark:text-zinc-50">{job.title}</h4>
+                                    <p className="text-sm text-zinc-500 dark:text-zinc-400">{job.category} • {job.positions_available - (job.positions_filled || 0)} positions available</p>
                                 </div>
                                 {selectedJobId === job.id && (
                                     <CheckCircle className="text-primary-500" size={20} />
@@ -590,7 +590,7 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
             </div>
 
             {/* Actions */}
-            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+            <div className="flex justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                 <Button variant="secondary" onClick={onClose}>Cancel</Button>
                 <Button
                     onClick={() => manualAssignMutation.mutate()}

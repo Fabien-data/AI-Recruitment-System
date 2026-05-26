@@ -20,10 +20,10 @@ export function Card({ children, className, hover = false, accent = null, glow =
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: 'easeOut' }}
       className={twMerge(
-        'relative bg-white rounded-3xl border border-zinc-200/60 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl transition-shadow',
-        'dark:bg-zinc-900/90 dark:border-zinc-800/70 dark:shadow-[0_8px_30px_rgb(0,0,0,0.4)]',
+        'relative bg-white rounded-3xl border border-zinc-200/70 shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-shadow',
+        'dark:bg-zinc-900 dark:border-zinc-800 dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)]',
         accent && accentStripe[accent],
-        hover && 'hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:hover:shadow-[0_8px_30px_rgb(0,0,0,0.6)] cursor-pointer',
+        hover && 'hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:hover:shadow-[0_8px_30px_rgb(0,0,0,0.7)] dark:hover:border-zinc-700 cursor-pointer',
         glow && (glowClass[accent] || 'hover:shadow-glow-blue'),
         className
       )}

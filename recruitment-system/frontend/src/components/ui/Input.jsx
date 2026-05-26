@@ -23,9 +23,9 @@ export function Input({
         type={type}
         id={inputId}
         className={twMerge(
-          'w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200/80 text-zinc-900 placeholder-zinc-400 rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all disabled:opacity-50',
-          'dark:bg-zinc-800/60 dark:border-zinc-700 dark:text-zinc-100 dark:placeholder-zinc-500 dark:focus:border-primary-400',
-          error && 'border-accent-400 focus:ring-accent-400/30 focus:border-accent-400 bg-accent-50/50 dark:bg-accent-950/20 dark:border-accent-700',
+          'w-full px-4 py-2.5 bg-white border border-zinc-200 text-zinc-900 placeholder-zinc-400 rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-colors disabled:opacity-50',
+          'dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100 dark:placeholder-zinc-500 dark:focus:border-primary-400 dark:focus:ring-primary-400/30',
+          error && 'border-accent-400 focus:ring-accent-400/30 focus:border-accent-400 bg-accent-50/50 dark:bg-accent-950/30 dark:border-accent-600',
           className
         )}
         aria-invalid={!!error}

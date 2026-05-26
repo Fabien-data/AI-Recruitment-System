@@ -120,7 +120,7 @@ export default function Candidates() {
       <div className="card mb-6">
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={20} aria-hidden />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 pointer-events-none" size={20} aria-hidden />
             <input
               type="text"
               placeholder="Search candidates..."
@@ -175,8 +175,8 @@ export default function Candidates() {
         {isLoading ? (
           <TableSkeleton rows={8} cols={7} />
         ) : candidatesList.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">
-            <Users className="mx-auto h-12 w-12 text-gray-300 mb-2" aria-hidden />
+          <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
+            <Users className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" aria-hidden />
             <p className="font-medium">No candidates found</p>
             <p className="text-sm mt-1">Add a candidate or adjust your filters.</p>
             <Button variant="primary" className="mt-4" onClick={() => setModalOpen(true)}>
@@ -188,29 +188,29 @@ export default function Candidates() {
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Name</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Age</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Phone</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Email</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Source</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Status</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Actions</th>
+                  <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                    <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Name</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Age</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Phone</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Email</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Source</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Status</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {candidatesList.map((candidate) => (
                     <tr
                       key={candidate.id}
-                      className="border-b border-gray-100 hover:bg-indigo-50 transition-colors cursor-pointer"
+                      className="border-b border-zinc-100 dark:border-zinc-800/60 hover:bg-primary-50 dark:hover:bg-primary-950/30 transition-colors cursor-pointer"
                       onClick={() => setReviewCandidateId(candidate.id)}
                     >
-                      <td className="py-3 px-4 font-medium text-gray-900">{candidate.name || 'Unknown'}</td>
-                      <td className="py-3 px-4 text-gray-600">{candidate.age ?? '-'}</td>
-                      <td className="py-3 px-4 text-gray-600">{candidate.phone}</td>
-                      <td className="py-3 px-4 text-gray-600">{candidate.email || '-'}</td>
+                      <td className="py-3 px-4 font-medium text-zinc-900 dark:text-zinc-50">{candidate.name || 'Unknown'}</td>
+                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{candidate.age ?? '-'}</td>
+                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{candidate.phone}</td>
+                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{candidate.email || '-'}</td>
                       <td className="py-3 px-4">
-                        <span className="badge bg-gray-100 text-gray-700">{candidate.source}</span>
+                        <span className="badge bg-gray-100 text-zinc-700 dark:text-zinc-300">{candidate.source}</span>
                       </td>
                       <td className="py-3 px-4">
                         <Badge status={candidate.status} />
@@ -230,8 +230,8 @@ export default function Candidates() {
             </div>
 
             {pagination && (
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mt-6 pt-4 border-t border-gray-200">
-                <p className="text-sm text-gray-600">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">
                   Showing {candidatesList.length} of {pagination.total} candidates
                 </p>
                 <div className="flex gap-2">
@@ -273,15 +273,15 @@ export default function Candidates() {
         </div>
         {showDuplicates && (
           duplicatesLoading ? (
-            <p className="text-sm text-gray-400">Scanning...</p>
+            <p className="text-sm text-zinc-400 dark:text-zinc-500">Scanning...</p>
           ) : duplicatesData.length === 0 ? (
-            <div className="py-6 text-center text-gray-500">
-              <Users className="mx-auto h-10 w-10 text-gray-300 mb-2" />
+            <div className="py-6 text-center text-zinc-500 dark:text-zinc-400">
+              <Users className="mx-auto h-10 w-10 text-zinc-300 dark:text-zinc-600 mb-2" />
               <p className="text-sm">No duplicate candidates found</p>
             </div>
           ) : (
             <div className="space-y-4">
-              <p className="text-sm text-gray-600">{duplicatesData.length} potential duplicate pair{duplicatesData.length !== 1 ? 's' : ''} found</p>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">{duplicatesData.length} potential duplicate pair{duplicatesData.length !== 1 ? 's' : ''} found</p>
               {duplicatesData.map((pair, i) => (
                 <div key={i} className="border border-orange-200 bg-orange-50 rounded-xl p-4">
                   <div className="flex items-center gap-2 mb-3 text-sm font-medium text-orange-700">
@@ -289,15 +289,15 @@ export default function Candidates() {
                     {pair.confidence}% confidence match
                   </div>
                   <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div className="bg-white rounded-lg p-3 border border-gray-200">
-                      <p className="font-semibold text-gray-900">{pair.candidate1?.name}</p>
-                      <p className="text-gray-500">{pair.candidate1?.phone}</p>
-                      <p className="text-gray-500">{pair.candidate1?.email || '—'}</p>
+                    <div className="bg-white dark:bg-zinc-900 rounded-lg p-3 border border-zinc-200 dark:border-zinc-800">
+                      <p className="font-semibold text-zinc-900 dark:text-zinc-50">{pair.candidate1?.name}</p>
+                      <p className="text-zinc-500 dark:text-zinc-400">{pair.candidate1?.phone}</p>
+                      <p className="text-zinc-500 dark:text-zinc-400">{pair.candidate1?.email || '—'}</p>
                     </div>
-                    <div className="bg-white rounded-lg p-3 border border-gray-200">
-                      <p className="font-semibold text-gray-900">{pair.candidate2?.name}</p>
-                      <p className="text-gray-500">{pair.candidate2?.phone}</p>
-                      <p className="text-gray-500">{pair.candidate2?.email || '—'}</p>
+                    <div className="bg-white dark:bg-zinc-900 rounded-lg p-3 border border-zinc-200 dark:border-zinc-800">
+                      <p className="font-semibold text-zinc-900 dark:text-zinc-50">{pair.candidate2?.name}</p>
+                      <p className="text-zinc-500 dark:text-zinc-400">{pair.candidate2?.phone}</p>
+                      <p className="text-zinc-500 dark:text-zinc-400">{pair.candidate2?.email || '—'}</p>
                     </div>
                   </div>
                   <div className="flex gap-2 mt-3 justify-end">
@@ -358,7 +358,7 @@ export default function Candidates() {
             placeholder="Candidate age"
           />
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Source</label>
             <select
               value={form.source}
               onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))}

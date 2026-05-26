@@ -31,8 +31,8 @@ function formatDateTime(iso) {
 function FieldRow({ label, value }) {
   return (
     <div>
-      <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">{label}</p>
-      <p className="text-sm text-zinc-900 mt-0.5">{value || <span className="text-zinc-400">—</span>}</p>
+      <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">{label}</p>
+      <p className="text-sm text-zinc-900 dark:text-zinc-50 mt-0.5">{value || <span className="text-zinc-400">—</span>}</p>
     </div>
   )
 }
@@ -83,10 +83,10 @@ export default function LeadDetail() {
   })
 
   if (isLoading) {
-    return <div className="p-8 text-sm text-zinc-500">Loading lead…</div>
+    return <div className="p-8 text-sm text-zinc-500 dark:text-zinc-400">Loading lead…</div>
   }
   if (!lead) {
-    return <div className="p-8 text-sm text-zinc-500">Lead not found.</div>
+    return <div className="p-8 text-sm text-zinc-500 dark:text-zinc-400">Lead not found.</div>
   }
 
   const cvDoc = (lead.documents || []).find((d) => d.doc_type === 'cv')
@@ -96,25 +96,25 @@ export default function LeadDetail() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      <Link to="/marketing-hub" className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 mb-4 transition-colors">
+      <Link to="/marketing-hub" className="inline-flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-50 mb-4 transition-colors">
         <ArrowLeft size={14} /> Back to leads
       </Link>
 
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-zinc-900 tracking-tight">{lead.full_name}</h1>
-          <div className="flex items-center gap-3 mt-2 text-sm text-zinc-500">
+          <h1 className="text-2xl lg:text-3xl font-bold text-zinc-900 dark:text-zinc-50 tracking-tight">{lead.full_name}</h1>
+          <div className="flex items-center gap-3 mt-2 text-sm text-zinc-500 dark:text-zinc-400">
             <span className="inline-flex items-center gap-1.5 font-mono">
               <Phone size={14} /> {lead.phone}
             </span>
             {lead.source_label && (
               <>
-                <span className="text-zinc-300">•</span>
+                <span className="text-zinc-300 dark:text-zinc-600">•</span>
                 <span>{lead.source_label}</span>
               </>
             )}
-            <span className="text-zinc-300">•</span>
+            <span className="text-zinc-300 dark:text-zinc-600">•</span>
             <span>Created {formatDateTime(lead.created_at)}</span>
           </div>
         </div>
@@ -128,7 +128,7 @@ export default function LeadDetail() {
           {!canConvert && lead.converted_candidate_id && (
             <Link
               to={`/candidates/${lead.converted_candidate_id}`}
-              className="inline-flex items-center gap-1.5 text-sm text-zinc-600 hover:text-zinc-900 underline"
+              className="inline-flex items-center gap-1.5 text-sm text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-50 underline"
             >
               View linked candidate <ExternalLink size={12} />
             </Link>
@@ -139,7 +139,7 @@ export default function LeadDetail() {
       {/* Stage selector */}
       <Card className="p-4 mb-6">
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Stage</span>
+          <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">Stage</span>
           <div className="flex flex-wrap gap-1.5">
             {STAGES.map((s) => {
               const active = lead.stage === s
@@ -157,8 +157,8 @@ export default function LeadDetail() {
                     active
                       ? 'bg-zinc-900 text-white'
                       : disabled
-                        ? 'bg-zinc-50 text-zinc-300 cursor-not-allowed'
-                        : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+                        ? 'bg-zinc-50 text-zinc-300 dark:text-zinc-600 cursor-not-allowed'
+                        : 'bg-zinc-100 text-zinc-700 dark:text-zinc-300 dark:text-zinc-600 hover:bg-zinc-200'
                   }`}
                   title={isBackward && !isAdmin ? 'Backward transitions are admin-only' : undefined}
                 >
@@ -173,7 +173,7 @@ export default function LeadDetail() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Profile */}
         <Card className="p-6 lg:col-span-2">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Profile</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Profile</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FieldRow label="NIC / Passport" value={lead.nic} />
             <FieldRow label="Country" value={lead.country} />
@@ -184,7 +184,7 @@ export default function LeadDetail() {
               value={
                 lead.preferred_job_title ? (
                   <span className="inline-flex items-center gap-2">
-                    <Link to={`/jobs/${lead.preferred_job_id}`} className="text-zinc-900 hover:underline">
+                    <Link to={`/jobs/${lead.preferred_job_id}`} className="text-zinc-900 dark:text-zinc-50 hover:underline">
                       {lead.preferred_job_title}
                     </Link>
                     {lead.preferred_job_is_urgent && <Flame size={12} className="text-red-500" />}
@@ -204,9 +204,9 @@ export default function LeadDetail() {
         {/* Documents */}
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide">Documents</h2>
+            <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide">Documents</h2>
             {!cvDoc && (
-              <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-700 hover:text-zinc-900 cursor-pointer">
+              <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300 dark:text-zinc-600 hover:text-zinc-900 dark:text-zinc-50 cursor-pointer">
                 + Upload CV
                 <input
                   type="file"
@@ -227,7 +227,7 @@ export default function LeadDetail() {
               <DocRow doc={cvDoc} onRemove={() => deleteDocMutation.mutate(cvDoc.id)} />
             </div>
           )}
-          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1.5">Other</p>
+          <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1.5">Other</p>
           {otherDocs.length === 0 ? (
             <p className="text-xs text-zinc-400">No documents</p>
           ) : (
@@ -302,7 +302,7 @@ function FollowUpsCard({ leadId, followUps, onChange }) {
 
   return (
     <Card className="p-6">
-      <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">
+      <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">
         <CalendarPlus size={14} className="inline mr-1.5 -mt-0.5" />
         Follow-ups
       </h2>
@@ -312,14 +312,14 @@ function FollowUpsCard({ leadId, followUps, onChange }) {
           type="datetime-local"
           value={dueAt}
           onChange={(e) => setDueAt(e.target.value)}
-          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
+          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
         />
         <input
           type="text"
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Note (optional)…"
-          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
+          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
         />
         <Button type="submit" size="sm" loading={createMutation.isPending}>
           Schedule
@@ -341,7 +341,7 @@ function FollowUpsCard({ leadId, followUps, onChange }) {
                   <button
                     type="button"
                     onClick={() => completeMutation.mutate(f.id)}
-                    className="p-1.5 text-amber-700 hover:text-emerald-600 rounded-full hover:bg-white"
+                    className="p-1.5 text-amber-700 hover:text-emerald-600 rounded-full hover:bg-white dark:bg-zinc-900"
                     title="Mark complete"
                   >
                     <CheckCircle2 size={14} />
@@ -352,12 +352,12 @@ function FollowUpsCard({ leadId, followUps, onChange }) {
           )}
           {done.length > 0 && (
             <details className="text-xs">
-              <summary className="cursor-pointer text-zinc-500 hover:text-zinc-700">
+              <summary className="cursor-pointer text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300 dark:text-zinc-600">
                 {done.length} completed
               </summary>
               <ul className="space-y-1 mt-2">
                 {done.map((f) => (
-                  <li key={f.id} className="px-3 py-1.5 bg-zinc-50 border border-zinc-100 rounded-lg text-zinc-500">
+                  <li key={f.id} className="px-3 py-1.5 bg-zinc-50 border border-zinc-100 rounded-lg text-zinc-500 dark:text-zinc-400">
                     <span className="font-mono">{new Date(f.due_at).toLocaleString()}</span>
                     {f.note && <span> — {f.note}</span>}
                   </li>
@@ -391,7 +391,7 @@ function SendTemplateCard({ leadId }) {
 
   return (
     <Card className="p-6">
-      <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">
+      <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">
         <MessageSquare size={14} className="inline mr-1.5 -mt-0.5" />
         Send message
       </h2>
@@ -400,7 +400,7 @@ function SendTemplateCard({ leadId }) {
         <select
           value={templateKey}
           onChange={(e) => setTemplateKey(e.target.value)}
-          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
+          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 text-sm"
         >
           <option value="">Select template…</option>
           {templates.map((t) => (
@@ -410,8 +410,8 @@ function SendTemplateCard({ leadId }) {
 
         {selected && (
           <div className="px-3 py-2 bg-zinc-50 border border-zinc-100 rounded-xl">
-            <p className="text-xs text-zinc-500 mb-1 font-semibold uppercase tracking-wide">Preview</p>
-            <p className="text-xs text-zinc-700 whitespace-pre-line">{selected.preview}</p>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-1 font-semibold uppercase tracking-wide">Preview</p>
+            <p className="text-xs text-zinc-700 dark:text-zinc-300 dark:text-zinc-600 whitespace-pre-line">{selected.preview}</p>
           </div>
         )}
 
@@ -422,7 +422,7 @@ function SendTemplateCard({ leadId }) {
               type="button"
               onClick={() => setChannel(c)}
               className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors capitalize ${
-                channel === c ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-900'
+                channel === c ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 shadow-sm' : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-50'
               }`}
             >
               {c}
@@ -445,12 +445,12 @@ function SendTemplateCard({ leadId }) {
 
 function DocRow({ doc, onRemove }) {
   return (
-    <div className="flex items-center justify-between gap-2 px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-2xl">
+    <div className="flex items-center justify-between gap-2 px-3 py-2 bg-zinc-50 border border-zinc-200 dark:border-zinc-800 rounded-2xl">
       <a
         href={doc.url}
         target="_blank"
         rel="noopener noreferrer"
-        className="flex items-center gap-2 text-sm text-zinc-700 hover:text-zinc-900 truncate"
+        className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 dark:text-zinc-600 hover:text-zinc-900 dark:text-zinc-50 truncate"
       >
         <FileText size={14} className="flex-shrink-0" />
         <span className="truncate">{doc.name}</span>

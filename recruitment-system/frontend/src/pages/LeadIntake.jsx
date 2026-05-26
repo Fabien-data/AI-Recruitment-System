@@ -168,7 +168,7 @@ export default function LeadIntake() {
     <div className="p-6 lg:p-8 animate-fade-in">
       <Link
         to="/marketing-hub"
-        className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 mb-4 transition-colors"
+        className="inline-flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-50 mb-4 transition-colors"
       >
         <ArrowLeft size={14} /> Back to leads
       </Link>
@@ -182,7 +182,7 @@ export default function LeadIntake() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <Card className="p-6">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Contact</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Contact</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
               label="Full name *"
@@ -211,11 +211,11 @@ export default function LeadIntake() {
                 onChange={(e) => setField('dob', e.target.value)}
               />
               {computedAge !== null && (
-                <p className="mt-1 ml-1 text-xs text-zinc-500">Age: {computedAge} years</p>
+                <p className="mt-1 ml-1 text-xs text-zinc-500 dark:text-zinc-400">Age: {computedAge} years</p>
               )}
             </div>
             <div>
-              <label className="block text-sm font-semibold text-zinc-700 mb-1.5 ml-1 tracking-tight">Country</label>
+              <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">Country</label>
               <select
                 value={form.country}
                 onChange={(e) => setField('country', e.target.value)}
@@ -231,7 +231,7 @@ export default function LeadIntake() {
         </Card>
 
         <Card className="p-6">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Job preference</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Job preference</h2>
           <JobAutocomplete
             value={form.preferred_job_id ? { id: form.preferred_job_id, title: form.preferred_job_title } : null}
             freeText={form.preferred_job_text}
@@ -240,10 +240,10 @@ export default function LeadIntake() {
         </Card>
 
         <Card className="p-6">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Source & remarks</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Source & remarks</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-semibold text-zinc-700 mb-1.5 ml-1 tracking-tight">Source</label>
+              <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">Source</label>
               <select
                 value={form.source_id}
                 onChange={(e) => setField('source_id', e.target.value)}
@@ -262,7 +262,7 @@ export default function LeadIntake() {
               placeholder="e.g. fb-spring-2026"
             />
             <div className="md:col-span-2">
-              <label className="block text-sm font-semibold text-zinc-700 mb-1.5 ml-1 tracking-tight">Remarks</label>
+              <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">Remarks</label>
               <textarea
                 rows={3}
                 value={form.remarks}
@@ -275,13 +275,13 @@ export default function LeadIntake() {
         </Card>
 
         <Card className="p-6">
-          <h2 className="text-sm font-bold text-zinc-900 uppercase tracking-wide mb-4">Documents</h2>
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-wide mb-4">Documents</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-semibold text-zinc-700 mb-1.5 ml-1 tracking-tight">CV / Resume</label>
+              <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">CV / Resume</label>
               {cvFile ? (
                 <div className="flex items-center justify-between gap-2 px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-2xl">
-                  <span className="flex items-center gap-2 text-sm text-zinc-700 truncate">
+                  <span className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 truncate">
                     <FileText size={14} /> {cvFile.name}
                   </span>
                   <button
@@ -293,7 +293,7 @@ export default function LeadIntake() {
                   </button>
                 </div>
               ) : (
-                <label className="flex items-center justify-center gap-2 px-3 py-3 border-2 border-dashed border-zinc-200 rounded-2xl text-sm text-zinc-500 hover:border-zinc-400 hover:bg-zinc-50 cursor-pointer transition-colors">
+                <label className="flex items-center justify-center gap-2 px-3 py-3 border-2 border-dashed border-zinc-200 rounded-2xl text-sm text-zinc-500 dark:text-zinc-400 hover:border-zinc-400 hover:bg-zinc-50 cursor-pointer transition-colors">
                   <Upload size={16} />
                   <span>Upload CV (PDF / DOC / Image)</span>
                   <input
@@ -306,8 +306,8 @@ export default function LeadIntake() {
               )}
             </div>
             <div>
-              <label className="block text-sm font-semibold text-zinc-700 mb-1.5 ml-1 tracking-tight">Other documents</label>
-              <label className="flex items-center justify-center gap-2 px-3 py-3 border-2 border-dashed border-zinc-200 rounded-2xl text-sm text-zinc-500 hover:border-zinc-400 hover:bg-zinc-50 cursor-pointer transition-colors">
+              <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">Other documents</label>
+              <label className="flex items-center justify-center gap-2 px-3 py-3 border-2 border-dashed border-zinc-200 rounded-2xl text-sm text-zinc-500 dark:text-zinc-400 hover:border-zinc-400 hover:bg-zinc-50 cursor-pointer transition-colors">
                 <Upload size={16} />
                 <span>NIC copy, passport, photos…</span>
                 <input

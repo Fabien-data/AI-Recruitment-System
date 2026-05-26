@@ -223,8 +223,8 @@ function MsgBubble({ msg }) {
   return (
     <div className={clsx('flex gap-2 mb-3', isInbound ? 'justify-start' : 'justify-end')}>
       {isInbound && (
-        <div className="w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center shrink-0 mt-1">
-          <User size={14} className="text-slate-500" />
+        <div className="w-7 h-7 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center shrink-0 mt-1">
+          <User size={14} className="text-zinc-500 dark:text-zinc-400" />
         </div>
       )}
       <div className={clsx('max-w-[68%]', isInbound ? '' : 'items-end flex flex-col')}>
@@ -236,7 +236,7 @@ function MsgBubble({ msg }) {
         <div className={clsx(
           'rounded-2xl px-4 py-2.5 shadow-sm text-sm whitespace-pre-wrap break-words',
           isInbound
-            ? 'bg-white text-gray-800 rounded-tl-none border border-gray-100'
+            ? 'bg-white dark:bg-zinc-900 text-gray-800 rounded-tl-none border border-gray-100'
             : isAgent
               ? 'bg-indigo-600 text-white rounded-tr-none'
               : 'bg-primary-600 text-white rounded-tr-none'
@@ -332,7 +332,7 @@ export default function Communications() {
     if (value === 'cv_uploaded') return 'bg-cyan-100 text-cyan-700'
     if (value === 'cv_parsed') return 'bg-emerald-100 text-emerald-700'
     if (value === 'shortlisted_or_rejected') return 'bg-violet-100 text-violet-700'
-    return 'bg-slate-100 text-slate-700'
+    return 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
   }, [])
 
   const getCandidateInitial = useCallback((candidate) => {
@@ -755,14 +755,14 @@ export default function Communications() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-screen bg-zinc-50 dark:bg-zinc-900/60 overflow-hidden">
 
       {/* ── Left: Chat list ─────────────────────────────────────────────────── */}
-      <div className="w-80 shrink-0 border-r border-slate-200 bg-white flex flex-col">
+      <div className="w-80 shrink-0 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col">
         {/* Header */}
-        <div className="px-4 py-3 border-b border-slate-100">
+        <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/60">
           <div className="flex items-center justify-between mb-3">
-            <h1 className="text-lg font-bold text-slate-900">Conversations</h1>
+            <h1 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">Conversations</h1>
             <div className="flex items-center gap-1.5">
               {connected
                 ? <Wifi size={14} className="text-emerald-500" />
@@ -773,20 +773,20 @@ export default function Communications() {
             </div>
           </div>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" size={16} />
             <input
               type="text"
               placeholder="Search candidates..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-400 transition-all"
+              className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-400 transition-all"
             />
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <select
               value={conversationStage}
               onChange={(e) => setConversationStage(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             >
               {STAGE_OPTIONS.map((option) => (
                 <option key={option.value || 'all'} value={option.value}>{option.label}</option>
@@ -795,7 +795,7 @@ export default function Communications() {
             <select
               value={pipelineStage}
               onChange={(e) => setPipelineStage(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             >
               {PIPELINE_OPTIONS.map((option) => (
                 <option key={`pipeline-${option.value || 'all'}`} value={option.value}>{option.label}</option>
@@ -804,7 +804,7 @@ export default function Communications() {
             <select
               value={responseStatus}
               onChange={(e) => setResponseStatus(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             >
               {RESPONSE_OPTIONS.map((option) => (
                 <option key={option.value || 'all'} value={option.value}>{option.label}</option>
@@ -813,7 +813,7 @@ export default function Communications() {
             <select
               value={handoffState}
               onChange={(e) => setHandoffState(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             >
               {HANDOFF_OPTIONS.map((option) => (
                 <option key={`handoff-${option.value || 'all'}`} value={option.value}>{option.label}</option>
@@ -823,18 +823,18 @@ export default function Communications() {
               type="date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             />
             <input
               type="date"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             />
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="col-span-2 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="col-span-2 w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             >
               {SORT_OPTIONS.map((option) => (
                 <option key={`sort-${option.value}`} value={option.value}>{option.label}</option>
@@ -853,7 +853,7 @@ export default function Communications() {
                 setDateFrom('')
                 setDateTo('')
               }}
-              className="text-[11px] text-slate-500 hover:text-slate-700"
+              className="text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300"
             >
               Clear filters
             </button>
@@ -872,8 +872,8 @@ export default function Communications() {
               ))}
             </div>
           ) : chatList.length === 0 ? (
-            <div className="p-8 text-center text-slate-400">
-              <MessageSquare size={40} className="mx-auto mb-2 text-slate-200" />
+            <div className="p-8 text-center text-zinc-400 dark:text-zinc-500">
+              <MessageSquare size={40} className="mx-auto mb-2 text-zinc-200 dark:text-zinc-700" />
               <p className="text-sm">No conversations yet</p>
             </div>
           ) : (
@@ -892,7 +892,7 @@ export default function Communications() {
                   role="button"
                   tabIndex={0}
                   className={clsx(
-                    'w-full px-4 py-3 flex items-start gap-3 text-left hover:bg-slate-50 transition-colors cursor-pointer',
+                    'w-full px-4 py-3 flex items-start gap-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors cursor-pointer',
                     selectedId === c.candidate_id && 'bg-primary-50 hover:bg-primary-50'
                   )}
                 >
@@ -927,14 +927,14 @@ export default function Communications() {
                       </div>
                     )}
                     <div className="flex items-baseline justify-between gap-1 mb-0.5">
-                      <p className="text-sm font-semibold text-slate-900 truncate">{getCandidateDisplayName(c)}</p>
+                      <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50 truncate">{getCandidateDisplayName(c)}</p>
                       {c.last_message_at && (
-                        <span className="text-[10px] text-slate-400 shrink-0">
+                        <span className="text-[10px] text-zinc-400 dark:text-zinc-500 shrink-0">
                           {formatDistanceToNow(new Date(c.last_message_at), { addSuffix: false })}
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-slate-500 truncate">{c.last_message || 'No messages'}</p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{c.last_message || 'No messages'}</p>
                     <div className="flex items-center gap-1.5 mt-1">
                       {c.is_human_handoff
                         ? <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-medium flex items-center gap-1">
@@ -965,23 +965,23 @@ export default function Communications() {
       {selectedId ? (
         <div className="flex-1 flex flex-col min-w-0">
           {/* Transcript header */}
-          <div className="px-5 py-3 bg-white border-b border-slate-200 shadow-sm shrink-0">
+          <div className="px-5 py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 shadow-sm shrink-0">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-full bg-primary-100 flex items-center justify-center font-bold text-primary-700 text-sm">
                   {getCandidateInitial(selectedCandidate)}
                 </div>
                 <div>
-                  <h2 className="font-semibold text-slate-900 text-sm">{getCandidateDisplayName(selectedCandidate)}</h2>
+                  <h2 className="font-semibold text-zinc-900 dark:text-zinc-50 text-sm">{getCandidateDisplayName(selectedCandidate)}</h2>
                   <div className="mt-1">
                     <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(selectedCandidate?.pipeline_stage))}>
                       {getPipelineStageLabel(selectedCandidate?.pipeline_stage)}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
                     <span className="flex items-center gap-1"><Phone size={11} /> {selectedCandidate?.phone || selectedCandidate?.whatsapp_phone}</span>
                     {selectedCandidate?.last_chatbot_state && (
-                      <span className="flex items-center gap-1 text-slate-400">
+                      <span className="flex items-center gap-1 text-zinc-400 dark:text-zinc-500">
                         <ChevronRight size={11} /> {selectedCandidate.last_chatbot_state.replace(/_/g, ' ')}
                       </span>
                     )}
@@ -1021,7 +1021,7 @@ export default function Communications() {
               <select
                 value={transcriptResponseStatus}
                 onChange={(e) => setTranscriptResponseStatus(e.target.value)}
-                className="px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+                className="px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
               >
                 {RESPONSE_OPTIONS.map((option) => (
                   <option key={`transcript-${option.value || 'all'}`} value={option.value}>{option.label}</option>
@@ -1031,13 +1031,13 @@ export default function Communications() {
                 type="date"
                 value={transcriptDateFrom}
                 onChange={(e) => setTranscriptDateFrom(e.target.value)}
-                className="px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+                className="px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
               />
               <input
                 type="date"
                 value={transcriptDateTo}
                 onChange={(e) => setTranscriptDateTo(e.target.value)}
-                className="px-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+                className="px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
               />
               <button
                 type="button"
@@ -1046,7 +1046,7 @@ export default function Communications() {
                   setTranscriptDateFrom('')
                   setTranscriptDateTo('')
                 }}
-                className="text-[11px] text-slate-500 hover:text-slate-700"
+                className="text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300"
               >
                 Clear transcript filters
               </button>
@@ -1064,8 +1064,8 @@ export default function Communications() {
                 ))}
               </div>
             ) : transcript.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400">
-                <MessageSquare size={48} className="mb-3 text-slate-200" />
+              <div className="h-full flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-500">
+                <MessageSquare size={48} className="mb-3 text-zinc-200 dark:text-zinc-700" />
                 <p className="text-sm">No messages yet</p>
               </div>
             ) : (
@@ -1073,7 +1073,7 @@ export default function Communications() {
                 {transcript.map((msg, i) => <MsgBubble key={msg.id || i} msg={msg} />)}
                 {agentTyping && (
                   <div className="flex justify-start mb-3">
-                    <div className="bg-white border border-slate-100 rounded-2xl rounded-tl-none px-4 py-2 shadow-sm text-xs text-slate-400 flex items-center gap-2">
+                    <div className="bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800/60 rounded-2xl rounded-tl-none px-4 py-2 shadow-sm text-xs text-zinc-400 dark:text-zinc-500 flex items-center gap-2">
                       <span className="flex gap-1">
                         <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:0ms]" />
                         <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:150ms]" />
@@ -1090,7 +1090,7 @@ export default function Communications() {
 
           {/* Input */}
           {selectedCandidate?.is_human_handoff && (
-            <div className="px-4 py-3 bg-white border-t border-slate-200 shrink-0">
+            <div className="px-4 py-3 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
               {sendError && (
                 <div className="flex items-center gap-2 text-xs text-red-500 mb-2">
                   <AlertCircle size={12} /> {sendError}
@@ -1099,7 +1099,7 @@ export default function Communications() {
 
               {/* Channel selector + template prefill */}
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-[11px] text-slate-400 font-medium">Send via:</span>
+                <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">Send via:</span>
                 {[
                   { value: 'whatsapp', label: 'WhatsApp' },
                   { value: 'email', label: 'Email', disabled: !selectedCandidate.email },
@@ -1114,7 +1114,7 @@ export default function Communications() {
                       'text-[11px] px-2.5 py-1 rounded-full border font-medium transition-colors',
                       sendChannel === opt.value
                         ? 'bg-indigo-600 border-indigo-600 text-white'
-                        : 'border-slate-200 text-slate-500 hover:border-indigo-400 hover:text-indigo-600',
+                        : 'border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 hover:border-indigo-400 hover:text-indigo-600',
                       opt.disabled && 'opacity-40 cursor-not-allowed',
                     )}
                     title={opt.disabled ? 'Candidate has no email address' : undefined}
@@ -1136,7 +1136,7 @@ export default function Communications() {
 
               {/* Job/interview context hint */}
               {msgContext?.application?.job_title && (
-                <div className="text-[10px] text-slate-400 mb-1.5 flex items-center gap-1">
+                <div className="text-[10px] text-zinc-400 dark:text-zinc-500 mb-1.5 flex items-center gap-1">
                   <Briefcase size={10} />
                   {msgContext.application.job_title}
                   {msgContext.interview?.scheduled_datetime && (
@@ -1164,11 +1164,11 @@ export default function Communications() {
                     </button>
                   </div>
                 ) : audioUrl ? (
-                  <div className="flex-1 flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 h-11">
+                  <div className="flex-1 flex items-center gap-3 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl px-4 py-2 h-11">
                     <button
                       type="button"
                       onClick={discardAudio}
-                      className="text-slate-400 hover:text-red-500 transition-colors"
+                      className="text-zinc-400 dark:text-zinc-500 hover:text-red-500 transition-colors"
                       title="Discard voice note"
                     >
                       <Trash2 size={18} />
@@ -1190,13 +1190,13 @@ export default function Communications() {
                       />
                       <label
                         htmlFor="agent-media-upload"
-                        className="p-2 text-slate-400 hover:text-indigo-600 cursor-pointer transition-colors"
+                        className="p-2 text-zinc-400 dark:text-zinc-500 hover:text-indigo-600 cursor-pointer transition-colors"
                       >
                         <Paperclip size={20} />
                       </label>
                     </div>
 
-                    <div className="flex-1 bg-slate-50 rounded-xl border border-slate-200 focus-within:ring-2 focus-within:ring-indigo-400 focus-within:bg-white transition-all">
+                    <div className="flex-1 bg-zinc-50 dark:bg-zinc-900/60 rounded-xl border border-zinc-200 dark:border-zinc-800 focus-within:ring-2 focus-within:ring-indigo-400 focus-within:bg-white dark:bg-zinc-900 transition-all">
                       <textarea
                         value={message}
                         onChange={(e) => {
@@ -1225,7 +1225,7 @@ export default function Communications() {
                     type="button"
                     onClick={startRecording}
                     variant="outline"
-                    className="mb-0.5 w-10 h-10 px-0 rounded-xl border-slate-200 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 flex items-center justify-center"
+                    className="mb-0.5 w-10 h-10 px-0 rounded-xl border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 flex items-center justify-center"
                   >
                     <Mic size={18} />
                   </Button>
@@ -1243,10 +1243,10 @@ export default function Communications() {
           )}
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center bg-slate-50">
-          <div className="text-center text-slate-400">
-            <MessageSquare size={56} className="mx-auto mb-3 text-slate-200" />
-            <p className="text-lg font-medium text-slate-500">Select a conversation</p>
+        <div className="flex-1 flex items-center justify-center bg-zinc-50 dark:bg-zinc-900/60">
+          <div className="text-center text-zinc-400 dark:text-zinc-500">
+            <MessageSquare size={56} className="mx-auto mb-3 text-zinc-200 dark:text-zinc-700" />
+            <p className="text-lg font-medium text-zinc-500 dark:text-zinc-400">Select a conversation</p>
             <p className="text-sm">Choose from the list to view the full chat transcript</p>
           </div>
         </div>
@@ -1254,14 +1254,14 @@ export default function Communications() {
 
       {/* ── Right: Candidate context ─────────────────────────────────────────── */}
       {selectedCandidate && (
-        <div className="w-64 shrink-0 border-l border-slate-200 bg-white flex flex-col overflow-y-auto">
-          <div className="p-4 border-b border-slate-100">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Candidate Info</h3>
+        <div className="w-64 shrink-0 border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col overflow-y-auto">
+          <div className="p-4 border-b border-zinc-100 dark:border-zinc-800/60">
+            <h3 className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3">Candidate Info</h3>
             <div className="flex flex-col items-center text-center">
               <div className="w-14 h-14 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-xl font-bold mb-2">
                 {getCandidateInitial(selectedCandidate)}
               </div>
-              <p className="font-semibold text-slate-900">{getCandidateDisplayName(selectedCandidate)}</p>
+              <p className="font-semibold text-zinc-900 dark:text-zinc-50">{getCandidateDisplayName(selectedCandidate)}</p>
               <button
                 type="button"
                 onClick={() => {
@@ -1278,23 +1278,23 @@ export default function Communications() {
               >
                 Edit contact
               </button>
-              <p className="text-xs text-slate-500">{selectedCandidate.phone || selectedCandidate.whatsapp_phone}</p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{selectedCandidate.phone || selectedCandidate.whatsapp_phone}</p>
             </div>
           </div>
 
           <div className="p-4 space-y-3 text-sm">
             {/* Status */}
-            <div className="flex items-center gap-2 text-slate-600">
+            <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
               <div className={clsx('w-2 h-2 rounded-full', selectedCandidate.is_human_handoff ? 'bg-indigo-500' : 'bg-emerald-500')} />
               <span>{selectedCandidate.is_human_handoff ? `Agent: ${selectedCandidate.agent_name || 'Active'}` : 'Bot Active'}</span>
             </div>
 
             {/* Bot state */}
             {selectedCandidate.last_chatbot_state && (
-              <div className="flex items-start gap-2 text-slate-600">
-                <RefreshCw size={13} className="mt-0.5 shrink-0 text-slate-400" />
+              <div className="flex items-start gap-2 text-zinc-600 dark:text-zinc-400">
+                <RefreshCw size={13} className="mt-0.5 shrink-0 text-zinc-400 dark:text-zinc-500" />
                 <div>
-                  <p className="text-[10px] text-slate-400 uppercase tracking-wide">Bot State</p>
+                  <p className="text-[10px] text-zinc-400 dark:text-zinc-500 uppercase tracking-wide">Bot State</p>
                   <p className="text-xs font-medium">{selectedCandidate.last_chatbot_state.replace(/_/g, ' ')}</p>
                 </div>
               </div>
@@ -1302,22 +1302,22 @@ export default function Communications() {
 
             {/* Language */}
             {selectedCandidate.last_language && (
-              <div className="flex items-center gap-2 text-slate-600">
-                <Globe size={13} className="text-slate-400 shrink-0" />
+              <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+                <Globe size={13} className="text-zinc-400 dark:text-zinc-500 shrink-0" />
                 <span className="text-xs">Language: <LangBadge lang={selectedCandidate.last_language} /></span>
               </div>
             )}
 
             {/* Candidate status */}
             {selectedCandidate.candidate_status && (
-              <div className="flex items-center gap-2 text-slate-600">
-                <Briefcase size={13} className="text-slate-400 shrink-0" />
+              <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+                <Briefcase size={13} className="text-zinc-400 dark:text-zinc-500 shrink-0" />
                 <span className="text-xs capitalize">{selectedCandidate.candidate_status}</span>
               </div>
             )}
 
-            <div className="flex items-center gap-2 text-slate-600">
-              <div className="w-3 h-3 rounded-full bg-slate-200 shrink-0" />
+            <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+              <div className="w-3 h-3 rounded-full bg-zinc-200 dark:bg-zinc-800 shrink-0" />
               <span className={clsx('text-[11px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(selectedCandidate.pipeline_stage))}>
                 {getPipelineStageLabel(selectedCandidate.pipeline_stage)}
               </span>
@@ -1325,15 +1325,15 @@ export default function Communications() {
 
             {/* Last activity */}
             {selectedCandidate.last_message_at && (
-              <div className="flex items-center gap-2 text-slate-600">
-                <Clock size={13} className="text-slate-400 shrink-0" />
+              <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+                <Clock size={13} className="text-zinc-400 dark:text-zinc-500 shrink-0" />
                 <span className="text-xs">{formatDistanceToNow(new Date(selectedCandidate.last_message_at), { addSuffix: true })}</span>
               </div>
             )}
           </div>
 
           {/* Quick actions */}
-          <div className="p-4 border-t border-slate-100 mt-auto">
+          <div className="p-4 border-t border-zinc-100 dark:border-zinc-800/60 mt-auto">
             {selectedCandidate.is_human_handoff ? (
               <Button
                 variant="outline"
@@ -1389,31 +1389,31 @@ export default function Communications() {
           className="space-y-3"
         >
           <div>
-            <label className="block text-xs text-slate-600 mb-1">Name</label>
+            <label className="block text-xs text-zinc-600 dark:text-zinc-400 mb-1">Name</label>
             <input
               value={editContactDraft.name}
               onChange={(e) => setEditContactDraft(prev => ({ ...prev, name: e.target.value }))}
-              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
               placeholder="Candidate name"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-slate-600 mb-1">Email</label>
+            <label className="block text-xs text-zinc-600 dark:text-zinc-400 mb-1">Email</label>
             <input
               value={editContactDraft.email}
               onChange={(e) => setEditContactDraft(prev => ({ ...prev, email: e.target.value }))}
-              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
               placeholder="Email address"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-slate-600 mb-1">Preferred language</label>
+            <label className="block text-xs text-zinc-600 dark:text-zinc-400 mb-1">Preferred language</label>
             <select
               value={editContactDraft.preferred_language}
               onChange={(e) => setEditContactDraft(prev => ({ ...prev, preferred_language: e.target.value }))}
-              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
             >
               <option value="en">English</option>
               <option value="si">Sinhala</option>
@@ -1422,12 +1422,12 @@ export default function Communications() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-600 mb-1">Notes</label>
+            <label className="block text-xs text-zinc-600 dark:text-zinc-400 mb-1">Notes</label>
             <textarea
               value={editContactDraft.notes}
               onChange={(e) => setEditContactDraft(prev => ({ ...prev, notes: e.target.value }))}
               rows={3}
-              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              className="w-full px-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
               placeholder="Add recruiter notes"
             />
           </div>

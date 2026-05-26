@@ -265,10 +265,10 @@ function ImportModal({ open, onClose, onImport, loading }) {
           <p className="font-semibold text-zinc-900">Accepted format</p>
           <p>Paste or upload JSON or CSV. The imported rows are normalized into the same KB entry shape.</p>
           <div className="flex flex-wrap gap-2 pt-1">
-            <button type="button" onClick={() => setMode('json')} className={`rounded-full px-3 py-1 text-xs font-semibold ${inputMode === 'json' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-700 border border-zinc-200'}`}>
+            <button type="button" onClick={() => setMode('json')} className={`rounded-full px-3 py-1 text-xs font-semibold ${inputMode === 'json' ? 'bg-zinc-900 text-white' : 'bg-white dark:bg-zinc-900 text-zinc-700 border border-zinc-200'}`}>
               JSON
             </button>
-            <button type="button" onClick={() => setMode('csv')} className={`rounded-full px-3 py-1 text-xs font-semibold ${inputMode === 'csv' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-700 border border-zinc-200'}`}>
+            <button type="button" onClick={() => setMode('csv')} className={`rounded-full px-3 py-1 text-xs font-semibold ${inputMode === 'csv' ? 'bg-zinc-900 text-white' : 'bg-white dark:bg-zinc-900 text-zinc-700 border border-zinc-200'}`}>
               CSV
             </button>
           </div>
@@ -296,7 +296,7 @@ salary,What is the salary?,Salary depends on the role.,salary|pay,10`}
             <p className="font-medium text-zinc-900">{previewCount} entries detected</p>
             {fileName && <p className="mt-1">Loaded from {fileName}</p>}
           </div>
-          <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-zinc-200 bg-white dark:bg-zinc-900 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">
             Load {inputMode.toUpperCase()} file
             <input type="file" accept={inputMode === 'csv' ? '.csv,text/csv' : 'application/json,.json'} className="hidden" onChange={handleFile} />
           </label>

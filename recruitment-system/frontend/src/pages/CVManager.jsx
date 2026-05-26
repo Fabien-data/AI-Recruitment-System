@@ -171,7 +171,7 @@ export default function CVManager() {
       queryClient.invalidateQueries({ queryKey: ['applications'] })
       queryClient.invalidateQueries({ queryKey: ['job-candidates'] })
       toast.custom((t) => (
-        <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
+        <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white dark:bg-zinc-900 shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
           <div className="flex-1 w-0 p-4">
             <div className="flex items-start">
               <div className="flex-shrink-0 pt-0.5">
@@ -180,14 +180,14 @@ export default function CVManager() {
                 </div>
               </div>
               <div className="ml-3 flex-1">
-                <p className="text-sm font-medium text-gray-900">Auto-Assignment Complete!</p>
-                <p className="mt-1 text-sm text-gray-500">
+                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Auto-Assignment Complete!</p>
+                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                   {data.assigned} assigned to jobs, {data.to_pool} moved to general pool
                 </p>
               </div>
             </div>
           </div>
-          <div className="flex border-l border-gray-200">
+          <div className="flex border-l border-zinc-200 dark:border-zinc-800">
             <button
               onClick={() => toast.dismiss(t.id)}
               className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-primary-600 hover:text-primary-500"
@@ -254,7 +254,7 @@ export default function CVManager() {
       <div className="card mb-6">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 pointer-events-none" size={20} />
             <input
               type="text"
               placeholder="Search candidates by name, phone, or email..."
@@ -276,9 +276,9 @@ export default function CVManager() {
 
         {/* Filter Options */}
         {showFilters && (
-          <div className="mt-4 pt-4 border-t border-gray-200 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Status</label>
               <select
                 className="input w-full"
                 value={statusFilter}
@@ -294,7 +294,7 @@ export default function CVManager() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Source</label>
               <select
                 className="input w-full"
                 value={sourceFilter}
@@ -335,8 +335,8 @@ export default function CVManager() {
         {isLoadingCandidates ? (
           <TableSkeleton rows={8} cols={6} />
         ) : candidatesList.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">
-            <User className="mx-auto h-12 w-12 text-gray-300 mb-2" />
+          <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
+            <User className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" />
             <p className="font-medium">No candidates found</p>
             <p className="text-sm mt-1">Click "Seed Mock Data" to add sample candidates for testing</p>
           </div>
@@ -344,40 +344,40 @@ export default function CVManager() {
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Candidate</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Contact</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Skills</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Source</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Actions</th>
+                <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Candidate</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Contact</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Skills</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Source</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Status</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {candidatesList.map((candidate) => (
-                  <tr key={candidate.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                  <tr key={candidate.id} className="border-b border-zinc-100 dark:border-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors">
                     <td className="py-4 px-4">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-semibold">
                           {candidate.name?.charAt(0)?.toUpperCase() || '?'}
                         </div>
                         <div>
-                          <p className="font-medium text-gray-900">{candidate.name}</p>
-                          <p className="text-xs text-gray-500">ID: {candidate.id?.slice(0, 8)}...</p>
+                          <p className="font-medium text-zinc-900 dark:text-zinc-50">{candidate.name}</p>
+                          <p className="text-xs text-zinc-500 dark:text-zinc-400">ID: {candidate.id?.slice(0, 8)}...</p>
                         </div>
                       </div>
                     </td>
                     <td className="py-4 px-4">
-                      <p className="text-gray-900">{candidate.phone}</p>
-                      <p className="text-sm text-gray-500">{candidate.email || 'No email'}</p>
+                      <p className="text-zinc-900 dark:text-zinc-50">{candidate.phone}</p>
+                      <p className="text-sm text-zinc-500 dark:text-zinc-400">{candidate.email || 'No email'}</p>
                     </td>
                     <td className="py-4 px-4">
                       <div className="flex flex-wrap gap-1 max-w-[200px]">
                         {parseTags(candidate.tags || candidate.skills).slice(0, 3).map((skill, i) => (
-                          <span key={i} className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">{skill}</span>
+                          <span key={i} className="text-xs bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 px-2 py-0.5 rounded-full">{skill}</span>
                         ))}
                         {parseTags(candidate.tags || candidate.skills).length > 3 && (
-                          <span className="text-xs text-gray-500">+{parseTags(candidate.tags || candidate.skills).length - 3}</span>
+                          <span className="text-xs text-zinc-500 dark:text-zinc-400">+{parseTags(candidate.tags || candidate.skills).length - 3}</span>
                         )}
                       </div>
                     </td>
@@ -406,8 +406,8 @@ export default function CVManager() {
 
         {/* Pagination */}
         {pagination && pagination.totalPages > 1 && (
-          <div className="flex justify-between items-center px-4 py-3 border-t border-gray-200">
-            <p className="text-sm text-gray-600">
+          <div className="flex justify-between items-center px-4 py-3 border-t border-zinc-200 dark:border-zinc-800">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
               Showing {((page - 1) * 20) + 1} to {Math.min(page * 20, pagination.total)} of {pagination.total} candidates
             </p>
             <div className="flex gap-2">
@@ -448,7 +448,7 @@ function StatCard({ label, value, color }) {
     green: 'bg-green-50 text-green-700 border-green-200',
     amber: 'bg-amber-50 text-amber-700 border-amber-200',
     purple: 'bg-purple-50 text-purple-700 border-purple-200',
-    gray: 'bg-gray-50 text-gray-700 border-gray-200'
+    gray: 'bg-zinc-50 dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800'
   }
 
   return (
@@ -465,8 +465,8 @@ function SourceBadge({ source }) {
     email: 'bg-blue-100 text-blue-700',
     messenger: 'bg-purple-100 text-purple-700',
     walkin: 'bg-amber-100 text-amber-700',
-    web: 'bg-gray-100 text-gray-700',
-    manual: 'bg-gray-100 text-gray-700'
+    web: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300',
+    manual: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
   }
 
   return (
@@ -515,7 +515,7 @@ function CVReviewModal({ candidate, onClose }) {
   return (
     <Modal open={true} onClose={onClose} title={`Review: ${candidate.name || 'Candidate'}`} size="lg">
       {/* Tab Navigation */}
-      <div className="flex gap-1 mb-6 border-b border-gray-200 overflow-x-auto">
+      <div className="flex gap-1 mb-6 border-b border-zinc-200 dark:border-zinc-800 overflow-x-auto">
         {tabs.map(tab => {
           const Icon = tab.icon
           return (
@@ -523,7 +523,7 @@ function CVReviewModal({ candidate, onClose }) {
               key={tab.id}
               className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-2 ${activeTab === tab.id
                 ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+                : 'border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300'
                 }`}
               onClick={() => setActiveTab(tab.id)}
             >
@@ -589,8 +589,8 @@ function OverviewTab({ candidate }) {
             {candidate.name?.charAt(0)?.toUpperCase() || '?'}
           </div>
           <div className="flex-1">
-            <h3 className="text-xl font-semibold text-gray-900">{candidate.name}</h3>
-            <div className="mt-2 flex flex-wrap gap-4 text-sm text-gray-600">
+            <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{candidate.name}</h3>
+            <div className="mt-2 flex flex-wrap gap-4 text-sm text-zinc-600 dark:text-zinc-400">
               <span className="flex items-center gap-1">📱 {candidate.phone}</span>
               <span className="flex items-center gap-1">📧 {candidate.email || 'No email'}</span>
               <span className="flex items-center gap-1">🌐 {candidate.preferred_language?.toUpperCase()}</span>
@@ -624,7 +624,7 @@ function OverviewTab({ candidate }) {
 
       {/* Skills */}
       <div>
-        <h4 className="text-sm font-semibold text-gray-700 mb-2">Skills & Tags</h4>
+        <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Skills & Tags</h4>
         <div className="flex flex-wrap gap-2">
           {parseTags(candidate.skills || candidate.tags).map((tag, i) => (
             <span key={i} className="px-3 py-1 bg-primary-100 text-primary-700 rounded-full text-sm font-medium">
@@ -632,7 +632,7 @@ function OverviewTab({ candidate }) {
             </span>
           ))}
           {parseTags(candidate.skills || candidate.tags).length === 0 && (
-            <span className="text-gray-500 text-sm">No skills/tags added yet</span>
+            <span className="text-zinc-500 dark:text-zinc-400 text-sm">No skills/tags added yet</span>
           )}
         </div>
       </div>
@@ -647,8 +647,8 @@ function OverviewTab({ candidate }) {
         const isImage = /\.(png|jpe?g|webp|gif)$/i.test(rawUrl) || primaryCv.file_type === 'image'
         return (
           <div className="border border-blue-100 rounded-xl overflow-hidden bg-blue-50">
-            <div className="flex items-center justify-between px-4 py-2 border-b border-blue-100 bg-white">
-              <span className="text-sm font-medium text-gray-700">CV Preview</span>
+            <div className="flex items-center justify-between px-4 py-2 border-b border-blue-100 bg-white dark:bg-zinc-900">
+              <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">CV Preview</span>
               <a
                 href={resolvedUrl}
                 download={`CV_${candidate.name}`}
@@ -671,7 +671,7 @@ function OverviewTab({ candidate }) {
 
       {/* CV Preview */}
       <div>
-        <h4 className="text-sm font-semibold text-gray-700 mb-2">CV</h4>
+        <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">CV</h4>
         {cvDocuments && cvDocuments.length > 0 ? (
           <div className="space-y-3">
             {cvDocuments.map(cv => {
@@ -682,19 +682,19 @@ function OverviewTab({ candidate }) {
               const parsedInsights = safeParseJSON(cv.parsed_data)
 
               return (
-                <div key={cv.id} className="border border-gray-200 rounded-lg bg-gray-50 overflow-hidden">
+                <div key={cv.id} className="border border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 overflow-hidden">
                   <div className="p-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <FileText className="text-primary-500" size={24} />
                       <div>
-                        <span className="text-sm font-medium text-gray-700">
+                        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                           {cv.file_name && !isChatbotRecord
                             ? cv.file_name
                             : isChatbotRecord
                               ? 'CV (processed via chatbot)'
                               : 'CV Document'}
                         </span>
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
                           {cv.uploaded_at
                             ? `Received ${new Date(cv.uploaded_at).toLocaleDateString()}`
                             : 'CV on file'}
@@ -730,8 +730,8 @@ function OverviewTab({ candidate }) {
                   </div>
 
                   {expandedCVs[cv.id] && parsedInsights && (
-                    <div className="px-4 py-3 bg-white border-t border-gray-100 text-sm">
-                      <h5 className="font-semibold text-gray-900 mb-2 flex items-center gap-1">
+                    <div className="px-4 py-3 bg-white dark:bg-zinc-900 border-t border-zinc-100 dark:border-zinc-800/60 text-sm">
+                      <h5 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-2 flex items-center gap-1">
                         <Sparkles size={14} className="text-primary-500" /> AI Extracted Details
                       </h5>
                       <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
@@ -742,8 +742,8 @@ function OverviewTab({ candidate }) {
                             const formattedKey = key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
                             return (
                               <div key={key} className="col-span-2">
-                                <dt className="text-gray-500 text-xs">{formattedKey}</dt>
-                                <dd className="font-medium text-gray-900">{val.join(', ')}</dd>
+                                <dt className="text-zinc-500 dark:text-zinc-400 text-xs">{formattedKey}</dt>
+                                <dd className="font-medium text-zinc-900 dark:text-zinc-50">{val.join(', ')}</dd>
                               </div>
                             )
                           }
@@ -751,8 +751,8 @@ function OverviewTab({ candidate }) {
                           const formattedKey = key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
                           return (
                             <div key={key}>
-                              <dt className="text-gray-500 text-xs">{formattedKey}</dt>
-                              <dd className="font-medium text-gray-900 break-words">{String(val)}</dd>
+                              <dt className="text-zinc-500 dark:text-zinc-400 text-xs">{formattedKey}</dt>
+                              <dd className="font-medium text-zinc-900 dark:text-zinc-50 break-words">{String(val)}</dd>
                             </div>
                           )
                         })}
@@ -764,16 +764,16 @@ function OverviewTab({ candidate }) {
             })}
           </div>
         ) : (
-          <div className="p-6 text-center border border-dashed border-gray-300 rounded-lg bg-gray-50">
-            <FileText className="mx-auto h-8 w-8 text-gray-400 mb-2" />
-            <p className="text-sm text-gray-500 font-medium">No CV uploaded</p>
+          <div className="p-6 text-center border border-dashed border-gray-300 rounded-lg bg-zinc-50 dark:bg-zinc-900/60">
+            <FileText className="mx-auto h-8 w-8 text-zinc-400 dark:text-zinc-500 mb-2" />
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">No CV uploaded</p>
           </div>
         )}
       </div>
 
       {/* Additional Documents */}
       <div>
-        <h4 className="text-sm font-semibold text-gray-700 mb-2">Additional Documents</h4>
+        <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Additional Documents</h4>
         {additionalDocuments && additionalDocuments.length > 0 ? (
           <div className="space-y-3">
             {additionalDocuments.map(doc => {
@@ -782,15 +782,15 @@ function OverviewTab({ candidate }) {
               const parsedInsights = safeParseJSON(doc.parsed_data)
 
               return (
-                <div key={doc.id} className="border border-gray-200 rounded-lg bg-gray-50 overflow-hidden">
+                <div key={doc.id} className="border border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 overflow-hidden">
                   <div className="p-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <FileText className="text-primary-500" size={24} />
                       <div>
-                        <span className="text-sm font-medium text-gray-700">
+                        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                           {doc.file_name || 'Additional Document'}
                         </span>
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
                           {doc.uploaded_at
                             ? `Received ${new Date(doc.uploaded_at).toLocaleDateString()}`
                             : 'Document on file'}
@@ -826,8 +826,8 @@ function OverviewTab({ candidate }) {
                   </div>
 
                   {expandedCVs[doc.id] && parsedInsights && (
-                    <div className="px-4 py-3 bg-white border-t border-gray-100 text-sm">
-                      <h5 className="font-semibold text-gray-900 mb-2 flex items-center gap-1">
+                    <div className="px-4 py-3 bg-white dark:bg-zinc-900 border-t border-zinc-100 dark:border-zinc-800/60 text-sm">
+                      <h5 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-2 flex items-center gap-1">
                         <Sparkles size={14} className="text-primary-500" /> AI Extracted Details
                       </h5>
                       <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
@@ -838,8 +838,8 @@ function OverviewTab({ candidate }) {
                             const formattedKey = key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
                             return (
                               <div key={key} className="col-span-2">
-                                <dt className="text-gray-500 text-xs">{formattedKey}</dt>
-                                <dd className="font-medium text-gray-900">{val.join(', ')}</dd>
+                                <dt className="text-zinc-500 dark:text-zinc-400 text-xs">{formattedKey}</dt>
+                                <dd className="font-medium text-zinc-900 dark:text-zinc-50">{val.join(', ')}</dd>
                               </div>
                             )
                           }
@@ -847,8 +847,8 @@ function OverviewTab({ candidate }) {
                           const formattedKey = key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
                           return (
                             <div key={key}>
-                              <dt className="text-gray-500 text-xs">{formattedKey}</dt>
-                              <dd className="font-medium text-gray-900 break-words">{String(val)}</dd>
+                              <dt className="text-zinc-500 dark:text-zinc-400 text-xs">{formattedKey}</dt>
+                              <dd className="font-medium text-zinc-900 dark:text-zinc-50 break-words">{String(val)}</dd>
                             </div>
                           )
                         })}
@@ -860,9 +860,9 @@ function OverviewTab({ candidate }) {
             })}
           </div>
         ) : (
-          <div className="p-6 text-center border border-dashed border-gray-300 rounded-lg bg-gray-50">
-            <FileText className="mx-auto h-8 w-8 text-gray-400 mb-2" />
-            <p className="text-sm text-gray-500 font-medium">No additional documents uploaded</p>
+          <div className="p-6 text-center border border-dashed border-gray-300 rounded-lg bg-zinc-50 dark:bg-zinc-900/60">
+            <FileText className="mx-auto h-8 w-8 text-zinc-400 dark:text-zinc-500 mb-2" />
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">No additional documents uploaded</p>
           </div>
         )}
       </div>
@@ -870,7 +870,7 @@ function OverviewTab({ candidate }) {
       {/* Quick Notes Preview */}
       {candidate.notes && (
         <div>
-          <h4 className="text-sm font-semibold text-gray-700 mb-2">Quick Notes</h4>
+          <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Quick Notes</h4>
           <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm">
             {candidate.notes}
           </div>
@@ -882,12 +882,12 @@ function OverviewTab({ candidate }) {
 
 function DetailCard({ label, value, icon }) {
   return (
-    <div className="p-4 bg-gray-50 rounded-lg border border-gray-100">
+    <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-100 dark:border-zinc-800/60">
       <div className="flex items-center gap-2 mb-1">
         <span>{icon}</span>
-        <span className="text-xs text-gray-500 uppercase tracking-wide">{label}</span>
+        <span className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">{label}</span>
       </div>
-      <p className="font-semibold text-gray-900">{value}</p>
+      <p className="font-semibold text-zinc-900 dark:text-zinc-50">{value}</p>
     </div>
   )
 }
@@ -918,12 +918,12 @@ function AIInsightsTab({ candidate }) {
                 strokeWidth="3.8" strokeDasharray={`${matchScore} 100`} strokeLinecap="round"/>
             </svg>
             <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-lg font-bold text-gray-900">{matchScore}%</span>
+              <span className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{matchScore}%</span>
             </div>
           </div>
           <div>
-            <p className="font-semibold text-gray-900 text-lg">Match Score</p>
-            <p className="text-sm text-gray-600">
+            <p className="font-semibold text-zinc-900 dark:text-zinc-50 text-lg">Match Score</p>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
               {matchScore >= 70 ? 'Excellent match for this role'
                : matchScore >= 50 ? 'Moderate match — review required'
                : 'Low match — consider alternatives'}
@@ -987,7 +987,7 @@ function AIInsightsTab({ candidate }) {
       )}
 
       {!matchScore && criticalMismatches.length === 0 && strengths.length === 0 && (
-        <div className="py-10 text-center text-gray-400">
+        <div className="py-10 text-center text-zinc-400 dark:text-zinc-500">
           <Sparkles size={36} className="mx-auto mb-3 opacity-30"/>
           <p className="text-sm">AI insights will appear here after auto-assign processing</p>
         </div>
@@ -1026,7 +1026,7 @@ function RemarksTab({ candidate }) {
     <div className="space-y-6">
       {/* Remark Type Selection */}
       <div>
-        <h4 className="text-sm font-semibold text-gray-700 mb-3">Quick Evaluation</h4>
+        <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Quick Evaluation</h4>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {REMARK_TYPES.map(type => {
             const Icon = type.icon
@@ -1037,13 +1037,13 @@ function RemarksTab({ candidate }) {
                 onClick={() => setSelectedRemarkType(isSelected ? null : type.id)}
                 className={`p-3 rounded-lg border-2 transition-all flex items-center gap-2 ${isSelected
                   ? 'border-primary-500 bg-primary-50'
-                  : 'border-gray-200 hover:border-gray-300 bg-white'
+                  : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300 bg-white dark:bg-zinc-900'
                   }`}
               >
                 <span className={`w-8 h-8 rounded-full ${type.color} flex items-center justify-center`}>
                   <Icon size={16} className="text-white" />
                 </span>
-                <span className="text-sm font-medium text-gray-700">{type.label}</span>
+                <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{type.label}</span>
               </button>
             )
           })}
@@ -1052,7 +1052,7 @@ function RemarksTab({ candidate }) {
 
       {/* Tags */}
       <div>
-        <label className="block text-sm font-semibold text-gray-700 mb-2">
+        <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
           <Tag size={14} className="inline mr-1" /> Skills & Tags (comma separated)
         </label>
         <input
@@ -1062,14 +1062,14 @@ function RemarksTab({ candidate }) {
           value={customTags}
           onChange={(e) => setCustomTags(e.target.value)}
         />
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
           Current tags will be visible in the candidate list for quick reference
         </p>
       </div>
 
       {/* Detailed Notes */}
       <div>
-        <label className="block text-sm font-semibold text-gray-700 mb-2">
+        <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
           <MessageSquare size={14} className="inline mr-1" /> Detailed Remarks
         </label>
         <textarea
@@ -1088,7 +1088,7 @@ Examples:
       </div>
 
       {/* Save Button */}
-      <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+      <div className="flex justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
         <Button variant="secondary" onClick={() => {
           setNotes(candidate.notes || '')
           setCustomTags(parseTags(candidate.tags).join(', '))
@@ -1124,9 +1124,9 @@ function ApplicationsTab({ applications }) {
   if (applications.length === 0) {
     return (
       <div className="text-center py-12">
-        <Briefcase className="mx-auto h-16 w-16 text-gray-300 mb-4" />
-        <p className="font-semibold text-gray-700">No Project Assignments</p>
-        <p className="text-gray-500 mt-1">Go to "Assign Project" tab to allocate this candidate to a job</p>
+        <Briefcase className="mx-auto h-16 w-16 text-zinc-300 dark:text-zinc-600 mb-4" />
+        <p className="font-semibold text-zinc-700 dark:text-zinc-300">No Project Assignments</p>
+        <p className="text-zinc-500 dark:text-zinc-400 mt-1">Go to "Assign Project" tab to allocate this candidate to a job</p>
       </div>
     )
   }
@@ -1134,18 +1134,18 @@ function ApplicationsTab({ applications }) {
   return (
     <div className="space-y-4">
       {applications.map(app => (
-        <div key={app.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+        <div key={app.id} className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 hover:shadow-md transition-shadow">
           <div className="flex justify-between items-start mb-3">
             <div>
-              <h4 className="font-semibold text-gray-900 text-lg">{app.job_title}</h4>
-              <p className="text-sm text-gray-500 flex items-center gap-2">
+              <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 text-lg">{app.job_title}</h4>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
                 <Briefcase size={14} /> {app.job_category}
               </p>
             </div>
             <Badge status={app.status} />
           </div>
 
-          <div className="flex items-center gap-6 text-sm text-gray-600 mb-4">
+          <div className="flex items-center gap-6 text-sm text-zinc-600 dark:text-zinc-400 mb-4">
             <span className="flex items-center gap-1">
               <Clock size={14} /> Applied: {new Date(app.applied_at).toLocaleDateString()}
             </span>
@@ -1158,7 +1158,7 @@ function ApplicationsTab({ applications }) {
             )}
           </div>
 
-          <div className="flex gap-2 border-t border-gray-100 pt-3">
+          <div className="flex gap-2 border-t border-zinc-100 dark:border-zinc-800/60 pt-3">
             {['applied', 'new', 'reviewing'].includes(app.status) ? (
               <>
                 <Button
@@ -1178,7 +1178,7 @@ function ApplicationsTab({ applications }) {
                 </Button>
               </>
             ) : (
-              <span className="text-sm text-gray-500 italic flex items-center gap-1">
+              <span className="text-sm text-zinc-500 dark:text-zinc-400 italic flex items-center gap-1">
                 {app.status === 'certified' && <CheckCircle2 size={14} className="text-green-500" />}
                 {app.status === 'certified'
                   ? `Certified on ${new Date(app.certified_at).toLocaleDateString()}`
@@ -1259,11 +1259,11 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
 
         {/* Notification Channels */}
         <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
+          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
             <Bell size={14} className="inline mr-1" /> Notification Channels
           </label>
           <div className="flex gap-3">
-            <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyWhatsApp ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'
+            <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyWhatsApp ? 'border-green-500 bg-green-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
               }`}>
               <input
                 type="checkbox"
@@ -1271,14 +1271,14 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
                 onChange={(e) => setNotifyWhatsApp(e.target.checked)}
                 className="sr-only"
               />
-              <Smartphone size={18} className={notifyWhatsApp ? 'text-green-600' : 'text-gray-400'} />
-              <span className={`text-sm font-medium ${notifyWhatsApp ? 'text-green-700' : 'text-gray-600'}`}>
+              <Smartphone size={18} className={notifyWhatsApp ? 'text-green-600' : 'text-zinc-400 dark:text-zinc-500'} />
+              <span className={`text-sm font-medium ${notifyWhatsApp ? 'text-green-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
                 WhatsApp
               </span>
               {notifyWhatsApp && <CheckCircle2 size={16} className="text-green-500 ml-auto" />}
             </label>
 
-            <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyEmail ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+            <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyEmail ? 'border-blue-500 bg-blue-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
               }`}>
               <input
                 type="checkbox"
@@ -1286,8 +1286,8 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
                 onChange={(e) => setNotifyEmail(e.target.checked)}
                 className="sr-only"
               />
-              <Send size={18} className={notifyEmail ? 'text-blue-600' : 'text-gray-400'} />
-              <span className={`text-sm font-medium ${notifyEmail ? 'text-blue-700' : 'text-gray-600'}`}>
+              <Send size={18} className={notifyEmail ? 'text-blue-600' : 'text-zinc-400 dark:text-zinc-500'} />
+              <span className={`text-sm font-medium ${notifyEmail ? 'text-blue-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
                 Email
               </span>
               {notifyEmail && <CheckCircle2 size={16} className="text-blue-500 ml-auto" />}
@@ -1298,7 +1298,7 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
         {/* Certification Remarks */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
+            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
               <Clock size={14} className="inline mr-1" /> Interview Date
             </label>
             <input
@@ -1310,7 +1310,7 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
             />
           </div>
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
+            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
               <Clock size={14} className="inline mr-1" /> Interview Time
             </label>
             <input
@@ -1324,7 +1324,7 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
         </div>
 
         <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
+          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
             <MapPin size={14} className="inline mr-1" /> Interview Location
           </label>
           <input
@@ -1337,7 +1337,7 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
         </div>
 
         <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
+          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
             <MessageSquare size={14} className="inline mr-1" /> Certification Remarks (Internal)
           </label>
           <textarea
@@ -1358,12 +1358,12 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
         </button>
 
         {showPreview && (
-          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+          <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-200 dark:border-zinc-800">
             <div className="flex items-center gap-2 mb-2">
-              <MessageSquare size={14} className="text-gray-500" />
-              <span className="text-xs font-medium text-gray-500 uppercase">Message Preview</span>
+              <MessageSquare size={14} className="text-zinc-500 dark:text-zinc-400" />
+              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase">Message Preview</span>
             </div>
-            <div className="text-sm text-gray-700 whitespace-pre-line bg-white p-3 rounded border border-gray-100">
+            <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line bg-white dark:bg-zinc-900 p-3 rounded border border-zinc-100 dark:border-zinc-800/60">
               🎉 Dear [Candidate Name],
               {'\n\n'}
               Congratulations! You have successfully passed our pre-screening process for the position.
@@ -1380,7 +1380,7 @@ function CertifyModal({ appId, onClose, onConfirm, loading }) {
         )}
 
         {/* Action Buttons */}
-        <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
+        <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button
             onClick={handleSubmit}
@@ -1429,7 +1429,7 @@ function TransferModal({ appId, onClose }) {
 
         <div className="space-y-4 mb-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Target Project</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Target Project</label>
             <select
               className="input w-full"
               value={targetJobId}
@@ -1444,7 +1444,7 @@ function TransferModal({ appId, onClose }) {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Transfer Reason</label>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Transfer Reason</label>
             <textarea
               className="input w-full h-20"
               value={reason}
@@ -1496,7 +1496,7 @@ function AllocateTab({ candidate, jobs, existingApplications }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-700">
+        <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
           Assign {candidate.name} to a Project
         </h3>
         <select
@@ -1512,9 +1512,9 @@ function AllocateTab({ candidate, jobs, existingApplications }) {
       </div>
 
       {filteredJobs.length === 0 ? (
-        <div className="text-center py-12 bg-gray-50 rounded-lg">
-          <Building className="mx-auto h-12 w-12 text-gray-300 mb-3" />
-          <p className="text-gray-500">
+        <div className="text-center py-12 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
+          <Building className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-3" />
+          <p className="text-zinc-500 dark:text-zinc-400">
             {availableJobs.length === 0
               ? 'Candidate is already assigned to all available projects'
               : 'No projects match the selected category'}
@@ -1525,12 +1525,12 @@ function AllocateTab({ candidate, jobs, existingApplications }) {
           {filteredJobs.map(job => (
             <div
               key={job.id}
-              className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 hover:shadow-md transition-all bg-white"
+              className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 hover:border-primary-300 hover:shadow-md transition-all bg-white dark:bg-zinc-900"
             >
               <div className="flex justify-between items-start mb-3">
                 <div className="flex-1">
-                  <h4 className="font-semibold text-gray-900">{job.title}</h4>
-                  <div className="flex flex-wrap gap-3 mt-1 text-sm text-gray-500">
+                  <h4 className="font-semibold text-zinc-900 dark:text-zinc-50">{job.title}</h4>
+                  <div className="flex flex-wrap gap-3 mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                     <span className="flex items-center gap-1">
                       <Briefcase size={14} /> {job.category}
                     </span>
@@ -1552,7 +1552,7 @@ function AllocateTab({ candidate, jobs, existingApplications }) {
               </div>
 
               {job.description && (
-                <p className="text-sm text-gray-600 mb-3 line-clamp-2">{job.description}</p>
+                <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-3 line-clamp-2">{job.description}</p>
               )}
 
               <div className="flex justify-end">

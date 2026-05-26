@@ -103,8 +103,8 @@ export default function JobCandidates() {
             <div className="p-6 lg:p-8 animate-fade-in">
                 <div className="card p-12 text-center">
                     <AlertCircle className="mx-auto h-12 w-12 text-red-400 mb-4" />
-                    <h2 className="text-xl font-semibold text-gray-900 mb-2">Job Not Found</h2>
-                    <p className="text-gray-600 mb-4">The job you're looking for doesn't exist or has been removed.</p>
+                    <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-2">Job Not Found</h2>
+                    <p className="text-zinc-600 dark:text-zinc-400 mb-4">The job you're looking for doesn't exist or has been removed.</p>
                     <Button onClick={() => navigate('/jobs')}>Back to Jobs</Button>
                 </div>
             </div>
@@ -117,21 +117,21 @@ export default function JobCandidates() {
             <div className="mb-6">
                 <Link
                     to="/jobs"
-                    className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-3"
+                    className="inline-flex items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300 mb-3"
                 >
                     <ArrowLeft size={16} />
                     Back to Jobs
                 </Link>
                 <div className="flex justify-between items-start">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-900">{job.title}</h1>
+                        <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">{job.title}</h1>
                         <div className="flex items-center gap-4 mt-2">
-                            <span className="text-gray-600 flex items-center gap-1">
+                            <span className="text-zinc-600 dark:text-zinc-400 flex items-center gap-1">
                                 <Briefcase size={16} />
                                 {job.category}
                             </span>
                             <Badge status={job.status} />
-                            <span className="text-gray-600">
+                            <span className="text-zinc-600 dark:text-zinc-400">
                                 {job.positions_filled || 0} / {job.positions_available} filled
                             </span>
                         </div>
@@ -190,8 +190,8 @@ export default function JobCandidates() {
 
             {/* Candidates List */}
             <div className="card overflow-hidden">
-                <div className="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
-                    <h2 className="font-semibold text-gray-900">
+                <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 flex justify-between items-center">
+                    <h2 className="font-semibold text-zinc-900 dark:text-zinc-50">
                         Assigned Candidates ({filteredCandidates.length})
                     </h2>
                     {statusFilter && (
@@ -202,7 +202,7 @@ export default function JobCandidates() {
                 </div>
 
                 {filteredCandidates.length === 0 ? (
-                    <div className="py-12 text-center text-gray-500">
+                    <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
                         <Users className="mx-auto h-12 w-12 text-gray-300 mb-2" />
                         <p className="font-medium">No candidates found</p>
                         <p className="text-sm mt-1">
@@ -256,7 +256,7 @@ export default function JobCandidates() {
                         <CheckCircle size={14} className="mr-1" />
                         Batch Certify
                     </Button>
-                    <button onClick={() => setSelectedIds(new Set())} className="text-gray-400 hover:text-white text-sm">
+                    <button onClick={() => setSelectedIds(new Set())} className="text-zinc-400 dark:text-zinc-500 hover:text-white text-sm">
                         Clear
                     </button>
                 </div>
@@ -336,7 +336,7 @@ function StatCard({ label, value, icon: Icon, color, onClick, active }) {
         green: 'bg-green-50 text-green-700 border-green-200',
         amber: 'bg-amber-50 text-amber-700 border-amber-200',
         purple: 'bg-purple-50 text-purple-700 border-purple-200',
-        gray: 'bg-gray-50 text-gray-700 border-gray-200'
+        gray: 'bg-zinc-50 dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800'
     }
 
     return (
@@ -403,22 +403,22 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
     return (
         <Modal onClose={onClose} title="Batch Certify Candidates">
             <div className="space-y-4">
-                <div className="bg-gray-50 rounded-xl p-3 max-h-40 overflow-y-auto">
-                    <p className="text-xs font-medium text-gray-500 mb-2">{candidates.length} candidates selected</p>
+                <div className="bg-zinc-50 dark:bg-zinc-900/60 rounded-xl p-3 max-h-40 overflow-y-auto">
+                    <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-2">{candidates.length} candidates selected</p>
                     {candidates.map(c => (
                         <div key={c.application_id} className="flex items-center gap-2 py-1 text-sm">
                             <CheckCircle size={12} className="text-green-500 flex-shrink-0" />
                             <span className="font-medium text-gray-800">{c.candidate.name}</span>
-                            <span className="text-gray-400">{c.candidate.phone}</span>
+                            <span className="text-zinc-400 dark:text-zinc-500">{c.candidate.phone}</span>
                         </div>
                     ))}
                 </div>
 
                 <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">Pre-Screening (optional)</p>
+                    <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Pre-Screening (optional)</p>
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-xs text-gray-500 mb-1">Date</label>
+                            <label className="block text-xs text-zinc-500 dark:text-zinc-400 mb-1">Date</label>
                             <input
                                 type="date"
                                 value={prescreeningDate}
@@ -427,7 +427,7 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
                             />
                         </div>
                         <div>
-                            <label className="block text-xs text-gray-500 mb-1">Time</label>
+                            <label className="block text-xs text-zinc-500 dark:text-zinc-400 mb-1">Time</label>
                             <input
                                 type="time"
                                 value={prescreeningTime}
@@ -437,7 +437,7 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
                         </div>
                     </div>
                     <div className="mt-2">
-                        <label className="block text-xs text-gray-500 mb-1">Location</label>
+                        <label className="block text-xs text-zinc-500 dark:text-zinc-400 mb-1">Location</label>
                         <input
                             type="text"
                             placeholder="e.g. Head Office, Colombo 3"
@@ -449,7 +449,7 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
                 </div>
 
                 <div>
-                    <label className="block text-xs text-gray-500 mb-1">Notes (optional)</label>
+                    <label className="block text-xs text-zinc-500 dark:text-zinc-400 mb-1">Notes (optional)</label>
                     <textarea
                         value={notes}
                         onChange={e => setNotes(e.target.value)}
@@ -460,7 +460,7 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
                 </div>
 
                 <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">Notify via</p>
+                    <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Notify via</p>
                     <div className="flex gap-4">
                         <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                             <input type="checkbox" checked={notifyWhatsApp} onChange={e => setNotifyWhatsApp(e.target.checked)} className="accent-primary-600" />
@@ -506,7 +506,7 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
     }
 
     return (
-        <div className={`p-4 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-primary-50' : ''}`}>
+        <div className={`p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors ${isSelected ? 'bg-primary-50' : ''}`}>
             <div className="flex items-start gap-4">
                 {/* Checkbox */}
                 <div className="flex-shrink-0 pt-1">
@@ -528,7 +528,7 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                         </div>
                         <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
-                                <h3 className="font-semibold text-gray-900 truncate">{candidate.name}</h3>
+                                <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{candidate.name}</h3>
                                 {application_status === 'certified' && (
                                     <span className="inline-flex items-center gap-1 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
                                         <CheckCircle2 size={12} />
@@ -551,7 +551,7 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                                     ) : null
                                 })()}
                             </div>
-                            <div className="flex items-center gap-3 text-sm text-gray-500">
+                            <div className="flex items-center gap-3 text-sm text-zinc-500 dark:text-zinc-400">
                                 <span className="flex items-center gap-1">
                                     <Phone size={12} />
                                     {candidate.phone}
@@ -570,12 +570,12 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                     {candidate.tags && candidate.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-2 ml-15">
                             {candidate.tags.slice(0, 4).map((tag, i) => (
-                                <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                                <span key={i} className="text-xs bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2 py-0.5 rounded-full">
                                     {tag}
                                 </span>
                             ))}
                             {candidate.tags.length > 4 && (
-                                <span className="text-xs text-gray-400">+{candidate.tags.length - 4}</span>
+                                <span className="text-xs text-zinc-400 dark:text-zinc-500">+{candidate.tags.length - 4}</span>
                             )}
                         </div>
                     )}
@@ -587,7 +587,7 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                         <Percent size={16} />
                         {match_score}%
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">{getScoreLabel(match_score)} Match</p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{getScoreLabel(match_score)} Match</p>
                 </div>
 
                 {/* Actions */}
@@ -648,8 +648,8 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
                           : candidate.name?.charAt(0)?.toUpperCase() || '?'}
                     </div>
                     <div className="flex-1">
-                        <h3 className="text-xl font-bold text-gray-900">{candidate.name}</h3>
-                        <div className="flex flex-wrap gap-3 mt-1 text-sm text-gray-600">
+                        <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-50">{candidate.name}</h3>
+                        <div className="flex flex-wrap gap-3 mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                             <span className="flex items-center gap-1">
                                 <Phone size={14} />
                                 {candidate.phone}
@@ -674,17 +674,17 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
 
                 {/* Match Breakdown */}
                 <div>
-                    <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-3 flex items-center gap-2">
                         <Target size={16} />
                         Compatibility Breakdown for {job.title}
                     </h4>
                     <div className="space-y-2">
                         {match_details.map((detail, i) => (
-                            <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <div key={i} className="flex items-center justify-between p-3 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
                                 <div className="flex items-center gap-2">
-                                    <span className="capitalize font-medium text-gray-700">{detail.factor}</span>
+                                    <span className="capitalize font-medium text-zinc-700 dark:text-zinc-300">{detail.factor}</span>
                                     {detail.detail && (
-                                        <span className="text-sm text-gray-500">({detail.detail})</span>
+                                        <span className="text-sm text-zinc-500 dark:text-zinc-400">({detail.detail})</span>
                                     )}
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -706,7 +706,7 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
                 {/* Skills */}
                 {candidate.tags && candidate.tags.length > 0 && (
                     <div>
-                        <h4 className="font-semibold text-gray-900 mb-3">Skills & Tags</h4>
+                        <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-3">Skills & Tags</h4>
                         <div className="flex flex-wrap gap-2">
                             {candidate.tags.map((tag, i) => (
                                 <span key={i} className="px-3 py-1 bg-primary-100 text-primary-700 rounded-full text-sm font-medium">
@@ -719,15 +719,15 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
 
                 {/* CV Preview */}
                 <div>
-                    <h4 className="font-semibold text-gray-900 mb-3">CV / Documents</h4>
-                    <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex items-center justify-between">
+                    <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-3">CV / Documents</h4>
+                    <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 flex items-center justify-between">
                         <div className="flex items-center gap-3">
                             <FileText className="text-primary-500" size={24} />
                             <div>
-                                <span className="text-sm font-medium text-gray-700">
+                                <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                                     {candidate.cv_filename || `${candidate.name}_CV.pdf`}
                                 </span>
-                                <p className="text-xs text-gray-500">Uploaded via {candidate.source}</p>
+                                <p className="text-xs text-zinc-500 dark:text-zinc-400">Uploaded via {candidate.source}</p>
                             </div>
                         </div>
                         <div className="flex gap-2">
@@ -774,7 +774,7 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
                 {/* Notes */}
                 {candidate.notes && (
                     <div>
-                        <h4 className="font-semibold text-gray-900 mb-3">Notes</h4>
+                        <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-3">Notes</h4>
                         <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm">
                             {candidate.notes}
                         </div>
@@ -782,7 +782,7 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
                 )}
 
                 {/* Actions */}
-                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                <div className="flex justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                     <Button variant="secondary" onClick={onClose}>Close</Button>
                     {application_status !== 'certified' && application_status !== 'rejected' && (
                         <>
@@ -821,26 +821,26 @@ function AlternativeJobsPanel({ candidateId, currentJobId }) {
 
     if (isLoading) return (
         <div>
-            <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><Sparkles size={16}/> Also Suitable For</h4>
-            <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-14 animate-pulse rounded-xl bg-gray-100" />)}</div>
+            <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-3 flex items-center gap-2"><Sparkles size={16}/> Also Suitable For</h4>
+            <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-14 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-800" />)}</div>
         </div>
     )
 
     if (!alternatives.length) return null
 
-    const scoreColor = (s) => s >= 70 ? 'text-green-600 bg-green-50' : s >= 50 ? 'text-amber-600 bg-amber-50' : 'text-gray-600 bg-gray-50'
+    const scoreColor = (s) => s >= 70 ? 'text-green-600 bg-green-50' : s >= 50 ? 'text-amber-600 bg-amber-50' : 'text-zinc-600 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-900/60'
 
     return (
         <div>
-            <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-3 flex items-center gap-2">
                 <Sparkles size={16} className="text-blue-500"/> Also Suitable For
             </h4>
             <div className="space-y-2">
                 {alternatives.map(alt => (
                     <div key={alt.job_id} className="flex items-center gap-3 p-3 bg-blue-50/60 border border-blue-100 rounded-xl">
                         <div className="flex-1 min-w-0">
-                            <p className="font-medium text-gray-900 text-sm truncate">{alt.job_title}</p>
-                            {alt.project_name && <p className="text-xs text-gray-500 truncate">{alt.project_name}</p>}
+                            <p className="font-medium text-zinc-900 dark:text-zinc-50 text-sm truncate">{alt.job_title}</p>
+                            {alt.project_name && <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{alt.project_name}</p>}
                             {alt.reason && <p className="text-xs text-blue-600 mt-0.5">{alt.reason}</p>}
                         </div>
                         <span className={`text-xs font-bold px-2 py-1 rounded-full ${scoreColor(alt.match_score)}`}>
@@ -989,7 +989,7 @@ Dewan Recruitment Team`
             } else {
                 const channelNames = getChannels().map(c => c === 'whatsapp' ? '📱 WhatsApp' : c === 'sms' ? '📲 SMS' : '📧 Email')
                 toast.custom((t) => (
-                    <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
+                    <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white dark:bg-zinc-900 shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
                         <div className="flex-1 w-0 p-4">
                             <div className="flex items-start">
                                 <div className="flex-shrink-0 pt-0.5">
@@ -998,15 +998,15 @@ Dewan Recruitment Team`
                                     </div>
                                 </div>
                                 <div className="ml-3 flex-1">
-                                    <p className="text-sm font-medium text-gray-900">Candidate Certified!</p>
-                                    <p className="mt-1 text-sm text-gray-500">
+                                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Candidate Certified!</p>
+                                    <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                                         {hasPrescreening ? '📅 Pre-screening invitation sent' : '✅ Status updated'}
                                         {' via ' + channelNames.join(', ')}
                                     </p>
                                 </div>
                             </div>
                         </div>
-                        <div className="flex border-l border-gray-200">
+                        <div className="flex border-l border-zinc-200 dark:border-zinc-800">
                             <button
                                 onClick={() => toast.dismiss(t.id)}
                                 className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-primary-600 hover:text-primary-500"
@@ -1087,13 +1087,13 @@ Dewan Recruitment Team`
 
                 {/* Notification Channels */}
                 <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
                         <Send size={14} className="inline mr-1" />
                         Notification Channels
                     </label>
                     <div className="grid grid-cols-3 gap-2">
                         {/* WhatsApp */}
-                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyWhatsApp ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'
+                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyWhatsApp ? 'border-green-500 bg-green-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
                             }`}>
                             <input
                                 type="checkbox"
@@ -1105,15 +1105,15 @@ Dewan Recruitment Team`
                                 <MessageSquare size={14} className="text-white" />
                             </div>
                             <div className="min-w-0">
-                                <span className={`text-sm font-medium block ${notifyWhatsApp ? 'text-green-700' : 'text-gray-600'}`}>
+                                <span className={`text-sm font-medium block ${notifyWhatsApp ? 'text-green-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
                                     WhatsApp
                                 </span>
-                                <p className="text-xs text-gray-400 truncate">{candidate.phone}</p>
+                                <p className="text-xs text-zinc-400 dark:text-zinc-500 truncate">{candidate.phone}</p>
                             </div>
                         </label>
 
                         {/* SMS */}
-                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifySMS ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifySMS ? 'border-blue-500 bg-blue-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
                             }`}>
                             <input
                                 type="checkbox"
@@ -1125,15 +1125,15 @@ Dewan Recruitment Team`
                                 <Smartphone size={14} className="text-white" />
                             </div>
                             <div className="min-w-0">
-                                <span className={`text-sm font-medium block ${notifySMS ? 'text-blue-700' : 'text-gray-600'}`}>
+                                <span className={`text-sm font-medium block ${notifySMS ? 'text-blue-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
                                     SMS
                                 </span>
-                                <p className="text-xs text-gray-400 truncate">{candidate.phone}</p>
+                                <p className="text-xs text-zinc-400 dark:text-zinc-500 truncate">{candidate.phone}</p>
                             </div>
                         </label>
 
                         {/* Email */}
-                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyEmail ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-gray-300'
+                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyEmail ? 'border-purple-500 bg-purple-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
                             } ${!candidate.email ? 'opacity-50 cursor-not-allowed' : ''}`}>
                             <input
                                 type="checkbox"
@@ -1146,10 +1146,10 @@ Dewan Recruitment Team`
                                 <MailIcon size={14} className="text-white" />
                             </div>
                             <div className="min-w-0">
-                                <span className={`text-sm font-medium block ${notifyEmail ? 'text-purple-700' : 'text-gray-600'}`}>
+                                <span className={`text-sm font-medium block ${notifyEmail ? 'text-purple-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
                                     Email
                                 </span>
-                                <p className="text-xs text-gray-400 truncate">{candidate.email || 'No email'}</p>
+                                <p className="text-xs text-zinc-400 dark:text-zinc-500 truncate">{candidate.email || 'No email'}</p>
                             </div>
                         </label>
                     </div>
@@ -1167,10 +1167,10 @@ Dewan Recruitment Team`
                     </button>
 
                     {showPreview && (
-                        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 relative">
+                        <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-200 dark:border-zinc-800 relative">
                             <div className="flex items-center gap-2 mb-2">
                                 <Sparkles size={14} className="text-amber-500" />
-                                <span className="text-xs font-medium text-gray-500 uppercase">
+                                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase">
                                     {hasPrescreening ? 'Pre-Screening Invitation' : 'Certification Message'}
                                 </span>
                                 <button
@@ -1178,12 +1178,12 @@ Dewan Recruitment Team`
                                         navigator.clipboard.writeText(generateMessage())
                                         toast.success('Message copied!')
                                     }}
-                                    className="ml-auto text-gray-400 hover:text-gray-600"
+                                    className="ml-auto text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:text-zinc-400"
                                 >
                                     <Copy size={14} />
                                 </button>
                             </div>
-                            <div className="text-sm text-gray-700 whitespace-pre-line bg-white p-3 rounded border border-gray-100 max-h-64 overflow-y-auto">
+                            <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line bg-white dark:bg-zinc-900 p-3 rounded border border-zinc-100 dark:border-zinc-800/60 max-h-64 overflow-y-auto">
                                 {generateMessage()}
                             </div>
                         </div>
@@ -1192,7 +1192,7 @@ Dewan Recruitment Team`
 
                 {/* Internal Notes */}
                 <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
                         Internal Notes (Optional)
                     </label>
                     <textarea
@@ -1204,7 +1204,7 @@ Dewan Recruitment Team`
                 </div>
 
                 {/* Actions */}
-                <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
+                <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                     <Button variant="secondary" onClick={onClose}>Cancel</Button>
                     <Button
                         onClick={() => certifyMutation.mutate()}
@@ -1291,7 +1291,7 @@ Dewan Recruitment Team`
                 showNotificationToast(notif, `${candidate.name} moved to general pool`)
             } else {
                 toast.custom((t) => (
-                    <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
+                    <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white dark:bg-zinc-900 shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
                         <div className="flex-1 w-0 p-4">
                             <div className="flex items-start">
                                 <div className="flex-shrink-0 pt-0.5">
@@ -1300,14 +1300,14 @@ Dewan Recruitment Team`
                                     </div>
                                 </div>
                                 <div className="ml-3 flex-1">
-                                    <p className="text-sm font-medium text-gray-900">Moved to General Pool</p>
-                                    <p className="mt-1 text-sm text-gray-500">
+                                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Moved to General Pool</p>
+                                    <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                                         {candidate.name} has been notified and moved to the general pool for future opportunities.
                                     </p>
                                 </div>
                             </div>
                         </div>
-                        <div className="flex border-l border-gray-200">
+                        <div className="flex border-l border-zinc-200 dark:border-zinc-800">
                             <button
                                 onClick={() => toast.dismiss(t.id)}
                                 className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-primary-600 hover:text-primary-500"
@@ -1343,7 +1343,7 @@ Dewan Recruitment Team`
 
                 {/* Rejection Reason */}
                 <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
                         Reason (Optional)
                     </label>
                     <textarea
@@ -1356,12 +1356,12 @@ Dewan Recruitment Team`
 
                 {/* Notification Channels */}
                 <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
                         <Send size={14} className="inline mr-1" />
                         Notify Candidate Via
                     </label>
                     <div className="flex gap-3">
-                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all flex-1 ${notifyWhatsApp ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'
+                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all flex-1 ${notifyWhatsApp ? 'border-green-500 bg-green-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
                             }`}>
                             <input
                                 type="checkbox"
@@ -1373,12 +1373,12 @@ Dewan Recruitment Team`
                                 <MessageSquare size={14} className="text-white" />
                             </div>
                             <div>
-                                <span className={`text-sm font-medium ${notifyWhatsApp ? 'text-green-700' : 'text-gray-600'}`}>WhatsApp</span>
-                                <p className="text-xs text-gray-400">{candidate.phone}</p>
+                                <span className={`text-sm font-medium ${notifyWhatsApp ? 'text-green-700' : 'text-zinc-600 dark:text-zinc-400'}`}>WhatsApp</span>
+                                <p className="text-xs text-zinc-400 dark:text-zinc-500">{candidate.phone}</p>
                             </div>
                         </label>
 
-                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all flex-1 ${notifySMS ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+                        <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all flex-1 ${notifySMS ? 'border-blue-500 bg-blue-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
                             }`}>
                             <input
                                 type="checkbox"
@@ -1390,8 +1390,8 @@ Dewan Recruitment Team`
                                 <Smartphone size={14} className="text-white" />
                             </div>
                             <div>
-                                <span className={`text-sm font-medium ${notifySMS ? 'text-blue-700' : 'text-gray-600'}`}>SMS</span>
-                                <p className="text-xs text-gray-400">{candidate.phone}</p>
+                                <span className={`text-sm font-medium ${notifySMS ? 'text-blue-700' : 'text-zinc-600 dark:text-zinc-400'}`}>SMS</span>
+                                <p className="text-xs text-zinc-400 dark:text-zinc-500">{candidate.phone}</p>
                             </div>
                         </label>
                     </div>
@@ -1409,21 +1409,21 @@ Dewan Recruitment Team`
                     </button>
 
                     {showPreview && (
-                        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-200 dark:border-zinc-800">
                             <div className="flex items-center gap-2 mb-2">
                                 <Sparkles size={14} className="text-amber-500" />
-                                <span className="text-xs font-medium text-gray-500 uppercase">General Pool Notification</span>
+                                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase">General Pool Notification</span>
                                 <button
                                     onClick={() => {
                                         navigator.clipboard.writeText(generateMessage())
                                         toast.success('Message copied!')
                                     }}
-                                    className="ml-auto text-gray-400 hover:text-gray-600"
+                                    className="ml-auto text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:text-zinc-400"
                                 >
                                     <Copy size={14} />
                                 </button>
                             </div>
-                            <div className="text-sm text-gray-700 whitespace-pre-line bg-white p-3 rounded border border-gray-100 max-h-48 overflow-y-auto">
+                            <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line bg-white dark:bg-zinc-900 p-3 rounded border border-zinc-100 dark:border-zinc-800/60 max-h-48 overflow-y-auto">
                                 {generateMessage()}
                             </div>
                         </div>
@@ -1431,7 +1431,7 @@ Dewan Recruitment Team`
                 </div>
 
                 {/* Actions */}
-                <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
+                <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                     <Button variant="secondary" onClick={onClose}>Cancel</Button>
                     <button
                         onClick={() => rejectMutation.mutate()}
@@ -1491,7 +1491,7 @@ function TransferModal({ data, currentJob, onClose }) {
                 </div>
 
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Target Job</label>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Target Job</label>
                     <select
                         className="input w-full"
                         value={targetJobId}
@@ -1507,7 +1507,7 @@ function TransferModal({ data, currentJob, onClose }) {
                 </div>
 
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Transfer Reason</label>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Transfer Reason</label>
                     <textarea
                         className="input w-full h-20"
                         value={reason}
@@ -1516,7 +1516,7 @@ function TransferModal({ data, currentJob, onClose }) {
                     />
                 </div>
 
-                <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
+                <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                     <Button variant="secondary" onClick={onClose}>Cancel</Button>
                     <Button
                         onClick={() => transferMutation.mutate()}

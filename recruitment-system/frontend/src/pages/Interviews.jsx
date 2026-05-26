@@ -37,7 +37,7 @@ function RatingStars({ value, onChange }) {
         <button key={n} onClick={() => onChange && onChange(n)} type="button">
           <Star
             size={16}
-            className={n <= (value || 0) ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300'}
+            className={n <= (value || 0) ? 'text-yellow-400 fill-yellow-400' : 'text-zinc-300 dark:text-zinc-600'}
           />
         </button>
       ))}
@@ -52,9 +52,9 @@ function FeedbackModal({ interview, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+      <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl p-6 w-full max-w-md">
         <h3 className="text-lg font-semibold mb-4">Complete Interview</h3>
-        <p className="text-sm text-gray-600 mb-4">
+        <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-4">
           {interview.candidate_name} — {interview.job_title}
         </p>
 
@@ -143,7 +143,7 @@ export default function Interviews() {
       {/* Filters */}
       <div className="card p-4 mb-6 flex flex-wrap gap-4 items-end">
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">Status</label>
           <select
             value={filters.status}
             onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}
@@ -158,7 +158,7 @@ export default function Interviews() {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">From</label>
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">From</label>
           <input
             type="date"
             value={filters.date_from}
@@ -167,7 +167,7 @@ export default function Interviews() {
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">To</label>
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">To</label>
           <input
             type="date"
             value={filters.date_to}
@@ -182,32 +182,32 @@ export default function Interviews() {
 
       {/* Interview list */}
       {isLoading ? (
-        <div className="card p-8 text-center text-gray-500">Loading interviews...</div>
+        <div className="card p-8 text-center text-zinc-500 dark:text-zinc-400">Loading interviews...</div>
       ) : interviews.length === 0 ? (
         <div className="card p-12 text-center">
-          <Calendar className="mx-auto h-12 w-12 text-gray-300 mb-4" />
-          <p className="text-gray-500">No interviews found</p>
+          <Calendar className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-4" />
+          <p className="text-zinc-500 dark:text-zinc-400">No interviews found</p>
         </div>
       ) : (
         <div className="card overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
+            <thead className="bg-zinc-50 dark:bg-zinc-900/60 border-b">
               <tr>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Candidate</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Job</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Date & Time</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Location</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Rating</th>
-                <th className="px-4 py-3 text-right font-medium text-gray-600">Actions</th>
+                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Candidate</th>
+                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Job</th>
+                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Date & Time</th>
+                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Location</th>
+                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Status</th>
+                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Rating</th>
+                <th className="px-4 py-3 text-right font-medium text-zinc-600 dark:text-zinc-400">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {interviews.map(iv => (
-                <tr key={iv.id} className="hover:bg-gray-50">
+                <tr key={iv.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
                   <td className="px-4 py-3">
-                    <div className="font-medium text-gray-900">{iv.candidate_name}</div>
-                    <div className="text-xs text-gray-500">{iv.candidate_phone}</div>
+                    <div className="font-medium text-zinc-900 dark:text-zinc-50">{iv.candidate_name}</div>
+                    <div className="text-xs text-zinc-500 dark:text-zinc-400">{iv.candidate_phone}</div>
                   </td>
                   <td className="px-4 py-3">
                     <Link to={`/jobs/${iv.job_id}`} className="text-primary-600 hover:underline">
@@ -216,25 +216,25 @@ export default function Interviews() {
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div className="flex items-center gap-1">
-                      <Clock size={14} className="text-gray-400" />
+                      <Clock size={14} className="text-zinc-400 dark:text-zinc-500" />
                       {formatDateTime(iv.scheduled_datetime)}
                     </div>
                   </td>
                   <td className="px-4 py-3">
                     {iv.location ? (
                       <div className="flex items-center gap-1">
-                        <MapPin size={14} className="text-gray-400" />
+                        <MapPin size={14} className="text-zinc-400 dark:text-zinc-500" />
                         {iv.location}
                       </div>
-                    ) : <span className="text-gray-400">TBD</span>}
+                    ) : <span className="text-zinc-400 dark:text-zinc-500">TBD</span>}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[iv.status] || 'bg-gray-100 text-gray-700'}`}>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[iv.status] || 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'}`}>
                       {iv.status}
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    {iv.rating ? <RatingStars value={iv.rating} /> : <span className="text-gray-400 text-xs">—</span>}
+                    {iv.rating ? <RatingStars value={iv.rating} /> : <span className="text-zinc-400 dark:text-zinc-500 text-xs">—</span>}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
@@ -243,7 +243,7 @@ export default function Interviews() {
                           <button
                             title="Send reminder"
                             onClick={() => reminderMutation.mutate(iv.id)}
-                            className="p-1.5 rounded hover:bg-gray-100 text-gray-500"
+                            className="p-1.5 rounded hover:bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400"
                           >
                             <Bell size={14} />
                           </button>

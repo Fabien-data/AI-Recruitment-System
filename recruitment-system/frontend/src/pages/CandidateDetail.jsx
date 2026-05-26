@@ -106,7 +106,7 @@ export default function CandidateDetail() {
           <ArrowLeft size={20} /> Back to Candidates
         </Link>
         <div className="card text-center py-12">
-          <p className="text-gray-600 font-medium">Candidate not found</p>
+          <p className="text-zinc-600 dark:text-zinc-400 font-medium">Candidate not found</p>
           <Link to="/candidates">
             <Button variant="primary" className="mt-4">Back to Candidates</Button>
           </Link>
@@ -172,11 +172,11 @@ export default function CandidateDetail() {
 
           <div className="space-y-4">
             <div className="flex flex-wrap items-start gap-3">
-              <h1 className="text-3xl font-bold text-gray-900 break-words">{candidate.name || candidate.phone || 'Unknown'}</h1>
+              <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 break-words">{candidate.name || candidate.phone || 'Unknown'}</h1>
               <Badge status={candidate.status} className="text-sm" />
             </div>
 
-            <div className="flex flex-wrap items-center gap-4 text-gray-600">
+            <div className="flex flex-wrap items-center gap-4 text-zinc-600 dark:text-zinc-400">
               <span className="inline-flex items-center gap-1">
                 <Phone size={18} aria-hidden /> {candidate.phone || '-'}
               </span>
@@ -186,25 +186,25 @@ export default function CandidateDetail() {
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Source</p>
-                <p className="mt-2 text-sm font-medium text-gray-900 break-words">{candidate.source || 'Unknown'}</p>
+              <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Source</p>
+                <p className="mt-2 text-sm font-medium text-zinc-900 dark:text-zinc-50 break-words">{candidate.source || 'Unknown'}</p>
               </div>
-              <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Preferred Language</p>
-                <p className="mt-2 text-sm font-medium text-gray-900 break-words">{languageLabel}</p>
+              <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Preferred Language</p>
+                <p className="mt-2 text-sm font-medium text-zinc-900 dark:text-zinc-50 break-words">{languageLabel}</p>
               </div>
-              <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Age</p>
-                <p className="mt-2 text-sm font-medium text-gray-900">{candidateAge ? `${candidateAge} years` : 'Not available'}</p>
+              <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Age</p>
+                <p className="mt-2 text-sm font-medium text-zinc-900 dark:text-zinc-50">{candidateAge ? `${candidateAge} years` : 'Not available'}</p>
               </div>
-              <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Application Status</p>
+              <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Application Status</p>
                 <div className="mt-2">
                   {primaryApplication ? (
                     <Badge status={primaryApplication.status} className="text-xs" />
                   ) : (
-                    <span className="text-sm font-medium text-gray-500">Not assigned</span>
+                    <span className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Not assigned</span>
                   )}
                 </div>
               </div>
@@ -221,7 +221,7 @@ export default function CandidateDetail() {
           </Link>
           <Link
             to={`/cv-manager?candidate=${candidate.id}`}
-            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
           >
             <FileText size={16} aria-hidden /> Open CV Manager
           </Link>
@@ -234,7 +234,7 @@ export default function CandidateDetail() {
               href={latestCvUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
             >
               <Download size={16} aria-hidden /> View Latest CV
             </a>
@@ -245,74 +245,74 @@ export default function CandidateDetail() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <Card>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4 flex items-center gap-2">
               <User size={20} aria-hidden /> Details
             </h2>
             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div>
-                <dt className="text-gray-500">Phone number</dt>
-                <dd className="font-medium text-gray-900 break-words">{candidate.phone || '-'}</dd>
+                <dt className="text-zinc-500 dark:text-zinc-400">Phone number</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50 break-words">{candidate.phone || '-'}</dd>
               </div>
               <div>
-                <dt className="text-gray-500">Email</dt>
-                <dd className="font-medium text-gray-900 break-words">{candidate.email || 'No email provided'}</dd>
+                <dt className="text-zinc-500 dark:text-zinc-400">Email</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50 break-words">{candidate.email || 'No email provided'}</dd>
               </div>
               <div>
-                <dt className="text-gray-500">Source</dt>
-                <dd className="font-medium text-gray-900">{candidate.source}</dd>
+                <dt className="text-zinc-500 dark:text-zinc-400">Source</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50">{candidate.source}</dd>
               </div>
               <div>
-                <dt className="text-gray-500">Preferred language</dt>
-                <dd className="font-medium text-gray-900">{languageLabel}</dd>
+                <dt className="text-zinc-500 dark:text-zinc-400">Preferred language</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50">{languageLabel}</dd>
               </div>
               <div>
-                <dt className="text-gray-500">Age</dt>
-                <dd className="font-medium text-gray-900">{candidateAge ? `${candidateAge} years` : '-'}</dd>
+                <dt className="text-zinc-500 dark:text-zinc-400">Age</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50">{candidateAge ? `${candidateAge} years` : '-'}</dd>
               </div>
               <div>
-                <dt className="text-gray-500">Created</dt>
-                <dd className="font-medium text-gray-900">
+                <dt className="text-zinc-500 dark:text-zinc-400">Created</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50">
                   {candidate.created_at ? format(new Date(candidate.created_at), 'MMM d, yyyy') : '-'}
                 </dd>
               </div>
               {candidate.last_contact_at && (
                 <div>
-                  <dt className="text-gray-500">Last contact</dt>
-                  <dd className="font-medium text-gray-900">
+                  <dt className="text-zinc-500 dark:text-zinc-400">Last contact</dt>
+                  <dd className="font-medium text-zinc-900 dark:text-zinc-50">
                     {format(new Date(candidate.last_contact_at), 'MMM d, yyyy')}
                   </dd>
                 </div>
               )}
             </dl>
             {candidate.notes && (
-              <div className="mt-4 pt-4 border-t border-gray-200">
-                <dt className="text-gray-500 text-sm mb-1">Notes</dt>
-                <dd className="text-gray-700 whitespace-pre-wrap">{candidate.notes}</dd>
+              <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                <dt className="text-zinc-500 dark:text-zinc-400 text-sm mb-1">Notes</dt>
+                <dd className="text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">{candidate.notes}</dd>
               </div>
             )}
             {candidate.remarks && (
-              <div className="mt-4 pt-4 border-t border-gray-200">
-                <dt className="text-gray-500 text-sm mb-1">Chatbot Remarks</dt>
-                <dd className="text-gray-700 whitespace-pre-wrap bg-blue-50 border border-blue-100 rounded-md px-3 py-2">
+              <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                <dt className="text-zinc-500 dark:text-zinc-400 text-sm mb-1">Chatbot Remarks</dt>
+                <dd className="text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap bg-blue-50 border border-blue-100 rounded-md px-3 py-2">
                   {candidate.remarks}
                 </dd>
               </div>
             )}
             {Array.isArray(candidate.preferences_log) && candidate.preferences_log.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-gray-200">
-                <dt className="text-gray-500 text-sm mb-2">Preferences History ({candidate.preferences_log.length})</dt>
+              <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                <dt className="text-zinc-500 dark:text-zinc-400 text-sm mb-2">Preferences History ({candidate.preferences_log.length})</dt>
                 <dd>
                   <ul className="space-y-1 text-sm">
                     {candidate.preferences_log.map((entry, i) => (
-                      <li key={i} className="flex items-start justify-between gap-3 border-l-2 border-gray-200 pl-3">
-                        <span className="text-gray-700">
+                      <li key={i} className="flex items-start justify-between gap-3 border-l-2 border-zinc-200 dark:border-zinc-800 pl-3">
+                        <span className="text-zinc-700 dark:text-zinc-300">
                           <span className="font-medium">{entry.job_role || '—'}</span>
-                          {entry.country && <span className="text-gray-500"> · {entry.country}</span>}
-                          {entry.experience_years != null && <span className="text-gray-500"> · {entry.experience_years}y</span>}
-                          {entry.source && <span className="text-xs text-gray-400 ml-2">({entry.source})</span>}
+                          {entry.country && <span className="text-zinc-500 dark:text-zinc-400"> · {entry.country}</span>}
+                          {entry.experience_years != null && <span className="text-zinc-500 dark:text-zinc-400"> · {entry.experience_years}y</span>}
+                          {entry.source && <span className="text-xs text-zinc-400 dark:text-zinc-500 ml-2">({entry.source})</span>}
                         </span>
                         {entry.ts && (
-                          <span className="text-xs text-gray-400 whitespace-nowrap">
+                          <span className="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
                             {new Date(entry.ts).toLocaleDateString()}
                           </span>
                         )}
@@ -326,63 +326,63 @@ export default function CandidateDetail() {
 
           {Object.keys(applicationForm).length > 0 && (
             <Card>
-              <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4 flex items-center gap-2">
                 <ClipboardList size={20} aria-hidden /> Digital Application Form
               </h2>
               
               <div className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="text-xs text-gray-500 uppercase tracking-wide">Position Applied For</label>
+                    <label className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">Position Applied For</label>
                     <div className="font-medium">{applicationForm.position_applied_for || '-'}</div>
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500 uppercase tracking-wide">Secondary Position</label>
+                    <label className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">Secondary Position</label>
                     <div className="font-medium">{applicationForm.secondary_position || '-'}</div>
                   </div>
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-1 mb-3">Personal Details</h3>
+                  <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50 border-b border-zinc-200 dark:border-zinc-800 pb-1 mb-3">Personal Details</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                     <div className="md:col-span-2">
-                      <label className="text-gray-500">Full Name</label>
+                      <label className="text-zinc-500 dark:text-zinc-400">Full Name</label>
                       <div className="font-medium">{applicationForm.full_name || '-'}</div>
                     </div>
                     <div className="md:col-span-2">
-                      <label className="text-gray-500">Address</label>
+                      <label className="text-zinc-500 dark:text-zinc-400">Address</label>
                       <div className="font-medium">{applicationForm.address || '-'}</div>
                     </div>
                     <div>
-                      <label className="text-gray-500">Passport No</label>
+                      <label className="text-zinc-500 dark:text-zinc-400">Passport No</label>
                       <div className="font-medium">{applicationForm.passport_no || '-'}</div>
                     </div>
                     <div>
-                      <label className="text-gray-500">N.I.C No</label>
+                      <label className="text-zinc-500 dark:text-zinc-400">N.I.C No</label>
                       <div className="font-medium">{applicationForm.nic_no || '-'}</div>
                     </div>
                     <div>
-                      <label className="text-gray-500">Date of Birth</label>
+                      <label className="text-zinc-500 dark:text-zinc-400">Date of Birth</label>
                       <div className="font-medium">{applicationForm.dob || '-'}</div>
                     </div>
                     <div>
-                      <label className="text-gray-500">Age</label>
+                      <label className="text-zinc-500 dark:text-zinc-400">Age</label>
                       <div className="font-medium">{applicationForm.age || '-'}</div>
                     </div>
                     <div>
-                      <label className="text-gray-500">Gender</label>
+                      <label className="text-zinc-500 dark:text-zinc-400">Gender</label>
                       <div className="font-medium capitalize">{applicationForm.gender || '-'}</div>
                     </div>
                     <div>
-                      <label className="text-gray-500">Marital Status</label>
+                      <label className="text-zinc-500 dark:text-zinc-400">Marital Status</label>
                       <div className="font-medium capitalize">{applicationForm.marital_status || '-'}</div>
                     </div>
                     {applicationForm.languages && (
                       <div className="md:col-span-2">
-                        <label className="text-gray-500">Languages</label>
+                        <label className="text-zinc-500 dark:text-zinc-400">Languages</label>
                         <div className="flex gap-2 mt-1">
                           {applicationForm.languages.map((lang, i) => (
-                            <Badge key={i} status="default" className="bg-gray-100 text-gray-800">{lang}</Badge>
+                            <Badge key={i} status="default" className="bg-zinc-100 dark:bg-zinc-800 text-gray-800">{lang}</Badge>
                           ))}
                         </div>
                       </div>
@@ -391,7 +391,7 @@ export default function CandidateDetail() {
                 </div>
 
                 <div>
-                   <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-1 mb-3">Education Level</h3>
+                   <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50 border-b border-zinc-200 dark:border-zinc-800 pb-1 mb-3">Education Level</h3>
                    <div className="flex flex-wrap gap-4">
                       {['O/L', 'A/L', 'Diploma', 'Degree'].map((level) => {
                         const key = level.toLowerCase().replace('/', '').replace('degree', 'degree');
@@ -399,8 +399,8 @@ export default function CandidateDetail() {
                         const isChecked = applicationForm.education?.[schemaKey];
                         return (
                           <div key={level} className="flex items-center gap-2">
-                             {isChecked ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} className="text-gray-400" />}
-                             <span className={isChecked ? 'font-medium text-gray-900' : 'text-gray-500'}>{level}</span>
+                             {isChecked ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} className="text-zinc-400 dark:text-zinc-500" />}
+                             <span className={isChecked ? 'font-medium text-zinc-900 dark:text-zinc-50' : 'text-zinc-500 dark:text-zinc-400'}>{level}</span>
                           </div>
                         )
                       })}
@@ -408,30 +408,30 @@ export default function CandidateDetail() {
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-1 mb-3">Working Experience</h3>
+                  <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50 border-b border-zinc-200 dark:border-zinc-800 pb-1 mb-3">Working Experience</h3>
                   {applicationForm.experience && applicationForm.experience.length > 0 ? (
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
                         <thead>
-                          <tr className="bg-gray-50">
-                            <th className="px-3 py-2 text-left font-medium text-gray-500">Company</th>
-                            <th className="px-3 py-2 text-left font-medium text-gray-500">Position</th>
-                            <th className="px-3 py-2 text-right font-medium text-gray-500">Years</th>
+                          <tr className="bg-zinc-50 dark:bg-zinc-900/60">
+                            <th className="px-3 py-2 text-left font-medium text-zinc-500 dark:text-zinc-400">Company</th>
+                            <th className="px-3 py-2 text-left font-medium text-zinc-500 dark:text-zinc-400">Position</th>
+                            <th className="px-3 py-2 text-right font-medium text-zinc-500 dark:text-zinc-400">Years</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                           {applicationForm.experience.map((exp, idx) => (
                             <tr key={idx}>
-                              <td className="px-3 py-2 text-gray-900">{exp.company}</td>
-                              <td className="px-3 py-2 text-gray-900">{exp.position}</td>
-                              <td className="px-3 py-2 text-right text-gray-900">{exp.years}</td>
+                              <td className="px-3 py-2 text-zinc-900 dark:text-zinc-50">{exp.company}</td>
+                              <td className="px-3 py-2 text-zinc-900 dark:text-zinc-50">{exp.position}</td>
+                              <td className="px-3 py-2 text-right text-zinc-900 dark:text-zinc-50">{exp.years}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
                   ) : (
-                    <p className="text-gray-500 text-sm italic">No experience recorded.</p>
+                    <p className="text-zinc-500 dark:text-zinc-400 text-sm italic">No experience recorded.</p>
                   )}
                 </div>
               </div>
@@ -440,20 +440,20 @@ export default function CandidateDetail() {
 
           {documents.length > 0 && (
             <Card>
-              <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4 flex items-center gap-2">
                 <FileText size={20} aria-hidden /> Documents
               </h2>
 
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">CV</h3>
+              <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">CV</h3>
               {cvs.length === 0 ? (
-                <p className="text-sm text-gray-500 mb-4">No CV uploaded yet.</p>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">No CV uploaded yet.</p>
               ) : (
                 <ul className="space-y-2 mb-4">
                   {cvs.map((cv) => {
                     const url = resolveDocumentUrl(cv)
                     return (
-                      <li key={cv.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
-                        <span className="text-gray-700">{cv.file_name || 'CV'}</span>
+                      <li key={cv.id} className="flex items-center justify-between py-2 border-b border-zinc-100 dark:border-zinc-800/60 last:border-0">
+                        <span className="text-zinc-700 dark:text-zinc-300">{cv.file_name || 'CV'}</span>
                         {url === PENDING_URL ? (
                           <span className="text-xs text-amber-600 italic">CV processing — check back in a moment</span>
                         ) : url ? (
@@ -483,16 +483,16 @@ export default function CandidateDetail() {
                 </ul>
               )}
 
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">Additional Documents</h3>
+              <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Additional Documents</h3>
               {additionalDocuments.length === 0 ? (
-                <p className="text-sm text-gray-500">No additional documents uploaded yet.</p>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">No additional documents uploaded yet.</p>
               ) : (
                 <ul className="space-y-2">
                   {additionalDocuments.map((doc) => {
                     const url = resolveDocumentUrl(doc)
                     return (
-                      <li key={doc.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
-                        <span className="text-gray-700">{doc.file_name || 'Additional Document'}</span>
+                      <li key={doc.id} className="flex items-center justify-between py-2 border-b border-zinc-100 dark:border-zinc-800/60 last:border-0">
+                        <span className="text-zinc-700 dark:text-zinc-300">{doc.file_name || 'Additional Document'}</span>
                         {url && (
                           <div className="flex items-center gap-3">
                             <a
@@ -524,15 +524,15 @@ export default function CandidateDetail() {
 
           {communications.length > 0 && (
             <Card>
-              <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4 flex items-center gap-2">
                 <MessageSquare size={20} aria-hidden /> Recent communications
               </h2>
               <ul className="space-y-3 max-h-64 overflow-y-auto">
                 {communications.slice(0, 10).map((c) => (
-                  <li key={c.id} className="text-sm p-3 bg-gray-50 rounded-lg">
-                    <span className="text-gray-500">{c.channel} · {c.direction}</span>
-                    <p className="text-gray-900 mt-1">{c.content || '(no content)'}</p>
-                    <p className="text-gray-400 text-xs mt-1">
+                  <li key={c.id} className="text-sm p-3 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
+                    <span className="text-zinc-500 dark:text-zinc-400">{c.channel} · {c.direction}</span>
+                    <p className="text-zinc-900 dark:text-zinc-50 mt-1">{c.content || '(no content)'}</p>
+                    <p className="text-zinc-400 dark:text-zinc-500 text-xs mt-1">
                       {c.sent_at ? format(new Date(c.sent_at), 'MMM d, HH:mm') : ''}
                     </p>
                   </li>
@@ -544,54 +544,54 @@ export default function CandidateDetail() {
 
         <div className="space-y-6">
           <Card>
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-gray-900">
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
               <FolderKanban size={20} aria-hidden /> Current Assignment
             </h2>
             {primaryApplication ? (
               <div className="space-y-4">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Project</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Project</p>
                   {primaryApplication.project_id ? (
                     <Link to={`/projects/${primaryApplication.project_id}`} className="mt-2 inline-block text-sm font-medium text-primary-600 hover:text-primary-700 break-words">
                       {primaryApplication.project_title || 'Untitled project'}
                     </Link>
                   ) : (
-                    <p className="mt-2 text-sm font-medium text-gray-900">Unassigned project</p>
+                    <p className="mt-2 text-sm font-medium text-zinc-900 dark:text-zinc-50">Unassigned project</p>
                   )}
                 </div>
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assigned Job</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Assigned Job</p>
                   <Link to={`/jobs/${primaryApplication.job_id}`} className="mt-2 inline-block text-sm font-medium text-primary-600 hover:text-primary-700 break-words">
                     {primaryApplication.job_title || 'Untitled job'}
                   </Link>
                   {primaryApplication.job_category && (
-                    <p className="mt-1 text-xs text-gray-500">{primaryApplication.job_category}</p>
+                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{primaryApplication.job_category}</p>
                   )}
                 </div>
-                <div className="rounded-xl bg-gray-50 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Application Status</p>
+                <div className="rounded-xl bg-zinc-50 dark:bg-zinc-900/60 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Application Status</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <Badge status={primaryApplication.status} className="text-xs" />
                     {primaryApplication.match_score != null && (
-                      <span className="text-xs font-medium text-gray-500">Match score: {primaryApplication.match_score}%</span>
+                      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Match score: {primaryApplication.match_score}%</span>
                     )}
                   </div>
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-gray-500">No job or project assignment yet.</p>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No job or project assignment yet.</p>
             )}
           </Card>
 
           <Card>
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-gray-900">
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
               <FileText size={20} aria-hidden /> Latest CV
             </h2>
             {latestCv ? (
               <div className="space-y-4">
                 <div>
-                  <p className="text-sm font-medium text-gray-900 break-words">{latestCv.file_name || 'CV Document'}</p>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50 break-words">{latestCv.file_name || 'CV Document'}</p>
+                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                     {latestCv.uploaded_at ? `Uploaded ${format(new Date(latestCv.uploaded_at), 'MMM d, yyyy')}` : 'Uploaded'}
                   </p>
                 </div>
@@ -611,13 +611,13 @@ export default function CandidateDetail() {
                         target="_blank"
                         rel="noopener noreferrer"
                         download={latestCv.file_name || 'cv'}
-                        className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200"
+                        className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-gray-200"
                       >
                         <Download size={14} aria-hidden /> Download CV
                       </a>
                     </>
                   ) : (
-                    <p className="text-sm text-gray-500">This CV record does not have a downloadable file link yet.</p>
+                    <p className="text-sm text-zinc-500 dark:text-zinc-400">This CV record does not have a downloadable file link yet.</p>
                   )}
                 </div>
                 <Link
@@ -629,7 +629,7 @@ export default function CandidateDetail() {
               </div>
             ) : (
               <div className="space-y-3">
-                <p className="text-sm text-gray-500">No CV uploaded yet.</p>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">No CV uploaded yet.</p>
                 <Link
                   to={`/cv-manager?candidate=${candidate.id}`}
                   className="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
@@ -641,32 +641,32 @@ export default function CandidateDetail() {
           </Card>
 
           <Card>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4 flex items-center gap-2">
               <Briefcase size={20} aria-hidden /> Applications
             </h2>
             {applications.length === 0 ? (
-              <p className="text-gray-500 text-sm">No applications yet.</p>
+              <p className="text-zinc-500 dark:text-zinc-400 text-sm">No applications yet.</p>
             ) : (
               <ul className="space-y-3">
                 {applications.map((app) => (
-                  <li key={app.id} className="rounded-lg bg-gray-50 p-3">
+                  <li key={app.id} className="rounded-lg bg-zinc-50 dark:bg-zinc-900/60 p-3">
                     <div className="space-y-2">
                       <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Project</p>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Project</p>
                         {app.project_id ? (
                           <Link to={`/projects/${app.project_id}`} className="mt-1 inline-block text-sm font-medium text-primary-600 hover:text-primary-700 break-words">
                             {app.project_title || 'Untitled project'}
                           </Link>
                         ) : (
-                          <p className="mt-1 text-sm text-gray-900">Unassigned project</p>
+                          <p className="mt-1 text-sm text-zinc-900 dark:text-zinc-50">Unassigned project</p>
                         )}
                       </div>
                       <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Job</p>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Job</p>
                         <Link to={`/jobs/${app.job_id}`} className="mt-1 inline-block text-sm font-medium text-primary-600 hover:text-primary-700 break-words">
                           {app.job_title}
                         </Link>
-                        <p className="mt-1 text-xs text-gray-500">{app.job_category || 'Job role'}</p>
+                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{app.job_category || 'Job role'}</p>
                       </div>
                     </div>
                     <Badge status={app.status} className="mt-3 text-xs" />

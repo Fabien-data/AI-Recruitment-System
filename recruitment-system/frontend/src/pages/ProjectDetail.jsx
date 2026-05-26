@@ -42,20 +42,20 @@ function ProjectCandidateList({ projectId, jobFilter }) {
   }
 
   if (!candidates.length) {
-    return <p className="text-center text-gray-500 py-6 text-sm">No candidates assigned yet</p>
+    return <p className="text-center text-zinc-500 dark:text-zinc-400 py-6 text-sm">No candidates assigned yet</p>
   }
 
   return (
     <div className="space-y-4">
       {groupedEntries.map(([jobTitle, jobCandidates]) => (
         <div key={jobTitle}>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">{jobTitle}</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-2">{jobTitle}</h3>
           <div className="space-y-2">
             {jobCandidates.map((c) => (
               <Link
                 key={`${jobTitle}-${c.id || c.candidate_id}`}
                 to={`/candidates/${c.id || c.candidate_id}`}
-                className="group flex items-start gap-3 rounded-xl p-3 transition-colors hover:bg-gray-50"
+                className="group flex items-start gap-3 rounded-xl p-3 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
               >
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 overflow-hidden">
                   {c.photo_url
@@ -63,8 +63,8 @@ function ProjectCandidateList({ projectId, jobFilter }) {
                     : (c.name?.charAt(0)?.toUpperCase() || <User size={14} />)}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium leading-tight text-gray-900 break-words group-hover:text-primary-600">{c.name}</p>
-                  <p className="mt-1 text-xs leading-snug text-gray-500 break-words">{c.application_status || c.status || 'applied'}</p>
+                  <p className="text-sm font-medium leading-tight text-zinc-900 dark:text-zinc-50 break-words group-hover:text-primary-600">{c.name}</p>
+                  <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400 break-words">{c.application_status || c.status || 'applied'}</p>
                 </div>
                 {c.match_score != null && (
                   <span className="text-xs font-semibold text-primary-600 flex-shrink-0">
@@ -125,7 +125,7 @@ export default function ProjectDetail() {
           <ArrowLeft size={20} /> Back to Projects
         </Link>
         <div className="card text-center py-12">
-          <p className="text-gray-600 font-medium">Project not found</p>
+          <p className="text-zinc-600 dark:text-zinc-400 font-medium">Project not found</p>
         </div>
       </div>
     )
@@ -161,12 +161,12 @@ export default function ProjectDetail() {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-3">
-            <h1 className="text-3xl font-bold text-gray-900 break-words">{project.title}</h1>
+            <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 break-words">{project.title}</h1>
             <Badge status={project.status} />
             <Badge status={project.priority} />
           </div>
-          <p className="text-xl text-gray-600 mb-3">{project.client_name}</p>
-          <div className="flex flex-wrap items-center gap-4 text-gray-600">
+          <p className="text-xl text-zinc-600 dark:text-zinc-400 mb-3">{project.client_name}</p>
+          <div className="flex flex-wrap items-center gap-4 text-zinc-600 dark:text-zinc-400">
             <span className="inline-flex items-center gap-1">
               <FolderKanban size={18} /> {project.industry_type}
             </span>
@@ -197,11 +197,11 @@ export default function ProjectDetail() {
         <div className="lg:col-span-2 space-y-6">
           {/* Overview Card */}
           <Card>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Project Overview</h2>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">Project Overview</h2>
             
             {/* Countries */}
             <div className="mb-4">
-              <h3 className="text-sm font-medium text-gray-700 mb-2">Target Countries</h3>
+              <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Target Countries</h3>
               <div className="flex flex-wrap gap-2">
                 {countries?.map((country) => (
                   <span key={country} className="inline-flex items-center gap-1 px-3 py-1 bg-blue-50 text-blue-700 rounded-lg border border-blue-100">
@@ -215,29 +215,29 @@ export default function ProjectDetail() {
             {/* Description */}
             {project.description && (
               <div className="mb-4">
-                <h3 className="text-sm font-medium text-gray-700 mb-2">Description</h3>
-                <p className="text-gray-600 whitespace-pre-wrap">{project.description}</p>
+                <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Description</h3>
+                <p className="text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{project.description}</p>
               </div>
             )}
 
             {/* Timeline */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
               {project.start_date && (
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">Start Date</p>
-                  <p className="font-medium text-gray-900">{format(new Date(project.start_date), 'MMM d, yyyy')}</p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">Start Date</p>
+                  <p className="font-medium text-zinc-900 dark:text-zinc-50">{format(new Date(project.start_date), 'MMM d, yyyy')}</p>
                 </div>
               )}
               {project.interview_date && (
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">Interview Date</p>
-                  <p className="font-medium text-gray-900">{format(new Date(project.interview_date), 'MMM d, yyyy')}</p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">Interview Date</p>
+                  <p className="font-medium text-zinc-900 dark:text-zinc-50">{format(new Date(project.interview_date), 'MMM d, yyyy')}</p>
                 </div>
               )}
               {project.end_date && (
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">End Date</p>
-                  <p className="font-medium text-gray-900">{format(new Date(project.end_date), 'MMM d, yyyy')}</p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">End Date</p>
+                  <p className="font-medium text-zinc-900 dark:text-zinc-50">{format(new Date(project.end_date), 'MMM d, yyyy')}</p>
                 </div>
               )}
             </div>
@@ -245,7 +245,7 @@ export default function ProjectDetail() {
             {/* Benefits */}
             {activeBenefits.length > 0 && (
               <div className="mb-4">
-                <h3 className="text-sm font-medium text-gray-700 mb-2">Benefits Included</h3>
+                <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Benefits Included</h3>
                 <div className="flex flex-wrap gap-2">
                   {activeBenefits.map(([benefit]) => {
                     const Icon = benefitIcons[benefit]
@@ -264,33 +264,33 @@ export default function ProjectDetail() {
             {(salaryInfo?.min || salaryInfo?.max) && (
               <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg">
                 <DollarSign size={20} className="text-blue-600" />
-                <span className="font-medium text-gray-900">
+                <span className="font-medium text-zinc-900 dark:text-zinc-50">
                   {salaryInfo.currency} {salaryInfo.min || 0} - {salaryInfo.max || 0}
                 </span>
-                <span className="text-sm text-gray-600">per month</span>
+                <span className="text-sm text-zinc-600 dark:text-zinc-400">per month</span>
               </div>
             )}
 
             {/* Contact Information */}
             {(contactInfo?.whatsapp || contactInfo?.email || contactInfo?.address) && (
-              <div className="mt-4 pt-4 border-t border-gray-200">
-                <h3 className="text-sm font-medium text-gray-700 mb-3">Contact Information</h3>
+              <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">Contact Information</h3>
                 <div className="space-y-2">
                   {contactInfo.whatsapp && (
-                    <div className="flex items-center gap-2 text-gray-600">
-                      <Phone size={16} className="text-gray-400" />
+                    <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+                      <Phone size={16} className="text-zinc-400 dark:text-zinc-500" />
                       <span>{contactInfo.whatsapp}</span>
                     </div>
                   )}
                   {contactInfo.email && (
-                    <div className="flex items-center gap-2 text-gray-600">
-                      <Mail size={16} className="text-gray-400" />
+                    <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+                      <Mail size={16} className="text-zinc-400 dark:text-zinc-500" />
                       <span>{contactInfo.email}</span>
                     </div>
                   )}
                   {contactInfo.address && (
-                    <div className="flex items-center gap-2 text-gray-600">
-                      <MapPinned size={16} className="text-gray-400" />
+                    <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+                      <MapPinned size={16} className="text-zinc-400 dark:text-zinc-500" />
                       <span>{contactInfo.address}</span>
                     </div>
                   )}
@@ -302,7 +302,7 @@ export default function ProjectDetail() {
           {/* Jobs Card */}
           <Card>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-900">Jobs in Project</h2>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Jobs in Project</h2>
               <div className="flex gap-2">
                 {(user?.role === 'admin' || user?.role === 'sourcing_department') && (
                   <Button
@@ -326,13 +326,13 @@ export default function ProjectDetail() {
                   <Link
                     key={job.id}
                     to={`/jobs/${job.id}`}
-                    className="block rounded-lg border border-gray-200 p-4 transition-colors hover:bg-gray-50"
+                    className="block rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
                   >
                     <div className="mb-2 flex items-start justify-between gap-3">
-                      <h3 className="font-medium text-gray-900">{job.title}</h3>
+                      <h3 className="font-medium text-zinc-900 dark:text-zinc-50">{job.title}</h3>
                       <Badge status={job.status} />
                     </div>
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-600">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-zinc-600 dark:text-zinc-400">
                       <span className="inline-flex items-center gap-1">
                         <Briefcase size={14} /> {job.category}
                       </span>
@@ -348,7 +348,7 @@ export default function ProjectDetail() {
               </div>
             ) : (
               <div className="text-center py-8">
-                <p className="text-gray-500 mb-3">No jobs linked to this project yet</p>
+                <p className="text-zinc-500 dark:text-zinc-400 mb-3">No jobs linked to this project yet</p>
                 {(user?.role === 'admin' || user?.role === 'sourcing_department') && (
                   <Button
                     variant="primary"
@@ -367,7 +367,7 @@ export default function ProjectDetail() {
           {/* Candidates Card */}
           <Card>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-900">Candidates</h2>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Candidates</h2>
               <div className="flex flex-wrap items-center justify-end gap-3">
                 {project.jobs && project.jobs.length > 1 && (
                   <select
@@ -421,12 +421,12 @@ export default function ProjectDetail() {
         <div className="space-y-6">
           {/* Stats Card */}
           <Card>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Progress</h2>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">Progress</h2>
             <div className="space-y-4">
               <div>
                 <div className="flex items-center justify-between text-sm mb-2">
-                  <span className="text-gray-600">Positions Filled</span>
-                  <span className="font-medium text-gray-900">{completionRate}%</span>
+                  <span className="text-zinc-600 dark:text-zinc-400">Positions Filled</span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">{completionRate}%</span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
@@ -434,23 +434,23 @@ export default function ProjectDetail() {
                     style={{ width: `${completionRate}%` }}
                   />
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
                   {stats.filled_positions || 0} of {stats.total_positions || 0} positions filled
                 </p>
               </div>
 
-              <div className="pt-4 border-t border-gray-200">
+              <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-gray-600">Total Jobs</span>
-                  <span className="text-lg font-bold text-gray-900">{stats.total_jobs || 0}</span>
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Total Jobs</span>
+                  <span className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{stats.total_jobs || 0}</span>
                 </div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-gray-600">Total Candidates</span>
-                  <span className="text-lg font-bold text-gray-900">{stats.unique_candidates || 0}</span>
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Total Candidates</span>
+                  <span className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{stats.unique_candidates || 0}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">Applications</span>
-                  <span className="text-lg font-bold text-gray-900">{stats.total_applications || 0}</span>
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Applications</span>
+                  <span className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{stats.total_applications || 0}</span>
                 </div>
               </div>
             </div>
@@ -458,33 +458,33 @@ export default function ProjectDetail() {
 
           {/* Team Card */}
           <Card>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Project Team</h2>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">Project Team</h2>
             {project.team && project.team.length > 0 ? (
               <div className="space-y-3">
                 {project.team.map((member) => (
-                  <div key={member.id} className="flex items-start gap-3 rounded-lg bg-gray-50 p-3">
+                  <div key={member.id} className="flex items-start gap-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 p-3">
                     <div className="w-10 h-10 bg-primary-100 text-primary-700 rounded-full flex items-center justify-center font-medium">
                       {member.full_name?.charAt(0)?.toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium leading-tight text-gray-900 break-words">{member.full_name}</p>
-                      <p className="mt-1 text-xs leading-snug text-gray-500 break-words">{member.email}</p>
+                      <p className="font-medium leading-tight text-zinc-900 dark:text-zinc-50 break-words">{member.full_name}</p>
+                      <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400 break-words">{member.email}</p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Badge status={member.user_role} className="text-xs" />
-                        <span className="text-xs text-gray-500 capitalize">• {member.role}</span>
+                        <span className="text-xs text-zinc-500 dark:text-zinc-400 capitalize">• {member.role}</span>
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="text-center text-gray-500 py-4 text-sm">No team members assigned</p>
+              <p className="text-center text-zinc-500 dark:text-zinc-400 py-4 text-sm">No team members assigned</p>
             )}
           </Card>
 
           {/* Quick Actions Card */}
           <Card>
-            <h2 className="text-lg font-semibold text-gray-900 mb-3">Quick Actions</h2>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">Quick Actions</h2>
             <div className="space-y-2">
               <Link
                 to={`/jobs?project_id=${id}`}
@@ -494,7 +494,7 @@ export default function ProjectDetail() {
               </Link>
               <Link
                 to={`/applications?project_id=${id}`}
-                className="block w-full text-center px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg font-medium text-sm transition-colors"
+                className="block w-full text-center px-4 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-gray-200 rounded-lg font-medium text-sm transition-colors"
               >
                 View Applications
               </Link>

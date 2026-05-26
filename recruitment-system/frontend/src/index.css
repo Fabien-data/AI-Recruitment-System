@@ -47,7 +47,7 @@ body {
 }
 
 html.dark body {
-  background-color: #09090b;
+  background-color: #0b0b0e;
   color: #f4f4f5;
 }
 
@@ -55,21 +55,55 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.04em;
 }
 
+::selection {
+  background-color: #2563eb;
+  color: white;
+}
+html.dark ::selection {
+  background-color: #3b82f6;
+  color: white;
+}
+
 @layer components {
   .badge {
     @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold tracking-tight border;
   }
-  .badge-new { @apply bg-blue-50 text-blue-700 border-blue-200/50 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/50; }
-  .badge-screening { @apply bg-amber-50 text-amber-700 border-amber-200/50 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50; }
-  .badge-interview { @apply bg-purple-50 text-purple-700 border-purple-200/50 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/50; }
-  .badge-hired { @apply bg-emerald-50 text-emerald-700 border-emerald-200/50 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50; }
-  .badge-rejected { @apply bg-red-50 text-red-700 border-red-200/50 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800/50; }
-  .badge-active { @apply bg-emerald-50 text-emerald-700 border-emerald-200/50 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50; }
+  .badge-new { @apply bg-blue-50 text-blue-700 border-blue-200/50 dark:bg-blue-950/50 dark:text-blue-200 dark:border-blue-800/60; }
+  .badge-screening { @apply bg-amber-50 text-amber-700 border-amber-200/50 dark:bg-amber-950/50 dark:text-amber-200 dark:border-amber-800/60; }
+  .badge-interview { @apply bg-purple-50 text-purple-700 border-purple-200/50 dark:bg-purple-950/50 dark:text-purple-200 dark:border-purple-800/60; }
+  .badge-hired { @apply bg-emerald-50 text-emerald-700 border-emerald-200/50 dark:bg-emerald-950/50 dark:text-emerald-200 dark:border-emerald-800/60; }
+  .badge-rejected { @apply bg-red-50 text-red-700 border-red-200/50 dark:bg-red-950/50 dark:text-red-200 dark:border-red-800/60; }
+  .badge-active { @apply bg-emerald-50 text-emerald-700 border-emerald-200/50 dark:bg-emerald-950/50 dark:text-emerald-200 dark:border-emerald-800/60; }
   .badge-paused { @apply bg-zinc-100 text-zinc-700 border-zinc-200/50 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700; }
-  .badge-closed { @apply bg-zinc-100 text-zinc-500 border-zinc-200/50 dark:bg-zinc-800/60 dark:text-zinc-400 dark:border-zinc-700; }
+  .badge-closed { @apply bg-zinc-100 text-zinc-500 border-zinc-200/50 dark:bg-zinc-800/80 dark:text-zinc-400 dark:border-zinc-700; }
 
   .glass {
-    @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-sm transition-all dark:bg-zinc-900/70 dark:border-zinc-700/40;
+    @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-sm transition-all dark:bg-zinc-900/80 dark:border-zinc-700/60;
+  }
+
+  /* Shared card surface — used by many pages via className="card" */
+  .card {
+    @apply bg-white rounded-2xl border border-zinc-200/70 shadow-[0_4px_16px_rgb(0,0,0,0.04)] p-5
+           dark:bg-zinc-900 dark:border-zinc-800 dark:shadow-[0_4px_16px_rgb(0,0,0,0.5)];
+  }
+
+  /* Shared input/select control — used by many pages via className="input" */
+  .input {
+    @apply w-full px-3 py-2 bg-white text-zinc-900 placeholder-zinc-400 border border-zinc-200 rounded-xl
+           focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500
+           dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-500 dark:border-zinc-700 dark:focus:border-primary-400
+           disabled:opacity-50 transition-colors;
+  }
+
+  /* Table helpers */
+  .table-th {
+    @apply text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-900/70 border-b border-zinc-200 dark:border-zinc-800;
+  }
+  .table-td {
+    @apply py-3 px-4 text-sm text-zinc-700 dark:text-zinc-300 border-b border-zinc-100 dark:border-zinc-800/60;
+  }
+  .table-row-hover {
+    @apply hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors;
   }
 
   .skeleton {
@@ -84,7 +118,7 @@ h1, h2, h3, h4, h5, h6 {
     animation: shimmer 1.8s linear infinite;
   }
   html.dark .skeleton::after {
-    background-image: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.06) 50%, transparent 100%);
+    background-image: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.08) 50%, transparent 100%);
   }
 }
 
@@ -107,6 +141,12 @@ html.dark .custom-scrollbar::-webkit-scrollbar-thumb {
 }
 html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #52525b;
+}
+
+/* Native select dropdown arrow dark-mode color hint (Chromium/Edge) */
+html.dark select option {
+  background-color: #18181b;
+  color: #f4f4f5;
 }
 
 /* Branded toast container (react-hot-toast renders our custom toasts at top-right). */

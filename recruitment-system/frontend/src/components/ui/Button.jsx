@@ -8,8 +8,8 @@ const variants = {
   accent:
     'bg-accent-gradient bg-[length:200%_100%] text-white border border-accent-700/20 shadow-md hover:bg-right hover:shadow-glow-red active:shadow-md transition-all cursor-pointer rounded-2xl',
   secondary:
-    'bg-white/80 backdrop-blur-md border border-zinc-200/60 text-zinc-900 hover:bg-white hover:shadow-md active:bg-zinc-100 shadow-sm transition-all cursor-pointer rounded-2xl ' +
-    'dark:bg-zinc-900/70 dark:border-zinc-700/60 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:active:bg-zinc-800/80',
+    'bg-white border border-zinc-200 text-zinc-900 hover:bg-zinc-50 hover:shadow-md active:bg-zinc-100 shadow-sm transition-all cursor-pointer rounded-2xl ' +
+    'dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-700 dark:active:bg-zinc-800',
   ghost:
     'bg-transparent text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100/60 active:bg-zinc-200 transition-all cursor-pointer rounded-2xl ' +
     'dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800/60 dark:active:bg-zinc-800',
