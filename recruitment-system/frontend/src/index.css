@@ -143,6 +143,57 @@ html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #52525b;
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * Print styles for the KPI report (/admin/users/:id/report).
+ * The report page wraps every printable section in .print-card and the layout
+ * adds .no-print to navigation/sidebar/header chrome that should disappear on
+ * paper. Charts continue to render as SVG so they print sharply.
+ * ─────────────────────────────────────────────────────────────────────────── */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  /* Hide app chrome that doesn't belong in the printout. */
+  aside,
+  .no-print,
+  .no-print *,
+  header > nav,
+  button:not(.print-keep) {
+    display: none !important;
+  }
+
+  /* Force light surfaces regardless of dark mode so prints are always legible. */
+  html,
+  body,
+  .dark\:bg-zinc-900,
+  .dark\:bg-zinc-950 {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Each KPI block: keep on one page where possible. */
+  .print-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border: 1px solid #d4d4d8 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  /* Cover sheet at the top. */
+  .print-cover {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  /* Hide animated fade-ins (Framer Motion sets opacity:0 briefly on mount). */
+  [style*="opacity: 0"] {
+    opacity: 1 !important;
+  }
+}
+
 /* Thin scrollbar — used inside dense panels (Messages conversations, modal lists) */
 .scrollbar-thin {
   scrollbar-width: thin;

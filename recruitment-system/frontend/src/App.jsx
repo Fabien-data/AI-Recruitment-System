@@ -7,6 +7,9 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import AdminDashboard from './pages/AdminDashboard'
+import ActivityMonitor from './pages/admin/ActivityMonitor'
+import UserDetail from './pages/admin/UserDetail'
+import UserKpiReport from './pages/admin/UserKpiReport'
 import Candidates from './pages/Candidates'
 import CandidateDetail from './pages/CandidateDetail'
 import Jobs from './pages/Jobs'
@@ -116,6 +119,21 @@ function App() {
         <Route path="admin" element={
           <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
             <AdminDashboard />
+          </RoleGuard>
+        } />
+        <Route path="admin/activity" element={
+          <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
+            <ActivityMonitor />
+          </RoleGuard>
+        } />
+        <Route path="admin/users/:id" element={
+          <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
+            <UserDetail />
+          </RoleGuard>
+        } />
+        <Route path="admin/users/:id/report" element={
+          <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
+            <UserKpiReport />
           </RoleGuard>
         } />
       </Route>

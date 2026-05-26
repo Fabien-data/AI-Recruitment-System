@@ -307,6 +307,31 @@ export const deleteAdminUser = (id) =>
 export const getAuditLogs = (params) =>
   apiClient.get('/api/admin/audit-logs', { params }).then(res => res.data)
 
+// ── Admin Observability (Migration 021) ────────────────────────────────────
+export const getSections = () =>
+  apiClient.get('/api/admin/sections').then(res => res.data)
+
+export const getUserPermissions = (userId) =>
+  apiClient.get(`/api/admin/users/${userId}/permissions`).then(res => res.data)
+
+export const updateUserPermissions = (userId, permissions) =>
+  apiClient.put(`/api/admin/users/${userId}/permissions`, { permissions }).then(res => res.data)
+
+export const getUserActivity = (userId, params) =>
+  apiClient.get(`/api/admin/users/${userId}/activity`, { params }).then(res => res.data)
+
+export const getUserSessions = (userId, params) =>
+  apiClient.get(`/api/admin/users/${userId}/sessions`, { params }).then(res => res.data)
+
+export const getUserKpi = (userId, params) =>
+  apiClient.get(`/api/admin/users/${userId}/kpi`, { params }).then(res => res.data)
+
+export const getGlobalActivity = (params) =>
+  apiClient.get('/api/admin/activity', { params }).then(res => res.data)
+
+export const logoutBackend = () =>
+  apiClient.post('/api/auth/logout').then(res => res.data)
+
 // ── Marketing Hub ──────────────────────────────────────────────────────────
 export const getLeads = (params) =>
   apiClient.get('/api/marketing-hub/leads', { params }).then(res => res.data)

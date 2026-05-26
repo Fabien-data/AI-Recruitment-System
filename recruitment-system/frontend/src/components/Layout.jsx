@@ -11,43 +11,80 @@ import { ThemeToggle } from './ui/ThemeToggle'
 import { TopProgressBar } from './ui/TopProgressBar'
 import { Logo } from './ui/Logo'
 
+// Each nav item is tagged with its `section` key so the nav builder can filter
+// by section_permissions for custom (non-admin) users.
 const BASE_NAV = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/candidates', label: 'Candidates', icon: Users },
-  { to: '/jobs', label: 'Jobs', icon: Briefcase },
-  { to: '/projects', label: 'Projects', icon: FolderKanban },
-  { to: '/applications', label: 'Applications', icon: FileText },
-  { to: '/interviews', label: 'Interviews', icon: CalendarDays },
+  { to: '/', label: 'Overview', icon: LayoutDashboard, end: true, section: 'dashboard' },
+  { to: '/candidates', label: 'Candidates', icon: Users, section: 'candidates' },
+  { to: '/jobs', label: 'Jobs', icon: Briefcase, section: 'jobs' },
+  { to: '/projects', label: 'Projects', icon: FolderKanban, section: 'projects' },
+  { to: '/applications', label: 'Applications', icon: FileText, section: 'applications' },
+  { to: '/interviews', label: 'Interviews', icon: CalendarDays, section: 'interviews' },
 ]
 
 const FULL_NAV_EXTRAS = [
-  { to: '/cv-manager', label: 'CV Manager', icon: FileSearch },
-  { to: '/communications', label: 'Messages', icon: MessageSquare },
-  { to: '/analytics', label: 'Analytics', icon: BarChart2 },
-  { to: '/knowledge-base', label: 'Knowledge Base', icon: BookOpen },
-  { to: '/general-pool', label: 'General Pool', icon: Database },
+  { to: '/cv-manager', label: 'CV Manager', icon: FileSearch, section: 'cv_manager' },
+  { to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' },
+  { to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' },
+  { to: '/knowledge-base', label: 'Knowledge Base', icon: BookOpen, section: 'knowledge_base' },
+  { to: '/general-pool', label: 'General Pool', icon: Database, section: 'general_pool' },
 ]
 
-function buildNav(role) {
+/**
+ * Build the visible sidebar items.
+ *
+ * 1. Admin: full menu, including the Admin Dashboard entry on top.
+ * 2. Custom users (sectionPermissions provided): role provides the candidate
+ *    set, then we filter out any item whose section the user lacks `can_view`
+ *    permission for. This lets an admin grant a Project Handler access to,
+ *    say, CV Manager simply by toggling can_view on cv_manager.
+ * 3. Legacy fallback (no permissions array yet): use the historical
+ *    role-based selection so behaviour is unchanged until first login post-021.
+ */
+function buildNav(role, sectionPermissions = []) {
+  // Step 1: role-default candidate set (same as historical behaviour)
+  let items
   if (role === 'marketing_agent') {
-    return [
-      { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-      { to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone },
+    items = [
+      { to: '/', label: 'Overview', icon: LayoutDashboard, end: true, section: 'dashboard' },
+      { to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' },
     ]
-  }
-
-  const items = [...BASE_NAV]
-
-  if (role === 'admin' || role === 'sourcing_department') {
-    items.push(...FULL_NAV_EXTRAS)
-    items.push({ to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone })
   } else {
-    items.push({ to: '/communications', label: 'Messages', icon: MessageSquare })
-    items.push({ to: '/analytics', label: 'Analytics', icon: BarChart2 })
+    items = [...BASE_NAV]
+    if (role === 'admin' || role === 'sourcing_department') {
+      items.push(...FULL_NAV_EXTRAS)
+      items.push({ to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' })
+    } else {
+      items.push({ to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' })
+      items.push({ to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' })
+    }
   }
 
+  // Step 2: if the user has custom section permissions, expand the candidate
+  // set to every section they can view (admin-granted overrides). Then filter
+  // by can_view to hide everything else.
+  if (role !== 'admin' && sectionPermissions.length > 0) {
+    const knownToCatalogue = new Map(
+      [...BASE_NAV, ...FULL_NAV_EXTRAS,
+        { to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' },
+      ].map(it => [it.section, it])
+    )
+    // Union: existing role-default items + any extra section the user has access to.
+    const sectionsAllowed = new Set(
+      sectionPermissions.filter(p => p.can_view).map(p => p.section_key)
+    )
+    for (const sec of sectionsAllowed) {
+      const cat = knownToCatalogue.get(sec)
+      if (cat && !items.find(it => it.section === sec)) items.push(cat)
+    }
+    // Filter: drop anything the user can't view (except the dashboard, which
+    // is universal — users always land somewhere).
+    items = items.filter(it => it.section === 'dashboard' || sectionsAllowed.has(it.section))
+  }
+
+  // Step 3: admin shortcut on top
   if (role === 'admin') {
-    items.unshift({ to: '/admin', label: 'Admin Dashboard', icon: ShieldCheck })
+    items.unshift({ to: '/admin', label: 'Admin Dashboard', icon: ShieldCheck, section: 'dashboard' })
   }
 
   return items
@@ -64,15 +101,16 @@ function getPageTitle(pathname, navItems) {
 
 export default function Layout() {
   const { user, logout } = useAuthStore()
+  const sectionPermissions = useAuthStore((s) => s.sectionPermissions)
   const { role } = useRole()
   const navigate = useNavigate()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  const navItems = buildNav(role)
+  const navItems = buildNav(role, sectionPermissions)
 
-  const handleLogout = () => {
-    logout()
+  const handleLogout = async () => {
+    await logout()
     navigate('/login')
   }
 

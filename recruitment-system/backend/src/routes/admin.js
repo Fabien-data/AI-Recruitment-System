@@ -1,12 +1,21 @@
 /**
  * Admin API Routes  (admin-only)
  *
- * GET    /api/admin/stats           — System-wide KPI counts
- * GET    /api/admin/users           — List all users
- * POST   /api/admin/users           — Create user with role
- * PUT    /api/admin/users/:id       — Update role / active status
- * DELETE /api/admin/users/:id       — Deactivate (soft-delete)
- * GET    /api/admin/audit-logs      — Recent audit log entries
+ * GET    /api/admin/stats                       — System-wide KPI counts
+ * GET    /api/admin/users                       — List all users
+ * POST   /api/admin/users                       — Create user (optionally with section_permissions)
+ * PUT    /api/admin/users/:id                   — Update role / active status / profile
+ * DELETE /api/admin/users/:id                   — Deactivate (soft-delete)
+ * GET    /api/admin/audit-logs                  — Recent audit log entries
+ *
+ * Migration 021 additions:
+ * GET    /api/admin/sections                    — Section catalogue (for permission matrix)
+ * GET    /api/admin/users/:id/permissions       — Effective section permissions for one user
+ * PUT    /api/admin/users/:id/permissions       — Replace section permissions for one user
+ * GET    /api/admin/users/:id/activity          — Paginated audit log for one user
+ * GET    /api/admin/users/:id/sessions          — Login session history for one user
+ * GET    /api/admin/users/:id/kpi               — Computed KPI metrics (4 categories)
+ * GET    /api/admin/activity                    — Global activity feed (all users)
  */
 
 const express = require('express');
@@ -14,9 +23,13 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const { pool } = require('../config/database');
 const { authenticate, authorize, ROLES } = require('../middleware/auth');
+const { loadPerms } = require('../middleware/sections');
+const { computeUserKpi } = require('../services/kpi');
 const logger = require('../utils/logger');
 
 const ADMIN_ONLY = [authenticate, authorize(ROLES.ADMIN)];
+
+const VALID_PERM_KEYS = ['can_view', 'can_create', 'can_edit', 'can_delete'];
 
 // ── System Stats ──────────────────────────────────────────────────────────────
 router.get('/stats', ...ADMIN_ONLY, async (req, res, next) => {
@@ -116,9 +129,17 @@ router.get('/users', ...ADMIN_ONLY, async (req, res, next) => {
 });
 
 // ── Create User ───────────────────────────────────────────────────────────────
+// Optional body field `section_permissions`: an array of
+// { section_key, can_view, can_create, can_edit, can_delete } applied in the
+// same transaction as the user insert. When omitted the user falls back to the
+// role-default permission set defined in middleware/sections.js.
 router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
+    const client = await pool.connect();
     try {
-        const { email, password, full_name, role = ROLES.PROJECT_HANDLER, phone } = req.body;
+        const {
+            email, password, full_name, role = ROLES.PROJECT_HANDLER, phone,
+            section_permissions,
+        } = req.body;
 
         if (!email || !password || !full_name) {
             return res.status(400).json({ error: 'email, password and full_name are required' });
@@ -129,24 +150,50 @@ router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
             return res.status(400).json({ error: `role must be one of: ${validRoles.join(', ')}` });
         }
 
-        const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+        const existing = await client.query('SELECT id FROM users WHERE email = $1', [email]);
         if (existing.rows.length > 0) {
             return res.status(400).json({ error: 'User with this email already exists' });
         }
 
         const password_hash = await bcrypt.hash(password, 10);
 
-        const result = await pool.query(
+        await client.query('BEGIN');
+
+        const result = await client.query(
             `INSERT INTO users (email, password_hash, full_name, role, phone)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id, email, full_name, role, phone, is_active, created_at`,
             [email, password_hash, full_name, role, phone || null]
         );
+        const newUser = result.rows[0];
+
+        if (Array.isArray(section_permissions) && section_permissions.length > 0) {
+            for (const p of section_permissions) {
+                if (!p?.section_key) continue;
+                await client.query(
+                    `INSERT INTO user_section_permissions
+                        (user_id, section_key, can_view, can_create, can_edit, can_delete)
+                     VALUES ($1, $2, $3, $4, $5, $6)
+                     ON CONFLICT (user_id, section_key) DO UPDATE SET
+                        can_view   = EXCLUDED.can_view,
+                        can_create = EXCLUDED.can_create,
+                        can_edit   = EXCLUDED.can_edit,
+                        can_delete = EXCLUDED.can_delete,
+                        updated_at = NOW()`,
+                    [newUser.id, p.section_key, !!p.can_view, !!p.can_create, !!p.can_edit, !!p.can_delete]
+                );
+            }
+        }
+
+        await client.query('COMMIT');
 
         logger.info(`Admin ${req.user.email} created user ${email} with role ${role}`);
-        res.status(201).json(result.rows[0]);
+        res.status(201).json(newUser);
     } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
         next(error);
+    } finally {
+        client.release();
     }
 });
 
@@ -255,7 +302,11 @@ router.get('/audit-logs', ...ADMIN_ONLY, async (req, res, next) => {
 
         params.push(parseInt(limit));
         const result = await pool.query(
-            `SELECT a.*, u.full_name AS actor_name, u.email AS actor_email
+            `SELECT a.*,
+                    u.full_name AS user_name,
+                    u.email     AS user_email,
+                    u.full_name AS actor_name,
+                    u.email     AS actor_email
              FROM audit_logs a
              LEFT JOIN users u ON a.user_id = u.id
              ${whereClause}
@@ -265,6 +316,215 @@ router.get('/audit-logs', ...ADMIN_ONLY, async (req, res, next) => {
         );
 
         res.json(result.rows);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── Sections catalogue ────────────────────────────────────────────────────────
+router.get('/sections', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const result = await pool.query(
+            'SELECT key, name, icon, description, sort_order FROM sections ORDER BY sort_order, name'
+        );
+        res.json(result.rows);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── User Section Permissions: read effective ─────────────────────────────────
+router.get('/users/:id/permissions', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const userRes = await pool.query('SELECT id, role, full_name, email FROM users WHERE id = $1', [req.params.id]);
+        if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+        const user = userRes.rows[0];
+        const permissions = await loadPerms(user.id, user.role);
+        res.json({ user, permissions });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── User Section Permissions: write ──────────────────────────────────────────
+router.put('/users/:id/permissions', ...ADMIN_ONLY, async (req, res, next) => {
+    const client = await pool.connect();
+    try {
+        const { permissions } = req.body;
+        if (!Array.isArray(permissions)) {
+            return res.status(400).json({ error: 'permissions must be an array' });
+        }
+
+        const userRes = await client.query('SELECT id, role FROM users WHERE id = $1', [req.params.id]);
+        if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+        const user = userRes.rows[0];
+
+        await client.query('BEGIN');
+        // Replace strategy: delete then re-insert the supplied rows.
+        await client.query('DELETE FROM user_section_permissions WHERE user_id = $1', [user.id]);
+        for (const p of permissions) {
+            if (!p?.section_key) continue;
+            const hasAny = VALID_PERM_KEYS.some(k => !!p[k]);
+            if (!hasAny) continue; // skip "all-false" rows — they're equivalent to NO row
+            await client.query(
+                `INSERT INTO user_section_permissions
+                    (user_id, section_key, can_view, can_create, can_edit, can_delete)
+                 VALUES ($1, $2, $3, $4, $5, $6)`,
+                [user.id, p.section_key, !!p.can_view, !!p.can_create, !!p.can_edit, !!p.can_delete]
+            );
+        }
+        // Audit the change so it shows up in activity feeds.
+        await client.query(
+            `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, changes, ip_address, user_agent, session_id, section_key)
+             VALUES ($1, 'update', 'user_permissions', $2, $3, $4, $5, $6, 'dashboard')`,
+            [
+                req.user.id,
+                user.id,
+                JSON.stringify({ target_user_id: user.id, permissions }),
+                req.ip || null,
+                req.headers['user-agent'] || null,
+                req.user.session_id || null,
+            ]
+        );
+        await client.query('COMMIT');
+
+        const effective = await loadPerms(user.id, user.role);
+        res.json({ user, permissions: effective });
+    } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        next(error);
+    } finally {
+        client.release();
+    }
+});
+
+// ── Per-user Activity feed ───────────────────────────────────────────────────
+router.get('/users/:id/activity', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const {
+            from, to, entity, action, section,
+            page = 1, limit = 50,
+        } = req.query;
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.min(500, Math.max(1, parseInt(limit) || 50));
+        const offset = (pageNum - 1) * limitNum;
+
+        const where = ['a.user_id = $1'];
+        const params = [req.params.id];
+
+        if (from)    { params.push(from);    where.push(`a.created_at >= $${params.length}`); }
+        if (to)      { params.push(to);      where.push(`a.created_at <= $${params.length}`); }
+        if (entity)  { params.push(entity);  where.push(`a.entity_type = $${params.length}`); }
+        if (action)  { params.push(action);  where.push(`a.action = $${params.length}`); }
+        if (section) { params.push(section); where.push(`a.section_key = $${params.length}`); }
+
+        const whereSql = `WHERE ${where.join(' AND ')}`;
+        const countRes = await pool.query(`SELECT COUNT(*)::int AS total FROM audit_logs a ${whereSql}`, params);
+
+        params.push(limitNum, offset);
+        const rowsRes = await pool.query(
+            `SELECT a.*, u.full_name AS user_name, u.email AS user_email
+             FROM audit_logs a
+             LEFT JOIN users u ON a.user_id = u.id
+             ${whereSql}
+             ORDER BY a.created_at DESC
+             LIMIT $${params.length - 1} OFFSET $${params.length}`,
+            params
+        );
+
+        res.json({
+            data: rowsRes.rows,
+            pagination: { page: pageNum, limit: limitNum, total: countRes.rows[0].total },
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── Per-user Sessions ────────────────────────────────────────────────────────
+router.get('/users/:id/sessions', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const limit = Math.min(200, parseInt(req.query.limit) || 50);
+        const result = await pool.query(
+            `SELECT id, login_at, logout_at,
+                    COALESCE(duration_ms, EXTRACT(EPOCH FROM (COALESCE(logout_at, NOW()) - login_at)) * 1000)::bigint AS duration_ms,
+                    logout_at IS NULL AS is_open,
+                    ip_address, user_agent
+             FROM user_sessions
+             WHERE user_id = $1
+             ORDER BY login_at DESC
+             LIMIT $2`,
+            [req.params.id, limit]
+        );
+        res.json({ data: result.rows });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── Per-user KPI ─────────────────────────────────────────────────────────────
+router.get('/users/:id/kpi', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const userRes = await pool.query(
+            'SELECT id, email, full_name, role, created_at, last_login_at, is_active FROM users WHERE id = $1',
+            [req.params.id]
+        );
+        if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+        const user = userRes.rows[0];
+
+        // Default window: last 30 days. Clamp future dates so charts don't extend
+        // past today, which would confuse the timeseries view.
+        const now = new Date();
+        const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        const from = req.query.from ? new Date(req.query.from) : defaultFrom;
+        const to   = req.query.to   ? new Date(req.query.to)   : now;
+
+        const kpi = await computeUserKpi(user.id, from, to);
+        res.json({ user, kpi });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── Global Activity feed (cross-user) ────────────────────────────────────────
+router.get('/activity', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const {
+            user_id, from, to, entity, action, section,
+            page = 1, limit = 50,
+        } = req.query;
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.min(500, Math.max(1, parseInt(limit) || 50));
+        const offset = (pageNum - 1) * limitNum;
+
+        const where = ['1=1'];
+        const params = [];
+
+        if (user_id) { params.push(user_id); where.push(`a.user_id = $${params.length}`); }
+        if (from)    { params.push(from);    where.push(`a.created_at >= $${params.length}`); }
+        if (to)      { params.push(to);      where.push(`a.created_at <= $${params.length}`); }
+        if (entity)  { params.push(entity);  where.push(`a.entity_type = $${params.length}`); }
+        if (action)  { params.push(action);  where.push(`a.action = $${params.length}`); }
+        if (section) { params.push(section); where.push(`a.section_key = $${params.length}`); }
+
+        const whereSql = `WHERE ${where.join(' AND ')}`;
+        const countRes = await pool.query(`SELECT COUNT(*)::int AS total FROM audit_logs a ${whereSql}`, params);
+
+        params.push(limitNum, offset);
+        const rowsRes = await pool.query(
+            `SELECT a.*, u.full_name AS user_name, u.email AS user_email
+             FROM audit_logs a
+             LEFT JOIN users u ON a.user_id = u.id
+             ${whereSql}
+             ORDER BY a.created_at DESC
+             LIMIT $${params.length - 1} OFFSET $${params.length}`,
+            params
+        );
+
+        res.json({
+            data: rowsRes.rows,
+            pagination: { page: pageNum, limit: limitNum, total: countRes.rows[0].total },
+        });
     } catch (error) {
         next(error);
     }

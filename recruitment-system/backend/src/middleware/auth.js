@@ -43,6 +43,10 @@ async function authenticate(req, res, next) {
         const u = result.rows[0];
         // Normalise legacy role values so old rows still work
         u.role = ROLE_ALIAS[u.role] || u.role;
+        // Surface the session_id from the JWT so audit middleware can link rows.
+        // Tokens issued before Migration 021 don't carry it — that's fine, audit
+        // rows just get session_id=null.
+        u.session_id = decoded.sessionId || null;
         req.user = u;
         next();
     } catch (error) {
@@ -74,10 +78,12 @@ function authorize(...roles) {
 }
 
 /**
- * Generate JWT token
+ * Generate JWT token. Optionally embeds a session_id so the audit middleware
+ * can correlate every action with the login that produced it.
  */
-function generateToken(userId, expiresIn = '7d') {
-    return jwt.sign({ userId }, JWT_SECRET, { expiresIn });
+function generateToken(userId, expiresIn = '7d', sessionId = null) {
+    const payload = sessionId ? { userId, sessionId } : { userId };
+    return jwt.sign(payload, JWT_SECRET, { expiresIn });
 }
 
 module.exports = {

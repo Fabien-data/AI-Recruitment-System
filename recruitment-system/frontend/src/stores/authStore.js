@@ -4,15 +4,24 @@ import { apiClient } from '../api'
 
 export const useAuthStore = create(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       token: null,
       isAuthenticated: false,
+      // Migration 021: section-level permissions returned at login time so the
+      // sidebar and route guards can filter without an extra round-trip.
+      // Array of { section_key, can_view, can_create, can_edit, can_delete, source }.
+      sectionPermissions: [],
 
       login: async (email, password) => {
         const data = await apiClient.post('/api/auth/login', { email, password }).then(res => res.data)
-        const { user, token } = data
-        set({ user, token, isAuthenticated: true })
+        const { user, token, section_permissions } = data
+        set({
+          user,
+          token,
+          isAuthenticated: true,
+          sectionPermissions: section_permissions || [],
+        })
         apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`
         return user
       },
@@ -22,13 +31,22 @@ export const useAuthStore = create(
           .post('/api/auth/register', { email, password, full_name, role })
           .then(res => res.data)
         const { user, token } = data
-        set({ user, token, isAuthenticated: true })
+        set({ user, token, isAuthenticated: true, sectionPermissions: [] })
         apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`
         return user
       },
 
-      logout: () => {
-        set({ user: null, token: null, isAuthenticated: false })
+      logout: async () => {
+        // Best-effort: close the session row on the server before tearing down
+        // local state. Network errors must not block the local logout.
+        try {
+          if (get().token) {
+            await apiClient.post('/api/auth/logout')
+          }
+        } catch (_err) {
+          // ignore — local state will be cleared anyway
+        }
+        set({ user: null, token: null, isAuthenticated: false, sectionPermissions: [] })
         delete apiClient.defaults.headers.common['Authorization']
       },
 
@@ -38,6 +56,10 @@ export const useAuthStore = create(
           apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`
         }
       },
+
+      // Allows the AdminDashboard to refresh perms after editing the current
+      // user's own access, without forcing a full re-login.
+      setSectionPermissions: (sectionPermissions) => set({ sectionPermissions: sectionPermissions || [] }),
     }),
     {
       name: 'auth-storage',
@@ -87,4 +109,20 @@ export function useRole() {
     // Marketing Hub access
     hasMarketingHub: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT || role === ROLES.MARKETING_AGENT,
   }
+}
+
+/**
+ * useSectionAccess('candidates', 'view') → boolean
+ *
+ * Admin always passes. For everyone else, looks up the section_permissions
+ * array delivered by the login response. Used by RoleGuard and Layout's nav
+ * builder to hide things the user can't see.
+ */
+export function useSectionAccess(sectionKey, action = 'view') {
+  const role = useAuthStore((s) => s.user?.role)
+  const perms = useAuthStore((s) => s.sectionPermissions) || []
+  if (role === ROLES.ADMIN) return true
+  const row = perms.find((p) => p.section_key === sectionKey)
+  if (!row) return false
+  return !!row[`can_${action}`]
 }
