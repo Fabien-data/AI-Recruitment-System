@@ -16,6 +16,12 @@
  */
 
 const { pool } = require('../config/database');
+const logger = require('../utils/logger');
+
+// Remembers whether the audit_logs.section_key / session_id columns exist so
+// the legacy fallback path is only taken when needed. See middleware/audit.js
+// for the same pattern — both are reset to true on process restart.
+let hasMigration021Cols = true;
 
 /**
  * @param {string} userId
@@ -136,8 +142,92 @@ async function computeUserKpi(userId, from, to) {
             ), '[]'::json) AS section_usage
     `;
 
-    const result = await pool.query(sql, [userId, from, to]);
-    const row = result.rows[0] || {};
+    let result;
+    if (hasMigration021Cols) {
+        try {
+            result = await pool.query(sql, [userId, from, to]);
+        } catch (err) {
+            const msg = (err.message || '').toLowerCase();
+            if (msg.includes('session_id') || msg.includes('section_key') || msg.includes('column')) {
+                hasMigration021Cols = false;
+                logger.warn('kpi: Migration 021 columns missing on audit_logs — using legacy KPI query. Run scripts/fix-audit-ownership.js.');
+            } else {
+                throw err;
+            }
+        }
+    }
+
+    if (!hasMigration021Cols) {
+        // Legacy query: no session_id / section_key references. Drops the
+        // "response & throughput" first-action-after-login metric and the
+        // section_usage breakdown (which require those columns) — they come
+        // back as null/empty so the UI degrades gracefully.
+        const legacySql = `
+            WITH p AS (
+                SELECT $1::uuid uid, $2::timestamptz dfrom, $3::timestamptz dto
+            )
+            SELECT
+                (SELECT COUNT(*)::int FROM audit_logs a, p
+                   WHERE a.user_id = p.uid AND a.created_at BETWEEN p.dfrom AND p.dto
+                ) AS total_actions,
+                (SELECT COUNT(*)::int FROM audit_logs a, p
+                   WHERE a.user_id = p.uid AND a.action = 'view'
+                     AND a.created_at BETWEEN p.dfrom AND p.dto
+                ) AS total_views,
+                (SELECT COUNT(*)::int FROM audit_logs a, p
+                   WHERE a.user_id = p.uid AND a.action = 'login'
+                     AND a.created_at BETWEEN p.dfrom AND p.dto
+                ) AS total_logins,
+                COALESCE((
+                    SELECT json_agg(t ORDER BY t.day)
+                    FROM (
+                        SELECT date_trunc('day', a.created_at) AS day,
+                               COUNT(*)::int                   AS actions,
+                               COUNT(*) FILTER (WHERE a.action='view')::int   AS views,
+                               COUNT(*) FILTER (WHERE a.action='create')::int AS created,
+                               COUNT(*) FILTER (WHERE a.action='update')::int AS updated,
+                               COUNT(*) FILTER (WHERE a.action='delete')::int AS deleted
+                        FROM audit_logs a, p
+                        WHERE a.user_id = p.uid AND a.created_at BETWEEN p.dfrom AND p.dto
+                        GROUP BY 1
+                    ) t
+                ), '[]'::json) AS activity_by_day,
+                COALESCE((
+                    SELECT json_agg(t ORDER BY (t.created + t.updated + t.deleted) DESC)
+                    FROM (
+                        SELECT a.entity_type,
+                               COUNT(*) FILTER (WHERE a.action='create')::int AS created,
+                               COUNT(*) FILTER (WHERE a.action='update')::int AS updated,
+                               COUNT(*) FILTER (WHERE a.action='delete')::int AS deleted,
+                               COUNT(*) FILTER (WHERE a.action='view')::int   AS viewed
+                        FROM audit_logs a, p
+                        WHERE a.user_id = p.uid AND a.created_at BETWEEN p.dfrom AND p.dto
+                        GROUP BY 1
+                    ) t
+                ), '[]'::json) AS work_by_entity,
+                NULL::int AS avg_first_action_seconds,
+                (SELECT AVG(duration_ms)::bigint FROM user_sessions s, p
+                   WHERE s.user_id = p.uid AND s.logout_at IS NOT NULL
+                     AND s.login_at BETWEEN p.dfrom AND p.dto
+                ) AS avg_session_ms,
+                (SELECT COUNT(*)::int FROM user_sessions s, p
+                   WHERE s.user_id = p.uid AND s.login_at BETWEEN p.dfrom AND p.dto
+                ) AS total_sessions,
+                COALESCE((
+                    SELECT json_agg(t ORDER BY t.count DESC)
+                    FROM (
+                        SELECT a.action, COUNT(*)::int AS count
+                        FROM audit_logs a, p
+                        WHERE a.user_id = p.uid AND a.created_at BETWEEN p.dfrom AND p.dto
+                        GROUP BY 1
+                    ) t
+                ), '[]'::json) AS action_breakdown,
+                '[]'::json AS section_usage
+        `;
+        result = await pool.query(legacySql, [userId, from, to]);
+    }
+
+    const row = result?.rows?.[0] || {};
     return {
         from,
         to,
