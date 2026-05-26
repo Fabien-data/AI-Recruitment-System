@@ -88,21 +88,25 @@ router.get('/', authenticate, async (req, res, next) => {
             language,
             project_id,
             project_ids,
-            intervention_needed
+            job_id,
+            intervention_needed,
+            sort_by,
+            sort_order,
         } = req.query;
 
         const offset = (page - 1) * limit;
 
         const params = [];
+        // Table alias `c` so we can join latest application info below.
         let whereClause = ' WHERE 1=1';
 
         if (status) {
-            whereClause += isMySQL ? ' AND status = ?' : ` AND status = $${params.length + 1}`;
+            whereClause += isMySQL ? ' AND c.status = ?' : ` AND c.status = $${params.length + 1}`;
             params.push(status);
         }
 
         if (source) {
-            whereClause += isMySQL ? ' AND source = ?' : ` AND source = $${params.length + 1}`;
+            whereClause += isMySQL ? ' AND c.source = ?' : ` AND c.source = $${params.length + 1}`;
             params.push(source);
         }
 
@@ -110,7 +114,7 @@ router.get('/', authenticate, async (req, res, next) => {
             // singlish/tanglish are stored as si/ta in the DB; normalise before filtering
             const LANG_NORM = { singlish: 'si', tanglish: 'ta' };
             const normLang = LANG_NORM[language] || language;
-            whereClause += isMySQL ? ' AND preferred_language = ?' : ` AND preferred_language = $${params.length + 1}`;
+            whereClause += isMySQL ? ' AND c.preferred_language = ?' : ` AND c.preferred_language = $${params.length + 1}`;
             params.push(normLang);
         }
 
@@ -131,53 +135,111 @@ router.get('/', authenticate, async (req, res, next) => {
                 .map((_, idx) => (isMySQL ? '?' : `$${params.length + idx + 1}`))
                 .join(', ');
 
-            whereClause += isMySQL
-                ? ` AND EXISTS (
+            whereClause += ` AND EXISTS (
                         SELECT 1
                         FROM applications a
                         JOIN jobs j ON a.job_id = j.id
-                        WHERE a.candidate_id = candidates.id
-                          AND j.project_id IN (${inPlaceholders})
-                    )`
-                : ` AND EXISTS (
-                        SELECT 1
-                        FROM applications a
-                        JOIN jobs j ON a.job_id = j.id
-                        WHERE a.candidate_id = candidates.id
+                        WHERE a.candidate_id = c.id
                           AND j.project_id IN (${inPlaceholders})
                     )`;
             params.push(...selectedProjectIds);
         }
 
+        if (job_id) {
+            const placeholder = isMySQL ? '?' : `$${params.length + 1}`;
+            whereClause += ` AND EXISTS (
+                        SELECT 1 FROM applications a
+                        WHERE a.candidate_id = c.id AND a.job_id = ${placeholder}
+                    )`;
+            params.push(String(job_id).trim());
+        }
+
         if (search) {
+            // Strip non-digits to also match phone numbers stored with/without country code/spaces.
+            const digits = String(search).replace(/\D/g, '');
             if (isMySQL) {
-                whereClause += ' AND (name LIKE ? OR phone LIKE ? OR email LIKE ?)';
-                params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+                if (digits) {
+                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR REPLACE(REPLACE(REPLACE(c.phone, \' \', \'\'), \'-\', \'\'), \'+\', \'\') LIKE ?)';
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${digits}%`);
+                } else {
+                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)';
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+                }
             } else {
-                whereClause += ` AND (name ILIKE $${params.length + 1} OR phone ILIKE $${params.length + 1} OR email ILIKE $${params.length + 1})`;
-                params.push(`%${search}%`);
+                if (digits) {
+                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR regexp_replace(c.phone, '\\D', '', 'g') ILIKE $${params.length + 2})`;
+                    params.push(`%${search}%`, `%${digits}%`);
+                } else {
+                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1})`;
+                    params.push(`%${search}%`);
+                }
             }
         }
 
         if (intervention_needed !== undefined) {
             const asBool = String(intervention_needed).toLowerCase() === 'true';
-            whereClause += isMySQL ? ' AND intervention_needed = ?' : ` AND intervention_needed = $${params.length + 1}`;
+            whereClause += isMySQL ? ' AND c.intervention_needed = ?' : ` AND c.intervention_needed = $${params.length + 1}`;
             params.push(asBool);
         }
 
-        // Count query
-        const countQuery = `SELECT COUNT(*) as count FROM candidates${whereClause}`;
+        // Allowed sort keys → SQL expressions (post-join column refs)
+        const SORT_MAP = {
+            created_at:    'c.created_at',
+            name:          'c.name',
+            job_title:     'la.job_title',
+            project_title: 'la.project_title',
+            status:        'c.status',
+        };
+        const sortCol = SORT_MAP[String(sort_by || '').toLowerCase()] || 'c.created_at';
+        const sortDir = String(sort_order || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+        // NULLS handling: keep candidates without applications at the end for job/project sorts.
+        const nullsClause = (sortCol === 'la.job_title' || sortCol === 'la.project_title')
+            ? (isMySQL ? '' : ' NULLS LAST')
+            : '';
+
+        // Join clause that exposes the most recent application's job/project.
+        // LEFT JOIN LATERAL is supported by PostgreSQL 9.3+ and MySQL 8.0.14+.
+        const lateralJoin = `
+            LEFT JOIN LATERAL (
+                SELECT j.id AS job_id, j.title AS job_title,
+                       p.id AS project_id, p.title AS project_title,
+                       a.applied_at
+                FROM applications a
+                JOIN jobs j ON a.job_id = j.id
+                LEFT JOIN projects p ON j.project_id = p.id
+                WHERE a.candidate_id = c.id
+                ORDER BY a.applied_at DESC
+                LIMIT 1
+            ) la ON TRUE
+        `;
+
+        // Count query (uses the same where clause; no need to join the lateral)
+        const countQuery = `SELECT COUNT(*) as count FROM candidates c${whereClause}`;
         const countResult = await query(countQuery, [...params]);
         const total = isMySQL ? countResult.rows[0].count : parseInt(countResult.rows[0].count);
 
-        // List query with pagination
+        // List query with pagination (includes latest-application fields for the UI + sorting)
         let listQuery;
         let listParams;
         if (isMySQL) {
-            listQuery = `SELECT * FROM candidates${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+            listQuery = `SELECT c.*, la.job_id AS latest_job_id, la.job_title AS latest_job_title,
+                                la.project_id AS latest_project_id, la.project_title AS latest_project_title,
+                                la.applied_at AS latest_applied_at
+                         FROM candidates c
+                         ${lateralJoin}
+                         ${whereClause}
+                         ORDER BY ${sortCol} ${sortDir}${nullsClause}, c.created_at DESC
+                         LIMIT ? OFFSET ?`;
             listParams = [...params, parseInt(limit), parseInt(offset)];
         } else {
-            listQuery = `SELECT * FROM candidates${whereClause} ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+            listQuery = `SELECT c.*, la.job_id AS latest_job_id, la.job_title AS latest_job_title,
+                                la.project_id AS latest_project_id, la.project_title AS latest_project_title,
+                                la.applied_at AS latest_applied_at
+                         FROM candidates c
+                         ${lateralJoin}
+                         ${whereClause}
+                         ORDER BY ${sortCol} ${sortDir}${nullsClause}, c.created_at DESC
+                         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
             listParams = [...params, limit, offset];
         }
 
@@ -374,7 +436,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
         const { id } = req.params;
         const updates = req.body;
 
-        const allowedFields = ['name', 'email', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
+        const allowedFields = ['name', 'phone', 'email', 'source', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
         const setClause = [];
         const values = [];
         const hasAgeInPayload = Object.prototype.hasOwnProperty.call(updates, 'age');
@@ -386,8 +448,10 @@ router.put('/:id', authenticate, async (req, res, next) => {
                 } else {
                     setClause.push(`${key} = $${values.length + 1}`);
                 }
-                // Handle JSON fields for MySQL
-                if (key === 'tags' && isMySQL && Array.isArray(updates[key])) {
+                // Normalize phone on edit so search/dedupe stay consistent
+                if (key === 'phone' && updates[key]) {
+                    values.push(normalizePhone(updates[key]) || String(updates[key]).trim());
+                } else if (key === 'tags' && isMySQL && Array.isArray(updates[key])) {
                     values.push(JSON.stringify(updates[key]));
                 } else {
                     values.push(updates[key]);

@@ -93,6 +93,7 @@ export default {
         'ping-soft': 'pingSoft 1.8s cubic-bezier(0,0,0.2,1) infinite',
         'shake': 'shake 0.4s cubic-bezier(0.36,0.07,0.19,0.97) both',
         'spin-slow': 'spin 3s linear infinite',
+        'wiggle': 'wiggle 1.6s ease-in-out infinite',
       },
       keyframes: {
         fadeIn: {
@@ -140,6 +141,11 @@ export default {
           '20%, 80%': { transform: 'translateX(2px)' },
           '30%, 50%, 70%': { transform: 'translateX(-3px)' },
           '40%, 60%': { transform: 'translateX(3px)' },
+        },
+        wiggle: {
+          '0%, 100%': { transform: 'rotate(0deg)' },
+          '25%': { transform: 'rotate(-6deg)' },
+          '75%': { transform: 'rotate(6deg)' },
         },
       },
       backgroundImage: {
