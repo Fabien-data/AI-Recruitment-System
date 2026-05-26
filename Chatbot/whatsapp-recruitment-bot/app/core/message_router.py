@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
@@ -12,12 +12,20 @@ from app.core.orchestrator import intake_orchestrator
 class MessageRouter:
     """Routes message modalities into the orchestrator pipeline."""
 
-    async def route_text(self, db: Session, phone_number: str, text: str, source_message_type: str = "text"):
+    async def route_text(
+        self,
+        db: Session,
+        phone_number: str,
+        text: str,
+        source_message_type: str = "text",
+        referral_data: Optional[Dict[str, Any]] = None,
+    ):
         return await intake_orchestrator.process_text_message(
             db=db,
             phone_number=phone_number,
             message_text=text,
             source_message_type=source_message_type,
+            referral_data=referral_data,
         )
 
     async def route_media(

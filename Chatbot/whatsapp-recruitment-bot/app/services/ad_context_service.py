@@ -97,6 +97,30 @@ class AdContextService:
 
         return context
 
+    async def load_for_ad_ref(
+        self,
+        ad_ref: str,
+        candidate,
+        db: Session,
+    ) -> Optional[Dict[str, Any]]:
+        """Load job context for an already-resolved ad_ref (skips the
+        START:<ref> text parsing). Used by the Meta CTWA referral path:
+        meta_referral_service resolves a job UUID from the ad headline,
+        then this method does the same backend fetch + candidate prefill
+        that ``detect_and_load`` does for text triggers."""
+        if not SYNC_ENABLED or not ad_ref:
+            return None
+
+        context = await self._fetch_context(ad_ref)
+        if not context:
+            logger.warning(
+                "Could not load context for ad_ref='%s' (referral path)", ad_ref
+            )
+            return None
+
+        await self._prefill_candidate(candidate, context, ad_ref, db)
+        return context
+
     async def _fetch_context(self, ad_ref: str) -> Optional[Dict[str, Any]]:
         """Fetch job/project context from recruitment system public endpoint."""
         url = f"{RECRUITMENT_API_URL}/api/public/job-context/{ad_ref}"

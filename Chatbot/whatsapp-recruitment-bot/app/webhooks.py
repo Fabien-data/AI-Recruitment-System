@@ -412,6 +412,7 @@ async def process_single_message(message: dict, contacts: list, db):
                     phone_number=kwargs["phone_number"],
                     text=kwargs.get("message_text", ""),
                     source_message_type=kwargs.get("source_message_type", "text"),
+                    referral_data=kwargs.get("referral_data"),
                 ),
                 timeout=45,
             )
@@ -471,13 +472,28 @@ async def process_single_message(message: dict, contacts: list, db):
     # ── Text message ──────────────────────────────────────────────────────────
     if message_type == "text":
         text_body = message.get("text", {}).get("body", "")
+        # Meta CTWA referral: present only on the first message after a
+        # Click-to-WhatsApp ad tap. Carries the ad headline, body, source_id,
+        # and ctwa_clid — enough for headline-based job matching with no
+        # admin mapping. Forwarded through to the orchestrator which decides
+        # whether to route into ad_intake_flow.
+        referral_obj = message.get("referral") if isinstance(message.get("referral"), dict) else None
+        if referral_obj:
+            logger.info(
+                f"📣 CTWA referral from {from_number}: "
+                f"headline={referral_obj.get('headline')!r} "
+                f"source_id={referral_obj.get('source_id')!r}"
+            )
         logger.info(f"💬 Text from {from_number}: {text_body!r}")
 
         # Fast-path: for simple greetings in early onboarding states, send language selector
-        # immediately and skip heavy chatbot orchestration.
+        # immediately and skip heavy chatbot orchestration. SKIPPED when a CTWA
+        # referral is present — that needs the orchestrator's headline match
+        # to fire so the candidate lands in the per-job ad flow, not the
+        # generic language selector.
         try:
             greet, _ = is_greeting(text_body)
-            if greet:
+            if greet and not referral_obj:
                 candidate = crud.get_or_create_candidate(db, from_number)
                 if candidate.conversation_state in (STATE_INITIAL, STATE_AWAITING_LANGUAGE_SELECTION):
                     sel = await meta_client.send_language_selector(from_number)
@@ -522,6 +538,7 @@ async def process_single_message(message: dict, contacts: list, db):
             phone_number=from_number,
             message_text=text_body,
             source_message_type=message_type,
+            referral_data=referral_obj,
         )
 
     # ── Document (CV upload) ──────────────────────────────────────────────────

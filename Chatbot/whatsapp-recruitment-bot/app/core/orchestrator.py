@@ -14,6 +14,11 @@ from app.agents.intake_agent import intake_agent
 from app.agents.recovery_agent import recovery_agent
 from app.services.ad_context_service import ad_context_service
 from app.services.ad_intake_flow import ad_intake_flow
+from app.services.meta_referral_service import (
+    AUTO_CONFIDENCE,
+    ReferralMatchResult,
+    meta_referral_service,
+)
 from app.services.cv_service import cv_service
 from app.services.language_service import language_service
 from app.services.handoff_service import handoff_service
@@ -61,6 +66,7 @@ class IntakeOrchestrator:
         phone_number: str,
         message_text: str,
         source_message_type: str = "text",
+        referral_data: Optional[Dict[str, Any]] = None,
     ) -> Any:
         candidate = crud.get_or_create_candidate(db, phone_number)
         state = self._ensure_agent_state(candidate)
@@ -72,6 +78,21 @@ class IntakeOrchestrator:
             self._save_agent_state(candidate, state)
             db.commit()
             return await self._route_interactive_action(db, candidate, state, interactive_text)
+
+        # Meta Click-to-WhatsApp referral object — present on the first
+        # message after a paid CTWA ad click. Headline-matched against
+        # active jobs (no admin mapping required). Tried BEFORE the
+        # text-based START: trigger so paid ads work even when the
+        # pre-fill text is friendly ("Hi! I want to apply").
+        if (
+            not state.get("ad_processed")
+            and meta_referral_service.is_referral(referral_data)
+        ):
+            referral_reply = await self._handle_referral_trigger(
+                db, candidate, state, referral_data
+            )
+            if referral_reply is not None:
+                return referral_reply
 
         # Meta Click-to-WhatsApp ad trigger ("START:ad_ref_xyz"). Pre-fills
         # job_interest, country, and full ad context so we skip questions the
@@ -693,6 +714,25 @@ class IntakeOrchestrator:
             db.commit()
             return reply
 
+        # Meta referral disambiguation pick: the candidate clicked a CTWA ad
+        # whose headline matched multiple active jobs ambiguously, so we
+        # offered them the top candidates. Now resolve the chosen job to
+        # its UUID and route into the ad flow exactly like a confident
+        # referral match would have done.
+        if re.match(r"^meta_dis_\d+$", action):
+            disambig_map = state.get("meta_disambig_map") if isinstance(state.get("meta_disambig_map"), dict) else {}
+            job_id = disambig_map.get(action)
+            if not job_id:
+                logger.warning("meta_dis tap '%s' had no mapped job_id in state", action)
+                return None
+            context = await ad_context_service.load_for_ad_ref(job_id, candidate, db)
+            if not context:
+                logger.warning("meta_dis tap could not load context for job_id=%s", job_id)
+                return None
+            # One-shot: clear the map so a stale tap can't re-fire later.
+            state.pop("meta_disambig_map", None)
+            return self._route_to_ad_flow_with_context(db, candidate, state, context)
+
         if action == "action_apply":
             return await self._route_apply_flow(db, candidate, state)
         if action == "action_question":
@@ -758,7 +798,7 @@ class IntakeOrchestrator:
 
     def _is_structured_interactive_token(self, text: str) -> bool:
         return bool(re.match(
-            r"^(job_\d+|urgent_\d+|action_apply|action_question|action_general_pool|lang_ad_(?:en|si|ta))$",
+            r"^(job_\d+|urgent_\d+|meta_dis_\d+|action_apply|action_question|action_general_pool|lang_ad_(?:en|si|ta))$",
             text or "",
         ))
 
@@ -769,20 +809,75 @@ class IntakeOrchestrator:
         state: Dict[str, Any],
         message_text: str,
     ) -> Optional[Any]:
-        """Process a `START:<job_uuid>` first message from a Meta ad click.
+        """Process a ``START:<job_uuid>`` first message from a Meta ad click.
 
-        Hands the conversation off to the deterministic ``ad_intake_flow`` —
-        either by sending the trilingual language selector (new user) or by
-        going straight to the branded welcome + first prompt in the language
-        the candidate previously locked. Either way we (a) load full ad
-        context, (b) pre-fill job_interest + destination from the ad, and
-        (c) apply the picked job's required_fields_schema so subsequent turns
-        ask the right questions for the role.
+        Loads ad context via the public job-context endpoint, then routes
+        the candidate into ``ad_intake_flow`` (language buttons for new
+        users; straight to branded welcome for returning users).
         """
         context = await ad_context_service.detect_and_load(message_text, candidate, db)
         if not context:
             return None
+        return self._route_to_ad_flow_with_context(db, candidate, state, context)
 
+    async def _handle_referral_trigger(
+        self,
+        db: Session,
+        candidate,
+        state: Dict[str, Any],
+        referral: Dict[str, Any],
+    ) -> Optional[Any]:
+        """Process a Meta Click-to-WhatsApp ``referral`` object.
+
+        Fuzzy-matches the ad headline against active jobs (no admin mapping
+        table required). When confident, routes the same way as a
+        ``START:<uuid>`` text trigger. When the match is ambiguous, sends a
+        small interactive list so the candidate can confirm which role they
+        clicked — without dropping them into the generic flow.
+
+        Returns None when the referral cannot plausibly be tied to any
+        active job; the caller then continues with the existing AI flow.
+        """
+        match: ReferralMatchResult = meta_referral_service.match(referral)
+        if not match.has_candidates:
+            return None
+
+        if match.is_confident:
+            job_id = match.best.job_id
+            if not job_id:
+                return None
+            context = await ad_context_service.load_for_ad_ref(job_id, candidate, db)
+            if not context:
+                # Backend lookup failed (job inactive, network blip). Don't
+                # drop the candidate — fall back to the disambiguation list
+                # so they can still self-select if other jobs are plausible.
+                logger.warning(
+                    "Referral high-confidence match for job_id=%s but context "
+                    "load failed; falling back to disambiguation list",
+                    job_id,
+                )
+            else:
+                logger.info(
+                    "Referral auto-routed to job '%s' (score=%.2f)",
+                    match.best.title, match.best.score,
+                )
+                return self._route_to_ad_flow_with_context(db, candidate, state, context)
+
+        return self._build_referral_disambiguation_list(state, match)
+
+    def _route_to_ad_flow_with_context(
+        self,
+        db: Session,
+        candidate,
+        state: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> Any:
+        """Shared post-context-load routing used by both the START: text
+        trigger and the Meta referral trigger. Pre-fills ``collected_data``
+        from the resolved job, stashes ``ad_context`` for FAQ grounding,
+        applies the per-job ``required_fields_schema``, then either sends
+        the trilingual language selector (new user) or jumps straight to
+        the branded welcome (returning user with a locked language)."""
         state["ad_processed"] = True
         prefilled = (context.get("chatbot_config") or {}).get("prefilled") or {}
         job = context.get("job") or {}
@@ -812,8 +907,7 @@ class IntakeOrchestrator:
         state["step"] = "ad_landed"
 
         # Per-job required_fields_schema → mandatory_fields list used by the
-        # ad-intake flow to drive question order. Falls back to defaults if
-        # the job didn't define a schema (handled inside the flow).
+        # ad-intake flow. Falls back to defaults if the job didn't set one.
         self._apply_required_fields_schema(state, job)
 
         # Branch: returning user (language locked) skips the language step.
@@ -834,6 +928,42 @@ class IntakeOrchestrator:
         self._save_agent_state(candidate, state)
         db.commit()
         return reply
+
+    def _build_referral_disambiguation_list(
+        self,
+        state: Dict[str, Any],
+        match: ReferralMatchResult,
+    ) -> Dict[str, Any]:
+        """Build a WhatsApp interactive list for ambiguous referral matches.
+
+        Stashes a button-id → job-uuid map in state so the user's tap can
+        be resolved back to a job in ``_route_interactive_action``."""
+        rows: List[Dict[str, str]] = []
+        disambig_map: Dict[str, str] = {}
+        for idx, candidate_match in enumerate(match.candidates):
+            job_id = candidate_match.job_id
+            if not job_id:
+                continue
+            rid = f"meta_dis_{idx}"
+            title = candidate_match.title[:24] or f"Option {idx + 1}"
+            countries = candidate_match.job.get("countries") or []
+            country = str(countries[0]) if countries else ""
+            desc = (country or str(candidate_match.job.get("category") or "Open role"))[:72]
+            rows.append({"id": rid, "title": title, "description": desc})
+            disambig_map[rid] = job_id
+
+        # Save the map so the tap handler can recover the job UUID.
+        state["meta_disambig_map"] = disambig_map
+        state["step"] = "ad_disambiguation"
+        return {
+            "type": "list",
+            "header_text": "Which role?",
+            "body_text": (
+                "We have a few matching openings — which one did you see in the ad?"
+            ),
+            "button_label": "Pick role",
+            "sections": [{"title": "Matching openings", "rows": rows}],
+        }
 
     async def _route_general_pool_signup(
         self,
