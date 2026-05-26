@@ -167,7 +167,7 @@ app.use('/api/analytics', analyticsRouter);
 app.use('/api/chatbot/intake', chatbotIntakeRouter); // POST /api/chatbot/intake
 app.use('/api/chatbot', chatbotIntakeRouter); // GET  /api/chatbot/jobs, POST /api/chatbot/sync-message
 app.use('/api/ad-links', adLinksRouter);
-app.use('/api/public', chatbotContextRouter);
+app.use('/api/public/job-context', chatbotContextRouter);
 app.use('/api/chatbot-sync', chatbotSyncRouter);
 
 // Knowledge Base API (NEW)
