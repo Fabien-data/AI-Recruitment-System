@@ -2,13 +2,20 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { getProjects, createProject, deleteProject } from '../api'
-import { FolderKanban, Plus, Trash2, Users, Briefcase } from 'lucide-react'
+import {
+  FolderKanban, Plus, Trash2, Users, Briefcase, Building2, Globe2, Tag,
+  Calendar, BarChart3, Activity, PauseCircle, CheckCircle2, Eye,
+} from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { Input } from '../components/ui/Input'
 import { PageHeader } from '../components/ui/PageHeader'
+import { Card } from '../components/ui/Card'
+import { Table } from '../components/ui/Table'
+import { EmptyState } from '../components/ui/EmptyState'
+import { Pagination } from '../components/ui/Pagination'
 import { useAuthStore } from '../stores/authStore'
 import toast from 'react-hot-toast'
 import { format } from 'date-fns'
@@ -63,16 +70,16 @@ export default function Projects() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['projects', { 
-      page, 
+    queryKey: ['projects', {
+      page,
       status: statusFilter || undefined,
       country: countryFilter || undefined,
       industry_type: industryFilter || undefined,
       priority: priorityFilter || undefined,
       search: searchQuery || undefined
     }],
-    queryFn: () => getProjects({ 
-      page, 
+    queryFn: () => getProjects({
+      page,
       status: statusFilter || undefined,
       country: countryFilter || undefined,
       industry_type: industryFilter || undefined,
@@ -80,6 +87,22 @@ export default function Projects() {
       search: searchQuery || undefined
     })
   })
+
+  // Lightweight unfiltered fetch for the 4 stat cards. Uses a higher page size
+  // so stats reflect the full dataset rather than the current page's slice.
+  const { data: statsData } = useQuery({
+    queryKey: ['projects', 'stats'],
+    queryFn: () => getProjects({ page: 1, limit: 1000 }),
+    staleTime: 60_000,
+  })
+
+  const allProjectsForStats = statsData?.data || []
+  const stats = {
+    total: statsData?.pagination?.total ?? allProjectsForStats.length,
+    active: allProjectsForStats.filter((p) => p.status === 'active').length,
+    onHold: allProjectsForStats.filter((p) => p.status === 'on_hold').length,
+    completed: allProjectsForStats.filter((p) => p.status === 'completed').length,
+  }
 
   const createMutation = useMutation({
     mutationFn: createProject,
@@ -191,6 +214,14 @@ export default function Projects() {
         )}
       />
 
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatCard tone="blue" icon={BarChart3} label="Total Projects" value={stats.total} />
+        <StatCard tone="emerald" icon={Activity} label="Active" value={stats.active} />
+        <StatCard tone="amber" icon={PauseCircle} label="On Hold" value={stats.onHold} />
+        <StatCard tone="purple" icon={CheckCircle2} label="Completed" value={stats.completed} />
+      </div>
+
       {/* Filters */}
       <div className="card mb-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -262,147 +293,162 @@ export default function Projects() {
       </div>
 
       {/* Projects Table */}
-      <div className="card overflow-hidden">
+      <Card className="overflow-hidden p-0">
         {isLoading ? (
-          <TableSkeleton rows={6} cols={8} />
+          <div className="p-5">
+            <TableSkeleton rows={6} cols={8} />
+          </div>
         ) : projectsList.length === 0 ? (
-          <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
-            <FolderKanban className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" />
-            <p className="font-medium">No projects found</p>
-            <p className="text-sm mt-1">Create your first project to get started.</p>
-          </div>
+          <EmptyState
+            icon={FolderKanban}
+            tone="purple"
+            title="No projects found"
+            description="Create your first project to start grouping jobs by client and country."
+            action={canCreateProject && (
+              <Button onClick={() => setModalOpen(true)}>
+                <Plus size={16} />
+                New Project
+              </Button>
+            )}
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Project</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Client</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Countries</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Industry</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Priority</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Positions</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Interview Date</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Team</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {projectsList.map((project) => {
-                  const countries = typeof project.countries === 'string' 
-                    ? JSON.parse(project.countries) 
-                    : project.countries
-                  
-                  return (
-                    <tr key={project.id} className="border-b border-zinc-100 dark:border-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors">
-                      <td className="py-3 px-4">
-                        <Link to={`/projects/${project.id}`} className="font-medium text-zinc-900 dark:text-zinc-50 hover:text-primary-600">
-                          {project.title}
-                        </Link>
-                      </td>
-                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{project.client_name}</td>
-                      <td className="py-3 px-4">
-                        <div className="flex flex-wrap gap-1">
-                          {countries?.slice(0, 2).map((country) => (
-                            <span key={country} className="text-xs px-2 py-1 bg-blue-50 text-blue-700 rounded-md">
-                              {country}
-                            </span>
-                          ))}
-                          {countries?.length > 2 && (
-                            <span className="text-xs px-2 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-md">
-                              +{countries.length - 2}
-                            </span>
-                          )}
+          <Table>
+            <Table.Head>
+              <Table.Tr hover={false}>
+                <Table.Th icon={FolderKanban}>Project</Table.Th>
+                <Table.Th icon={Building2}>Client</Table.Th>
+                <Table.Th icon={Globe2}>Countries</Table.Th>
+                <Table.Th icon={Tag}>Industry</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th>Priority</Table.Th>
+                <Table.Th align="right">Positions</Table.Th>
+                <Table.Th icon={Calendar}>Interview</Table.Th>
+                <Table.Th icon={Users} align="right">Team</Table.Th>
+                <Table.Th align="right">Actions</Table.Th>
+              </Table.Tr>
+            </Table.Head>
+            <Table.Body>
+              {projectsList.map((project) => {
+                const countries = typeof project.countries === 'string'
+                  ? JSON.parse(project.countries)
+                  : project.countries
+                const filled = project.filled_positions || 0
+                const total = project.total_positions || 0
+                const pct = total > 0 ? Math.min(100, Math.round((filled / total) * 100)) : 0
+                const barTone = pct >= 100 ? 'from-emerald-500 to-emerald-600' : pct >= 60 ? 'from-amber-400 to-amber-500' : 'from-primary-500 to-primary-600'
+                const accent =
+                  project.status === 'active' ? 'emerald'
+                  : project.status === 'on_hold' ? 'amber'
+                  : project.status === 'completed' ? 'purple'
+                  : project.status === 'cancelled' ? 'rose'
+                  : 'zinc'
+                return (
+                  <Table.Tr key={project.id} accent={accent}>
+                    <Table.Td className="font-semibold text-zinc-900 dark:text-zinc-50 min-w-[220px]">
+                      <Link to={`/projects/${project.id}`} className="group inline-flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900 shadow-sm">
+                          {project.title?.charAt(0)?.toUpperCase() || 'P'}
                         </div>
-                      </td>
-                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 text-sm">{project.industry_type}</td>
-                      <td className="py-3 px-4">
-                        <Badge status={project.status} />
-                      </td>
-                      <td className="py-3 px-4">
-                        <Badge status={project.priority} />
-                      </td>
-                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{project.filled_positions || 0}</span>
-                          <span className="text-gray-400">/</span>
-                          <span>{project.total_positions || 0}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 text-sm">
-                        {project.interview_date ? format(new Date(project.interview_date), 'MMM dd, yyyy') : '-'}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-1">
-                          <Users size={16} className="text-gray-400" />
-                          <span className="text-sm text-zinc-600 dark:text-zinc-400">{project.team_count || 0}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex gap-2 items-center">
-                          <Link
-                            to={`/projects/${project.id}`}
-                            className="text-primary-600 hover:text-primary-700 font-medium text-sm"
+                        <span className="text-sm group-hover:text-primary-600 dark:group-hover:text-primary-400 truncate">{project.title}</span>
+                      </Link>
+                    </Table.Td>
+                    <Table.Td>
+                      <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
+                        <Building2 size={13} className="text-zinc-400" />
+                        <span className="text-sm">{project.client_name}</span>
+                      </div>
+                    </Table.Td>
+                    <Table.Td>
+                      <div className="flex flex-wrap gap-1 max-w-[200px]">
+                        {countries?.slice(0, 2).map((country) => (
+                          <span
+                            key={country}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-full ring-1 ring-inset ring-emerald-200 dark:ring-emerald-900/60"
                           >
-                            View
-                          </Link>
-                          {project.job_count > 0 && (
-                            <>
-                              <span className="text-zinc-300 dark:text-zinc-600">|</span>
-                              <div className="flex items-center gap-1 text-zinc-500 dark:text-zinc-400 text-sm">
-                                <Briefcase size={14} />
-                                <span>{project.job_count}</span>
-                              </div>
-                            </>
-                          )}
-                          {canDeleteProject && (
-                            <>
-                              <span className="text-zinc-300 dark:text-zinc-600">|</span>
-                              <button
-                                onClick={() => handleDelete(project.id)}
-                                className="text-red-600 hover:text-red-700"
-                                title="Delete project"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </>
-                          )}
+                            <Globe2 size={10} />
+                            {country}
+                          </span>
+                        ))}
+                        {countries?.length > 2 && (
+                          <span className="text-xs px-2 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-full ring-1 ring-inset ring-zinc-200 dark:ring-zinc-700">
+                            +{countries.length - 2}
+                          </span>
+                        )}
+                      </div>
+                    </Table.Td>
+                    <Table.Td>
+                      {project.industry_type ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-200 dark:ring-blue-900/60">
+                          {project.industry_type}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-400 text-sm">—</span>
+                      )}
+                    </Table.Td>
+                    <Table.Td><Badge status={project.status} /></Table.Td>
+                    <Table.Td><Badge status={project.priority} /></Table.Td>
+                    <Table.Td align="right" className="min-w-[140px]">
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{filled} / {total || 0}</span>
+                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                          <div
+                            className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
+                            style={{ width: `${pct}%` }}
+                          />
                         </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+                      </div>
+                    </Table.Td>
+                    <Table.Td className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
+                      {project.interview_date ? format(new Date(project.interview_date), 'MMM dd, yyyy') : '—'}
+                    </Table.Td>
+                    <Table.Td align="right">
+                      <div className="inline-flex items-center gap-1 text-zinc-700 dark:text-zinc-300">
+                        <Users size={14} className="text-zinc-400" />
+                        <span className="text-sm font-medium">{project.team_count || 0}</span>
+                      </div>
+                    </Table.Td>
+                    <Table.Td align="right">
+                      <div className="inline-flex items-center gap-1.5">
+                        <Link
+                          to={`/projects/${project.id}`}
+                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-primary-700 dark:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-950/40 transition-colors"
+                          title="View project"
+                        >
+                          <Eye size={13} /> View
+                        </Link>
+                        {project.job_count > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
+                            <Briefcase size={11} /> {project.job_count}
+                          </span>
+                        )}
+                        {canDeleteProject && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(project.id)}
+                            className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                            title="Delete project"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </Table.Td>
+                  </Table.Tr>
+                )
+              })}
+            </Table.Body>
+          </Table>
         )}
-      </div>
-
-      {/* Pagination */}
-      {data?.pagination && data.pagination.totalPages > 1 && (
-        <div className="mt-6 flex items-center justify-between">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Page {data.pagination.page} of {data.pagination.totalPages}
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => setPage(p => p + 1)}
-              disabled={page >= data.pagination.totalPages}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-      )}
+        {data?.pagination && data.pagination.totalPages > 1 && (
+          <Pagination
+            page={data.pagination.page}
+            totalPages={data.pagination.totalPages}
+            total={data.pagination.total}
+            pageSize={data.pagination.limit || 20}
+            onChange={(next) => setPage(next)}
+          />
+        )}
+      </Card>
 
       {/* Create Project Modal */}
       <Modal
@@ -730,6 +776,34 @@ export default function Projects() {
           </div>
         </form>
       </Modal>
+    </div>
+  )
+}
+
+const STAT_TONES = {
+  blue:    { icon: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200',           grad: 'section-grad-blue',    text: 'text-blue-700 dark:text-blue-200' },
+  emerald: { icon: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200', grad: 'section-grad-emerald', text: 'text-emerald-700 dark:text-emerald-200' },
+  amber:   { icon: 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200',       grad: 'section-grad-amber',   text: 'text-amber-700 dark:text-amber-200' },
+  purple:  { icon: 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-200',   grad: 'section-grad-purple',  text: 'text-purple-700 dark:text-purple-200' },
+  rose:    { icon: 'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-200',           grad: 'section-grad-rose',    text: 'text-rose-700 dark:text-rose-200' },
+  indigo:  { icon: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-200',   grad: 'section-grad-indigo',  text: 'text-indigo-700 dark:text-indigo-200' },
+}
+
+function StatCard({ tone = 'blue', icon: Icon, label, value }) {
+  const t = STAT_TONES[tone] || STAT_TONES.blue
+  return (
+    <div className={`card relative overflow-hidden ${t.grad}`}>
+      <div className="relative flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">{label}</p>
+          <p className={`mt-1 text-3xl font-bold tracking-tight ${t.text}`}>{value}</p>
+        </div>
+        {Icon && (
+          <div className={`rounded-2xl p-3 shadow-sm ${t.icon}`}>
+            <Icon size={22} aria-hidden />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

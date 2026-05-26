@@ -1,25 +1,28 @@
-﻿import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
-  Calendar, Clock, MapPin, User, CheckCircle2, XCircle,
-  AlertCircle, ChevronDown, Bell, Star, Filter
+  Calendar, CalendarDays, Clock, MapPin, Briefcase, User, Phone,
+  CheckCircle2, XCircle, Bell, Star, BarChart3, CalendarCheck, Hourglass, Filter,
 } from 'lucide-react'
 import {
   getInterviews, updateInterview, deleteInterview, sendInterviewReminder
 } from '../api'
+import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
-import { Badge } from '../components/ui/Badge'
 import { PageHeader } from '../components/ui/PageHeader'
-import { CalendarDays } from 'lucide-react'
+import { Table } from '../components/ui/Table'
+import { EmptyState } from '../components/ui/EmptyState'
+import { TableSkeleton } from '../components/ui/Skeleton'
+import { Modal } from '../components/ui/Modal'
 import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
 
-const STATUS_COLORS = {
-  scheduled: 'bg-blue-100 text-blue-800',
-  confirmed: 'bg-green-100 text-green-800',
-  completed: 'bg-purple-100 text-purple-800',
-  cancelled: 'bg-red-100 text-red-800',
-  no_show: 'bg-orange-100 text-orange-800'
+const STATUS_META = {
+  scheduled: { tone: 'blue',    label: 'Scheduled',  pill: 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 ring-blue-200 dark:ring-blue-900/60' },
+  confirmed: { tone: 'emerald', label: 'Confirmed',  pill: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-900/60' },
+  completed: { tone: 'purple',  label: 'Completed',  pill: 'bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 ring-purple-200 dark:ring-purple-900/60' },
+  cancelled: { tone: 'rose',    label: 'Cancelled',  pill: 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 ring-rose-200 dark:ring-rose-900/60' },
+  no_show:   { tone: 'amber',   label: 'No Show',    pill: 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 ring-amber-200 dark:ring-amber-900/60' },
 }
 
 function formatDateTime(dt) {
@@ -34,10 +37,10 @@ function RatingStars({ value, onChange }) {
   return (
     <div className="flex gap-1">
       {[1, 2, 3, 4, 5].map(n => (
-        <button key={n} onClick={() => onChange && onChange(n)} type="button">
+        <button key={n} onClick={() => onChange && onChange(n)} type="button" className={onChange ? 'cursor-pointer' : 'cursor-default'}>
           <Star
             size={16}
-            className={n <= (value || 0) ? 'text-yellow-400 fill-yellow-400' : 'text-zinc-300 dark:text-zinc-600'}
+            className={n <= (value || 0) ? 'text-amber-400 fill-amber-400' : 'text-zinc-300 dark:text-zinc-600'}
           />
         </button>
       ))}
@@ -45,25 +48,70 @@ function RatingStars({ value, onChange }) {
   )
 }
 
-function FeedbackModal({ interview, onClose, onSave }) {
-  const [rating, setRating] = useState(interview.rating || 0)
-  const [feedback, setFeedback] = useState(interview.feedback || '')
-  const [status, setStatus] = useState(interview.status)
+function StatusPill({ status }) {
+  const meta = STATUS_META[status] || { label: status || 'unknown', pill: 'bg-zinc-100 text-zinc-700 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700' }
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full ring-1 ring-inset px-2 py-0.5 text-xs font-semibold ${meta.pill}`}>
+      {meta.label}
+    </span>
+  )
+}
+
+const STAT_TONES = {
+  blue:    { wrap: 'section-grad-blue ring-blue-200/60 dark:ring-blue-900/60',       label: 'text-blue-700 dark:text-blue-300',       value: 'text-blue-900 dark:text-blue-100',       icon: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200' },
+  emerald: { wrap: 'section-grad-emerald ring-emerald-200/60 dark:ring-emerald-900/60', label: 'text-emerald-700 dark:text-emerald-300', value: 'text-emerald-900 dark:text-emerald-100', icon: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200' },
+  purple:  { wrap: 'section-grad-purple ring-purple-200/60 dark:ring-purple-900/60',   label: 'text-purple-700 dark:text-purple-300',   value: 'text-purple-900 dark:text-purple-100',   icon: 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-200' },
+  amber:   { wrap: 'section-grad-amber ring-amber-200/60 dark:ring-amber-900/60',     label: 'text-amber-700 dark:text-amber-300',     value: 'text-amber-900 dark:text-amber-100',     icon: 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200' },
+}
+
+function StatCard({ tone = 'blue', icon: Icon, label, value }) {
+  const t = STAT_TONES[tone] || STAT_TONES.blue
+  return (
+    <div className={`relative overflow-hidden rounded-2xl ring-1 ring-inset bg-white dark:bg-zinc-900 p-4 ${t.wrap}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className={`text-[10px] font-semibold uppercase tracking-wider ${t.label}`}>{label}</p>
+          <p className={`mt-1 text-2xl font-bold tracking-tight ${t.value}`}>{value}</p>
+        </div>
+        {Icon && (
+          <div className={`rounded-xl p-2.5 shadow-sm ${t.icon}`}>
+            <Icon size={18} aria-hidden />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function FeedbackModal({ open, interview, onClose, onSave, loading }) {
+  const [rating, setRating] = useState(0)
+  const [feedback, setFeedback] = useState('')
+  const [status, setStatus] = useState('completed')
+
+  useEffect(() => {
+    if (open && interview) {
+      setRating(interview.rating || 0)
+      setFeedback(interview.feedback || '')
+      setStatus(interview.status || 'completed')
+    }
+  }, [open, interview])
+
+  if (!interview) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl p-6 w-full max-w-md">
-        <h3 className="text-lg font-semibold mb-4">Complete Interview</h3>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-4">
-          {interview.candidate_name} — {interview.job_title}
-        </p>
+    <Modal open={open} onClose={onClose} title="Complete Interview" size="md">
+      <div className="space-y-5">
+        <div className="rounded-2xl bg-zinc-50 dark:bg-zinc-900/60 ring-1 ring-inset ring-zinc-200 dark:ring-zinc-800 p-3 text-sm">
+          <p className="font-semibold text-zinc-900 dark:text-zinc-50">{interview.candidate_name}</p>
+          <p className="text-zinc-500 dark:text-zinc-400">{interview.job_title}</p>
+        </div>
 
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-1">Outcome</label>
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">Outcome</label>
           <select
             value={status}
             onChange={e => setStatus(e.target.value)}
-            className="w-full border rounded-lg px-3 py-2 text-sm"
+            className="input w-full"
           >
             <option value="completed">Completed</option>
             <option value="no_show">No Show</option>
@@ -71,30 +119,30 @@ function FeedbackModal({ interview, onClose, onSave }) {
           </select>
         </div>
 
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-1">Rating</label>
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">Rating</label>
           <RatingStars value={rating} onChange={setRating} />
         </div>
 
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-1">Feedback</label>
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">Feedback</label>
           <textarea
             value={feedback}
             onChange={e => setFeedback(e.target.value)}
             rows={4}
             placeholder="Interview notes, strengths, concerns..."
-            className="w-full border rounded-lg px-3 py-2 text-sm resize-none"
+            className="input w-full resize-none"
           />
         </div>
 
-        <div className="flex justify-end gap-2">
+        <div className="flex justify-end gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-800">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => onSave({ status, rating: rating || null, feedback })}>
+          <Button onClick={() => onSave({ status, rating: rating || null, feedback })} loading={loading}>
             Save
           </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -131,6 +179,25 @@ export default function Interviews() {
     setFeedbackTarget(null)
   }
 
+  const stats = useMemo(() => {
+    const now = new Date()
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000)
+    const startOfWeek = new Date(startOfToday)
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay())
+    const endOfWeek = new Date(startOfWeek.getTime() + 7 * 24 * 60 * 60 * 1000)
+
+    let today = 0, week = 0, completed = 0, cancelled = 0
+    for (const iv of interviews) {
+      const dt = iv.scheduled_datetime ? new Date(iv.scheduled_datetime) : null
+      if (dt && dt >= startOfToday && dt < endOfToday) today++
+      if (dt && dt >= startOfWeek && dt < endOfWeek) week++
+      if (iv.status === 'completed') completed++
+      if (iv.status === 'cancelled' || iv.status === 'no_show') cancelled++
+    }
+    return { today, week, completed, cancelled }
+  }, [interviews])
+
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
       <PageHeader
@@ -140,154 +207,204 @@ export default function Interviews() {
         subtitle="Schedule, track, and complete candidate interviews"
       />
 
-      {/* Filters */}
-      <div className="card p-4 mb-6 flex flex-wrap gap-4 items-end">
-        <div>
-          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">Status</label>
-          <select
-            value={filters.status}
-            onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}
-            className="border rounded-lg px-3 py-2 text-sm"
-          >
-            <option value="">All statuses</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="confirmed">Confirmed</option>
-            <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
-            <option value="no_show">No Show</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">From</label>
-          <input
-            type="date"
-            value={filters.date_from}
-            onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))}
-            className="border rounded-lg px-3 py-2 text-sm"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">To</label>
-          <input
-            type="date"
-            value={filters.date_to}
-            onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}
-            className="border rounded-lg px-3 py-2 text-sm"
-          />
-        </div>
-        <Button variant="secondary" size="sm" onClick={() => setFilters({ status: '', date_from: '', date_to: '' })}>
-          Clear
-        </Button>
+      {/* Stats strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatCard tone="blue"    icon={CalendarCheck} label="Today"     value={stats.today} />
+        <StatCard tone="purple"  icon={CalendarDays}  label="This Week" value={stats.week} />
+        <StatCard tone="emerald" icon={BarChart3}     label="Completed" value={stats.completed} />
+        <StatCard tone="amber"   icon={Hourglass}     label="Cancelled / No-show" value={stats.cancelled} />
       </div>
 
-      {/* Interview list */}
-      {isLoading ? (
-        <div className="card p-8 text-center text-zinc-500 dark:text-zinc-400">Loading interviews...</div>
-      ) : interviews.length === 0 ? (
-        <div className="card p-12 text-center">
-          <Calendar className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-4" />
-          <p className="text-zinc-500 dark:text-zinc-400">No interviews found</p>
+      {/* Filters */}
+      <Card className="p-4 mb-6">
+        <div className="flex items-center gap-2 mb-3 text-zinc-800 dark:text-zinc-200">
+          <Filter size={16} aria-hidden />
+          <h2 className="text-sm font-semibold">Filters</h2>
         </div>
-      ) : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-50 dark:bg-zinc-900/60 border-b">
-              <tr>
-                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Candidate</th>
-                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Job</th>
-                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Date & Time</th>
-                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Location</th>
-                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Status</th>
-                <th className="px-4 py-3 text-left font-medium text-zinc-600 dark:text-zinc-400">Rating</th>
-                <th className="px-4 py-3 text-right font-medium text-zinc-600 dark:text-zinc-400">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {interviews.map(iv => (
-                <tr key={iv.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-zinc-900 dark:text-zinc-50">{iv.candidate_name}</div>
-                    <div className="text-xs text-zinc-500 dark:text-zinc-400">{iv.candidate_phone}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Link to={`/jobs/${iv.job_id}`} className="text-primary-600 hover:underline">
-                      {iv.job_title}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <div className="flex items-center gap-1">
-                      <Clock size={14} className="text-zinc-400 dark:text-zinc-500" />
-                      {formatDateTime(iv.scheduled_datetime)}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    {iv.location ? (
-                      <div className="flex items-center gap-1">
-                        <MapPin size={14} className="text-zinc-400 dark:text-zinc-500" />
-                        {iv.location}
-                      </div>
-                    ) : <span className="text-zinc-400 dark:text-zinc-500">TBD</span>}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[iv.status] || 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'}`}>
-                      {iv.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {iv.rating ? <RatingStars value={iv.rating} /> : <span className="text-zinc-400 dark:text-zinc-500 text-xs">—</span>}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      {['scheduled', 'confirmed'].includes(iv.status) && (
-                        <>
-                          <button
-                            title="Send reminder"
-                            onClick={() => reminderMutation.mutate(iv.id)}
-                            className="p-1.5 rounded hover:bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400"
-                          >
-                            <Bell size={14} />
-                          </button>
-                          <button
-                            title="Complete / Feedback"
-                            onClick={() => setFeedbackTarget(iv)}
-                            className="p-1.5 rounded hover:bg-green-50 text-green-600"
-                          >
-                            <CheckCircle2 size={14} />
-                          </button>
-                          <button
-                            title="Cancel"
-                            onClick={() => { if (confirm('Cancel this interview?')) cancelMutation.mutate(iv.id) }}
-                            className="p-1.5 rounded hover:bg-red-50 text-red-500"
-                          >
-                            <XCircle size={14} />
-                          </button>
-                        </>
-                      )}
-                      {iv.status === 'completed' && !iv.rating && (
-                        <button
-                          title="Add rating/feedback"
-                          onClick={() => setFeedbackTarget(iv)}
-                          className="p-1.5 rounded hover:bg-yellow-50 text-yellow-600"
-                        >
-                          <Star size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">Status</label>
+            <select
+              value={filters.status}
+              onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}
+              className="input w-full"
+            >
+              <option value="">All statuses</option>
+              {Object.entries(STATUS_META).map(([value, meta]) => (
+                <option key={value} value={value}>{meta.label}</option>
               ))}
-            </tbody>
-          </table>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">From</label>
+            <div className="relative">
+              <CalendarDays size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" aria-hidden />
+              <input
+                type="date"
+                value={filters.date_from}
+                onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))}
+                className="input w-full pl-8"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">To</label>
+            <div className="relative">
+              <CalendarDays size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" aria-hidden />
+              <input
+                type="date"
+                value={filters.date_to}
+                onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}
+                className="input w-full pl-8"
+              />
+            </div>
+          </div>
+          <div className="flex items-end">
+            <Button variant="secondary" size="sm" onClick={() => setFilters({ status: '', date_from: '', date_to: '' })}>
+              Clear
+            </Button>
+          </div>
         </div>
-      )}
+      </Card>
 
-      {feedbackTarget && (
-        <FeedbackModal
-          interview={feedbackTarget}
-          onClose={() => setFeedbackTarget(null)}
-          onSave={(data) => handleFeedbackSave(feedbackTarget.id, data)}
-        />
-      )}
+      {/* Interview list */}
+      <Card className="overflow-hidden p-0">
+        {isLoading ? (
+          <div className="p-5"><TableSkeleton rows={6} cols={7} /></div>
+        ) : interviews.length === 0 ? (
+          <EmptyState
+            icon={Calendar}
+            tone="blue"
+            title="No interviews found"
+            description="Schedule an interview by certifying an application — it will appear here."
+          />
+        ) : (
+          <Table>
+            <Table.Head>
+              <Table.Tr hover={false}>
+                <Table.Th icon={User}>Candidate</Table.Th>
+                <Table.Th icon={Briefcase}>Job</Table.Th>
+                <Table.Th icon={Clock}>Date &amp; Time</Table.Th>
+                <Table.Th icon={MapPin}>Location</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th>Rating</Table.Th>
+                <Table.Th align="right">Actions</Table.Th>
+              </Table.Tr>
+            </Table.Head>
+            <Table.Body>
+              {interviews.map(iv => {
+                const accent = STATUS_META[iv.status]?.tone || 'zinc'
+                return (
+                  <Table.Tr key={iv.id} accent={accent}>
+                    <Table.Td className="min-w-[200px]">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold shrink-0 ring-2 ring-white dark:ring-zinc-900">
+                          {iv.candidate_name?.charAt(0)?.toUpperCase() || '?'}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-semibold text-zinc-900 dark:text-zinc-50 truncate text-sm">{iv.candidate_name}</p>
+                          {iv.candidate_phone && (
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate inline-flex items-center gap-1">
+                              <Phone size={10} />{iv.candidate_phone}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </Table.Td>
+                    <Table.Td>
+                      <Link to={`/jobs/${iv.job_id}`} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
+                        <Briefcase size={13} />
+                        <span className="truncate max-w-[160px]">{iv.job_title}</span>
+                      </Link>
+                    </Table.Td>
+                    <Table.Td className="whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300 text-sm">
+                        <Clock size={13} className="text-zinc-400 dark:text-zinc-500" />
+                        {formatDateTime(iv.scheduled_datetime)}
+                      </div>
+                    </Table.Td>
+                    <Table.Td>
+                      {iv.location ? (
+                        <div className="inline-flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300 text-sm">
+                          <MapPin size={13} className="text-zinc-400 dark:text-zinc-500" />
+                          {iv.location}
+                        </div>
+                      ) : <span className="text-zinc-400 dark:text-zinc-500 text-sm">TBD</span>}
+                    </Table.Td>
+                    <Table.Td><StatusPill status={iv.status} /></Table.Td>
+                    <Table.Td>
+                      {iv.rating ? <RatingStars value={iv.rating} /> : <span className="text-zinc-400 dark:text-zinc-500 text-xs">—</span>}
+                    </Table.Td>
+                    <Table.Td align="right">
+                      <div className="inline-flex items-center justify-end gap-1">
+                        {['scheduled', 'confirmed'].includes(iv.status) && (
+                          <>
+                            <IconAction
+                              title="Send reminder"
+                              icon={Bell}
+                              tone="blue"
+                              onClick={() => reminderMutation.mutate(iv.id)}
+                            />
+                            <IconAction
+                              title="Complete / Feedback"
+                              icon={CheckCircle2}
+                              tone="emerald"
+                              onClick={() => setFeedbackTarget(iv)}
+                            />
+                            <IconAction
+                              title="Cancel"
+                              icon={XCircle}
+                              tone="rose"
+                              onClick={() => { if (confirm('Cancel this interview?')) cancelMutation.mutate(iv.id) }}
+                            />
+                          </>
+                        )}
+                        {iv.status === 'completed' && !iv.rating && (
+                          <IconAction
+                            title="Add rating/feedback"
+                            icon={Star}
+                            tone="amber"
+                            onClick={() => setFeedbackTarget(iv)}
+                          />
+                        )}
+                      </div>
+                    </Table.Td>
+                  </Table.Tr>
+                )
+              })}
+            </Table.Body>
+          </Table>
+        )}
+      </Card>
+
+      <FeedbackModal
+        open={!!feedbackTarget}
+        interview={feedbackTarget}
+        onClose={() => setFeedbackTarget(null)}
+        onSave={(data) => handleFeedbackSave(feedbackTarget.id, data)}
+        loading={updateMutation.isPending}
+      />
     </div>
+  )
+}
+
+const ICON_TONES = {
+  blue:    'text-blue-600 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/40',
+  emerald: 'text-emerald-600 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/40',
+  rose:    'text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/40',
+  amber:   'text-amber-600 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/40',
+  purple:  'text-purple-600 hover:bg-purple-50 dark:text-purple-300 dark:hover:bg-purple-950/40',
+}
+
+function IconAction({ title, icon: Icon, tone = 'blue', onClick }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={`inline-flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${ICON_TONES[tone]}`}
+    >
+      <Icon size={15} />
+    </button>
   )
 }

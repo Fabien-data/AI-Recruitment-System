@@ -106,6 +106,26 @@ export const deleteKnowledgeBaseEntry = (id) =>
 export const importKnowledgeBaseEntries = (entries, tenant_id = null) =>
   apiClient.post('/api/knowledge-base/import', { tenant_id, entries }).then(res => res.data)
 
+// Knowledge Base Documents (PDF/DOCX/TXT uploads parsed + chunked for the chatbot)
+export const getKnowledgeDocuments = (params) =>
+  apiClient.get('/api/knowledge-documents', { params }).then(res => res.data)
+
+export const uploadKnowledgeDocument = (file, { title, category } = {}) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (title) formData.append('title', title)
+  if (category) formData.append('category', category)
+  return apiClient.post('/api/knowledge-documents', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(res => res.data)
+}
+
+export const deleteKnowledgeDocument = (id) =>
+  apiClient.delete(`/api/knowledge-documents/${id}`).then(res => res.data)
+
+export const getKnowledgeDocumentChunks = (id) =>
+  apiClient.get(`/api/knowledge-documents/${id}/chunks`).then(res => res.data)
+
 // Applications
 export const getApplications = (params) =>
   apiClient.get('/api/applications', { params }).then(res => res.data)
@@ -118,6 +138,9 @@ export const updateApplication = (id, data) =>
 
 export const transferApplication = (id, data) =>
   apiClient.post(`/api/applications/${id}/transfer`, data).then(res => res.data)
+
+export const deleteApplication = (id) =>
+  apiClient.delete(`/api/applications/${id}`).then(res => res.data)
 
 export const getMatchingCandidates = (jobId) =>
   apiClient.get(`/api/applications/match/${jobId}`).then(res => res.data)

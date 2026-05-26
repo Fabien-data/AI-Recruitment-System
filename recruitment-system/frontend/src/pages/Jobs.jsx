@@ -12,6 +12,8 @@ import { Button } from '../components/ui/Button'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { Card } from '../components/ui/Card'
 import { PageHeader } from '../components/ui/PageHeader'
+import { Table } from '../components/ui/Table'
+import { EmptyState } from '../components/ui/EmptyState'
 import { CreateJobModal } from '../components/CreateJobModal'
 import { EditJobModal } from '../components/EditJobModal'
 import { DeleteJobConfirm } from '../components/DeleteJobConfirm'
@@ -424,87 +426,119 @@ export default function Jobs() {
       </div>
 
       {/* Jobs List */}
-      <div className="card overflow-hidden">
+      <Card className="overflow-hidden p-0">
         {isLoading ? (
-          <TableSkeleton rows={6} cols={6} />
+          <div className="p-5">
+            <TableSkeleton rows={6} cols={6} />
+          </div>
         ) : jobsList.length === 0 ? (
-          <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
-            <Briefcase className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" aria-hidden />
-            <p className="font-medium">No jobs found</p>
-            <p className="text-sm mt-1">Adjust your filters or create a new job.</p>
-            <div className="mt-4 flex justify-center">
+          <EmptyState
+            icon={Briefcase}
+            tone="blue"
+            title="No jobs found"
+            description="Adjust your filters or create a new job."
+            action={
               <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
                 <Plus size={16} />
                 Create Job Manually
               </Button>
-            </div>
-          </div>
+            }
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Title</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Category</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Project</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Region</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Positions</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobsList.map((job) => (
-                  <tr key={job.id} className="border-b border-zinc-100 dark:border-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors">
-                    <td className="py-3 px-4 font-medium text-zinc-900 dark:text-zinc-50">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span>{job.title}</span>
-                        <UrgencyPill level={job.urgency_level} />
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{job.category}</td>
-                    <td className="py-3 px-4">
+          <Table>
+            <Table.Head>
+              <Table.Tr hover={false}>
+                <Table.Th icon={Briefcase}>Title</Table.Th>
+                <Table.Th>Category</Table.Th>
+                <Table.Th icon={FolderKanban}>Project</Table.Th>
+                <Table.Th>Region</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th align="right">Positions</Table.Th>
+                <Table.Th align="right">Actions</Table.Th>
+              </Table.Tr>
+            </Table.Head>
+            <Table.Body>
+              {jobsList.map((job) => {
+                const filled = job.positions_filled ?? 0
+                const available = job.positions_available ?? 1
+                const pct = Math.min(100, Math.round((filled / Math.max(1, available)) * 100))
+                const barTone = pct >= 100 ? 'from-emerald-500 to-emerald-600' : pct >= 60 ? 'from-amber-400 to-amber-500' : 'from-primary-500 to-primary-600'
+                return (
+                  <Table.Tr key={job.id}>
+                    <Table.Td className="font-semibold text-zinc-900 dark:text-zinc-50 min-w-[220px]">
+                      <Link to={`/jobs/${job.id}`} className="group inline-flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900 shadow-sm">
+                          {job.title?.charAt(0)?.toUpperCase() || 'J'}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm group-hover:text-primary-600 dark:group-hover:text-primary-400 truncate">{job.title}</span>
+                          </div>
+                          <div className="mt-0.5">
+                            <UrgencyPill level={job.urgency_level} />
+                          </div>
+                        </div>
+                      </Link>
+                    </Table.Td>
+                    <Table.Td>
+                      {job.category ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-200 dark:ring-blue-900/60">
+                          {job.category}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-400 dark:text-zinc-500 text-sm">—</span>
+                      )}
+                    </Table.Td>
+                    <Table.Td>
                       {job.project_title ? (
                         <Link
                           to={`/projects/${job.project_id}`}
-                          className="inline-flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400"
+                          className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium"
                         >
                           <FolderKanban size={14} />
-                          <span>{job.project_title}</span>
+                          <span className="truncate max-w-[160px]">{job.project_title}</span>
                         </Link>
                       ) : (
-                        <span className="text-zinc-400 dark:text-zinc-500 text-sm">-</span>
+                        <span className="text-zinc-400 dark:text-zinc-500 text-sm">—</span>
                       )}
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex flex-col gap-1">
+                    </Table.Td>
+                    <Table.Td>
+                      <div className="flex flex-col gap-1 items-start">
                         <DomainPill domain={job.domain} />
                         {(job.country || job.country_code) && (
                           <CountryFlag code={job.country_code} name={job.country} />
                         )}
                       </div>
-                    </td>
-                    <td className="py-3 px-4">
+                    </Table.Td>
+                    <Table.Td>
                       <Badge status={job.status} />
-                    </td>
-                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">
-                      {(job.positions_filled ?? 0)} / {job.positions_available ?? 1}
-                    </td>
-                    <td className="py-3 px-4">
+                    </Table.Td>
+                    <Table.Td align="right" className="min-w-[140px]">
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{filled} / {available}</span>
+                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                          <div
+                            className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </Table.Td>
+                    <Table.Td align="right">
                       <RowActions
                         job={job}
                         isAdmin={isAdmin}
                         onEdit={() => setEditJob(job)}
                         onDelete={() => setDeleteJob(job)}
                       />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </Table.Td>
+                  </Table.Tr>
+                )
+              })}
+            </Table.Body>
+          </Table>
         )}
-      </div>
+      </Card>
 
       <CreateJobModal
         isOpen={isCreateModalOpen}

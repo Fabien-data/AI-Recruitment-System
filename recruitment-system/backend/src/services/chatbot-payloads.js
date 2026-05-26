@@ -203,8 +203,36 @@ function buildFaqPayload(entry) {
     };
 }
 
+/* ───────────────────────── KNOWLEDGE BASE DOCUMENT CHUNKS ─────────────────── */
+
+/**
+ * One vector entry per chunk so semantic search can pull the exact paragraph
+ * that answers a question, while metadata.document_id lets the chatbot group
+ * results back into their source document.
+ */
+function buildKbDocChunkPayload(chunk, document) {
+    const docTitle = document?.title || document?.original_filename || 'Document';
+    const chunkLabel = chunk.chunk_index != null ? ` (part ${chunk.chunk_index + 1})` : '';
+    return {
+        doc_id: `kbdoc_chunk_${chunk.id}`,
+        doc_type: 'kb_doc_chunk',
+        title: `${docTitle}${chunkLabel}`,
+        content: chunk.content,
+        metadata: {
+            document_id: document?.id || null,
+            document_title: docTitle,
+            category: document?.category || 'general',
+            chunk_index: chunk.chunk_index,
+            keywords: _toArray(chunk.keywords),
+            mime_type: document?.mime_type || null,
+            original_filename: document?.original_filename || null,
+        },
+    };
+}
+
 module.exports = {
     buildJobPayload,
     buildProjectPayload,
     buildFaqPayload,
+    buildKbDocChunkPayload,
 };

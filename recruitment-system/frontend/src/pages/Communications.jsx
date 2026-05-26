@@ -22,7 +22,8 @@ import {
   MessageSquare, Search, Send, Phone, Mail, Bot, User,
   UserCheck, RefreshCw, Globe, Briefcase, MapPin, Clock,
   ChevronRight, AlertCircle, Wifi, WifiOff, Loader2,
-  Mic, Square, Trash2, Paperclip, Wand2
+  Mic, Square, Trash2, Paperclip, Wand2,
+  SlidersHorizontal, ChevronDown, X as XIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { format, formatDistanceToNow } from 'date-fns'
@@ -213,7 +214,7 @@ function MsgBubble({ msg }) {
   if (isSystem) {
     return (
       <div className="flex justify-center my-2">
-        <span className="text-xs bg-amber-50 text-amber-600 border border-amber-200 px-3 py-1 rounded-full">
+        <span className="text-xs bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-200 dark:ring-amber-900/60 px-3 py-1 rounded-full">
           {msg.content}
         </span>
       </div>
@@ -223,23 +224,24 @@ function MsgBubble({ msg }) {
   return (
     <div className={clsx('flex gap-2 mb-3', isInbound ? 'justify-start' : 'justify-end')}>
       {isInbound && (
-        <div className="w-7 h-7 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center shrink-0 mt-1">
+        <div className="w-7 h-7 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center shrink-0 mt-1 ring-2 ring-white dark:ring-zinc-900">
           <User size={14} className="text-zinc-500 dark:text-zinc-400" />
         </div>
       )}
       <div className={clsx('max-w-[68%]', isInbound ? '' : 'items-end flex flex-col')}>
         {isAgent && (
-          <span className="text-[10px] text-indigo-500 font-semibold mb-0.5 mr-1">
+          <span className="inline-flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-300 font-semibold mb-0.5 mr-1">
+            <UserCheck size={9} />
             {msg.sender_name || 'Agent'}
           </span>
         )}
         <div className={clsx(
-          'rounded-2xl px-4 py-2.5 shadow-sm text-sm whitespace-pre-wrap break-words',
+          'rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words shadow-[0_2px_8px_rgb(0,0,0,0.04)] dark:shadow-[0_2px_8px_rgb(0,0,0,0.3)]',
           isInbound
-            ? 'bg-white dark:bg-zinc-900 text-gray-800 rounded-tl-none border border-gray-100'
+            ? 'bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-100 rounded-tl-none ring-1 ring-inset ring-zinc-100 dark:ring-zinc-700'
             : isAgent
-              ? 'bg-indigo-600 text-white rounded-tr-none'
-              : 'bg-primary-600 text-white rounded-tr-none'
+              ? 'bg-gradient-to-br from-indigo-500 to-indigo-600 text-white rounded-tr-none'
+              : 'bg-gradient-to-br from-primary-500 to-primary-600 text-white rounded-tr-none'
         )}>
           {hasMedia && (
             <div className={msg.content ? 'mb-2' : ''}>
@@ -248,20 +250,31 @@ function MsgBubble({ msg }) {
           )}
           {msg.content}
         </div>
-        <div className={clsx('flex items-center gap-1 mt-0.5 text-[10px] text-gray-400', isInbound ? 'ml-1' : 'mr-1 flex-row-reverse')}>
-          <span>{format(new Date(msg.sent_at), 'HH:mm')}</span>
+        <div className={clsx('flex items-center gap-1.5 mt-1 text-[10px] text-zinc-400 dark:text-zinc-500', isInbound ? 'ml-1' : 'mr-1 flex-row-reverse')}>
+          <span className="inline-flex items-center gap-1">
+            <Clock size={9} />
+            {format(new Date(msg.sent_at), 'HH:mm')}
+          </span>
           {msg.detected_language && <LangBadge lang={msg.detected_language} />}
           {!isInbound && (
-            <span>{isAgent ? '🧑‍💼' : '🤖'}</span>
+            <span
+              className={clsx(
+                'inline-flex items-center justify-center w-3.5 h-3.5 rounded-full',
+                isAgent ? 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300' : 'bg-primary-100 dark:bg-primary-900/60 text-primary-600 dark:text-primary-300'
+              )}
+              title={isAgent ? 'Sent by agent' : 'Sent by bot'}
+            >
+              {isAgent ? <UserCheck size={8} /> : <Bot size={8} />}
+            </span>
           )}
         </div>
       </div>
       {!isInbound && (
         <div className={clsx(
-          'w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-1',
-          isAgent ? 'bg-indigo-100' : 'bg-primary-100'
+          'w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-1 ring-2 ring-white dark:ring-zinc-900 shadow-sm',
+          isAgent ? 'bg-gradient-to-br from-indigo-400 to-indigo-600 text-white' : 'bg-gradient-to-br from-primary-400 to-primary-600 text-white'
         )}>
-          {isAgent ? <UserCheck size={14} className="text-indigo-600" /> : <Bot size={14} className="text-primary-600" />}
+          {isAgent ? <UserCheck size={14} /> : <Bot size={14} />}
         </div>
       )}
     </div>
@@ -285,6 +298,7 @@ export default function Communications() {
   const [transcriptResponseStatus, setTranscriptResponseStatus] = useState('')
   const [transcriptDateFrom, setTranscriptDateFrom] = useState('')
   const [transcriptDateTo, setTranscriptDateTo] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
   const [showEditContactModal, setShowEditContactModal] = useState(false)
   const [editContactDraft, setEditContactDraft] = useState({ name: '', email: '', preferred_language: 'en', notes: '' })
   const [identityError, setIdentityError] = useState(null)
@@ -754,23 +768,33 @@ export default function Communications() {
   }, [message, selectedId, audioBlob, discardAudio])
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  // h-full (not h-screen) keeps the 3-pane layout inside Layout's <main>, so
+  // there's no outer page scroll — only the inner conversation/transcript panels scroll.
   return (
-    <div className="flex h-screen bg-zinc-50 dark:bg-zinc-900/60 overflow-hidden">
+    <div className="flex h-full bg-zinc-50 dark:bg-zinc-900/60 overflow-hidden rounded-2xl border border-zinc-200/60 dark:border-zinc-800/60">
 
       {/* ── Left: Chat list ─────────────────────────────────────────────────── */}
       <div className="w-80 shrink-0 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col">
         {/* Header */}
         <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/60">
           <div className="flex items-center justify-between mb-3">
-            <h1 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">Conversations</h1>
-            <div className="flex items-center gap-1.5">
+            <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-primary-700 to-indigo-600 dark:from-primary-300 dark:to-indigo-300 bg-clip-text text-transparent">
+              Conversations
+            </h1>
+            <span
+              className={clsx(
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset',
+                connected
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-900/60'
+                  : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 ring-rose-200 dark:ring-rose-900/60'
+              )}
+              title={connected ? 'Real-time connected' : 'Disconnected — reconnecting…'}
+            >
               {connected
-                ? <Wifi size={14} className="text-emerald-500" />
-                : <WifiOff size={14} className="text-red-400 animate-pulse" />}
-              <span className={clsx('text-[10px] font-medium', connected ? 'text-emerald-600' : 'text-red-400')}>
-                {connected ? 'Live' : 'Offline'}
-              </span>
-            </div>
+                ? <Wifi size={11} />
+                : <WifiOff size={11} className="animate-pulse" />}
+              {connected ? 'Live' : 'Offline'}
+            </span>
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" size={16} />
@@ -782,86 +806,110 @@ export default function Communications() {
               className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-400 transition-all"
             />
           </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <select
-              value={conversationStage}
-              onChange={(e) => setConversationStage(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-            >
-              {STAGE_OPTIONS.map((option) => (
-                <option key={option.value || 'all'} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <select
-              value={pipelineStage}
-              onChange={(e) => setPipelineStage(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-            >
-              {PIPELINE_OPTIONS.map((option) => (
-                <option key={`pipeline-${option.value || 'all'}`} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <select
-              value={responseStatus}
-              onChange={(e) => setResponseStatus(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-            >
-              {RESPONSE_OPTIONS.map((option) => (
-                <option key={option.value || 'all'} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <select
-              value={handoffState}
-              onChange={(e) => setHandoffState(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-            >
-              {HANDOFF_OPTIONS.map((option) => (
-                <option key={`handoff-${option.value || 'all'}`} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-            />
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-            />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="col-span-2 w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={`sort-${option.value}`} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </div>
-          <div className="mt-2 flex justify-end">
-            <button
-              type="button"
-              onClick={() => {
-                setConversationStage('')
-                setPipelineStage('')
-                setHandoffState('')
-                setSortBy('latest_desc')
-                setResponseStatus('')
-                setDateFrom('')
-                setDateTo('')
-              }}
-              className="text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300"
-            >
-              Clear filters
-            </button>
-          </div>
+          {(() => {
+            const activeFilterCount = [conversationStage, pipelineStage, responseStatus, handoffState, dateFrom, dateTo].filter(Boolean).length
+              + (sortBy && sortBy !== 'latest_desc' ? 1 : 0)
+            return (
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowFilters((v) => !v)}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                >
+                  <SlidersHorizontal size={12} />
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <span className="inline-flex items-center justify-center rounded-full bg-primary-600 text-white text-[10px] font-bold px-1.5 min-w-[16px] h-4">
+                      {activeFilterCount}
+                    </span>
+                  )}
+                  <ChevronDown size={12} className={clsx('transition-transform', showFilters && 'rotate-180')} />
+                </button>
+                {activeFilterCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConversationStage('')
+                      setPipelineStage('')
+                      setHandoffState('')
+                      setSortBy('latest_desc')
+                      setResponseStatus('')
+                      setDateFrom('')
+                      setDateTo('')
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                  >
+                    <XIcon size={11} /> Clear
+                  </button>
+                )}
+              </div>
+            )
+          })()}
+          {showFilters && (
+            <div className="mt-2 grid grid-cols-2 gap-2 animate-fade-in">
+              <select
+                value={conversationStage}
+                onChange={(e) => setConversationStage(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              >
+                {STAGE_OPTIONS.map((option) => (
+                  <option key={option.value || 'all'} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <select
+                value={pipelineStage}
+                onChange={(e) => setPipelineStage(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              >
+                {PIPELINE_OPTIONS.map((option) => (
+                  <option key={`pipeline-${option.value || 'all'}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <select
+                value={responseStatus}
+                onChange={(e) => setResponseStatus(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              >
+                {RESPONSE_OPTIONS.map((option) => (
+                  <option key={option.value || 'all'} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <select
+                value={handoffState}
+                onChange={(e) => setHandoffState(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              >
+                {HANDOFF_OPTIONS.map((option) => (
+                  <option key={`handoff-${option.value || 'all'}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              />
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              />
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="col-span-2 w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={`sort-${option.value}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* List */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto scrollbar-thin">
           {listLoading ? (
             <div className="p-4 space-y-3">
               {[1, 2, 3, 4, 5].map(i => (
@@ -892,14 +940,18 @@ export default function Communications() {
                   role="button"
                   tabIndex={0}
                   className={clsx(
-                    'w-full px-4 py-3 flex items-start gap-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors cursor-pointer',
-                    selectedId === c.candidate_id && 'bg-primary-50 hover:bg-primary-50'
+                    'relative w-full px-4 py-3 flex items-start gap-3 text-left transition-colors cursor-pointer',
+                    selectedId === c.candidate_id
+                      ? 'bg-primary-50/70 dark:bg-primary-950/30 before:content-[""] before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-gradient-to-b before:from-primary-500 before:to-indigo-500'
+                      : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
                   )}
                 >
                   {/* Avatar */}
                   <div className={clsx(
-                    'w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0',
-                    c.is_human_handoff ? 'bg-indigo-100 text-indigo-700' : 'bg-primary-100 text-primary-700'
+                    'w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ring-2 ring-white dark:ring-zinc-900 shadow-sm',
+                    c.is_human_handoff
+                      ? 'bg-gradient-to-br from-indigo-400 to-indigo-600 text-white'
+                      : 'bg-gradient-to-br from-primary-400 to-primary-600 text-white'
                   )}>
                     {getCandidateInitial(c)}
                   </div>
@@ -1254,7 +1306,7 @@ export default function Communications() {
 
       {/* ── Right: Candidate context ─────────────────────────────────────────── */}
       {selectedCandidate && (
-        <div className="w-64 shrink-0 border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col overflow-y-auto">
+        <div className="w-64 shrink-0 border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col overflow-y-auto scrollbar-thin">
           <div className="p-4 border-b border-zinc-100 dark:border-zinc-800/60">
             <h3 className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3">Candidate Info</h3>
             <div className="flex flex-col items-center text-center">

@@ -245,15 +245,20 @@ export default function ProjectDetail() {
             {/* Benefits */}
             {activeBenefits.length > 0 && (
               <div className="mb-4">
-                <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Benefits Included</h3>
-                <div className="flex flex-wrap gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-3">Benefits Included</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {activeBenefits.map(([benefit]) => {
                     const Icon = benefitIcons[benefit]
                     return (
-                      <span key={benefit} className="inline-flex items-center gap-1 px-3 py-1 bg-green-50 text-green-700 rounded-lg border border-green-100">
-                        {Icon && <Icon size={16} />}
-                        <span className="capitalize">{benefit}</span>
-                      </span>
+                      <div
+                        key={benefit}
+                        className="flex items-center gap-2.5 rounded-xl bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/40 dark:to-zinc-900 ring-1 ring-inset ring-emerald-100 dark:ring-emerald-900/60 px-3 py-2.5"
+                      >
+                        <div className="rounded-lg bg-emerald-100 dark:bg-emerald-900/60 p-1.5 text-emerald-700 dark:text-emerald-200 shadow-sm">
+                          {Icon && <Icon size={14} aria-hidden />}
+                        </div>
+                        <span className="capitalize text-sm font-medium text-zinc-800 dark:text-zinc-200">{benefit}</span>
+                      </div>
                     )
                   })}
                 </div>
@@ -392,23 +397,11 @@ export default function ProjectDetail() {
 
             {/* Pipeline stats */}
             {stats.total_applications > 0 && (
-              <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
-                <div className="rounded-lg bg-blue-50 p-3 text-center">
-                  <p className="text-xs text-blue-600">Total</p>
-                  <p className="text-lg font-bold text-blue-900">{stats.total_applications}</p>
-                </div>
-                <div className="rounded-lg bg-yellow-50 p-3 text-center">
-                  <p className="text-xs text-yellow-600">Screening</p>
-                  <p className="text-lg font-bold text-yellow-900">{stats.screening_count || 0}</p>
-                </div>
-                <div className="rounded-lg bg-purple-50 p-3 text-center">
-                  <p className="text-xs text-purple-600">Interview</p>
-                  <p className="text-lg font-bold text-purple-900">{stats.interview_count || 0}</p>
-                </div>
-                <div className="rounded-lg bg-green-50 p-3 text-center">
-                  <p className="text-xs text-green-600">Selected</p>
-                  <p className="text-lg font-bold text-green-900">{stats.selected_count || 0}</p>
-                </div>
+              <div className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
+                <PipelineStat tone="blue" label="Total" value={stats.total_applications} />
+                <PipelineStat tone="amber" label="Screening" value={stats.screening_count || 0} />
+                <PipelineStat tone="purple" label="Interview" value={stats.interview_count || 0} />
+                <PipelineStat tone="emerald" label="Selected" value={stats.selected_count || 0} />
               </div>
             )}
 
@@ -420,17 +413,17 @@ export default function ProjectDetail() {
         {/* Sidebar */}
         <div className="space-y-6">
           {/* Stats Card */}
-          <Card>
+          <Card accent="blue">
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">Progress</h2>
             <div className="space-y-4">
               <div>
                 <div className="flex items-center justify-between text-sm mb-2">
                   <span className="text-zinc-600 dark:text-zinc-400">Positions Filled</span>
-                  <span className="font-medium text-zinc-900 dark:text-zinc-50">{completionRate}%</span>
+                  <span className="font-semibold text-zinc-900 dark:text-zinc-50">{completionRate}%</span>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
+                <div className="w-full bg-zinc-200/70 dark:bg-zinc-800 rounded-full h-2 overflow-hidden">
                   <div
-                    className="bg-primary-600 h-2 rounded-full transition-all"
+                    className="h-full rounded-full bg-gradient-to-r from-primary-500 to-primary-600 transition-all duration-500"
                     style={{ width: `${completionRate}%` }}
                   />
                 </div>
@@ -509,6 +502,23 @@ export default function ProjectDetail() {
         isOpen={isJobModalOpen}
         onClose={() => setIsJobModalOpen(false)}
       />
+    </div>
+  )
+}
+
+const pipelineTones = {
+  blue:    { wrap: 'section-grad-blue ring-blue-200/60 dark:ring-blue-900/60',       label: 'text-blue-700 dark:text-blue-300',       value: 'text-blue-900 dark:text-blue-100' },
+  amber:   { wrap: 'section-grad-amber ring-amber-200/60 dark:ring-amber-900/60',    label: 'text-amber-700 dark:text-amber-300',     value: 'text-amber-900 dark:text-amber-100' },
+  purple:  { wrap: 'section-grad-purple ring-purple-200/60 dark:ring-purple-900/60', label: 'text-purple-700 dark:text-purple-300',   value: 'text-purple-900 dark:text-purple-100' },
+  emerald: { wrap: 'section-grad-emerald ring-emerald-200/60 dark:ring-emerald-900/60', label: 'text-emerald-700 dark:text-emerald-300', value: 'text-emerald-900 dark:text-emerald-100' },
+}
+
+function PipelineStat({ tone = 'blue', label, value }) {
+  const t = pipelineTones[tone] || pipelineTones.blue
+  return (
+    <div className={`rounded-xl ring-1 ring-inset p-3 text-center ${t.wrap}`}>
+      <p className={`text-[10px] font-semibold uppercase tracking-wider ${t.label}`}>{label}</p>
+      <p className={`text-xl font-bold mt-0.5 ${t.value}`}>{value}</p>
     </div>
   )
 }

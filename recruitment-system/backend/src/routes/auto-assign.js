@@ -246,6 +246,17 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
             logger.info(`Candidate ${candidateId} moved to future pool - no matching jobs`);
         }
 
+        // If at least one assignment was made and the candidate was sitting in
+        // future_pool, lift them back into active screening so they disappear
+        // from the General Pool list (previously they stayed there forever).
+        if (assignments.length > 0 && candidate.status === 'future_pool') {
+            await pool.query(
+                `UPDATE candidates SET status = 'screening', updated_at = NOW() WHERE id = $1`,
+                [candidateId]
+            );
+            logger.info(`Candidate ${candidateId} lifted from future_pool → screening (${assignments.length} jobs assigned)`);
+        }
+
         res.json({
             candidate_id: candidateId,
             candidate_name: candidate.name,

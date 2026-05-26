@@ -174,6 +174,11 @@ app.use('/api/chatbot-sync', chatbotSyncRouter);
 const knowledgeBaseRouter = require('./routes/knowledge-base');
 app.use('/api/knowledge-base', knowledgeBaseRouter);
 
+// Knowledge Base Documents — recruiter uploads PDF/DOCX/TXT, parsed + chunked
+// so the chatbot can retrieve passages alongside FAQ entries.
+const knowledgeDocumentsRouter = require('./routes/knowledge-documents');
+app.use('/api/knowledge-documents', knowledgeDocumentsRouter);
+
 // Marketing Hub — analytics router must be mounted BEFORE the broader hub
 // router so the /analytics prefix wins (Express matches in declaration order).
 app.use('/api/marketing-hub/analytics', marketingAnalyticsRouter);

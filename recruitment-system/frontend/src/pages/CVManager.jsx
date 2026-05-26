@@ -50,6 +50,8 @@ import { Input } from '../components/ui/Input'
 import { Modal, ConfirmModal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { PageHeader } from '../components/ui/PageHeader'
+import { Tabs } from '../components/ui/Tabs'
+import { EmptyState } from '../components/ui/EmptyState'
 import { FileSearch } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -90,13 +92,22 @@ function getDocumentCategory(cv) {
 
 // Remark types for CV evaluation
 const REMARK_TYPES = [
-  { id: 'excellent', label: 'Excellent Candidate', color: 'bg-green-500', icon: Star },
-  { id: 'good', label: 'Good Fit', color: 'bg-blue-500', icon: CheckCircle2 },
-  { id: 'potential', label: 'Has Potential', color: 'bg-amber-500', icon: Clock },
-  { id: 'needs_review', label: 'Needs Review', color: 'bg-orange-500', icon: Eye },
-  { id: 'not_qualified', label: 'Not Qualified', color: 'bg-red-500', icon: XCircle },
-  { id: 'future_pool', label: 'Future Pool', color: 'bg-purple-500', icon: Database }
+  { id: 'excellent',     label: 'Excellent Candidate', tone: 'emerald', icon: Star },
+  { id: 'good',          label: 'Good Fit',            tone: 'blue',    icon: CheckCircle2 },
+  { id: 'potential',     label: 'Has Potential',       tone: 'indigo',  icon: Clock },
+  { id: 'needs_review',  label: 'Needs Review',        tone: 'amber',   icon: Eye },
+  { id: 'not_qualified', label: 'Not Qualified',       tone: 'rose',    icon: XCircle },
+  { id: 'future_pool',   label: 'Future Pool',         tone: 'purple',  icon: Database },
 ]
+
+const REMARK_TONES = {
+  emerald: { idle: 'border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 hover:border-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40', sel: 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 ring-2 ring-emerald-500/30',  icon: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200', label: 'text-emerald-900 dark:text-emerald-100' },
+  blue:    { idle: 'border-blue-200/70 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40',                  sel: 'border-blue-500 bg-blue-50 dark:bg-blue-950/50 ring-2 ring-blue-500/30',          icon: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200',           label: 'text-blue-900 dark:text-blue-100' },
+  indigo:  { idle: 'border-indigo-200/70 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 hover:border-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40',  sel: 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/50 ring-2 ring-indigo-500/30',  icon: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-200',     label: 'text-indigo-900 dark:text-indigo-100' },
+  amber:   { idle: 'border-amber-200/70 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20 hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40',          sel: 'border-amber-500 bg-amber-50 dark:bg-amber-950/50 ring-2 ring-amber-500/30',     icon: 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200',         label: 'text-amber-900 dark:text-amber-100' },
+  rose:    { idle: 'border-rose-200/70 dark:border-rose-900/60 bg-rose-50/40 dark:bg-rose-950/20 hover:border-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40',                  sel: 'border-rose-500 bg-rose-50 dark:bg-rose-950/50 ring-2 ring-rose-500/30',         icon: 'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-200',             label: 'text-rose-900 dark:text-rose-100' },
+  purple:  { idle: 'border-purple-200/70 dark:border-purple-900/60 bg-purple-50/40 dark:bg-purple-950/20 hover:border-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40',  sel: 'border-purple-500 bg-purple-50 dark:bg-purple-950/50 ring-2 ring-purple-500/30',  icon: 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-200',     label: 'text-purple-900 dark:text-purple-100' },
+}
 
 export default function CVManager() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -505,34 +516,16 @@ function CVReviewModal({ candidate, onClose }) {
   const applications = Array.isArray(applicationsData) ? applicationsData : []
 
   const tabs = [
-    { id: 'overview', label: 'Overview', icon: User },
-    { id: 'ai_insights', label: 'AI Insights', icon: Sparkles },
-    { id: 'remarks', label: 'Remarks & Notes', icon: MessageSquare },
-    { id: 'applications', label: `Projects (${applications.length})`, icon: Briefcase },
-    { id: 'allocate', label: 'Assign Project', icon: Building }
+    { value: 'overview',     label: 'Overview',        icon: User,          tone: 'blue' },
+    { value: 'ai_insights',  label: 'AI Insights',     icon: Sparkles,      tone: 'purple' },
+    { value: 'remarks',      label: 'Remarks & Notes', icon: MessageSquare, tone: 'amber' },
+    { value: 'applications', label: 'Projects',        icon: Briefcase,     tone: 'emerald', count: applications.length },
+    { value: 'allocate',     label: 'Assign Project',  icon: Building,      tone: 'indigo' },
   ]
 
   return (
     <Modal open={true} onClose={onClose} title={`Review: ${candidate.name || 'Candidate'}`} size="lg">
-      {/* Tab Navigation */}
-      <div className="flex gap-1 mb-6 border-b border-zinc-200 dark:border-zinc-800 overflow-x-auto">
-        {tabs.map(tab => {
-          const Icon = tab.icon
-          return (
-            <button
-              key={tab.id}
-              className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-2 ${activeTab === tab.id
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:text-zinc-300'
-                }`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <Icon size={16} />
-              {tab.label}
-            </button>
-          )
-        })}
-      </div>
+      <Tabs value={activeTab} onChange={setActiveTab} items={tabs} className="mb-6" />
 
       <div className="min-h-[450px]">
         {activeTab === 'overview' && (
@@ -581,19 +574,31 @@ function OverviewTab({ candidate }) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       {/* Candidate Info Card */}
-      <div className="bg-gradient-to-r from-primary-50 to-primary-100 rounded-lg p-6">
+      <div className="rounded-2xl bg-gradient-to-br from-blue-50 via-white to-white dark:from-blue-950/40 dark:via-zinc-900 dark:to-zinc-900 ring-1 ring-inset ring-blue-100 dark:ring-blue-900/60 p-5">
         <div className="flex items-start gap-4">
-          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-2xl font-bold">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900 shadow-lg">
             {candidate.name?.charAt(0)?.toUpperCase() || '?'}
           </div>
-          <div className="flex-1">
-            <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{candidate.name}</h3>
-            <div className="mt-2 flex flex-wrap gap-4 text-sm text-zinc-600 dark:text-zinc-400">
-              <span className="flex items-center gap-1">📱 {candidate.phone}</span>
-              <span className="flex items-center gap-1">📧 {candidate.email || 'No email'}</span>
-              <span className="flex items-center gap-1">🌐 {candidate.preferred_language?.toUpperCase()}</span>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 tracking-tight truncate">{candidate.name}</h3>
+            <div className="mt-2 flex flex-wrap gap-3 text-sm text-zinc-600 dark:text-zinc-400">
+              {candidate.phone && (
+                <span className="inline-flex items-center gap-1.5">
+                  <Smartphone size={13} className="text-zinc-400" />{candidate.phone}
+                </span>
+              )}
+              {candidate.email && (
+                <span className="inline-flex items-center gap-1.5">
+                  <Send size={13} className="text-zinc-400" />{candidate.email}
+                </span>
+              )}
+              {candidate.preferred_language && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-white/80 dark:bg-zinc-900/60 ring-1 ring-zinc-200 dark:ring-zinc-700 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                  {candidate.preferred_language.toUpperCase()}
+                </span>
+              )}
             </div>
           </div>
           <Badge status={candidate.status} />
@@ -601,20 +606,23 @@ function OverviewTab({ candidate }) {
       </div>
 
       {/* Details Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <DetailCard label="Source" value={candidate.source} icon="📥" />
-        <DetailCard label="Height" value={metadata.height_cm ? `${metadata.height_cm} cm` : 'N/A'} icon="📏" />
-        <DetailCard label="Age" value={(candidate.age || metadata.age) ? `${candidate.age || metadata.age} years` : 'N/A'} icon="🎂" />
-        <DetailCard label="Experience" value={(candidate.experience_years || metadata.experience_years) ? `${candidate.experience_years || metadata.experience_years} years` : 'N/A'} icon="💼" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <DetailCard label="Source"     value={candidate.source} icon={Database}    tone="indigo" />
+        <DetailCard label="Height"     value={metadata.height_cm ? `${metadata.height_cm} cm` : 'N/A'} icon={Star} tone="emerald" />
+        <DetailCard label="Age"        value={(candidate.age || metadata.age) ? `${candidate.age || metadata.age} years` : 'N/A'} icon={User} tone="amber" />
+        <DetailCard label="Experience" value={(candidate.experience_years || metadata.experience_years) ? `${candidate.experience_years || metadata.experience_years} years` : 'N/A'} icon={Briefcase} tone="purple" />
       </div>
 
       {/* Mismatches Alert */}
       {mismatches.length > 0 && (
-        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-          <h4 className="flex items-center gap-2 text-orange-800 font-semibold mb-2">
-            <AlertCircle size={18} /> Requirement Mismatches
+        <div className="rounded-2xl section-grad-amber ring-1 ring-inset ring-amber-200 dark:ring-amber-900/60 p-4">
+          <h4 className="flex items-center gap-2 text-amber-900 dark:text-amber-200 font-semibold mb-2">
+            <div className="rounded-lg bg-amber-100 dark:bg-amber-900/60 p-1.5 text-amber-700 dark:text-amber-200">
+              <AlertCircle size={14} aria-hidden />
+            </div>
+            Requirement Mismatches
           </h4>
-          <ul className="list-disc list-inside text-sm text-orange-700 space-y-1">
+          <ul className="list-disc list-inside text-sm text-amber-800 dark:text-amber-200 space-y-1 ml-1">
             {mismatches.map((mismatch, idx) => (
               <li key={idx}>{mismatch}</li>
             ))}
@@ -880,14 +888,29 @@ function OverviewTab({ candidate }) {
   )
 }
 
-function DetailCard({ label, value, icon }) {
+const DETAIL_TONES = {
+  indigo:  { wrap: 'bg-indigo-50/70 dark:bg-indigo-950/30 ring-indigo-100 dark:ring-indigo-900/50',   icon: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-200' },
+  emerald: { wrap: 'bg-emerald-50/70 dark:bg-emerald-950/30 ring-emerald-100 dark:ring-emerald-900/50', icon: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200' },
+  amber:   { wrap: 'bg-amber-50/70 dark:bg-amber-950/30 ring-amber-100 dark:ring-amber-900/50',       icon: 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200' },
+  purple:  { wrap: 'bg-purple-50/70 dark:bg-purple-950/30 ring-purple-100 dark:ring-purple-900/50',   icon: 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-200' },
+  blue:    { wrap: 'bg-blue-50/70 dark:bg-blue-950/30 ring-blue-100 dark:ring-blue-900/50',           icon: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200' },
+  zinc:    { wrap: 'bg-zinc-50 dark:bg-zinc-900/60 ring-zinc-100 dark:ring-zinc-800',                 icon: 'bg-white text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300' },
+}
+
+function DetailCard({ label, value, icon: Icon, tone = 'zinc' }) {
+  const t = DETAIL_TONES[tone] || DETAIL_TONES.zinc
+  const isReact = typeof Icon === 'function' || typeof Icon === 'object'
   return (
-    <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-100 dark:border-zinc-800/60">
-      <div className="flex items-center gap-2 mb-1">
-        <span>{icon}</span>
-        <span className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">{label}</span>
+    <div className={`flex items-start gap-3 p-3.5 rounded-2xl ring-1 ring-inset min-h-[78px] ${t.wrap}`}>
+      {Icon && (
+        <div className={`flex-shrink-0 mt-0.5 rounded-lg p-1.5 shadow-sm ${t.icon}`}>
+          {isReact ? <Icon size={14} aria-hidden /> : <span className="text-base leading-none">{Icon}</span>}
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">{label}</span>
+        <p className="mt-0.5 font-semibold text-sm text-zinc-900 dark:text-zinc-50 break-words">{value || '—'}</p>
       </div>
-      <p className="font-semibold text-zinc-900 dark:text-zinc-50">{value}</p>
     </div>
   )
 }
@@ -906,27 +929,38 @@ function AIInsightsTab({ candidate }) {
   const strengths = metadata.strengths || parseTags(candidate.tags || candidate.skills).slice(0, 5).map(s => ({ label: s }))
   const matchScore = metadata.match_score || candidate.match_score || null
 
+  const scoreColor = matchScore >= 70 ? '#10b981' : matchScore >= 50 ? '#f59e0b' : '#ef4444'
+  const scoreTone = matchScore >= 70 ? 'emerald' : matchScore >= 50 ? 'amber' : 'rose'
+  const scoreGrad = {
+    emerald: 'section-grad-emerald ring-emerald-200/60 dark:ring-emerald-900/60',
+    amber:   'section-grad-amber ring-amber-200/60 dark:ring-amber-900/60',
+    rose:    'section-grad-rose ring-rose-200/60 dark:ring-rose-900/60',
+  }[scoreTone]
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Match Score */}
       {matchScore != null && (
-        <div className="flex items-center gap-6 p-5 bg-gradient-to-r from-blue-50 to-blue-100 rounded-xl">
-          <div className="relative w-20 h-20 flex-shrink-0">
-            <svg className="w-20 h-20 -rotate-90" viewBox="0 0 36 36">
-              <circle cx="18" cy="18" r="15.9" fill="none" stroke="#dbeafe" strokeWidth="3.8"/>
-              <circle cx="18" cy="18" r="15.9" fill="none" stroke={matchScore >= 70 ? '#22c55e' : matchScore >= 50 ? '#f59e0b' : '#ef4444'}
-                strokeWidth="3.8" strokeDasharray={`${matchScore} 100`} strokeLinecap="round"/>
+        <div className={`flex items-center gap-6 p-5 rounded-2xl ring-1 ring-inset ${scoreGrad}`}>
+          <div className="relative w-24 h-24 flex-shrink-0">
+            <svg className="w-24 h-24 -rotate-90" viewBox="0 0 36 36">
+              <circle cx="18" cy="18" r="15.9" fill="none" stroke="currentColor" className="text-zinc-200 dark:text-zinc-800" strokeWidth="3.5"/>
+              <circle cx="18" cy="18" r="15.9" fill="none" stroke={scoreColor}
+                strokeWidth="3.5" strokeDasharray={`${matchScore} 100`} strokeLinecap="round" className="transition-all duration-700"/>
             </svg>
             <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{matchScore}%</span>
+              <span className="text-xl font-bold text-zinc-900 dark:text-zinc-50">{matchScore}%</span>
             </div>
           </div>
-          <div>
-            <p className="font-semibold text-zinc-900 dark:text-zinc-50 text-lg">Match Score</p>
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              {matchScore >= 70 ? 'Excellent match for this role'
-               : matchScore >= 50 ? 'Moderate match — review required'
-               : 'Low match — consider alternatives'}
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Match Score</p>
+            <p className="font-bold text-zinc-900 dark:text-zinc-50 text-xl tracking-tight">
+              {matchScore >= 70 ? 'Excellent match' : matchScore >= 50 ? 'Moderate match' : 'Low match'}
+            </p>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
+              {matchScore >= 70 ? 'Strong fit for this role.'
+               : matchScore >= 50 ? 'Manual review recommended.'
+               : 'Consider alternative roles.'}
             </p>
           </div>
         </div>
@@ -934,17 +968,20 @@ function AIInsightsTab({ candidate }) {
 
       {/* Critical Mismatches */}
       {criticalMismatches.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold text-red-700 mb-2 flex items-center gap-1">
-            <AlertCircle size={15}/> Critical Mismatches
+        <div className="rounded-2xl section-grad-rose ring-1 ring-inset ring-rose-200/60 dark:ring-rose-900/60 p-4">
+          <h4 className="text-sm font-semibold text-rose-900 dark:text-rose-200 mb-3 flex items-center gap-2">
+            <div className="rounded-lg bg-rose-100 dark:bg-rose-900/60 p-1.5 text-rose-700 dark:text-rose-200">
+              <XCircle size={14} aria-hidden />
+            </div>
+            Critical Mismatches
           </h4>
           <div className="space-y-2">
             {criticalMismatches.map((m, i) => (
-              <div key={i} className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-sm">
-                <XCircle size={15} className="text-red-500 mt-0.5 flex-shrink-0"/>
+              <div key={i} className="flex items-start gap-2 p-3 bg-white/70 dark:bg-zinc-900/40 ring-1 ring-rose-200/70 dark:ring-rose-900/40 rounded-xl text-sm">
+                <XCircle size={15} className="text-rose-500 mt-0.5 flex-shrink-0"/>
                 <div>
-                  {m.field && <span className="font-medium text-red-700">{m.field}: </span>}
-                  <span className="text-red-600">{m.reason || m.field || m}</span>
+                  {m.field && <span className="font-semibold text-rose-700 dark:text-rose-300">{m.field}: </span>}
+                  <span className="text-rose-700 dark:text-rose-300">{m.reason || m.field || m}</span>
                 </div>
               </div>
             ))}
@@ -954,13 +991,16 @@ function AIInsightsTab({ candidate }) {
 
       {/* Other Mismatches */}
       {otherMismatches.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold text-orange-700 mb-2 flex items-center gap-1">
-            <AlertCircle size={15}/> Other Mismatches
+        <div className="rounded-2xl section-grad-amber ring-1 ring-inset ring-amber-200/60 dark:ring-amber-900/60 p-4">
+          <h4 className="text-sm font-semibold text-amber-900 dark:text-amber-200 mb-3 flex items-center gap-2">
+            <div className="rounded-lg bg-amber-100 dark:bg-amber-900/60 p-1.5 text-amber-700 dark:text-amber-200">
+              <AlertCircle size={14} aria-hidden />
+            </div>
+            Other Mismatches
           </h4>
-          <div className="space-y-1">
+          <div className="space-y-2">
             {otherMismatches.map((m, i) => (
-              <div key={i} className="flex items-start gap-2 p-2.5 bg-orange-50 border border-orange-100 rounded-lg text-sm text-orange-700">
+              <div key={i} className="flex items-start gap-2 p-2.5 bg-white/70 dark:bg-zinc-900/40 ring-1 ring-amber-200/70 dark:ring-amber-900/40 rounded-xl text-sm text-amber-800 dark:text-amber-200">
                 <AlertCircle size={13} className="mt-0.5 flex-shrink-0"/>
                 <span>{m.reason || m.field || m}</span>
               </div>
@@ -971,26 +1011,31 @@ function AIInsightsTab({ candidate }) {
 
       {/* Strengths */}
       {strengths.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold text-green-700 mb-2 flex items-center gap-1">
-            <CheckCircle2 size={15}/> Strengths
+        <div className="rounded-2xl section-grad-emerald ring-1 ring-inset ring-emerald-200/60 dark:ring-emerald-900/60 p-4">
+          <h4 className="text-sm font-semibold text-emerald-900 dark:text-emerald-200 mb-3 flex items-center gap-2">
+            <div className="rounded-lg bg-emerald-100 dark:bg-emerald-900/60 p-1.5 text-emerald-700 dark:text-emerald-200">
+              <CheckCircle2 size={14} aria-hidden />
+            </div>
+            Strengths
           </h4>
-          <div className="space-y-1">
+          <div className="flex flex-wrap gap-2">
             {strengths.map((s, i) => (
-              <div key={i} className="flex items-center gap-2 p-2.5 bg-green-50 border border-green-100 rounded-lg text-sm text-green-700">
-                <CheckCircle size={13} className="flex-shrink-0"/>
-                <span>{s.label || s}</span>
-              </div>
+              <span key={i} className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 ring-1 ring-inset ring-emerald-200 dark:ring-emerald-900 px-3 py-1 text-xs font-semibold text-emerald-800 dark:text-emerald-200">
+                <CheckCircle size={11} />
+                {s.label || s}
+              </span>
             ))}
           </div>
         </div>
       )}
 
       {!matchScore && criticalMismatches.length === 0 && strengths.length === 0 && (
-        <div className="py-10 text-center text-zinc-400 dark:text-zinc-500">
-          <Sparkles size={36} className="mx-auto mb-3 opacity-30"/>
-          <p className="text-sm">AI insights will appear here after auto-assign processing</p>
-        </div>
+        <EmptyState
+          icon={Sparkles}
+          tone="purple"
+          title="No AI insights yet"
+          description="Insights will appear here after auto-assign processing."
+        />
       )}
     </div>
   )
@@ -1031,19 +1076,19 @@ function RemarksTab({ candidate }) {
           {REMARK_TYPES.map(type => {
             const Icon = type.icon
             const isSelected = selectedRemarkType === type.id
+            const t = REMARK_TONES[type.tone] || REMARK_TONES.blue
             return (
               <button
                 key={type.id}
+                type="button"
                 onClick={() => setSelectedRemarkType(isSelected ? null : type.id)}
-                className={`p-3 rounded-lg border-2 transition-all flex items-center gap-2 ${isSelected
-                  ? 'border-primary-500 bg-primary-50'
-                  : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300 bg-white dark:bg-zinc-900'
-                  }`}
+                className={`p-3 rounded-2xl border-2 transition-all flex items-center gap-2.5 text-left ${isSelected ? t.sel : t.idle}`}
               >
-                <span className={`w-8 h-8 rounded-full ${type.color} flex items-center justify-center`}>
-                  <Icon size={16} className="text-white" />
+                <span className={`w-8 h-8 rounded-xl flex items-center justify-center shadow-sm ${t.icon}`}>
+                  <Icon size={15} />
                 </span>
-                <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{type.label}</span>
+                <span className={`text-sm font-semibold ${isSelected ? t.label : 'text-zinc-700 dark:text-zinc-300'}`}>{type.label}</span>
+                {isSelected && <CheckCircle2 size={14} className="ml-auto text-current shrink-0" />}
               </button>
             )
           })}
@@ -1512,61 +1557,95 @@ function AllocateTab({ candidate, jobs, existingApplications }) {
       </div>
 
       {filteredJobs.length === 0 ? (
-        <div className="text-center py-12 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
-          <Building className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-3" />
-          <p className="text-zinc-500 dark:text-zinc-400">
-            {availableJobs.length === 0
-              ? 'Candidate is already assigned to all available projects'
-              : 'No projects match the selected category'}
-          </p>
-        </div>
+        <EmptyState
+          icon={Building}
+          tone="indigo"
+          title={availableJobs.length === 0 ? 'Already assigned everywhere' : 'No projects in this category'}
+          description={availableJobs.length === 0
+            ? 'This candidate is already linked to every available project.'
+            : 'Try a different category or clear the filter.'}
+          compact
+        />
       ) : (
-        <div className="space-y-3 max-h-[350px] overflow-y-auto pr-2">
-          {filteredJobs.map(job => (
-            <div
-              key={job.id}
-              className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 hover:border-primary-300 hover:shadow-md transition-all bg-white dark:bg-zinc-900"
-            >
-              <div className="flex justify-between items-start mb-3">
-                <div className="flex-1">
-                  <h4 className="font-semibold text-zinc-900 dark:text-zinc-50">{job.title}</h4>
-                  <div className="flex flex-wrap gap-3 mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                    <span className="flex items-center gap-1">
-                      <Briefcase size={14} /> {job.category}
-                    </span>
-                    {job.location && (
-                      <span className="flex items-center gap-1">
-                        <MapPin size={14} /> {job.location}
-                      </span>
-                    )}
-                    {job.salary_range && (
-                      <span className="flex items-center gap-1">
-                        <DollarSign size={14} /> {job.salary_range}
-                      </span>
-                    )}
+        <div className="space-y-3 max-h-[420px] overflow-y-auto scrollbar-thin pr-2 -mr-2">
+          {filteredJobs.map(job => {
+            const remaining = Math.max(0, (job.positions_available || 0) - (job.positions_filled || 0))
+            const total = job.positions_available || 0
+            const filledPct = total > 0 ? Math.min(100, Math.round(((job.positions_filled || 0) / total) * 100)) : 0
+            const remainingTone = remaining === 0 ? 'rose' : remaining <= 2 ? 'amber' : 'emerald'
+            const remainingClass = {
+              emerald: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200 ring-emerald-200 dark:ring-emerald-900',
+              amber:   'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200 ring-amber-200 dark:ring-amber-900',
+              rose:    'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-200 ring-rose-200 dark:ring-rose-900',
+            }[remainingTone]
+            return (
+              <div
+                key={job.id}
+                className="relative rounded-2xl border border-zinc-200 dark:border-zinc-800 p-4 transition-all hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md bg-white dark:bg-zinc-900 before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r before:bg-gradient-to-b before:from-indigo-500 before:to-purple-500"
+              >
+                <div className="flex justify-between items-start gap-3 mb-3 pl-2">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold shrink-0 ring-2 ring-white dark:ring-zinc-900 shadow-sm">
+                      {job.title?.charAt(0)?.toUpperCase() || 'J'}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{job.title}</h4>
+                      <div className="flex flex-wrap gap-2 mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                        {job.category && (
+                          <span className="inline-flex items-center gap-1">
+                            <Briefcase size={11} /> {job.category}
+                          </span>
+                        )}
+                        {job.location && (
+                          <span className="inline-flex items-center gap-1">
+                            <MapPin size={11} /> {job.location}
+                          </span>
+                        )}
+                        {job.salary_range && (
+                          <span className="inline-flex items-center gap-1">
+                            <DollarSign size={11} /> {job.salary_range}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`text-xs font-semibold px-2 py-1 rounded-full ring-1 ring-inset whitespace-nowrap shrink-0 ${remainingClass}`}>
+                    {remaining} open
+                  </span>
+                </div>
+
+                {/* Positions progress */}
+                <div className="pl-2 mb-3">
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Positions filled</span>
+                    <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{job.positions_filled || 0} / {total}</span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500"
+                      style={{ width: `${filledPct}%` }}
+                    />
                   </div>
                 </div>
-                <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
-                  {job.positions_available - (job.positions_filled || 0)} positions
-                </span>
-              </div>
 
-              {job.description && (
-                <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-3 line-clamp-2">{job.description}</p>
-              )}
+                {job.description && (
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-3 line-clamp-2 pl-2">{job.description}</p>
+                )}
 
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  onClick={() => allocateMutation.mutate(job.id)}
-                  loading={allocateMutation.isPending}
-                  className="gap-1"
-                >
-                  <CheckCircle size={14} /> Assign to Project
-                </Button>
+                <div className="flex justify-end pl-2">
+                  <Button
+                    size="sm"
+                    onClick={() => allocateMutation.mutate(job.id)}
+                    loading={allocateMutation.isPending}
+                    disabled={remaining === 0}
+                    className="gap-1"
+                  >
+                    <CheckCircle size={14} /> Assign
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

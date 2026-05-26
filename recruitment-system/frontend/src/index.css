@@ -143,6 +143,49 @@ html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #52525b;
 }
 
+/* Thin scrollbar — used inside dense panels (Messages conversations, modal lists) */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #d4d4d8 transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #2563eb;
+}
+html.dark .scrollbar-thin {
+  scrollbar-color: #3f3f46 transparent;
+}
+html.dark .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+}
+html.dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #60a5fa;
+}
+
+/* Soft gradient surfaces for section banners and stat cards */
+.section-grad-blue { background-image: linear-gradient(135deg, rgba(59,130,246,0.10), rgba(59,130,246,0.02)); }
+.section-grad-emerald { background-image: linear-gradient(135deg, rgba(16,185,129,0.10), rgba(16,185,129,0.02)); }
+.section-grad-amber { background-image: linear-gradient(135deg, rgba(245,158,11,0.10), rgba(245,158,11,0.02)); }
+.section-grad-rose { background-image: linear-gradient(135deg, rgba(244,63,94,0.10), rgba(244,63,94,0.02)); }
+.section-grad-purple { background-image: linear-gradient(135deg, rgba(168,85,247,0.10), rgba(168,85,247,0.02)); }
+.section-grad-indigo { background-image: linear-gradient(135deg, rgba(99,102,241,0.10), rgba(99,102,241,0.02)); }
+html.dark .section-grad-blue { background-image: linear-gradient(135deg, rgba(59,130,246,0.18), rgba(15,23,42,0)); }
+html.dark .section-grad-emerald { background-image: linear-gradient(135deg, rgba(16,185,129,0.18), rgba(15,23,42,0)); }
+html.dark .section-grad-amber { background-image: linear-gradient(135deg, rgba(245,158,11,0.18), rgba(15,23,42,0)); }
+html.dark .section-grad-rose { background-image: linear-gradient(135deg, rgba(244,63,94,0.18), rgba(15,23,42,0)); }
+html.dark .section-grad-purple { background-image: linear-gradient(135deg, rgba(168,85,247,0.18), rgba(15,23,42,0)); }
+html.dark .section-grad-indigo { background-image: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(15,23,42,0)); }
+
 /* Native select dropdown arrow dark-mode color hint (Chromium/Edge) */
 html.dark select option {
   background-color: #18181b;

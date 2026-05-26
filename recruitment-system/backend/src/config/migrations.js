@@ -435,6 +435,51 @@ async function applyMigrations() {
     // The is_urgent column itself stays for one release as a deprecated shim.
     await safeAlter(`DROP INDEX IF EXISTS idx_jobs_is_urgent`, 'drop idx_jobs_is_urgent');
 
+    // ── Migration 020: Knowledge Base Documents (chatbot doc ingestion) ──────
+    // Recruiters upload PDF/DOCX/TXT into the KB. We parse + chunk on insert
+    // and store each chunk in knowledge_document_chunks. The chatbot retrieves
+    // matching chunks alongside the existing FAQ knowledge_base entries.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS knowledge_documents (
+            id                  UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id           UUID,
+            title               TEXT         NOT NULL,
+            original_filename   TEXT         NOT NULL,
+            mime_type           TEXT         NOT NULL,
+            file_size_bytes     BIGINT       NOT NULL,
+            storage_url         TEXT,
+            category            VARCHAR(100) NOT NULL DEFAULT 'general',
+            status              VARCHAR(20)  NOT NULL DEFAULT 'pending',
+            parse_error         TEXT,
+            chunk_count         INT          NOT NULL DEFAULT 0,
+            uploaded_by         UUID         REFERENCES users(id) ON DELETE SET NULL,
+            uploaded_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'knowledge_documents table');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_kbdoc_status   ON knowledge_documents(status)`, 'idx_kbdoc_status');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_kbdoc_category ON knowledge_documents(category)`, 'idx_kbdoc_category');
+
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS knowledge_document_chunks (
+            id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            document_id  UUID         NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+            chunk_index  INT          NOT NULL,
+            content      TEXT         NOT NULL,
+            token_count  INT,
+            keywords     JSONB        DEFAULT '[]'::jsonb,
+            created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'knowledge_document_chunks table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_kbchunk_document ON knowledge_document_chunks(document_id)`,
+        'idx_kbchunk_document'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_kbchunk_content_fts ON knowledge_document_chunks USING gin(to_tsvector('english', content))`,
+        'idx_kbchunk_content_fts'
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 

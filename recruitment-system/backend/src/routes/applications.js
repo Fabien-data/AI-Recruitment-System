@@ -139,6 +139,21 @@ router.post('/', authenticate, async (req, res, next) => {
             adaptQuery("INSERT INTO applications (id, candidate_id, job_id, match_score, status) VALUES ($1, $2, $3, $4, 'applied')"),
             [appId, candidate_id, job_id, matchScore]
         );
+
+        // If this candidate was sitting in future_pool (General Pool view),
+        // a manual assignment means they belong in active screening now.
+        if (candidate.status === 'future_pool') {
+            try {
+                await query(
+                    adaptQuery("UPDATE candidates SET status = 'screening', updated_at = NOW() WHERE id = $1"),
+                    [candidate_id]
+                );
+                logger.info(`Candidate ${candidate_id} lifted from future_pool → screening on manual application`);
+            } catch (statusErr) {
+                logger.warn(`Failed to lift candidate ${candidate_id} from future_pool: ${statusErr.message}`);
+            }
+        }
+
         const inserted = await query(adaptQuery('SELECT * FROM applications WHERE id = $1'), [appId]);
         res.status(201).json(inserted.rows[0]);
     } catch (error) {
@@ -416,6 +431,60 @@ router.post('/:id/transfer', authenticate, async (req, res, next) => {
         }
 
         res.json({ ...newApp.rows[0], notification });
+    } catch (error) { next(error); }
+});
+
+/**
+ * Delete an application (admin only).
+ * Cascades to interview_schedules rows that reference this application,
+ * so the call works regardless of FK ON DELETE setting.
+ */
+router.delete('/:id', authenticate, async (req, res, next) => {
+    try {
+        if (req.user?.role !== 'admin') {
+            return res.status(403).json({ error: 'Only admins can delete applications' });
+        }
+
+        const { id } = req.params;
+
+        const appResult = await query(
+            adaptQuery('SELECT id, candidate_id, job_id FROM applications WHERE id = $1'),
+            [id]
+        );
+        if (appResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Application not found' });
+        }
+        const application = appResult.rows[0];
+
+        await withTransaction(async (conn) => {
+            const exec = typeof conn.execute === 'function'
+                ? (sql, p) => conn.execute(sql, p)
+                : (sql, p) => conn.query(sql, p);
+
+            await exec(adaptQuery('DELETE FROM interview_schedules WHERE application_id = $1'), [id]);
+            await exec(adaptQuery('DELETE FROM applications WHERE id = $1'), [id]);
+        });
+
+        try {
+            await query(
+                adaptQuery(`
+                    INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, changes)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                `),
+                [
+                    generateUUID(),
+                    req.user.id,
+                    'application_deleted',
+                    'application',
+                    id,
+                    JSON.stringify({ candidate_id: application.candidate_id, job_id: application.job_id }),
+                ]
+            );
+        } catch (auditErr) {
+            logger.warn(`Audit log failed for application delete ${id}: ${auditErr.message}`);
+        }
+
+        res.json({ success: true, application_id: id });
     } catch (error) { next(error); }
 });
 

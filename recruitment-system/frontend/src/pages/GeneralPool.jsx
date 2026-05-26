@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react'
+﻿import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
@@ -17,13 +17,19 @@ import {
     ChevronDown,
     Calendar,
     Sparkles,
-    CheckCircle
+    CheckCircle,
+    Layers,
+    Tag,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Modal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
+import { Card } from '../components/ui/Card'
+import { Table } from '../components/ui/Table'
+import { EmptyState } from '../components/ui/EmptyState'
+import { Pagination } from '../components/ui/Pagination'
 import { apiClient, getJobs, createApplication } from '../api'
 import toast from 'react-hot-toast'
 
@@ -63,13 +69,19 @@ export default function GeneralPool() {
         )
         : candidates
 
+    const pageStats = useMemo(() => {
+        const withSkills = candidates.filter((c) => (c.tags || []).length > 0).length
+        const withRemarks = candidates.filter((c) => Boolean(c.remarks)).length
+        return { withSkills, withRemarks }
+    }, [candidates])
+
     return (
-        <div className="p-6 lg:p-8 animate-fade-in">
+        <div className="p-6 lg:p-8 animate-fade-in space-y-6">
             <PageHeader
                 icon={Database}
-                tone="blue"
+                tone="mixed"
                 title="General Pool"
-                subtitle="Candidates for future job opportunities"
+                subtitle="Candidates parked in the future pool — surfaces every lead the chatbot couldn't match to an open role."
                 actions={
                     <Button variant="secondary" onClick={() => refetch()}>
                         <RefreshCw size={16} />
@@ -79,198 +91,164 @@ export default function GeneralPool() {
             />
 
             {/* Info Banner */}
-            <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-4 mb-6">
+            <div className="rounded-2xl section-grad-purple ring-1 ring-inset ring-purple-200/60 dark:ring-purple-900/60 p-4">
                 <div className="flex items-start gap-3">
-                    <Sparkles className="text-purple-500 mt-0.5" size={20} />
+                    <div className="rounded-xl bg-purple-100 dark:bg-purple-900/60 p-2 text-purple-700 dark:text-purple-200 shadow-sm">
+                        <Sparkles size={18} aria-hidden />
+                    </div>
                     <div>
-                        <h3 className="font-semibold text-purple-900">About General Pool</h3>
-                        <p className="text-sm text-purple-700 mt-1">
-                            These candidates didn't match any active job positions during the automatic assessment.
-                            They are stored here for future opportunities. When new jobs are created, you can
-                            re-evaluate these candidates or manually assign them.
+                        <h3 className="font-semibold text-purple-900 dark:text-purple-100">About General Pool</h3>
+                        <p className="text-sm text-purple-800 dark:text-purple-200 mt-1">
+                            <span className="font-semibold">General Pool = Future Pool.</span> These candidates didn't match any
+                            active job during automatic assessment, so they sit here until they're manually or auto-assigned. As
+                            soon as you assign one to a job, they drop out of this list.
                         </p>
                     </div>
                 </div>
             </div>
 
+            {/* Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <PoolStat tone="purple"  icon={Database} label="Total in Pool" value={pagination?.total || 0} />
+                <PoolStat tone="emerald" icon={Tag}      label="With Skills (page)" value={pageStats.withSkills} subtitle="on this page" />
+                <PoolStat tone="blue"    icon={Layers}   label="With Remarks (page)" value={pageStats.withRemarks} subtitle="on this page" />
+            </div>
+
             {/* Search */}
-            <div className="card mb-6">
+            <Card className="p-4">
                 <div className="relative max-w-md">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 pointer-events-none" size={20} />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 pointer-events-none" size={18} />
                     <input
                         type="text"
                         placeholder="Search candidates by name, phone, or email..."
                         value={searchInput}
                         onChange={(e) => setSearchInput(e.target.value)}
-                        className="input pl-10 w-full"
+                        className="input pl-9 w-full"
                     />
                 </div>
-            </div>
-
-            {/* Stats */}
-            <div className="grid grid-cols-3 gap-4 mb-6">
-                <div className="card py-4 px-6 bg-purple-50 border border-purple-200">
-                    <p className="text-3xl font-bold text-purple-700">{pagination?.total || 0}</p>
-                    <p className="text-sm text-purple-600">Total in Pool</p>
-                </div>
-                <div className="card py-4 px-6 bg-blue-50 border border-blue-200">
-                    <p className="text-3xl font-bold text-blue-700">
-                        {candidates.filter(c => {
-                            const date = new Date(c.updated_at || c.created_at)
-                            const week = new Date()
-                            week.setDate(week.getDate() - 7)
-                            return date > week
-                        }).length}
-                    </p>
-                    <p className="text-sm text-blue-600">Added This Week</p>
-                </div>
-                <div className="card py-4 px-6 bg-green-50 border border-green-200">
-                    <p className="text-3xl font-bold text-green-700">
-                        {candidates.filter(c => (c.tags || []).length > 0).length}
-                    </p>
-                    <p className="text-sm text-green-600">With Skills</p>
-                </div>
-            </div>
+            </Card>
 
             {/* Candidates List */}
-            <div className="card overflow-hidden">
-                <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
+            <Card className="overflow-hidden p-0">
+                <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/60">
                     <h2 className="font-semibold text-zinc-900 dark:text-zinc-50">
-                        Pool Candidates ({filteredCandidates.length})
+                        Pool Candidates <span className="text-zinc-500 dark:text-zinc-400 font-normal">({filteredCandidates.length})</span>
                     </h2>
                 </div>
 
                 {isLoading ? (
-                    <TableSkeleton rows={8} cols={5} />
+                    <div className="p-5"><TableSkeleton rows={8} cols={5} /></div>
                 ) : filteredCandidates.length === 0 ? (
-                    <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
-                        <Database className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-2" />
-                        <p className="font-medium">No candidates in pool</p>
-                        <p className="text-sm mt-1">
-                            {candidates.length === 0
-                                ? 'All candidates have been matched to jobs'
-                                : 'No candidates match your search'}
-                        </p>
-                    </div>
+                    <EmptyState
+                        icon={Database}
+                        tone="purple"
+                        title={candidates.length === 0 ? 'All candidates matched' : 'No candidates match your search'}
+                        description={candidates.length === 0
+                            ? 'Every candidate has been assigned to a job. New unmatched leads will appear here automatically.'
+                            : 'Try a different name, phone, or email.'}
+                    />
                 ) : (
-                    <>
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
-                                <thead>
-                                    <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60">
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Candidate</th>
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Contact</th>
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Skills</th>
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Added</th>
-                                        <th className="text-left py-3 px-4 text-sm font-semibold text-zinc-700 dark:text-zinc-300">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredCandidates.map((candidate) => (
-                                        <tr key={candidate.id} className="border-b border-zinc-100 dark:border-zinc-800/60 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-colors">
-                                            <td className="py-4 px-4">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white font-semibold">
-                                                        {candidate.name?.charAt(0)?.toUpperCase() || '?'}
-                                                    </div>
-                                                    <div>
-                                                        <p className="font-medium text-zinc-900 dark:text-zinc-50">{candidate.name}</p>
-                                                        <p className="text-xs text-zinc-500 dark:text-zinc-400">via {candidate.source}</p>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td className="py-4 px-4">
-                                                <p className="text-zinc-900 dark:text-zinc-50 flex items-center gap-1">
-                                                    <Phone size={12} className="text-zinc-400 dark:text-zinc-500" />
-                                                    {candidate.phone}
+                    <Table>
+                        <Table.Head>
+                            <Table.Tr hover={false}>
+                                <Table.Th icon={User}>Candidate</Table.Th>
+                                <Table.Th icon={Phone}>Contact</Table.Th>
+                                <Table.Th icon={Tag}>Skills</Table.Th>
+                                <Table.Th icon={Calendar}>Added</Table.Th>
+                                <Table.Th align="right">Actions</Table.Th>
+                            </Table.Tr>
+                        </Table.Head>
+                        <Table.Body>
+                            {filteredCandidates.map((candidate) => (
+                                <Table.Tr key={candidate.id} accent="purple">
+                                    <Table.Td className="min-w-[220px]">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white font-bold ring-2 ring-white dark:ring-zinc-900 shadow-sm shrink-0">
+                                                {candidate.name?.charAt(0)?.toUpperCase() || '?'}
+                                            </div>
+                                            <div className="min-w-0">
+                                                <p className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{candidate.name}</p>
+                                                <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">
+                                                    via {candidate.source || 'unknown'}
                                                 </p>
-                                                {candidate.email && (
-                                                    <p className="text-sm text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
-                                                        <Mail size={12} className="text-zinc-400 dark:text-zinc-500" />
-                                                        {candidate.email}
-                                                    </p>
-                                                )}
-                                            </td>
-                                            <td className="py-4 px-4">
-                                                <div className="flex flex-wrap gap-1 max-w-[200px]">
-                                                    {(candidate.tags || []).slice(0, 3).map((skill, i) => (
-                                                        <span key={i} className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
-                                                            {skill}
-                                                        </span>
-                                                    ))}
-                                                    {(candidate.tags || []).length === 0 && (
-                                                        <span className="text-xs text-zinc-400 dark:text-zinc-500 italic">No skills tagged</span>
-                                                    )}
-                                                </div>
-                                                {candidate.remarks && (
-                                                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 truncate max-w-[200px]" title={candidate.remarks}>
-                                                        📝 {candidate.remarks}
-                                                    </p>
-                                                )}
-                                            </td>
-                                            <td className="py-4 px-4">
-                                                <span className="text-sm text-zinc-600 dark:text-zinc-400 flex items-center gap-1">
-                                                    <Calendar size={12} />
-                                                    {new Date(candidate.updated_at || candidate.created_at).toLocaleDateString()}
+                                            </div>
+                                        </div>
+                                    </Table.Td>
+                                    <Table.Td>
+                                        <p className="text-sm text-zinc-700 dark:text-zinc-300 inline-flex items-center gap-1">
+                                            <Phone size={12} className="text-zinc-400 dark:text-zinc-500" />
+                                            {candidate.phone || '—'}
+                                        </p>
+                                        {candidate.email && (
+                                            <p className="text-xs text-zinc-500 dark:text-zinc-400 inline-flex items-center gap-1 mt-0.5">
+                                                <Mail size={12} className="text-zinc-400 dark:text-zinc-500" />
+                                                {candidate.email}
+                                            </p>
+                                        )}
+                                    </Table.Td>
+                                    <Table.Td>
+                                        <div className="flex flex-wrap gap-1 max-w-[220px]">
+                                            {(candidate.tags || []).slice(0, 3).map((skill, i) => (
+                                                <span key={i} className="inline-flex items-center text-xs bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full ring-1 ring-inset ring-purple-200 dark:ring-purple-900/60">
+                                                    {skill}
                                                 </span>
-                                            </td>
-                                            <td className="py-4 px-4">
-                                                <div className="flex gap-2">
-                                                    <Button
-                                                        variant="secondary"
-                                                        size="sm"
-                                                        onClick={() => setSelectedCandidate(candidate)}
-                                                        className="gap-1"
-                                                    >
-                                                        <Eye size={14} />
-                                                        View
-                                                    </Button>
-                                                    <Button
-                                                        variant="primary"
-                                                        size="sm"
-                                                        onClick={() => setSelectedCandidate({ ...candidate, showAssign: true })}
-                                                        className="gap-1"
-                                                    >
-                                                        <ArrowRight size={14} />
-                                                        Assign
-                                                    </Button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        {/* Pagination */}
-                        {pagination && pagination.totalPages > 1 && (
-                            <div className="flex justify-between items-center px-4 py-3 border-t border-zinc-200 dark:border-zinc-800">
-                                <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                                    Showing {((page - 1) * 20) + 1} to {Math.min(page * 20, pagination.total)} of {pagination.total}
-                                </p>
-                                <div className="flex gap-2">
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        disabled={page === 1}
-                                        onClick={() => setPage(p => p - 1)}
-                                    >
-                                        Previous
-                                    </Button>
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        disabled={page >= pagination.totalPages}
-                                        onClick={() => setPage(p => p + 1)}
-                                    >
-                                        Next
-                                    </Button>
-                                </div>
-                            </div>
-                        )}
-                    </>
+                                            ))}
+                                            {(candidate.tags || []).length > 3 && (
+                                                <span className="inline-flex items-center text-xs bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2 py-0.5 rounded-full">
+                                                    +{(candidate.tags || []).length - 3}
+                                                </span>
+                                            )}
+                                            {(candidate.tags || []).length === 0 && (
+                                                <span className="text-xs text-zinc-400 dark:text-zinc-500 italic">No skills tagged</span>
+                                            )}
+                                        </div>
+                                        {candidate.remarks && (
+                                            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 truncate max-w-[220px]" title={candidate.remarks}>
+                                                {candidate.remarks}
+                                            </p>
+                                        )}
+                                    </Table.Td>
+                                    <Table.Td className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
+                                        {new Date(candidate.updated_at || candidate.created_at).toLocaleDateString()}
+                                    </Table.Td>
+                                    <Table.Td align="right">
+                                        <div className="inline-flex gap-1.5">
+                                            <Button
+                                                variant="secondary"
+                                                size="sm"
+                                                onClick={() => setSelectedCandidate(candidate)}
+                                                className="gap-1"
+                                            >
+                                                <Eye size={13} />
+                                                View
+                                            </Button>
+                                            <Button
+                                                variant="primary"
+                                                size="sm"
+                                                onClick={() => setSelectedCandidate({ ...candidate, showAssign: true })}
+                                                className="gap-1"
+                                            >
+                                                <ArrowRight size={13} />
+                                                Assign
+                                            </Button>
+                                        </div>
+                                    </Table.Td>
+                                </Table.Tr>
+                            ))}
+                        </Table.Body>
+                    </Table>
                 )}
-            </div>
+
+                {pagination && pagination.totalPages > 1 && (
+                    <Pagination
+                        page={pagination.page || page}
+                        totalPages={pagination.totalPages}
+                        total={pagination.total}
+                        pageSize={pagination.limit || 20}
+                        onChange={setPage}
+                    />
+                )}
+            </Card>
 
             {/* Candidate Modal */}
             {selectedCandidate && (
@@ -280,6 +258,32 @@ export default function GeneralPool() {
                     onClose={() => setSelectedCandidate(null)}
                 />
             )}
+        </div>
+    )
+}
+
+const POOL_STAT_TONES = {
+    purple:  { wrap: 'section-grad-purple ring-purple-200/60 dark:ring-purple-900/60',   label: 'text-purple-700 dark:text-purple-300',   value: 'text-purple-900 dark:text-purple-100',   icon: 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-200' },
+    emerald: { wrap: 'section-grad-emerald ring-emerald-200/60 dark:ring-emerald-900/60', label: 'text-emerald-700 dark:text-emerald-300', value: 'text-emerald-900 dark:text-emerald-100', icon: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200' },
+    blue:    { wrap: 'section-grad-blue ring-blue-200/60 dark:ring-blue-900/60',         label: 'text-blue-700 dark:text-blue-300',       value: 'text-blue-900 dark:text-blue-100',       icon: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200' },
+}
+
+function PoolStat({ tone = 'purple', icon: Icon, label, value, subtitle }) {
+    const t = POOL_STAT_TONES[tone] || POOL_STAT_TONES.purple
+    return (
+        <div className={`relative overflow-hidden rounded-2xl ring-1 ring-inset bg-white dark:bg-zinc-900 p-4 ${t.wrap}`}>
+            <div className="flex items-center justify-between gap-3">
+                <div>
+                    <p className={`text-[10px] font-semibold uppercase tracking-wider ${t.label}`}>{label}</p>
+                    <p className={`mt-1 text-3xl font-bold tracking-tight ${t.value}`}>{value}</p>
+                    {subtitle && <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5">{subtitle}</p>}
+                </div>
+                {Icon && (
+                    <div className={`rounded-2xl p-3 shadow-sm ${t.icon}`}>
+                        <Icon size={20} aria-hidden />
+                    </div>
+                )}
+            </div>
         </div>
     )
 }
