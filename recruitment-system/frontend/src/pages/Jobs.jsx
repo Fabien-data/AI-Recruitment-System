@@ -17,6 +17,7 @@ export default function Jobs() {
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState('active')
   const [categoryFilter, setCategoryFilter] = useState('')
+  const [urgentOnly, setUrgentOnly] = useState(false)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [uploadState, setUploadState] = useState({
     isProcessing: false,
@@ -112,7 +113,8 @@ export default function Jobs() {
       ]
     : []
 
-  const jobsList = data?.data || []
+  const jobsListAll = data?.data || []
+  const jobsList = urgentOnly ? jobsListAll.filter(j => j.is_urgent) : jobsListAll
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
@@ -293,6 +295,16 @@ export default function Jobs() {
               aria-label="Filter by category"
             />
           </div>
+          <div className="flex items-end">
+            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={urgentOnly}
+                onChange={(e) => setUrgentOnly(e.target.checked)}
+              />
+              Urgent only
+            </label>
+          </div>
         </div>
       </div>
 
@@ -328,7 +340,16 @@ export default function Jobs() {
               <tbody>
                 {jobsList.map((job) => (
                   <tr key={job.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="py-3 px-4 font-medium text-gray-900">{job.title}</td>
+                    <td className="py-3 px-4 font-medium text-gray-900">
+                      <div className="flex items-center gap-2">
+                        <span>{job.title}</span>
+                        {job.is_urgent && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide bg-red-100 text-red-700 px-1.5 py-0.5 rounded">
+                            Urgent
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="py-3 px-4 text-gray-600">{job.category}</td>
                     <td className="py-3 px-4">
                       {job.project_title ? (

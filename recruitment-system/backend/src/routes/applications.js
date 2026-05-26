@@ -224,43 +224,43 @@ router.put('/:id', authenticate, async (req, res, next) => {
             }
         }
 
+        let notification = { success: [], failed: [] };
         if (status) {
             const jobResult = await query(adaptQuery('SELECT title FROM jobs WHERE id = $1'), [application.job_id]);
             const jobTitle = jobResult.rows[0]?.title || 'the position';
             const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
 
-            setImmediate(async () => {
-                try {
-                    switch (status) {
-                        case 'certified':
-                            if (prescreening_datetime && prescreening_location) {
-                                await notifications.sendPreScreeningNotification(
-                                    application.candidate_id, jobTitle, prescreening_datetime, prescreening_location, channels);
-                            } else {
-                                await notifications.sendCertificationNotification(
-                                    application.candidate_id, jobTitle, certification_notes, channels);
-                            }
-                            break;
-                        case 'interview_scheduled':
-                            if (effDt && effLoc)
-                                await notifications.sendInterviewNotification(application.candidate_id, jobTitle, effDt, effLoc, channels);
-                            break;
-                        case 'selected':
-                            await notifications.sendSelectionNotification(application.candidate_id, jobTitle, channels);
-                            break;
-                        case 'rejected':
-                            await notifications.sendRejectionNotification(application.candidate_id, jobTitle, channels);
-                            break;
-                    }
-                } catch (notifError) {
-                    logger.error(`Notification failed for application ${id}:`, notifError);
+            try {
+                switch (status) {
+                    case 'certified':
+                        if (prescreening_datetime && prescreening_location) {
+                            notification = await notifications.sendPreScreeningNotification(
+                                application.candidate_id, jobTitle, prescreening_datetime, prescreening_location, channels);
+                        } else {
+                            notification = await notifications.sendCertificationNotification(
+                                application.candidate_id, jobTitle, certification_notes, channels);
+                        }
+                        break;
+                    case 'interview_scheduled':
+                        if (effDt && effLoc)
+                            notification = await notifications.sendInterviewNotification(application.candidate_id, jobTitle, effDt, effLoc, channels);
+                        break;
+                    case 'selected':
+                        notification = await notifications.sendSelectionNotification(application.candidate_id, jobTitle, channels);
+                        break;
+                    case 'rejected':
+                        notification = await notifications.sendRejectionNotification(application.candidate_id, jobTitle, channels);
+                        break;
                 }
-            });
+            } catch (notifError) {
+                logger.error(`Notification failed for application ${id}:`, notifError);
+                notification.failed.push({ channel: 'all', error: notifError.message });
+            }
         }
 
         res.json({
             ...application,
-            notification_queued: !!status && ['certified','interview_scheduled','selected','rejected'].includes(status)
+            notification,
         });
     } catch (error) { next(error); }
 });
@@ -290,15 +290,22 @@ router.post('/:id/reject-to-pool', authenticate, async (req, res, next) => {
         );
 
         const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
-        setImmediate(async () => {
-            try {
-                await notifications.sendGeneralPoolNotification(application.candidate_id, channels);
-            } catch (e) { logger.error(`General pool notification failed: ${e.message}`); }
-        });
+        let notification = { success: [], failed: [] };
+        try {
+            notification = await notifications.sendGeneralPoolNotification(application.candidate_id, channels);
+        } catch (e) {
+            logger.error(`General pool notification failed: ${e.message}`);
+            notification.failed.push({ channel: 'all', error: e.message });
+        }
 
-        res.json({ success: true, message: 'Candidate moved to general pool',
-                   application_id: id, candidate_id: application.candidate_id,
-                   notification_queued: true, channels });
+        res.json({
+            success: true,
+            message: 'Candidate moved to general pool',
+            application_id: id,
+            candidate_id: application.candidate_id,
+            channels,
+            notification,
+        });
     } catch (error) { next(error); }
 });
 
@@ -340,20 +347,21 @@ router.post('/:id/transfer', authenticate, async (req, res, next) => {
 
         // Notify candidate that their application has been moved
         const channels = Array.isArray(req.body.notify_channels) ? req.body.notify_channels : ['whatsapp'];
-        setImmediate(async () => {
-            try {
-                await notifications.sendTransferNotification(
-                    originalApp.candidate_id,
-                    targetJobResult.rows[0].title,
-                    /* oldJobTitle */ (await query(adaptQuery('SELECT title FROM jobs WHERE id = $1'), [originalApp.job_id])).rows[0]?.title || 'previous position',
-                    channels
-                );
-            } catch (notifErr) {
-                logger.error(`Transfer notification failed for application ${id}: ${notifErr.message}`);
-            }
-        });
+        let notification = { success: [], failed: [] };
+        try {
+            const oldJobTitle = (await query(adaptQuery('SELECT title FROM jobs WHERE id = $1'), [originalApp.job_id])).rows[0]?.title || 'previous position';
+            notification = await notifications.sendTransferNotification(
+                originalApp.candidate_id,
+                targetJobResult.rows[0].title,
+                oldJobTitle,
+                channels
+            );
+        } catch (notifErr) {
+            logger.error(`Transfer notification failed for application ${id}: ${notifErr.message}`);
+            notification.failed.push({ channel: 'all', error: notifErr.message });
+        }
 
-        res.json(newApp.rows[0]);
+        res.json({ ...newApp.rows[0], notification });
     } catch (error) { next(error); }
 });
 
@@ -407,21 +415,25 @@ router.post('/batch-certify', authenticate, async (req, res, next) => {
                 );
                 const app = appResult.rows[0];
 
-                setImmediate(async () => {
-                    try {
-                        if (prescreening_datetime && prescreening_location) {
-                            await notifications.sendPreScreeningNotification(
-                                app.candidate_id, app.job_title, prescreening_datetime, prescreening_location, channels);
-                        } else {
-                            await notifications.sendCertificationNotification(
-                                app.candidate_id, app.job_title, certification_notes || '', channels);
-                        }
-                    } catch (notifErr) {
-                        logger.error(`Batch certify notification failed for ${appId}: ${notifErr.message}`);
+                let perCandidateNotification = { success: [], failed: [] };
+                try {
+                    if (prescreening_datetime && prescreening_location) {
+                        perCandidateNotification = await notifications.sendPreScreeningNotification(
+                            app.candidate_id, app.job_title, prescreening_datetime, prescreening_location, channels);
+                    } else {
+                        perCandidateNotification = await notifications.sendCertificationNotification(
+                            app.candidate_id, app.job_title, certification_notes || '', channels);
                     }
-                });
+                } catch (notifErr) {
+                    logger.error(`Batch certify notification failed for ${appId}: ${notifErr.message}`);
+                    perCandidateNotification.failed.push({ channel: 'all', error: notifErr.message });
+                }
 
-                results.success.push({ application_id: appId, candidate_id: app?.candidate_id });
+                results.success.push({
+                    application_id: appId,
+                    candidate_id: app?.candidate_id,
+                    notification: perCandidateNotification,
+                });
             } catch (err) {
                 results.failed.push({ application_id: appId, error: err.message });
             }

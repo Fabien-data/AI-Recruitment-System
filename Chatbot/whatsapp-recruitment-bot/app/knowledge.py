@@ -199,6 +199,15 @@ async def bootstrap_job_cache() -> int:
             else:
                 requirements = raw_req if isinstance(raw_req, dict) else {}
 
+            schema = job.get("required_fields_schema")
+            if isinstance(schema, str):
+                try:
+                    schema = json.loads(schema) if schema else {}
+                except Exception:
+                    schema = {}
+            elif not isinstance(schema, dict):
+                schema = {}
+
             job_cache[job_id] = {
                 "job_id": job_id,
                 "project_id": job.get("project_id"),
@@ -215,6 +224,10 @@ async def bootstrap_job_cache() -> int:
                 "start_date":     job.get("start_date"),
                 "interview_date": job.get("interview_date"),
                 "project_title":  job.get("project_title"),
+                "is_urgent":      bool(job.get("is_urgent")),
+                "required_fields_schema": schema,
+                "created_at":     job.get("created_at"),
+                "updated_at":     job.get("updated_at"),
             }
             loaded_count += 1
 
@@ -278,7 +291,7 @@ def _require_api_key(x_chatbot_api_key: Optional[str]) -> None:
 @router.post("/upsert")
 async def upsert_knowledge(
     body: KnowledgeUpsertRequest,
-    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False)
+    x_chatbot_api_key: Optional[str] = Header(default=None)
 ):
     """
     Upsert a knowledge document into the RAG index.
@@ -322,6 +335,15 @@ async def upsert_knowledge(
                     requirements = {}
             else:
                 requirements = raw_req if isinstance(raw_req, dict) else {}
+            schema = metadata.get("required_fields_schema")
+            if isinstance(schema, str):
+                try:
+                    schema = json.loads(schema) if schema else {}
+                except Exception:
+                    schema = {}
+            elif not isinstance(schema, dict):
+                schema = {}
+
             job_cache[job_id] = {
                 "job_id": job_id,
                 "project_id": metadata.get("project_id"),
@@ -338,6 +360,8 @@ async def upsert_knowledge(
                 "start_date":     metadata.get("start_date"),
                 "interview_date": metadata.get("interview_date"),
                 "project_title":  metadata.get("project_title"),
+                "is_urgent":      bool(metadata.get("is_urgent")),
+                "required_fields_schema": schema,
                 "updated_at":     now_ts,
             }
             logger.info(f"✅ Job cache instantly updated for job_id={job_id} title={body.title!r}")
@@ -388,7 +412,7 @@ async def upsert_knowledge(
 @router.post("/delete")
 async def delete_knowledge(
     body: KnowledgeDeleteRequest,
-    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False)
+    x_chatbot_api_key: Optional[str] = Header(default=None)
 ):
     """
     Delete a knowledge document from the RAG index.
@@ -434,7 +458,7 @@ def get_general_knowledge() -> Dict[str, Any]:
 @router.post("/general")
 async def upsert_general_knowledge(
     body: GeneralKnowledgeUpsertRequest,
-    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False),
+    x_chatbot_api_key: Optional[str] = Header(default=None),
 ):
     """
     Upsert a general knowledge entry (company info, FAQs, registration details).
@@ -468,7 +492,7 @@ async def upsert_general_knowledge(
 
 @router.get("/general")
 async def list_general_knowledge(
-    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False),
+    x_chatbot_api_key: Optional[str] = Header(default=None),
 ):
     """List all stored general knowledge entries (CRM admin debug)."""
     _require_api_key(x_chatbot_api_key)
@@ -477,7 +501,7 @@ async def list_general_knowledge(
 
 @router.post("/refresh-cache")
 async def refresh_cache_endpoint(
-    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False)
+    x_chatbot_api_key: Optional[str] = Header(default=None)
 ):
     """
     Trigger an immediate refresh of the in-memory job cache.
@@ -509,7 +533,7 @@ async def job_cache_health():
 
 @router.get("/inventory")
 async def knowledge_inventory(
-    x_chatbot_api_key: Optional[str] = Header(default=None, convert_underscores=False)
+    x_chatbot_api_key: Optional[str] = Header(default=None)
 ):
     """
     Report what knowledge the bot currently has. Used by the CRM reconciler

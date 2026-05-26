@@ -76,6 +76,7 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
         const jobsSQL = isMySQL
             ? `SELECT j.id, j.title, j.category, j.status, j.salary_range,
                       j.requirements, j.positions_available, j.location, j.description,
+                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
                       p.id as project_id, p.countries, p.benefits, p.salary_info,
                       p.interview_date, p.start_date, p.title as project_title
                FROM jobs j
@@ -84,6 +85,7 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
                ORDER BY j.created_at DESC`
             : `SELECT j.id, j.title, j.category, j.status, j.salary_range,
                       j.requirements, j.positions_available, j.location, j.description,
+                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
                       p.id as project_id, p.countries, p.benefits, p.salary_info,
                       p.interview_date, p.start_date, p.title as project_title
                FROM jobs j
@@ -117,6 +119,10 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
                 start_date:     job.start_date     || null,
                 interview_date: job.interview_date || null,
                 project_title:  job.project_title  || null,
+                is_urgent:      Boolean(job.is_urgent),
+                required_fields_schema: _parseJsonSafe(job.required_fields_schema, {}),
+                created_at:     job.created_at || null,
+                updated_at:     job.updated_at || null,
             };
         });
 
@@ -371,7 +377,9 @@ router.post(
             job_id: providedJobId,
             ad_ref,
             is_general_pool,
-            chatbot_candidate_id
+            chatbot_candidate_id,
+            remarks,
+            preferences_log
         } = req.body;
 
         const isGeneralPool = (
@@ -489,6 +497,14 @@ router.post(
                 candidateId = existingCandidate.id;
                 responseStatus = 'updated';
 
+                // remarks: COALESCE preserves prior remarks if the new payload omits it
+                // preferences_log: append-only — if the new payload sends an array, we
+                //   merge with the existing log via JSONB concatenation in Postgres so
+                //   recruiters can see the full timeline of declared preferences.
+                const preferencesLogJson = Array.isArray(preferences_log) && preferences_log.length > 0
+                    ? JSON.stringify(preferences_log)
+                    : null;
+
                 const updateSQL = isMySQL
                     ? `UPDATE candidates SET
                         name                 = COALESCE(?, name),
@@ -501,6 +517,8 @@ router.post(
                         chatbot_ref          = COALESCE(?, chatbot_ref),
                         ad_ref               = COALESCE(?, ad_ref),
                         metadata             = ?,
+                        remarks              = COALESCE(?, remarks),
+                        preferences_log      = COALESCE(JSON_MERGE_PRESERVE(preferences_log, ?), preferences_log),
                         last_contact_at      = NOW(),
                         updated_at           = NOW()
                        WHERE id = ?`
@@ -515,9 +533,11 @@ router.post(
                         chatbot_ref          = COALESCE($8, chatbot_ref),
                         ad_ref               = COALESCE($9, ad_ref),
                         metadata             = $10,
+                        remarks              = COALESCE($11, remarks),
+                        preferences_log      = COALESCE(preferences_log, '[]'::jsonb) || COALESCE($12::jsonb, '[]'::jsonb),
                         last_contact_at      = NOW(),
                         updated_at           = NOW()
-                       WHERE id = $11`;
+                       WHERE id = $13`;
 
                 await query(updateSQL, [
                     resolvedCandidateName || null,
@@ -530,6 +550,8 @@ router.post(
                     chatbot_candidate_id ? String(chatbot_candidate_id) : null,
                     ad_ref || null,
                     metadataJson,   // unified JSON string or null — no double-stringify
+                    remarks || null,
+                    preferencesLogJson,
                     candidateId
                 ]);
 
@@ -539,17 +561,21 @@ router.post(
                 responseStatus = 'created';
                 candidateId = generateUUID();
 
+                const preferencesLogInsertJson = Array.isArray(preferences_log) && preferences_log.length > 0
+                    ? JSON.stringify(preferences_log)
+                    : '[]';
+
                 const insertSQL = isMySQL
                     ? `INSERT INTO candidates
                         (id, phone, whatsapp_phone, name, email, source, preferred_language,
                          skills, experience_years, highest_qualification,
-                         chatbot_ref, ad_ref, metadata, status, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', NOW(), NOW())`
+                         chatbot_ref, ad_ref, metadata, remarks, preferences_log, status, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', NOW(), NOW())`
                     : `INSERT INTO candidates
                         (id, phone, whatsapp_phone, name, email, source, preferred_language,
                          skills, experience_years, highest_qualification,
-                         chatbot_ref, ad_ref, metadata, status)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'new')`;
+                         chatbot_ref, ad_ref, metadata, remarks, preferences_log, status)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, 'new')`;
 
                 await query(insertSQL, [
                     candidateId,
@@ -564,7 +590,9 @@ router.post(
                     highest_qualification || null,
                     chatbot_candidate_id ? String(chatbot_candidate_id) : null,
                     ad_ref || null,
-                    metadataJson    // unified JSON string or null — no double-stringify
+                    metadataJson,    // unified JSON string or null — no double-stringify
+                    remarks || null,
+                    preferencesLogInsertJson
                 ]);
 
                 logger.info(`Chatbot intake: CREATED candidate ${candidateId} (${normalizedPhone})`);
@@ -754,7 +782,12 @@ router.post(
                     job_interest_stated: job_interest || null,
                     cv_file_id: cvFileId,
                     additional_document_ids: additionalDocumentIds,
-                    routed_by: 'agentic_state_machine'
+                    routed_by: 'agentic_state_machine',
+                    // Surface the chatbot's free-text remarks + preference history
+                    // here so recruiters reviewing the general pool see the WHY
+                    // alongside the WHAT.
+                    remarks: remarks || null,
+                    preferences_log: Array.isArray(preferences_log) ? preferences_log : []
                 };
 
                 const existingPoolSQL = isMySQL

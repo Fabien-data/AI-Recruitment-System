@@ -17,7 +17,16 @@ from app.health import router as health_router
 from app.knowledge import router as knowledge_router, bootstrap_job_cache, start_cache_refresh_task, load_persisted_knowledge
 from app import __version__
 
-# Configure logging
+# Configure logging — force UTF-8 on stdout/stderr so Sinhala/Tamil and emoji
+# survive into Cloud Run logs instead of being mangled to '?' by Cloud Run's
+# default C locale (which broke QA observability for non-English replies).
+import sys as _sys
+for _stream in (_sys.stdout, _sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
+
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -386,6 +395,51 @@ async def candidate_info(phone: str, db: Session = Depends(get_db)):
         "qualification": candidate.highest_qualification,
         "extracted_data": candidate.extracted_data,
         "has_cv": bool(candidate.resume_file_path),
+    }
+
+
+@app.get("/admin/conversation")
+async def admin_conversation(phone: str, limit: int = 30, db: Session = Depends(get_db)):
+    """
+    🔍 Return the most recent conversation turns for a candidate (QA helper).
+    Each row includes message_type ('incoming'/'outgoing'), full text, detected
+    language, sentiment, and timestamp.
+
+    Example: GET /admin/conversation?phone=94XXXXXXXXX&limit=20
+    """
+    from app.models import Conversation, Candidate as CandidateModel
+
+    candidate = crud.get_candidate_by_phone(db, phone)
+    if not candidate:
+        return {"status": "not_found", "phone": phone, "messages": []}
+
+    rows = (
+        db.query(Conversation)
+        .filter(Conversation.candidate_id == candidate.id)
+        .order_by(Conversation.timestamp.desc())
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+
+    messages = []
+    for r in reversed(rows):
+        mt = r.message_type.value if hasattr(r.message_type, "value") else str(r.message_type)
+        messages.append({
+            "id": r.id,
+            "type": mt,
+            "text": r.message_text,
+            "language": r.detected_language,
+            "sentiment": r.sentiment_label,
+            "sentiment_score": r.sentiment_score,
+            "media_type": r.media_type,
+            "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+        })
+
+    return {
+        "phone": phone,
+        "candidate_id": candidate.id,
+        "count": len(messages),
+        "messages": messages,
     }
 
 

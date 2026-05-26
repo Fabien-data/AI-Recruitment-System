@@ -76,6 +76,19 @@ class RecruitmentSyncService:
         if preferred_language:
             payload["preferred_language"] = preferred_language
 
+        # General-pool routing: when the chatbot saves a lead with no matching
+        # job, it sets remarks + preferences_log + general_pool_optin in state.
+        # Send those through so the backend stores them on the candidate row
+        # and copies them into the general_pool metadata.
+        remarks = agent_state.get("remarks")
+        if remarks:
+            payload["remarks"] = remarks
+        prefs_log = agent_state.get("preferences_log")
+        if isinstance(prefs_log, list) and prefs_log:
+            payload["preferences_log"] = prefs_log
+        if collected.get("general_pool_optin"):
+            payload["is_general_pool"] = True
+
         return payload
 
     def _resolve_cv_path(self, candidate, cv_path: Optional[str]) -> Optional[str]:
@@ -169,9 +182,14 @@ class RecruitmentSyncService:
             return False
 
         # Don't sync until we know the candidate's job interest — a "General"
-        # placeholder makes job matching useless in the CRM.
+        # placeholder makes job matching useless in the CRM. Exception: when
+        # the chatbot has opted the lead into the general pool (no match found),
+        # we DO want to push so the lead is captured with their remarks.
         job_interest = self._resolve_job_interest(candidate)
-        if not job_interest or job_interest.strip().lower() in ("general", ""):
+        agent_state = candidate.agent_state if isinstance(candidate.agent_state, dict) else {}
+        collected = agent_state.get("collected_data") if isinstance(agent_state.get("collected_data"), dict) else {}
+        is_general_pool = bool(collected.get("general_pool_optin"))
+        if (not job_interest or job_interest.strip().lower() in ("general", "")) and not is_general_pool:
             logger.info(
                 "Sync deferred for %s — job_role not yet collected",
                 candidate.phone_number,
@@ -186,6 +204,11 @@ class RecruitmentSyncService:
             if db is not None:
                 candidate.cv_sync_status = "synced"
                 db.commit()
+            logger.info(
+                "Recruitment sync succeeded for %s job_role=%s",
+                candidate.phone_number,
+                payload.get("job_interest"),
+            )
             return True
 
         if db is not None:

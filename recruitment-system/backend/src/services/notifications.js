@@ -6,6 +6,7 @@ const { query } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const whatsapp = require('./whatsapp');
 const sms = require('./sms');
+const chatbotNotifier = require('./chatbotNotifier');
 const logger = require('../utils/logger');
 
 // Notification templates for different scenarios
@@ -435,60 +436,89 @@ async function sendNotification(options) {
                 switch (channel) {
                     case 'whatsapp':
                         if (candidate.phone) {
-                            // Prefer template messages for proactive outbound (outside 24h window).
-                            // Fall back to freeform text if no template is defined or token missing.
-                            const templateName = template.template_name;
-                            if (templateName && process.env.WHATSAPP_ACCESS_TOKEN) {
-                                try {
-                                    const langMap = { en: 'en', si: 'si_LK', ta: 'ta' };
-                                    const langCode = langMap[language] || 'en';
-                                    const components = buildTemplateComponents(type, variables);
-                                    await whatsapp.sendTemplateMessage(
-                                        candidate.phone, templateName, langCode, components
-                                    );
-                                    results.success.push({ channel: 'whatsapp', phone: candidate.phone, mode: 'template' });
-                                } catch (tplErr) {
-                                    logger.warn(`Template send failed (${templateName}), falling back to text: ${tplErr.message}`);
-                                    await whatsapp.sendTextMessage(candidate.phone, message);
-                                    results.success.push({ channel: 'whatsapp', phone: candidate.phone, mode: 'text_fallback' });
-                                }
+                            // Route through the chatbot so the candidate sees this in the same
+                            // WhatsApp thread as their bot conversation. The chatbot owns the
+                            // Meta credentials and the language-aware template rendering.
+                            const pushResult = await chatbotNotifier.pushCandidateStatus({
+                                phone: candidate.phone,
+                                name: candidate.name,
+                                type,
+                                jobTitle: data.job_title,
+                                interviewDate: data.interview_datetime,
+                                interviewLocation: data.interview_location,
+                                alternativeJobs: data.alternative_jobs,
+                                prescreeningDatetime: data.prescreening_datetime,
+                                prescreeningLocation: data.prescreening_location,
+                                certificationNotes: data.certification_notes,
+                                oldJobTitle: data.old_job_title,
+                                newJobTitle: data.new_job_title,
+                            });
+
+                            if (pushResult.ok) {
+                                results.success.push({
+                                    channel: 'whatsapp',
+                                    phone: candidate.phone,
+                                    messageId: pushResult.messageId,
+                                });
+                                await logCommunication(candidateId, 'whatsapp', 'outbound', message, type, {
+                                    deliveryStatus: 'sent',
+                                    whatsappMessageId: pushResult.messageId,
+                                });
                             } else {
-                                await whatsapp.sendTextMessage(candidate.phone, message);
-                                results.success.push({ channel: 'whatsapp', phone: candidate.phone, mode: 'text' });
+                                results.failed.push({
+                                    channel: 'whatsapp',
+                                    error: pushResult.error,
+                                });
+                                await logCommunication(candidateId, 'whatsapp', 'outbound', message, type, {
+                                    deliveryStatus: 'failed',
+                                    error: pushResult.error,
+                                });
                             }
-                            await logCommunication(candidateId, 'whatsapp', 'outbound', message, type);
+                        } else {
+                            results.failed.push({ channel: 'whatsapp', error: 'candidate has no phone number' });
                         }
                         break;
 
                     case 'sms':
                         if (candidate.phone) {
                             const smsResult = await sms.sendSMS(candidate.phone, message.substring(0, 480));
-                            results.success.push({
-                                channel: 'sms',
-                                phone: candidate.phone,
-                                simulated: smsResult.simulated || false
-                            });
-                            await logCommunication(candidateId, 'sms', 'outbound', message.substring(0, 480), type);
+                            if (smsResult.simulated) {
+                                results.failed.push({
+                                    channel: 'sms',
+                                    error: 'SMS provider not configured (NOTIFYLK credentials missing)',
+                                });
+                                await logCommunication(candidateId, 'sms', 'outbound', message.substring(0, 480), type, {
+                                    deliveryStatus: 'simulated',
+                                });
+                            } else {
+                                results.success.push({ channel: 'sms', phone: candidate.phone });
+                                await logCommunication(candidateId, 'sms', 'outbound', message.substring(0, 480), type, {
+                                    deliveryStatus: 'sent',
+                                });
+                            }
+                        } else {
+                            results.failed.push({ channel: 'sms', error: 'candidate has no phone number' });
                         }
                         break;
 
                     case 'email':
                         if (candidate.email) {
-                            // Try to use Gmail service for sending
-                            try {
-                                const gmailService = require('./gmail');
-                                const isGmailConnected = await gmailService.isConnected();
-                                if (isGmailConnected) {
-                                    await gmailService.sendAutoReply(candidate.email, subject, candidate.name);
-                                    results.success.push({ channel: 'email', email: candidate.email });
-                                } else {
-                                    results.success.push({ channel: 'email', email: candidate.email, status: 'queued', note: 'Gmail not connected' });
-                                }
-                            } catch (gmailErr) {
-                                logger.warn(`Gmail email send failed, queuing: ${gmailErr.message}`);
-                                results.success.push({ channel: 'email', email: candidate.email, status: 'queued' });
+                            const emailResult = await sendEmail(candidate.email, subject, message, candidate.name);
+                            if (emailResult.ok) {
+                                results.success.push({ channel: 'email', email: candidate.email, provider: emailResult.provider });
+                                await logCommunication(candidateId, 'email', 'outbound', message, type, {
+                                    deliveryStatus: 'sent',
+                                    provider: emailResult.provider,
+                                });
+                            } else {
+                                results.failed.push({ channel: 'email', error: emailResult.error });
+                                await logCommunication(candidateId, 'email', 'outbound', message, type, {
+                                    deliveryStatus: 'failed',
+                                    error: emailResult.error,
+                                });
                             }
-                            await logCommunication(candidateId, 'email', 'outbound', message, type);
+                        } else {
+                            results.failed.push({ channel: 'email', error: 'candidate has no email address' });
                         }
                         break;
                 }
@@ -524,6 +554,32 @@ async function sendCertificationNotification(candidateId, jobTitle, certificatio
         data: {
             job_title: jobTitle,
             certification_notes: certificationNotes
+        },
+        channels
+    });
+}
+
+/**
+ * Send interview reminder (bell icon / scheduled reminder job).
+ * Same job/datetime fields as sendInterviewNotification but uses the
+ * reminder template so the candidate sees this as a friendly nudge,
+ * not a re-issue of the original schedule message.
+ */
+async function sendInterviewReminderNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp']) {
+    return sendNotification({
+        candidateId,
+        type: 'interview_reminder',
+        data: {
+            job_title: jobTitle,
+            interview_datetime: new Date(interviewDatetime).toLocaleString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            }),
+            interview_location: interviewLocation
         },
         channels
     });
@@ -614,16 +670,77 @@ async function sendGeneralPoolNotification(candidateId, channels = ['whatsapp'])
 }
 
 /**
- * Log communication to database
+ * Log communication to database.
+ * extras: { deliveryStatus, whatsappMessageId, provider, error }
  */
-async function logCommunication(candidateId, channel, direction, content, messageType) {
+async function logCommunication(candidateId, channel, direction, content, messageType, extras = {}) {
     try {
+        const metadata = {
+            notification_type: messageType,
+            delivery_status: extras.deliveryStatus || 'sent',
+        };
+        if (extras.provider) metadata.provider = extras.provider;
+        if (extras.error) metadata.error = extras.error;
+
         await query(
-            adaptQuery('INSERT INTO communications (candidate_id, channel, direction, message_type, content, metadata) VALUES ($1, $2, $3, $4, $5, $6)'),
-            [candidateId, channel, direction, 'text', content, JSON.stringify({ notification_type: messageType })]
+            adaptQuery('INSERT INTO communications (candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id) VALUES ($1, $2, $3, $4, $5, $6, $7)'),
+            [candidateId, channel, direction, 'text', content, JSON.stringify(metadata), extras.whatsappMessageId || null]
         );
     } catch (error) {
         logger.error('Failed to log communication:', error);
+    }
+}
+
+/**
+ * Send an email via Gmail (if OAuth connected) or SMTP (nodemailer fallback).
+ * Returns { ok, provider?, error? } — never throws.
+ */
+async function sendEmail(toEmail, subject, body, recipientName) {
+    // Try Gmail OAuth first
+    try {
+        const gmailService = require('./gmail');
+        if (typeof gmailService.isConnected === 'function' && await gmailService.isConnected()) {
+            // Existing gmail.sendAutoReply signature is (to, subject, name).
+            // Prefer a richer sendEmail signature if the service ever exposes one.
+            if (typeof gmailService.sendEmail === 'function') {
+                await gmailService.sendEmail(toEmail, subject, body);
+            } else {
+                await gmailService.sendAutoReply(toEmail, subject, recipientName);
+            }
+            return { ok: true, provider: 'gmail' };
+        }
+    } catch (gmailErr) {
+        logger.warn(`Gmail send failed, falling back to SMTP: ${gmailErr.message}`);
+    }
+
+    // SMTP fallback via nodemailer
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const smtpFrom = process.env.SMTP_FROM || smtpUser;
+
+    if (!smtpHost || !smtpUser || !smtpPass) {
+        return { ok: false, error: 'No email provider configured (Gmail not connected and SMTP env vars missing)' };
+    }
+
+    try {
+        const nodemailer = require('nodemailer');
+        const transport = nodemailer.createTransport({
+            host: smtpHost,
+            port: parseInt(process.env.SMTP_PORT || '587', 10),
+            secure: process.env.SMTP_SECURE === 'true',
+            auth: { user: smtpUser, pass: smtpPass },
+        });
+        await transport.sendMail({
+            from: smtpFrom,
+            to: toEmail,
+            subject,
+            text: body,
+        });
+        return { ok: true, provider: 'smtp' };
+    } catch (smtpErr) {
+        logger.error(`SMTP send failed for ${toEmail}: ${smtpErr.message}`);
+        return { ok: false, error: `SMTP error: ${smtpErr.message}` };
     }
 }
 
@@ -757,6 +874,7 @@ module.exports = {
     sendCertificationNotification,
     sendPreScreeningNotification,
     sendInterviewNotification,
+    sendInterviewReminderNotification,
     sendSelectionNotification,
     sendRejectionNotification,
     sendGeneralPoolNotification,

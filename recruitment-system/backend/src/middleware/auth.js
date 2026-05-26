@@ -8,6 +8,7 @@ const ROLES = {
     ADMIN: 'admin',
     PROJECT_HANDLER: 'project_handler',
     SOURCING_DEPARTMENT: 'sourcing_department',
+    MARKETING_AGENT: 'marketing_agent',
 };
 
 // Backwards-compat alias map (old DB values → new values)

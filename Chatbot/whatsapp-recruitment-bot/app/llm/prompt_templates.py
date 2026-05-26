@@ -1492,6 +1492,41 @@ Question:"""
             "singlish": "Hello {name}, *{job_title}* ekata apply kalata thanks. Apahanata me post ekata vena candidates select una. Ewa gana kanagathu wenna epa — vena opportunities thiyenawa!{alternatives_text}\n\nMewain monawath gana dana ganna kamatida?",
             "tanglish": "Hello {name}, *{job_title}* post-ku apply pannathukkuk nandri. Valakkamaga antha post-ku vera candidates select aagittanga. Aana worry pannatheenga — vera opportunities irukku!{alternatives_text}\n\nIndha edhaavathu pathi therinja kondaalum solveenga?",
         },
+        "certified": {
+            "en": "Hi {name}! 🎉 Great news — you have been *certified* for *{job_title}*! Our team will be in touch with the next steps. Congratulations and welcome aboard!{notes_text}",
+            "si": "ආයුබෝවන් {name}! 🎉 සුබ ආරංචියක් — *{job_title}* සඳහා ඔබව *සහතික* කර ඇත! අපේ කණ්ඩායම ඉදිරි පියවර ගැන සම්බන්ධ වෙනවා. සුභ පැතුම්!{notes_text}",
+            "ta": "வணக்கம் {name}! 🎉 நல்ல செய்தி — *{job_title}* பதவிக்கு நீங்கள் *சான்றளிக்கப்பட்டுள்ளீர்கள்*! எங்கள் குழு அடுத்த படிகள் பற்றி உங்களுடன் தொடர்பு கொள்ளும். வாழ்த்துக்கள்!{notes_text}",
+            "singlish": "Hello {name}! 🎉 Good news — oya *{job_title}* ekata *certified* una! Api team eka next steps gana kiyanawa. Congrats!{notes_text}",
+            "tanglish": "Hello {name}! 🎉 Nalla news — *{job_title}* post-ku neenga *certified* aagiteenga! Engal team next steps pathi contact pannuvanga. Congrats!{notes_text}",
+        },
+        "prescreening_certified": {
+            "en": "Hi {name}! 🎉 You have been *certified* for *{job_title}*. Your *pre-screening* is scheduled for *{prescreening_datetime}*{location_text}. Please arrive on time and bring your original documents.{notes_text}",
+            "si": "ආයුබෝවන් {name}! 🎉 *{job_title}* සඳහා ඔබව *සහතික* කර ඇත. ඔබේ *පෙර-පරීක්ෂාව* *{prescreening_datetime}*{location_text} දිනට නියමිතයි. කරුණාකර වේලාවට පැමිණ මුල් ලේඛන රැගෙන එන්න.{notes_text}",
+            "ta": "வணக்கம் {name}! 🎉 *{job_title}* பதவிக்கு நீங்கள் *சான்றளிக்கப்பட்டுள்ளீர்கள்*. உங்கள் *முன்-தேர்வு* *{prescreening_datetime}*{location_text} அன்று திட்டமிடப்பட்டுள்ளது. தயவுசெய்து நேரத்திற்கு வந்து உங்கள் அசல் ஆவணங்களைக் கொண்டு வாருங்கள்.{notes_text}",
+            "singlish": "Hello {name}! 🎉 *{job_title}* ekata *certified* una. Oyage *pre-screening* eka *{prescreening_datetime}*{location_text} thiyenawa. Welawata enna, original documents aran enna.{notes_text}",
+            "tanglish": "Hello {name}! 🎉 *{job_title}* post-ku *certified* aagiteenga. Unga *pre-screening* *{prescreening_datetime}*{location_text} ku schedule panniyirukku. Time-ku vandhu original documents kondu vaanga.{notes_text}",
+        },
+        "general_pool": {
+            "en": "Hi {name}, thank you for your interest in working with us. We don't have a position matching your profile right now, but we've kept you in our *general talent pool*. We'll reach out as soon as a suitable opportunity opens up. 🙌",
+            "si": "ආයුබෝවන් {name}, අප සමඟ වැඩ කිරීමට ඔබේ උනන්දුවට ස්තුතියි. දැනට ඔබේ පැතිකඩට ගැලපෙන තනතුරක් නැත, නමුත් අපි ඔබව *සාමාන්‍ය දක්ෂතා කණ්ඩායමේ* තබා ඇත. සුදුසු අවස්ථාවක් ලැබුණු විගස අපි ඔබව සම්බන්ධ කරගන්නවා. 🙌",
+            "ta": "வணக்கம் {name}, எங்களுடன் வேலை செய்வதில் உங்கள் ஆர்வத்திற்கு நன்றி. தற்போது உங்கள் சுயவிவரத்துடன் பொருந்தும் பதவி எதுவும் இல்லை, ஆனால் உங்களை எங்கள் *பொது திறமை குழுவில்* வைத்துள்ளோம். பொருத்தமான வாய்ப்பு கிடைத்தவுடன் தொடர்பு கொள்வோம். 🙌",
+            "singlish": "Hello {name}, api ekka weda karanna hithuwata thanks. Den oyage profile ekata match wena position ekak na, eth api oyawa *general talent pool* eke thiyala thiyenawa. Hodatama match wena ekak awama api connect karanawa. 🙌",
+            "tanglish": "Hello {name}, engaludan vela seyya unga interest-ku nandri. Ippo unga profile-ku match aagura position illa, aana ungala *general talent pool*-la vechirukkom. Sariyana opportunity vandha udan contact pannuvom. 🙌",
+        },
+        "transferred": {
+            "en": "Hi {name}, your application has been *transferred* from *{old_job_title}* to *{new_job_title}*. Your profile and documents have been moved automatically. Our team will be in touch with next steps. 🔄",
+            "si": "ආයුබෝවන් {name}, ඔබේ අයදුම්පත *{old_job_title}* සිට *{new_job_title}* දක්වා *මාරු* කර ඇත. ඔබේ පැතිකඩ සහ ලේඛන ස්වයංක්‍රීයව මාරු වී ඇත. අපේ කණ්ඩායම ඉදිරි පියවර ගැන සම්බන්ධ වෙනවා. 🔄",
+            "ta": "வணக்கம் {name}, உங்கள் விண்ணப்பம் *{old_job_title}* இலிருந்து *{new_job_title}* க்கு *மாற்றப்பட்டுள்ளது*. உங்கள் சுயவிவரம் மற்றும் ஆவணங்கள் தானாகவே மாற்றப்பட்டுள்ளன. எங்கள் குழு அடுத்த படிகள் பற்றி தொடர்பு கொள்ளும். 🔄",
+            "singlish": "Hello {name}, oyage application eka *{old_job_title}* eken *{new_job_title}* ekata *transfer* kara thiyenawa. Profile saha documents automatic-ly move una. Api team eka next steps gana kiyanawa. 🔄",
+            "tanglish": "Hello {name}, unga application *{old_job_title}*-ilirundhu *{new_job_title}*-ku *transfer* aagirukku. Profile-um documents-um automatic-a move aagirukku. Team next steps pathi contact pannuvanga. 🔄",
+        },
+        "interview_reminder": {
+            "en": "Hi {name}! ⏰ Friendly reminder — your interview for *{job_title}* is on *{interview_date}*{location_text}. Please be prepared, arrive on time, and bring your original documents. Good luck!",
+            "si": "ආයුබෝවන් {name}! ⏰ මතක් කිරීමක් — *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *{interview_date}*{location_text} දිනට නියමිතයි. කරුණාකර සූදානම්ව, වේලාවට පැමිණ, මුල් ලේඛන රැගෙන එන්න. සුභ පැතුම්!",
+            "ta": "வணக்கம் {name}! ⏰ நினைவூட்டல் — *{job_title}* பதவிக்கான உங்கள் நேர்முகத் தேர்வு *{interview_date}*{location_text} அன்று நடைபெறும். தயவுசெய்து தயாராக இருந்து, நேரத்திற்கு வந்து, அசல் ஆவணங்களைக் கொண்டு வாருங்கள். வாழ்த்துக்கள்!",
+            "singlish": "Hello {name}! ⏰ Reminder ekak — oyage *{job_title}* interview eka *{interview_date}*{location_text} thiyenawa. Ready weela, welawata enna, original documents aran enna. Good luck!",
+            "tanglish": "Hello {name}! ⏰ Reminder — unga *{job_title}* interview *{interview_date}*{location_text} ku irukku. Ready-a irundhu, time-ku vandhu, original documents kondu vaanga. Good luck!",
+        },
     }
 
     @classmethod
@@ -1504,6 +1539,11 @@ Question:"""
         interview_date: Optional[str] = None,
         interview_location: Optional[str] = None,
         alternative_jobs: Optional[list] = None,
+        prescreening_datetime: Optional[str] = None,
+        prescreening_location: Optional[str] = None,
+        certification_notes: Optional[str] = None,
+        old_job_title: Optional[str] = None,
+        new_job_title: Optional[str] = None,
     ) -> Optional[str]:
         """Build a status update message for a candidate in their preferred language."""
         templates_for_status = cls.STATUS_UPDATE_TEMPLATES.get(status)
@@ -1520,16 +1560,22 @@ Question:"""
         if template is None:
             template = templates_for_status.get("en", "")
 
-        # Build location text
+        # Build interview/prescreening location text
         location_text = ""
-        if interview_location:
-            location_text = f" at *{interview_location}*"
+        loc_source = interview_location or prescreening_location
+        if loc_source:
+            location_text = f" at *{loc_source}*"
 
         # Build alternatives text
         alternatives_text = ""
         if alternative_jobs:
             job_list = "\n".join(f"  • {j}" for j in alternative_jobs[:5])
             alternatives_text = f"\n\n{job_list}"
+
+        # Build certification notes text (recruiter-facing context shown to candidate)
+        notes_text = ""
+        if certification_notes and certification_notes.strip():
+            notes_text = f"\n\n_Note: {certification_notes.strip()}_"
 
         name = candidate_name.strip().split()[0] if candidate_name.strip() else "there"
 
@@ -1539,6 +1585,10 @@ Question:"""
             interview_date=interview_date or "TBD",
             location_text=location_text,
             alternatives_text=alternatives_text,
+            prescreening_datetime=prescreening_datetime or "TBD",
+            notes_text=notes_text,
+            old_job_title=old_job_title or "",
+            new_job_title=new_job_title or job_title,
         )
 
     @classmethod

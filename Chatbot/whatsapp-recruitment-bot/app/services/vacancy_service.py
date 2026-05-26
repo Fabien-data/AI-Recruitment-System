@@ -514,6 +514,75 @@ class VacancyService:
         nonzero = [j for j in scored if score(j) > 0]
         return (nonzero[:15] if nonzero else scored[:15])
 
+    def get_all_vacancies(self) -> List[Dict[str, Any]]:
+        """Return every active vacancy from the in-memory cache.
+
+        Used by the AI supervisor's FAQ-mode prompt to ground answers about
+        salaries / countries / openings in live data.
+        """
+        cache = get_job_cache()
+        return [j for j in cache.values() if j.get("status") == "active"]
+
+    async def get_recent_active(self, limit: int = 3) -> List[Dict[str, Any]]:
+        """Return the N most recent active vacancies, regardless of match.
+
+        Used by the chatbot's no-match fallback to keep the lead engaged
+        instead of dead-ending the conversation. Prefers `is_urgent=True`
+        jobs first (recruiter-flagged); falls back to most-recent active.
+        """
+        cache = get_job_cache()
+        active = [j for j in cache.values() if j.get("status") == "active"]
+        if not active:
+            # Cold cache — try the REST fallback so we never return empty when
+            # the recruitment system actually has jobs.
+            try:
+                refreshed = await self._fetch_from_rest_api({"status": "active"})
+                if refreshed:
+                    active = refreshed
+            except Exception as exc:
+                logger.debug("get_recent_active rest fallback failed: %s", exc)
+
+        # Stable sort by created_at desc when available; fall back to insertion
+        # order (cache iteration order). Missing timestamps sort last.
+        def _ts(job: Dict[str, Any]) -> str:
+            return str(
+                job.get("created_at")
+                or job.get("updated_at")
+                or job.get("deadline")
+                or ""
+            )
+
+        urgent = [j for j in active if j.get("is_urgent")]
+        urgent.sort(key=_ts, reverse=True)
+        if len(urgent) >= limit:
+            return urgent[: max(1, min(limit, 10))]
+
+        # Top up with the most recent non-urgent jobs when there aren't enough urgent ones.
+        non_urgent = [j for j in active if not j.get("is_urgent")]
+        non_urgent.sort(key=_ts, reverse=True)
+        combined = urgent + non_urgent
+        return combined[: max(1, min(limit, 10))]
+
+    def get_required_fields_schema(self, job_id: Optional[str]) -> Dict[str, Any]:
+        """Return the per-job mandatory/optional intake schema, if set.
+
+        Shape: { field_name: { mandatory: bool, ask_after?: str, ... } }
+        Empty dict means "use the static default order".
+        """
+        if not job_id:
+            return {}
+        cache = get_job_cache()
+        job = cache.get(str(job_id))
+        if not job:
+            for j in cache.values():
+                if str(j.get("job_id")) == str(job_id) or str(j.get("id")) == str(job_id):
+                    job = j
+                    break
+        if not job:
+            return {}
+        schema = job.get("required_fields_schema") or {}
+        return schema if isinstance(schema, dict) else {}
+
     def get_active_countries(self) -> list:
         """Return deduplicated sorted list of countries with active vacancies."""
         cache = get_job_cache()
@@ -652,7 +721,7 @@ TASK: Write a friendly, conversational WhatsApp reply in {lang_name}.
 - NEVER list more than 8 jobs — pick the most relevant ones if there are more.
 - End with an engaging question to keep the conversation going.
 - Use the candidate's first name naturally if you know it.
-- If a job has a deadline within 30 days, prefix the title with "?? URGENT". If it has very high placement demand (security/driver/cook), prefix with "? HIGH DEMAND".
+- If a job has is_urgent=true OR a deadline within 30 days, prefix the title with "?? URGENT". If it has very high placement demand (security/driver/cook), prefix with "? HIGH DEMAND".
 
 CRITICAL LANGUAGE RULES:
 - Reply ENTIRELY in {lang_name}.

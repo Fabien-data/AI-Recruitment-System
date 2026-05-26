@@ -1,0 +1,485 @@
+## Appendix A — Conversation transcripts (post-fix run, rev 111)
+
+Each scenario was driven by simulated Meta webhook payloads against the live Cloud Run instance. Bot replies were pulled from Cloud Run logs (`Sending reply to <phone>:` lines), with the full reply text logged after the truncation fix shipped in rev 111. Sinhala/Tamil characters render correctly here even though they appear as `?` in older Cloud Run logs — see §4.1 of the report for why.
+
+### en / novice (phone `9477009001`)
+**Final state:** name=`Kamal` job_role=`Driver` country=`Dubai` exp=`5` locked_lang=`en` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `hi` |
+| 1 | 🤖 bot | Hello Kamal! Could you please share your email address for our records? |
+| 2 | 👤 user | `i want job` |
+| 2 | 🤖 bot | Could you please share your email address? This will help us keep in touch regarding job opportunities. |
+| 3 | 👤 user | `?` |
+| 3 | 🤖 bot | Could you please share your email address for our records? |
+| 4 | 👤 user | `dont know` |
+| 4 | 🤖 bot | No worries, Kamal. Could you please share your email address for our records? |
+| 5 | 👤 user | `what` |
+| 5 | 🤖 bot | Could you please provide your email address for our records? |
+| 6 | 👤 user | `name?? me Kamal` |
+| 6 | 🤖 bot | Could you please share your email address for official communication? |
+| 7 | 👤 user | `driver job lol` |
+| 7 | 🤖 bot | Could you please share your email address for official communication? |
+| 8 | 👤 user | `dubai` |
+| 8 | 🤖 bot | Could you please share your email address for us to have an official contact method? |
+| 9 | 👤 user | `30 yrs` |
+| 9 | 🤖 bot | Could you please share your email address for official contact? |
+| 10 | 👤 user | `no email` |
+| 10 | 🤖 bot | Could you please upload your CV document or photo here? |
+| 11 | 👤 user | `5 yr` |
+| 11 | 🤖 bot | Could you please provide your email address for official communication? |
+
+### en / cooperative (phone `9477009002`)
+**Final state:** name=`Nimal Perera` job_role=`Welder` country=`Saudi Arabia` exp=`8` locked_lang=`en` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `Hello, I would like to apply for a job` |
+| 1 | 🤖 bot | Great! Could you please upload your CV so we can proceed with your application? |
+| 2 | 👤 user | `My name is Nimal Perera` |
+| 2 | 🤖 bot | Thank you, Nimal. Could you please upload your CV? |
+| 3 | 👤 user | `I am interested in welder positions` |
+| 3 | 🤖 bot | Thank you for confirming your interest in welder positions. Could you please upload your CV? |
+| 4 | 👤 user | `I prefer Saudi Arabia or Qatar` |
+| 4 | 🤖 bot | Thank you for sharing your preferred countries. Could you please upload your CV? |
+| 5 | 👤 user | `I am 32 years old` |
+| 5 | 🤖 bot | Thank you for confirming your age. Could you please upload your CV? |
+| 6 | 👤 user | `nimal.perera.test@example.com` |
+| 6 | 🤖 bot | Thank you for confirming your email. Could you please upload your CV? |
+| 7 | 👤 user | `I have 8 years of welding experience` |
+| 7 | 🤖 bot | Could you please upload your CV? It will help us match you with the right opportunities. |
+
+### en / skeptical (phone `9477009003`)
+**Final state:** name=`-` job_role=`-` country=`-` exp=`None` locked_lang=`en` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `Hi, is this a real recruitment agency?` |
+| 1 | 🤖 bot | Yes, this is Dewan Consultants, a real recruitment agency. How can I assist you today? |
+| 2 | 👤 user | `do you charge any registration fee?` |
+| 2 | 🤖 bot | No, we do not charge any registration fees for our services. |
+| 3 | 👤 user | `what is the salary for a driver in Dubai?` |
+| 3 | 🤖 bot | The salary for a driver in Dubai can vary based on experience and the employer, but it typically ranges from AED 2,000 to AED 4,000 per month. Would you like to apply for a driver position in Dubai? |
+| 4 | 👤 user | `how do I know this isn't a scam?` |
+| 4 | 🤖 bot | We understand your concern. Dewan Consultants is a reputable agency helping candidates secure legitimate overseas jobs. You can verify our credentials through our official website or contact us directly for more information. |
+| 5 | 👤 user | `what company is this?` |
+| 5 | 🤖 bot | We are Dewan Consultants, a recruitment agency helping candidates find overseas job opportunities. How can I assist you today? |
+| 6 | 👤 user | `what countries do you send people to?` |
+| 6 | 🤖 bot | We send candidates to various countries, including the UAE, Qatar, Saudi Arabia, and more. Which countries are you interested in working in? |
+
+### en / codeswitch (phone `9477009004`)
+**Final state:** name=`Sunil` job_role=`-` country=`Dubai` exp=`None` locked_lang=`singlish` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `hi machan, mata Dubai eke job ekak ona` |
+| 1 | 🤖 bot | Ela jobs gana kiyanna puluwan, oyage job role eka mokakda? Driver, Nurse, Cook wage monawada hoyanne? |
+| 2 | 👤 user | `salary kiyada?` |
+| 3 | 👤 user | `name eka Sunil` |
+| 4 | 👤 user | `im 28 years` |
+| 5 | 👤 user | `ela jobs monawada thiyenne?` |
+
+### en / offtopic (phone `9477009005`)
+**Final state:** name=`-` job_role=`-` country=`-` exp=`None` locked_lang=`en` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `what's the weather like in Colombo today` |
+| 1 | 🤖 bot | I'm here to assist with job applications. Please let me know which countries you are interested in working in. |
+| 2 | 👤 user | `who won the cricket match yesterday` |
+| 2 | 🤖 bot | I'm here to assist with job applications. For cricket match updates, please check the latest sports news online. |
+| 3 | 👤 user | `tell me a joke` |
+| 3 | 🤖 bot | Why don't scientists trust atoms? Because they make up everything! |
+| 4 | 👤 user | `asdfghjkl qwerty zzz` |
+| 4 | 🤖 bot | Could you please let me know which countries you are interested in working? |
+| 5 | 👤 user | `what is 234 times 56` |
+| 5 | 🤖 bot | The result of 234 times 56 is 13,104. |
+| 6 | 👤 user | `are you a real person or AI` |
+| 6 | 🤖 bot | I'm an AI here to assist you with finding overseas job opportunities. How can I help you today? |
+| 7 | 👤 user | `fuck you` |
+| 7 | 🤖 bot | I'm here to help with your job application process. If you have any questions or need assistance, feel free to let me know. |
+| 8 | 👤 user | `you stupid bot` |
+
+### si / novice (phone `9477009101`)
+**Final state:** name=`Kamal` job_role=`Driver` country=`Dubai` exp=`6` locked_lang=`si` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `ආයුබෝවන්` |
+| 1 | 🤖 bot | ????????! ??? CV ????? ?? ?????????? ??? ??? ??? ?????? |
+| 2 | 👤 user | `මට job එකක් ඕන` |
+| 2 | 🤖 bot | ??? Dubai ?? ????????? ??????? ?? ?? ?????. ??? ?? ??????? |
+| 3 | 👤 user | `?` |
+| 3 | 🤖 bot | ??? CV ????? ?? ?????????? ???????? ?????. |
+| 4 | 👤 user | `මොකක්ද` |
+| 4 | 🤖 bot | ??? CV ????? ?? ?????????? ???????? ?????. |
+| 5 | 👤 user | `Kamal` |
+| 5 | 🤖 bot | ??? ????? ?????? ??????? |
+| 6 | 👤 user | `driver` |
+| 6 | 🤖 bot | ??? ????? ?????? ??????? |
+| 7 | 👤 user | `Dubai` |
+| 7 | 🤖 bot | ??? ????? ?????? ??????? |
+| 8 | 👤 user | `මට වයස 35` |
+| 8 | 🤖 bot | ??? ????? ?????? ??????? |
+| 9 | 👤 user | `email නෑ` |
+| 9 | 🤖 bot | ??? CV ????? ?? ?????????? ??? ??? ??? ?????? |
+| 10 | 👤 user | `අවුරුදු 6` |
+| 10 | 🤖 bot | ??? ????? ?????? ??????? |
+
+### si / cooperative (phone `9477009102`)
+**Final state:** name=`සමන් කුමාර` job_role=`වැල්ඩර්` country=`Qatar` exp=`7` locked_lang=`si` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `ආයුබෝවන්! මට රැකියාවක් සඳහා අයදුම් කරන්න ඕන` |
+| 1 | 🤖 bot | ????????! ??? CV ????? ?? ?????????? ??? ??? ?????. |
+| 2 | 👤 user | `මගේ නම සමන් කුමාර` |
+| 2 | 🤖 bot | ??? CV ????? ?? ?????????? ???????? ?????. |
+| 3 | 👤 user | `මට වැල්ඩර් රැකියාවක් ඕන` |
+| 3 | 🤖 bot | ??? CV ????? ?? ?????????? ???????? ?????. |
+| 4 | 👤 user | `මට Qatar හෝ Saudi කැමතියි` |
+| 4 | 🤖 bot | ??? CV ????? ?? ?????????? ??? ??? ??? ?????? |
+| 5 | 👤 user | `මගේ වයස අවුරුදු 30` |
+| 5 | 🤖 bot | ??? CV ????? ?? ?????????? ?? ??? ???? ?????. |
+| 6 | 👤 user | `saman.test@example.com` |
+| 6 | 🤖 bot | ??? CV ????? ?? ?????????? ???????? ?????. |
+| 7 | 👤 user | `මට වසර 7ක වැල්ඩින් පළපුරුද්ද` |
+
+### si / skeptical (phone `9477009103`)
+**Final state:** name=`-` job_role=`driver` country=`Dubai` exp=`None` locked_lang=`si` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `මේක ඇත්ත agency එකක්ද?` |
+| 1 | 🤖 bot | ???, Dewan Consultants ??? ?????????? ?? ???????? agency ???? ?? ???, ??? ????? ?????? ??????????? ????? ?????? ???? ?????? ??? ???????. |
+| 2 | 👤 user | `registration fee එකක් ගන්නවද?` |
+| 2 | 🤖 bot | ???? ??????? ???? ?????? ?????????? ????????? ?? ??????. |
+| 3 | 👤 user | `Dubai එකේ driver job එකේ සැලරිය කීයද?` |
+| 3 | 🤖 bot | ????, Dubai ?? driver ???????? ???????? ????? ?????? AED 2,000 ??? AED 4,000 ????? ????? ??? ???. ?????, ????????? ?? ?????? ???????? ???? ????? ??? ???. |
+| 4 | 👤 user | `මේක scam එකක් නෙවෙයිද?` |
+| 4 | 🤖 bot | ??? ?????????? ???? ???? ??????? ?? Dewan Consultants ?????? ???????. ??? ???????? ???? ???? ??? ?? ???. |
+| 5 | 👤 user | `මේ company එකේ නම මොකක්ද?` |
+| 5 | 🤖 bot | ??? company ??? ?? Dewan Consultants. ??? ???? ??????? ?????? |
+
+### si / codeswitch (phone `9477009104`)
+**Final state:** name=`Nuwan` job_role=`-` country=`Saudi` exp=`4` locked_lang=`singlish` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `hello, මට Saudi job ekak ona` |
+| 1 | 🤖 bot | Oyata mokada job ekata apply karanna? Driver, Nurse wage roles innawa. |
+| 2 | 👤 user | `මගේ name Nuwan` |
+| 2 | 🤖 bot | Oyata mokada job ekata apply karanna? (e.g. Driver, Nurse, Cook) |
+| 3 | 👤 user | `experience අවුරුදු 4` |
+| 3 | 🤖 bot | Hari, oyage job role eka mokakda? Monawada oyata karanna one? |
+| 4 | 👤 user | `salary kiyada AED වලින්?` |
+| 4 | 🤖 bot | Nuwan, mokakda oyage job role eka? Eken salary eka piliganna puluwan. |
+| 5 | 👤 user | `thank you ela` |
+| 5 | 🤖 bot | Hari, oyage job role eka mokakda? Driver, Nurse wage? |
+
+### si / offtopic (phone `9477009105`)
+**Final state:** name=`-` job_role=`-` country=`-` exp=`None` locked_lang=`si` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `අද කොළඹ කාලගුණය මොකක්ද` |
+| 1 | 🤖 bot | ????????, ?? ?????? ??????? ??? ??? ?????. ??? ????? ??????? ?????? ???? ?????? ?? ???? ??? ?????? |
+| 2 | 👤 user | `ඊයේ ක්‍රිකට් match එක ජයග්‍රහණය කලේ කවුද` |
+| 2 | 🤖 bot | ?? ????????, ?? ???????? match ??????? ??????? ??? ??? ?????. ???? ?????, ??? ?????? ????????? ??? ??????? |
+| 3 | 👤 user | `ජෝක් එකක් කියන්න` |
+| 3 | 🤖 bot | ?? ????????, ????? ?? ???? ?????? ?????. ??? ????? ??????? ???? ???????? |
+| 4 | 👤 user | `qwerty asdf` |
+| 4 | 🤖 bot | ?? ??? ??? ???? ???????. ??? CV ????? ?? ?????????? ???????? ?????. |
+| 5 | 👤 user | `234 × 56 කීයද` |
+| 5 | 🤖 bot | 234 ? 56 = 13,104 |
+| 6 | 👤 user | `ඔයා මනුෂ්‍යයෙක්ද?` |
+| 6 | 🤖 bot | ?? ??? ???? ???? ??????? ??????? ?????????? ??????. ?? ???? ??????? ??????? |
+| 7 | 👤 user | `තෝ බල්ලෙක්` |
+
+### ta / novice (phone `9477009201`)
+**Final state:** name=`ராமு` job_role=`டிரைவர்` country=`துபாய்` exp=`5` locked_lang=`ta` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `வணக்கம்` |
+| 1 | 🤖 bot | ???????, ?????? email ???????? ????? ????????? |
+| 2 | 👤 user | `எனக்கு வேலை வேணும்` |
+| 2 | 🤖 bot | ?????? CV-? ????????????. ?????? ??????? ?????? ?????? ??? ????????. |
+| 3 | 👤 user | `?` |
+| 3 | 🤖 bot | ?????? ?????????? ???????? ????? ????????? ??? ?????? ????????? ?????? ??????. |
+| 4 | 👤 user | `தெரியல` |
+| 4 | 🤖 bot | ???, ?????? CV-?? Upload ????? ????????? |
+| 5 | 👤 user | `பெயர் ராமு` |
+| 5 | 🤖 bot | ?????????? ?????? Email ???????? ?????????. |
+| 6 | 👤 user | `டிரைவர் வேலை` |
+| 6 | 🤖 bot | ?????????? ?????? email ???????? ??????????. |
+| 7 | 👤 user | `துபாய்` |
+| 7 | 🤖 bot | ??????? ????? ??? ?????????? ???????? ????? ????????? |
+| 8 | 👤 user | `30 வயசு` |
+| 8 | 🤖 bot | ?????? ?????????? ???????? ?????????. |
+| 9 | 👤 user | `email இல்லை` |
+| 9 | 🤖 bot | ???, ?????? CV-? Upload ?????????. |
+| 10 | 👤 user | `5 வருஷம்` |
+
+### ta / cooperative (phone `9477009202`)
+**Final state:** name=`சுரேஷ் குமார்` job_role=`வெல்டர்` country=`சவுதி அரேபியா` exp=`9` locked_lang=`ta` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `வணக்கம், நான் வேலைக்கு apply பண்ண விரும்புகிறேன்` |
+| 1 | 🤖 bot | ???????, ?????? CV ? ????????????. |
+| 2 | 👤 user | `என் பெயர் சுரேஷ் குமார்` |
+| 2 | 🤖 bot | ??????? ?????? CV ? ????????????. |
+| 3 | 👤 user | `எனக்கு வெல்டர் வேலை வேணும்` |
+| 3 | 🤖 bot | ??????? ???? ????????? ???? ????? ?????????????????? |
+| 4 | 👤 user | `சவுதி அரேபியா அல்லது கத்தார்` |
+| 4 | 🤖 bot | ???????? CV-? ????????????. |
+| 5 | 👤 user | `எனக்கு வயது 33` |
+| 5 | 🤖 bot | ??????? ?????? CV ? Upload ????? ????????? |
+| 6 | 👤 user | `suresh.test@example.com` |
+| 6 | 🤖 bot | ?????????? ?????? CV ? ????????????. |
+| 7 | 👤 user | `எனக்கு 9 வருட welding அனுபவம்` |
+| 7 | 🤖 bot | ?????? CV-? ????????????. ??? ?????? ????????? ?????? ?????? ??????. |
+
+### ta / skeptical (phone `9477009203`)
+**Final state:** name=`-` job_role=`-` country=`-` exp=`None` locked_lang=`ta` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `இது உண்மையான agency-ஆ?` |
+| 1 | 🤖 bot | ???, ??? ???????? ????????. ?????? ???? ???????? ???????? ?????? ???????? ??????????. |
+| 2 | 👤 user | `registration fee ஏதாவது வசூலிக்கிறீங்களா?` |
+| 2 | 🤖 bot | ?????, ????????? ????? ????? ??????? ????????? ?????. |
+| 3 | 👤 user | `துபாய் driver salary எவ்வளவு?` |
+| 3 | 🤖 bot | ???????? ??????? ????????? ??????? ?? ??????????? ???????? ?????????, ???????? ???????, ???????? ??????? ???? ?????. ?????????, ????? AED 2,000 ????? AED 4,000 ??? ?????????. ?????? ?????????, ??????? ?????????? ???????? ???????????. |
+| 4 | 👤 user | `இது scam-ஆ இருக்குமா?` |
+| 4 | 🤖 bot | ??? ??? scam ????. ??????? ??????? ???????? ??????????, ?????????? ?????????? ???? ????????????? ??? ??? ???????? ?????? ????????????????????. |
+| 5 | 👤 user | `என்ன company இது?` |
+
+### ta / codeswitch (phone `9477009204`)
+**Final state:** name=`Murugan` job_role=`-` country=`Qatar` exp=`6` locked_lang=`tanglish` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `hi, enakku Qatar job venum` |
+| 1 | 🤖 bot | Vanakkam Murugan! Neenga yeh job-ku apply panna virumbureenga? |
+| 2 | 👤 user | `என் name Murugan` |
+| 2 | 🤖 bot | Vanakkam Murugan! Neenga yeh job-ku apply panna virumbureenga? |
+| 3 | 👤 user | `experience 6 years` |
+| 3 | 🤖 bot | Neenga yeh job-ku apply panna virumbureenga? |
+| 4 | 👤 user | `salary எவ்வளவு QAR-ல` |
+| 4 | 🤖 bot | Salary details paathukalam, aanaal neenga yeh job-ku apply panna virumbureenga? |
+| 5 | 👤 user | `நன்றி` |
+
+### ta / offtopic (phone `9477009205`)
+**Final state:** name=`-` job_role=`-` country=`-` exp=`None` locked_lang=`ta` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `இன்று கொழும்பு வானிலை எப்படி` |
+| 1 | 🤖 bot | ????????????, ???? ?????? ?????? ???????? ????? ????????. ???? ??????? ???? ????????????? ?????????? ???????????. |
+| 2 | 👤 user | `நேற்று cricket யார் வென்றது` |
+| 2 | 🤖 bot | ????????????, ???? ???????? ?????????? ??????????? ?????? ???????? ????? ????????. ???? ??????? ??? ????????? |
+| 3 | 👤 user | `ஒரு joke சொல்லுங்க` |
+| 3 | 🤖 bot | ?????????: ??? ????? ??????? ??????? ??????? ?????. ????? ??? ?????????????, ????????? ??? ????? ????! |
+| 4 | 👤 user | `qwerty asdf` |
+| 4 | 🤖 bot | ?????????? ??????? ???? ????? ?????????? ??????? ?????????????. |
+| 5 | 👤 user | `234 × 56 எவ்வளவு` |
+| 5 | 🤖 bot | ????????????, ????? ???? ???? ????????? ????? ????????. ???? ?????? ???? ????????????? ????????? ?????????. |
+| 6 | 👤 user | `நீங்க மனிதரா?` |
+| 7 | 👤 user | `நாயே` |
+
+### singlish / novice (phone `9477009301`)
+**Final state:** name=`Kasun` job_role=`Driver` country=`Dubai` exp=`5` locked_lang=`en` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `ado` |
+| 1 | 🤖 bot | Could you please provide your email address for official communication? |
+| 2 | 👤 user | `mata job ekak ona` |
+| 2 | 🤖 bot | Could you please provide your email address? This will help us keep in touch. |
+| 3 | 👤 user | `?` |
+| 3 | 🤖 bot | Could you please provide your email address for our records? |
+| 4 | 👤 user | `monawada` |
+| 4 | 🤖 bot | Could you please share your email address? This will help us keep in touch officially. |
+| 5 | 👤 user | `name eka Kasun` |
+| 5 | 🤖 bot | Could you please share your email address for official communication? |
+| 6 | 👤 user | `driver job` |
+| 6 | 🤖 bot | Great! Could you please share your email address for official communication? |
+| 7 | 👤 user | `Dubai` |
+| 7 | 🤖 bot | Could you please share your email address for our records? |
+| 8 | 👤 user | `ag 29` |
+| 8 | 🤖 bot | Could you please provide your email address for official communication? |
+| 9 | 👤 user | `email naha` |
+| 9 | 🤖 bot | Could you please provide your email address? It's useful for official communication. |
+| 10 | 👤 user | `5 awurudu` |
+| 10 | 🤖 bot | Could you please share your email address for our records? |
+
+### singlish / cooperative (phone `9477009302`)
+**Final state:** name=`Pradeep Silva` job_role=`welder` country=`Saudi` exp=`10` locked_lang=`singlish` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `hi machan, mata job ekak apply karanna ona` |
+| 1 | 🤖 bot | Hari, mama oyage CV eka balanna ona. Karunakara upload karanna. |
+| 2 | 👤 user | `mage nama Pradeep Silva` |
+| 2 | 🤖 bot | Hari, Pradeep. Oya CV eka upload karanna puluwanda? |
+| 3 | 👤 user | `mata welder job ekak ona` |
+| 3 | 🤖 bot | Hari, dan oyage CV eka upload karanna. |
+| 4 | 👤 user | `Saudi nathnam Qatar kemathi` |
+| 4 | 🤖 bot | Hari, dan oyage CV eka upload karanna. |
+| 5 | 👤 user | `mata wayasa 34` |
+| 5 | 🤖 bot | Hari, dan oyage CV eka upload karanna. |
+| 6 | 👤 user | `pradeep.test@example.com` |
+| 6 | 🤖 bot | Hari, dan oyage CV eka upload karanna. |
+| 7 | 👤 user | `mata welding experience awurudu 10k thiyenawa` |
+
+### singlish / skeptical (phone `9477009303`)
+**Final state:** name=`-` job_role=`-` country=`-` exp=`None` locked_lang=`en` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `meka real agency ekakda?` |
+| 1 | 🤖 bot | Yes, Dewan Consultants is a real recruitment agency. We're here to help you find overseas job opportunities. |
+| 2 | 👤 user | `registration fee ekak gannawada?` |
+| 2 | 🤖 bot | No, we do not charge any registration fees for our services. |
+| 3 | 👤 user | `Dubai eke driver salary kiyada?` |
+| 3 | 🤖 bot | Driver salaries in Dubai can vary based on experience and employer, but they typically range from AED 2,000 to AED 4,000 per month. Would you like to work in Dubai or any other countries? |
+| 4 | 👤 user | `meka scam ekak nemeida?` |
+| 4 | 🤖 bot | No, this is not a scam. I'm here to help you find overseas job opportunities. Could you please tell me your age? |
+| 5 | 👤 user | `company eke nama mokakda?` |
+| 5 | 🤖 bot | We are Dewan Consultants, assisting candidates in finding overseas job opportunities. |
+
+### singlish / codeswitch (phone `9477009304`)
+**Final state:** name=`Roshan` job_role=`-` country=`Dubai` exp=`3` locked_lang=`singlish` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `hello sir, mata Dubai job ekak ona, salary how much?` |
+| 1 | 🤖 bot | Hello Roshan, salary eka job role ekata anuwa wenawa. Oya email eka danna, mama ewa gena details dannam. |
+| 2 | 👤 user | `name Roshan` |
+| 2 | 🤖 bot | Hari Roshan, oyage email address eka denna puluwanda? Backup ekak widihata thiyaganna. |
+| 3 | 👤 user | `im 27 years` |
+| 3 | 🤖 bot | Hari, oyage email address eka denna puluwanda? Backup ekak widiyata thiyaganna. |
+| 4 | 👤 user | `experience 3 yrs driving` |
+| 4 | 🤖 bot | Hari, dan oya email eka denna puluwanda? Backup contact ekak widihata ganna. |
+| 5 | 👤 user | `thanks bro` |
+| 5 | 🤖 bot | Hari, oya email eka denna puluwanda? Eka backup ekak widihata thiyaganna. |
+
+### singlish / offtopic (phone `9477009305`)
+**Final state:** name=`-` job_role=`-` country=`-` exp=`None` locked_lang=`en` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `ada kalaguna kohomada` |
+| 1 | 🤖 bot | Hi! Could you please share your full name? |
+| 2 | 👤 user | `iye cricket match eka kawda jayagatte` |
+| 2 | 🤖 bot | I'm here to help you with finding a job overseas. If you have any questions about that, feel free to ask! |
+| 3 | 👤 user | `joke ekak kiyanna` |
+| 3 | 🤖 bot | Why did the scarecrow win an award? Because he was outstanding in his field! |
+| 4 | 👤 user | `asdf qwerty` |
+| 4 | 🤖 bot | Could you please upload your CV document or photo? |
+| 5 | 👤 user | `234 multiplied by 56 kiyada` |
+| 5 | 🤖 bot | I'm here to help you find an overseas job. Could you please tell me your full name? |
+| 6 | 👤 user | `oya AI ekakda?` |
+| 6 | 🤖 bot | Yes, I'm an AI here to assist you with finding overseas job opportunities. Could you please tell me your full name? |
+| 7 | 👤 user | `tho ballek` |
+| 7 | 🤖 bot | I'm here to assist you with finding a job overseas. Could you please tell me your full name? |
+
+### tanglish / novice (phone `9477009401`)
+**Final state:** name=`-` job_role=`Driver` country=`Dubai` exp=`5` locked_lang=`en` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `vanakkam` |
+| 1 | 🤖 bot | Hello! Could you please share your email address? This will help us keep in touch regarding job opportunities. |
+| 2 | 👤 user | `enakku velai venum` |
+| 2 | 🤖 bot | I understand you're looking for a job. Could you please share your email address for further communication? |
+| 3 | 👤 user | `?` |
+| 3 | 🤖 bot | Could you please share your email address for official contact? |
+| 4 | 👤 user | `theriyala` |
+| 4 | 🤖 bot | Could you please provide your email address? This will help us keep in touch. |
+| 5 | 👤 user | `peyar Ravi` |
+| 5 | 🤖 bot | Thank you, Ravi. Could you please share your email address for our records? |
+| 6 | 👤 user | `driver velai` |
+| 6 | 🤖 bot | Great! Could you please share your email address for further communication? |
+| 7 | 👤 user | `Dubai` |
+| 7 | 🤖 bot | Could you please share your email address? This will help us keep in touch. |
+| 8 | 👤 user | `30 vayasu` |
+| 8 | 🤖 bot | Could you please share your email address for official contact? |
+| 9 | 👤 user | `email illa` |
+| 9 | 🤖 bot | Could you please provide your email address? It's important for official communication. |
+| 10 | 👤 user | `5 varsham` |
+| 10 | 🤖 bot | Thank you for sharing your experience. Could you please provide your email address for official contact? |
+
+### tanglish / cooperative (phone `9477009402`)
+**Final state:** name=`Karthik Raj` job_role=`Welder` country=`Saudi Arabia` exp=`8` locked_lang=`tanglish` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `vanakkam, naan velai-ku apply panna virumbureen` |
+| 1 | 🤖 bot | Vanakkam! Neenga yeh job-ku apply panna virumbureenga? |
+| 2 | 👤 user | `en peyar Karthik Raj` |
+| 2 | 🤖 bot | Nandri, Karthik! Neenga yeh job-ku apply panna virumbureenga? |
+| 3 | 👤 user | `enakku welder velai venum` |
+| 3 | 🤖 bot | Nandri, neenga Saudi Arabia illa Qatar-la velai thedureengala? Vera edhavadhu country interest irukka? |
+| 4 | 👤 user | `Saudi Arabia illana Qatar` |
+| 4 | 🤖 bot | Sari, unga CV upload pannunga. |
+| 5 | 👤 user | `enakku 31 vayasu` |
+| 5 | 🤖 bot | Nandri! Ungaloda email address kudunga. |
+| 6 | 👤 user | `karthik.test@example.com` |
+| 6 | 🤖 bot | Nandri! Unga email address kedaichuchu. Neenga unga CV upload pannunga. |
+| 7 | 👤 user | `enakku 8 varsham welding experience irukku` |
+| 7 | 🤖 bot | Sari, neenga unga CV upload pannunga. |
+
+### tanglish / skeptical (phone `9477009403`)
+**Final state:** name=`-` job_role=`-` country=`Dubai` exp=`None` locked_lang=`en` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `ithu real agency-a?` |
+| 1 | 🤖 bot | Yes, this is a real agency. I'm here to assist you with finding overseas job opportunities. Could you please tell me your age? |
+| 2 | 👤 user | `registration fee edhavadhu vasoolikkireengala?` |
+| 2 | 🤖 bot | No, there is no registration fee for our service. We are here to help you find the right job opportunity. |
+| 3 | 👤 user | `Dubai driver salary evlo?` |
+| 3 | 🤖 bot | Driver salaries in Dubai can vary widely based on experience and the employer, but typically range from AED 2,000 to AED 5,000 per month. Would you like to share your email address for further communication? |
+| 4 | 👤 user | `ithu scam-a irukkuma?` |
+| 4 | 🤖 bot | No, this is not a scam. I'm here to help you find overseas job opportunities. If you have any questions, feel free to ask. |
+| 5 | 👤 user | `enna company ithu?` |
+
+### tanglish / codeswitch (phone `9477009404`)
+**Final state:** name=`Mani` job_role=`-` country=`Qatar` exp=`4` locked_lang=`singlish` cv_synced=`True`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `hi sir, enakku Qatar job venum, salary how much` |
+| 1 | 🤖 bot | Oyata mokada job ekata apply karanna? Mokakda oyage job role eka? |
+| 2 | 👤 user | `name Mani` |
+| 2 | 🤖 bot | Oyata mokada job ekata apply karanna? Driver, Nurse, Cook wage monawada balanne? |
+| 3 | 👤 user | `im 26 yrs old` |
+| 3 | 🤖 bot | Hari, oyata mokada job ekata apply karanna? |
+| 4 | 👤 user | `experience 4 years cleaning` |
+| 4 | 🤖 bot | Hari, oyage email eka denna puluwanda? Eya backup contact ekak widiyata thiyaganna. |
+| 5 | 👤 user | `thanks anna` |
+| 5 | 🤖 bot | Oyata mokada job ekata apply karanna? Kiyannako. |
+
+### tanglish / offtopic (phone `9477009405`)
+**Final state:** name=`nayee` job_role=`-` country=`-` exp=`None` locked_lang=`en` cv_synced=`False`
+
+| # | who | message |
+|---|-----|---------|
+| 1 | 👤 user | `indru weather eppadi colombo-la` |
+| 1 | 🤖 bot | I'm here to assist you with finding overseas job opportunities. If you have any questions about that, feel free to ask! |
+| 2 | 👤 user | `naetru cricket match-la yaar jeichuvanga` |
+| 2 | 🤖 bot | I'm here to help with job opportunities. Could you please tell me about your work experience in years? |
+| 3 | 👤 user | `oru joke sollunga` |
+| 3 | 🤖 bot | I'm here to help you find a job opportunity. Could you please share which countries you are interested in working? |
+| 4 | 👤 user | `qwerty asdf` |
+| 4 | 🤖 bot | Could you please upload your CV document or photo? |
+| 5 | 👤 user | `234 multiplied by 56 evlo` |
+| 5 | 🤖 bot | I'm here to help with job opportunities. Could you please tell me your full name? |
+| 6 | 👤 user | `neenga AI-a?` |
+| 6 | 🤖 bot | I'm here to assist you with finding overseas job opportunities. Could you please tell me your full name? |
+| 7 | 👤 user | `nayee` |
+| 7 | 🤖 bot | What job role are you looking for? |

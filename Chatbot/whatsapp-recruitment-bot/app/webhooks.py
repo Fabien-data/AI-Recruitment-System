@@ -740,7 +740,8 @@ async def process_single_message(message: dict, contacts: list, db):
             # Remove the flag so the sync doesn't have the ugly token
             response_text = response_text.replace("__INTERACTIVE_LANGUAGE_SELECTOR__", "[Interactive Language Selector]")
         else:
-            logger.info(f"📤 Sending reply to {from_number}: {response_text[:80]}...")
+            # Log the full reply (not [:80]) so QA can verify language/tone end-to-end.
+            logger.info(f"📤 Sending reply to {from_number}: {response_text}")
             result = await meta_client.send_message(from_number, response_text)
 
         if result and "error" in result:
@@ -799,10 +800,16 @@ class CandidateStatusPayload(BaseModel):
     candidate_phone: str
     candidate_name: str
     status: str  # shortlisted | interview_scheduled | hired | rejected_with_alternatives
+                 # | certified | prescreening_certified | general_pool | transferred | interview_reminder
     job_title: str
     interview_date: Optional[str] = None
     interview_location: Optional[str] = None
     alternative_jobs: Optional[list] = None
+    prescreening_datetime: Optional[str] = None
+    prescreening_location: Optional[str] = None
+    certification_notes: Optional[str] = None
+    old_job_title: Optional[str] = None
+    new_job_title: Optional[str] = None
 
 
 def _require_api_key_webhook(api_key: Optional[str]) -> None:
@@ -878,6 +885,11 @@ async def candidate_status_webhook(
         interview_date=payload.interview_date,
         interview_location=payload.interview_location,
         alternative_jobs=payload.alternative_jobs,
+        prescreening_datetime=payload.prescreening_datetime,
+        prescreening_location=payload.prescreening_location,
+        certification_notes=payload.certification_notes,
+        old_job_title=payload.old_job_title,
+        new_job_title=payload.new_job_title,
     )
 
     if not message:

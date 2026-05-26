@@ -10,6 +10,7 @@ import {
 } from '../api'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
+import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
 
 const STATUS_COLORS = {
   scheduled: 'bg-blue-100 text-blue-800',
@@ -117,7 +118,10 @@ export default function Interviews() {
 
   const reminderMutation = useMutation({
     mutationFn: (id) => sendInterviewReminder(id, {}),
-    onSuccess: () => alert('Reminder sent successfully')
+    onSuccess: (result) => {
+      showNotificationToast(result?.notification, 'Reminder sent')
+    },
+    onError: (err) => showErrorToast(err, 'Reminder failed'),
   })
 
   const handleFeedbackSave = (id, data) => {

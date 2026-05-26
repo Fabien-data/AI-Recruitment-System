@@ -209,6 +209,12 @@ LANGUAGE_SWITCH_PATTERNS = {
         r'\bswitch\s*(to\s*)?english\b',
         r'english[- ]en\s*katha\s*karanna',  # "English-en katha karanna"
         r'english\s*la\s*pesu',
+        # Standalone English greetings: if the WHOLE message is a plain English
+        # greeting, treat it as a clear signal the user wants to chat in English.
+        # Anchored so "hi" mid-sentence in another language won't trigger.
+        r'^\s*(hi|hello|hey|hiya)\s*[.!?]*\s*$',
+        r'^\s*(hi|hello|hey)\s+there\s*[.!?]*\s*$',
+        r'^\s*good\s+(morning|afternoon|evening|day)\s*[.!?]*\s*$',
     ]
 }
 
@@ -398,7 +404,53 @@ class LanguageDetector:
     # register — 1 word like "driver" or "hari" (which also appears in English)
     # must not permanently lock the conversation into Singlish/Tanglish.
     _INSTANT_LOCK_CONFIDENCE = 0.70
-    _MIN_DICT_MATCHES = 3  # Need at least 3 distinct register words before locking
+    # Short hybrid messages ("mata weda ona") only have 2-3 register words, so
+    # require fewer matches for them; longer English messages stay strict.
+    _MIN_DICT_MATCHES_SHORT = 2
+    _MIN_DICT_MATCHES_LONG = 3
+    _SHORT_MSG_TOKEN_COUNT = 5
+
+    @classmethod
+    def _min_dict_matches(cls, token_count: int) -> int:
+        return cls._MIN_DICT_MATCHES_SHORT if token_count <= cls._SHORT_MSG_TOKEN_COUNT else cls._MIN_DICT_MATCHES_LONG
+
+    # STRONG markers — words that NEVER appear in English. A single occurrence
+    # of any of these is enough to lock the register, regardless of message
+    # length. Added after QA found "ado", "vanakkam", "mata", "enakku" first
+    # messages were being mis-detected as English and the bot locked to en.
+    STRONG_SINGLISH_MARKERS = {
+        'ado', 'oya', 'oyata', 'oyage', 'oyalata', 'oyagee',
+        'mata', 'mage', 'magey', 'magee',
+        'mokakda', 'mokakdha', 'mokak', 'mokada', 'monawada', 'monwa',
+        'meka', 'mekada', 'mekai', 'mekath', 'mehema',
+        'thiyenawa', 'thiyenne', 'tiyenawa', 'tiyenne', 'thiyenna',
+        'karanawa', 'karanna', 'karannako',
+        'puluwanda', 'puluwan', 'puluwn',
+        'kohomada', 'kohomde', 'ayubowan', 'machan', 'machang',
+        'kiyada', 'kiyanawa', 'kiyanna', 'kiyanako',
+        'ekak', 'ekakda', 'eke', 'ekata',
+        'denna', 'dennako', 'ganna', 'gannako',
+        'oneda', 'onada', 'kemathi', 'naha',
+        'awurudu', 'avurudu', 'avuruddak', 'vayasa', 'wayasa', 'ag',
+        'kalaguna', 'iye', 'ada', 'ratawal', 'job ekak',
+        'jayagatte', 'kawda',
+    }
+    STRONG_TANGLISH_MARKERS = {
+        'vanakkam', 'vanakam',
+        'enakku', 'unakku', 'avanukku', 'avalukku', 'enaku',
+        'naan', 'neenga', 'ninga', 'avan', 'aval', 'naanga',
+        'venum', 'venuma', 'venam', 'vendaam', 'illa', 'illai',
+        'panna', 'pannunga', 'panreen', 'pannuren', 'pannungal',
+        'sollunga', 'solreen', 'sollu', 'solli', 'sonna',
+        'irukku', 'irukka', 'iruku', 'irundhu', 'irundhutu',
+        'ennoda', 'ungaluku', 'evlo', 'epdi', 'eppadi',
+        'theriyala', 'theriyum', 'theriyuma',
+        'vaanga', 'pongo', 'pongunga', 'varen', 'vandhu',
+        'vayasu', 'varsham', 'varudam',
+        'ithu', 'athu', 'yethu', 'enna', 'yenna', 'edhu', 'evlovu',
+        'velai', 'naetru', 'indru', 'inniku',
+        'thaedi', 'thedra', 'nayee',
+    }
     
     def __init__(self):
         self.default_language = "en"
@@ -448,11 +500,16 @@ class LanguageDetector:
             except Exception as e:
                 logger.debug(f"langdetect error: {e}")
         
-        # 4. If user has a confirmed language (2+ messages), use that
+        # 4. If user has a confirmed language, use that.
+        # Native scripts (si, ta) cannot be ambiguous — 1 prior detection is
+        # enough to persist. Transliterated registers still need 2 to avoid
+        # false locks from a single English-shaped Singlish word.
         if phone_number:
             persisted = self._confirmed_languages.get(phone_number)
-            if persisted and persisted["count"] >= 2:
-                return persisted["lang"], 0.6
+            if persisted:
+                min_count = 1 if persisted["lang"] in {"si", "ta"} else 2
+                if persisted["count"] >= min_count:
+                    return persisted["lang"], 0.6
         
         # 5. Default to English
         return self.default_language, 0.5
@@ -496,12 +553,24 @@ class LanguageDetector:
         single-word overlaps (e.g. "driver" appearing in the Singlish dict).
         """
         raw_words = set(re.findall(r'\b[a-zA-Z]+\b', text.lower()))
-        
+
         if not raw_words:
             return self.default_language, 0.0
-        
+
         # Normalize common misspellings via variant map
         words = {self._SPELLING_VARIANTS.get(w, w) for w in raw_words}
+
+        # Strong-marker fast path: a single unambiguous Singlish/Tanglish word
+        # (e.g. "vanakkam", "mata", "enakku") is enough to lock the register.
+        strong_singlish_hits = words & self.STRONG_SINGLISH_MARKERS
+        strong_tanglish_hits = words & self.STRONG_TANGLISH_MARKERS
+        if strong_singlish_hits and not strong_tanglish_hits:
+            return "singlish", 0.85
+        if strong_tanglish_hits and not strong_singlish_hits:
+            return "tanglish", 0.85
+        if strong_singlish_hits and strong_tanglish_hits:
+            # Both groups matched → fall through to weighted comparison below.
+            pass
         
         # Domain-weighted scoring (PDF spec: domain words count 2×)
         def _weighted_matches(word_set: set, dictionary: set) -> float:
@@ -513,21 +582,23 @@ class LanguageDetector:
 
         singlish_score = _weighted_matches(words, self.SINGLISH_WORDS)
         tamil_score = _weighted_matches(words, self.TAMIL_TRANSLITERATED)
-        
+
         total_words = max(len(words), 1)
-        
+        min_matches = self._min_dict_matches(total_words)
+
         # Lock to a register only when BOTH the match count AND confidence bar are met.
-        # The old `or singlish_score >= 1` shortcut let a single word like "driver"
-        # permanently lock an English speaker into Singlish — removed.
-        if singlish_score > tamil_score and singlish_score >= self._MIN_DICT_MATCHES:
+        # Short messages need only 2 matches (single-line replies like "mata weda
+        # ona" carry the whole intent); longer messages still need 3 to avoid
+        # accidental Singlish locking from English text containing "driver" etc.
+        if singlish_score > tamil_score and singlish_score >= min_matches:
             confidence = min(singlish_score / total_words * 2, 0.9)
             if confidence >= self._INSTANT_LOCK_CONFIDENCE:
                 return "singlish", max(confidence, self._REGISTER_THRESHOLD)
-        elif tamil_score > singlish_score and tamil_score >= self._MIN_DICT_MATCHES:
+        elif tamil_score > singlish_score and tamil_score >= min_matches:
             confidence = min(tamil_score / total_words * 2, 0.9)
             if confidence >= self._INSTANT_LOCK_CONFIDENCE:
                 return "tanglish", max(confidence, self._REGISTER_THRESHOLD)
-        
+
         return self.default_language, 0.0
     
     def _detect_with_langdetect(self, text: str) -> Optional[Tuple[str, float]]:

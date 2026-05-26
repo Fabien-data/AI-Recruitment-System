@@ -219,6 +219,155 @@ async function applyMigrations() {
         'idx_outbox_doc_synced'
     );
 
+    // ── Migration 013: urgent jobs + per-job required-fields schema ───────────
+    // Lets recruiters flag a job as "urgent" so the chatbot can offer it when
+    // no exact match exists for a candidate's stated preference, and lets each
+    // job declare which intake fields are mandatory vs optional so the bot
+    // asks the right questions for the right role.
+    const jobSchemaCols = [
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS is_urgent BOOLEAN NOT NULL DEFAULT FALSE`, 'jobs.is_urgent'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS required_fields_schema JSONB DEFAULT '{}'::jsonb`, 'jobs.required_fields_schema'],
+        [`CREATE INDEX IF NOT EXISTS idx_jobs_is_urgent ON jobs(is_urgent) WHERE is_urgent = TRUE`, 'idx_jobs_is_urgent'],
+    ];
+    for (const [sql, label] of jobSchemaCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 014: candidate remarks + preferences log for general pool ───
+    // remarks: free-text note from chatbot when a lead is saved to the general
+    //          pool without a specific job match (so we never lose them).
+    // preferences_log: history of preferences declared across turns/sessions
+    //          so recruiters can see the evolution of what the candidate wants.
+    const candidatePoolCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS remarks TEXT`, 'candidates.remarks'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS preferences_log JSONB DEFAULT '[]'::jsonb`, 'candidates.preferences_log'],
+    ];
+    for (const [sql, label] of candidatePoolCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 015: Marketing Hub — lead_sources lookup ───────────────────
+    // Reference table for lead-origin tagging (hotline_3cx, facebook_ad, etc.).
+    // Created before marketing_leads because that table references it.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS lead_sources (
+            id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            slug        VARCHAR(50)  NOT NULL UNIQUE,
+            label       VARCHAR(120) NOT NULL,
+            is_active   BOOLEAN      NOT NULL DEFAULT TRUE,
+            created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'lead_sources table');
+
+    // Seed default lead sources (idempotent via ON CONFLICT)
+    await safeAlter(`
+        INSERT INTO lead_sources (slug, label) VALUES
+            ('hotline_3cx',  'Hotline (3CX)'),
+            ('facebook_ad',  'Facebook Ad'),
+            ('referral',     'Referral'),
+            ('walk_in',      'Walk-in'),
+            ('chatbot',      'Chatbot'),
+            ('other',        'Other')
+        ON CONFLICT (slug) DO NOTHING
+    `, 'lead_sources seed');
+
+    // ── Migration 016: Marketing Hub — marketing_leads table ─────────────────
+    // Raw leads captured by call-handling agents. Promoted into candidates via
+    // an explicit convert step; until then they live exclusively in this table
+    // so the recruitment pipeline stays clean.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS marketing_leads (
+            id                      UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            full_name               VARCHAR(255) NOT NULL,
+            phone                   VARCHAR(50)  NOT NULL,
+            nic                     VARCHAR(50),
+            dob                     DATE,
+            country                 VARCHAR(100),
+            preferred_job_id        UUID         REFERENCES jobs(id) ON DELETE SET NULL,
+            preferred_job_text      TEXT,
+            remarks                 TEXT,
+            source_id               UUID         REFERENCES lead_sources(id) ON DELETE SET NULL,
+            campaign_ref            VARCHAR(100),
+            stage                   VARCHAR(32)  NOT NULL DEFAULT 'new',
+            lost_reason             TEXT,
+            assigned_agent_id       UUID         REFERENCES users(id) ON DELETE SET NULL,
+            converted_candidate_id  UUID         REFERENCES candidates(id) ON DELETE SET NULL,
+            converted_at            TIMESTAMPTZ,
+            last_contacted_at       TIMESTAMPTZ,
+            created_by              UUID         REFERENCES users(id) ON DELETE SET NULL,
+            created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'marketing_leads table');
+
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_marketing_leads_phone        ON marketing_leads(phone)`, 'idx_marketing_leads_phone');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_marketing_leads_stage_agent  ON marketing_leads(stage, assigned_agent_id)`, 'idx_marketing_leads_stage_agent');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_marketing_leads_source_date  ON marketing_leads(source_id, created_at DESC)`, 'idx_marketing_leads_source_date');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_marketing_leads_converted    ON marketing_leads(converted_candidate_id) WHERE converted_candidate_id IS NOT NULL`, 'idx_marketing_leads_converted');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_marketing_leads_preferred_job ON marketing_leads(preferred_job_id) WHERE preferred_job_id IS NOT NULL`, 'idx_marketing_leads_preferred_job');
+
+    // ── Migration 017: Marketing Hub — lead_documents table ──────────────────
+    // CV + supporting docs (NIC, passport, etc.) attached to a lead.
+    // Files live in GCS under marketing-leads/<lead_id>/; this row holds the URL.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS lead_documents (
+            id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            lead_id      UUID         NOT NULL REFERENCES marketing_leads(id) ON DELETE CASCADE,
+            doc_type     VARCHAR(32)  NOT NULL DEFAULT 'other',
+            url          TEXT         NOT NULL,
+            name         VARCHAR(255) NOT NULL,
+            mime_type    VARCHAR(100),
+            size_bytes   BIGINT,
+            uploaded_by  UUID         REFERENCES users(id) ON DELETE SET NULL,
+            uploaded_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'lead_documents table');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_lead_documents_lead ON lead_documents(lead_id)`, 'idx_lead_documents_lead');
+
+    // ── Migration 018: Marketing Hub — lead_follow_ups table ─────────────────
+    // Call-back reminders and tasks. The notifications service reads pending
+    // rows where due_at <= NOW() to send WhatsApp/SMS reminders to the agent.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS lead_follow_ups (
+            id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            lead_id       UUID         NOT NULL REFERENCES marketing_leads(id) ON DELETE CASCADE,
+            due_at        TIMESTAMPTZ  NOT NULL,
+            note          TEXT,
+            status        VARCHAR(20)  NOT NULL DEFAULT 'pending',
+            completed_at  TIMESTAMPTZ,
+            created_by    UUID         REFERENCES users(id) ON DELETE SET NULL,
+            created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'lead_follow_ups table');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_lead_follow_ups_due_pending ON lead_follow_ups(due_at) WHERE status = 'pending'`, 'idx_lead_follow_ups_due_pending');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_lead_follow_ups_lead         ON lead_follow_ups(lead_id)`, 'idx_lead_follow_ups_lead');
+
+    // ── Migration 019: Marketing Hub — lead_call_events table ────────────────
+    // Captures 3CX webhook events (ringing/pickup/ended). lead_id is nullable
+    // because not every caller maps to an existing lead — unmatched calls are
+    // still logged for analytics and later attribution.
+    // Unique on (call_id, event_type) so 3CX retries cannot double-log.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS lead_call_events (
+            id                 UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            lead_id            UUID         REFERENCES marketing_leads(id) ON DELETE SET NULL,
+            call_id            VARCHAR(128) NOT NULL,
+            event_type         VARCHAR(32)  NOT NULL,
+            caller_number      VARCHAR(50),
+            agent_extension    VARCHAR(20),
+            agent_user_id      UUID         REFERENCES users(id) ON DELETE SET NULL,
+            duration_seconds   INTEGER,
+            recording_url      TEXT,
+            raw_payload        JSONB,
+            occurred_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'lead_call_events table');
+    await safeAlter(`CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_call_events_unique ON lead_call_events(call_id, event_type)`, 'idx_lead_call_events_unique');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_lead_call_events_caller ON lead_call_events(caller_number)`, 'idx_lead_call_events_caller');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_lead_call_events_lead   ON lead_call_events(lead_id) WHERE lead_id IS NOT NULL`, 'idx_lead_call_events_lead');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_lead_call_events_occurred ON lead_call_events(occurred_at DESC)`, 'idx_lead_call_events_occurred');
+
     logger.info('✅ Startup migrations complete.');
 }
 

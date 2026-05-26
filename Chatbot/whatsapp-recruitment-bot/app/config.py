@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     
     # OpenAI
     openai_api_key: str
-    llm_primary_model: str = "gpt-5.5"
-    llm_fallback_model: str = "gpt-4o"
+    llm_primary_model: str = "gpt-4o"
+    llm_fallback_model: str = "gpt-4o-mini"
     classifier_model: str = "gpt-4o-mini"
     
     # Pinecone (OPTIONAL — if empty, falls back to PostgreSQL text search)

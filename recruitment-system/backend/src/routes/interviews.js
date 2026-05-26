@@ -164,25 +164,27 @@ router.post('/', authenticate, async (req, res, next) => {
             [scheduled_datetime, location || null, application_id]
         );
 
-        // Send candidate notification asynchronously
+        // Send candidate notification synchronously so the response carries
+        // real per-channel delivery results (no more silent fire-and-forget).
         const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
-        setImmediate(async () => {
-            try {
-                await notifications.sendInterviewNotification(
-                    candidate_id, job_title, scheduled_datetime, location || 'TBD', channels
-                );
-                // Mark confirmation sent
+        let notification = { success: [], failed: [] };
+        try {
+            notification = await notifications.sendInterviewNotification(
+                candidate_id, job_title, scheduled_datetime, location || 'TBD', channels
+            );
+            if (notification.success.some(s => s.channel === 'whatsapp')) {
                 await query(
                     adaptQuery('UPDATE interview_schedules SET confirmation_sent_at = NOW() WHERE id = $1'),
                     [id]
                 );
-            } catch (notifErr) {
-                logger.error(`Interview notification failed for ${id}: ${notifErr.message}`);
             }
-        });
+        } catch (notifErr) {
+            logger.error(`Interview notification failed for ${id}: ${notifErr.message}`);
+            notification.failed.push({ channel: 'all', error: notifErr.message });
+        }
 
         const created = await query(adaptQuery('SELECT * FROM interview_schedules WHERE id = $1'), [id]);
-        res.status(201).json(created.rows[0]);
+        res.status(201).json({ ...created.rows[0], notification });
     } catch (err) { next(err); }
 });
 
@@ -252,15 +254,28 @@ router.post('/:id/remind', authenticate, async (req, res, next) => {
         const iv = ivResult.rows[0];
 
         const channels = req.body.notify_channels || ['whatsapp'];
-        await notifications.sendInterviewNotification(
-            iv.candidate_id, iv.job_title, iv.scheduled_datetime, iv.location || 'TBD', channels
-        );
-        await query(
-            adaptQuery('UPDATE interview_schedules SET reminder_sent_at = NOW() WHERE id = $1'),
-            [req.params.id]
-        );
+        let notification = { success: [], failed: [] };
+        try {
+            notification = await notifications.sendInterviewReminderNotification(
+                iv.candidate_id, iv.job_title, iv.scheduled_datetime, iv.location || 'TBD', channels
+            );
+            if (notification.success.some(s => s.channel === 'whatsapp')) {
+                await query(
+                    adaptQuery('UPDATE interview_schedules SET reminder_sent_at = NOW() WHERE id = $1'),
+                    [req.params.id]
+                );
+            }
+        } catch (notifErr) {
+            logger.error(`Reminder send failed for ${req.params.id}: ${notifErr.message}`);
+            notification.failed.push({ channel: 'all', error: notifErr.message });
+        }
 
-        res.json({ success: true, message: 'Reminder sent' });
+        const ok = notification.success.length > 0;
+        res.json({
+            success: ok,
+            message: ok ? 'Reminder sent' : 'Reminder send failed',
+            notification,
+        });
     } catch (err) { next(err); }
 });
 

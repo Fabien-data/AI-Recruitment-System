@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore, useRole } from '../stores/authStore'
-import { LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell, FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck } from 'lucide-react'
+import { LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell, FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { twMerge } from 'tailwind-merge'
 
@@ -25,10 +25,19 @@ const FULL_NAV_EXTRAS = [
 ]
 
 function buildNav(role) {
+  // Marketing agents see a focused workspace — only the hub + overview.
+  if (role === 'marketing_agent') {
+    return [
+      { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+      { to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone },
+    ]
+  }
+
   const items = [...BASE_NAV]
 
   if (role === 'admin' || role === 'sourcing_department') {
     items.push(...FULL_NAV_EXTRAS)
+    items.push({ to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone })
   } else {
     // project_handler gets communications read-only + basic analytics
     items.push({ to: '/communications', label: 'Messages', icon: MessageSquare })
@@ -154,6 +163,7 @@ export default function Layout() {
                  {role === 'project_handler' ? 'Project Handler'
                    : role === 'sourcing_department' ? 'Sourcing Dept.'
                    : role === 'admin' ? 'Administrator'
+                   : role === 'marketing_agent' ? 'Marketing Agent'
                    : role}
                </p>
             </div>

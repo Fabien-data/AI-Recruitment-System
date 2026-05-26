@@ -75,6 +75,46 @@ _COUNTRIES = {
 
 _GIBBERISH_RE = re.compile(r"^[^A-Za-z0-9\u0B80-\u0DFF]{4,}$")
 
+# Keywords that indicate the user is asking an FAQ-style question \u2014 across all
+# five supported registers. Used to decide whether to inject live vacancy data
+# into the AI supervisor context, even before full onboarding is complete.
+_FAQ_KEYWORDS = (
+    # English
+    "salary", "salaries", "wage", "pay", "package",
+    "interview", "visa", "passport", "medical", "country", "countries",
+    "fee", "fees", "cost", "registration", "agency", "agent", "hotline", "contact",
+    "address", "office", "location", "when", "where", "how much", "how many",
+    "what is", "what are", "tell me about", "details about",
+    "available", "openings", "vacancy", "vacancies",
+    # Sinhala (native)
+    "\u0DC0\u0DD0\u0DA7\u0DD4\u0DB4", "\u0DC3\u0DB8\u0DCA\u0DB6\u0DBD", "\u0DB4\u0DA9\u0DD2\u0DBA", "\u0DB8\u0DD4\u0DAF\u0DBD", "\u0DB8\u0DD4\u0DAF\u0DBD\u0D9A\u0DCA", "\u0D9A\u0DD3\u0DBA\u0DAF", "\u0D9A\u0DDC\u0DA0\u0DCA\u0DA0\u0DBB\u0DAF",
+    "\u0DBB\u0DA7", "\u0DBB\u0DA7\u0DC0\u0DBD\u0DCA", "\u0D89\u0DB1\u0DCA\u0DA7\u0DBB\u0DCA\u0DC0\u0DCA\u200D\u0DBA\u0DD6", "\u0DC0\u0DD3\u0DC3\u0DCF", "\u0DB4\u0DCF\u0DC3\u0DCA\u0DB4\u0DDD\u0DA7\u0DCA",
+    # Tamil (native)
+    "\u0B9A\u0BAE\u0BCD\u0BAA\u0BB3\u0BAE\u0BCD", "\u0B8A\u0BA4\u0BBF\u0BAF\u0BAE\u0BCD", "\u0B8A\u0BA4\u0BBF\u0BAF\u0BAE\u0BCD", "\u0B8E\u0BB5\u0BCD\u0BB5\u0BB3\u0BB5\u0BC1", "\u0B8E\u0BA4\u0BCD\u0BA4\u0BA9\u0BC8",
+    "\u0BA8\u0BBE\u0B9F\u0BC1", "\u0BA8\u0BBE\u0B9F\u0BC1\u0B95\u0BB3\u0BCD", "\u0BB5\u0BC0\u0B9A\u0BBE", "\u0BAA\u0BBE\u0BB8\u0BCD\u0BAA\u0BCB\u0BB0\u0BCD\u0B9F\u0BCD", "\u0BA8\u0BC7\u0BB0\u0BCD\u0B95\u0BBE\u0BA3\u0BB2\u0BCD",
+    # Singlish
+    "sambala", "vetan", "padi", "kochchara", "keeyada", "kohomada", "mokakda",
+    # Tanglish
+    "sambalam", "oodiyam", "evvalo", "ethana", "epdi", "enna",
+)
+
+
+def looks_like_faq_question(text: str) -> bool:
+    """Cheap heuristic: does this message look like an FAQ / info ask?
+
+    Used to decide whether to surface live vacancy + ad context into the AI
+    supervisor's system prompt even before onboarding completes. Errs on the
+    side of true \u2014 false positives just add a few tokens to the prompt.
+    """
+    if not text:
+        return False
+    t = text.strip().lower()
+    if not t:
+        return False
+    if "?" in t or "\uFF1F" in text:
+        return True
+    return any(kw in t for kw in _FAQ_KEYWORDS)
+
 _SINHALA_NUM_WORDS = {
     "බිංදුව": 0,
     "ශුන්ය": 0,

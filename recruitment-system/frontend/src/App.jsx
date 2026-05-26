@@ -21,6 +21,10 @@ import Communications from './pages/Communications'
 import Interviews from './pages/Interviews'
 import Analytics from './pages/Analytics'
 import KnowledgeBase from './pages/KnowledgeBase'
+import MarketingHub from './pages/MarketingHub'
+import LeadIntake from './pages/LeadIntake'
+import LeadDetail from './pages/LeadDetail'
+import MarketingAnalytics from './pages/MarketingAnalytics'
 import './App.css'
 
 class ErrorBoundary extends Component {
@@ -89,6 +93,26 @@ function App() {
         <Route path="interviews" element={<Interviews />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="knowledge-base" element={<KnowledgeBase />} />
+        <Route path="marketing-hub" element={
+          <RoleGuard allowedRoles={['admin', 'sourcing_department', 'marketing_agent']} fallback={<Navigate to="/" replace />}>
+            <MarketingHub />
+          </RoleGuard>
+        } />
+        <Route path="marketing-hub/new" element={
+          <RoleGuard allowedRoles={['admin', 'sourcing_department', 'marketing_agent']} fallback={<Navigate to="/" replace />}>
+            <LeadIntake />
+          </RoleGuard>
+        } />
+        <Route path="marketing-hub/analytics" element={
+          <RoleGuard allowedRoles={['admin', 'sourcing_department']} fallback={<Navigate to="/marketing-hub" replace />}>
+            <MarketingAnalytics />
+          </RoleGuard>
+        } />
+        <Route path="marketing-hub/:id" element={
+          <RoleGuard allowedRoles={['admin', 'sourcing_department', 'marketing_agent']} fallback={<Navigate to="/" replace />}>
+            <LeadDetail />
+          </RoleGuard>
+        } />
         <Route path="admin" element={
           <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
             <AdminDashboard />

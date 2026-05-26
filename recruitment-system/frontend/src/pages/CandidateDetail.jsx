@@ -290,6 +290,38 @@ export default function CandidateDetail() {
                 <dd className="text-gray-700 whitespace-pre-wrap">{candidate.notes}</dd>
               </div>
             )}
+            {candidate.remarks && (
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <dt className="text-gray-500 text-sm mb-1">Chatbot Remarks</dt>
+                <dd className="text-gray-700 whitespace-pre-wrap bg-blue-50 border border-blue-100 rounded-md px-3 py-2">
+                  {candidate.remarks}
+                </dd>
+              </div>
+            )}
+            {Array.isArray(candidate.preferences_log) && candidate.preferences_log.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <dt className="text-gray-500 text-sm mb-2">Preferences History ({candidate.preferences_log.length})</dt>
+                <dd>
+                  <ul className="space-y-1 text-sm">
+                    {candidate.preferences_log.map((entry, i) => (
+                      <li key={i} className="flex items-start justify-between gap-3 border-l-2 border-gray-200 pl-3">
+                        <span className="text-gray-700">
+                          <span className="font-medium">{entry.job_role || '—'}</span>
+                          {entry.country && <span className="text-gray-500"> · {entry.country}</span>}
+                          {entry.experience_years != null && <span className="text-gray-500"> · {entry.experience_years}y</span>}
+                          {entry.source && <span className="text-xs text-gray-400 ml-2">({entry.source})</span>}
+                        </span>
+                        {entry.ts && (
+                          <span className="text-xs text-gray-400 whitespace-nowrap">
+                            {new Date(entry.ts).toLocaleDateString()}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
+              </div>
+            )}
           </Card>
 
           {Object.keys(applicationForm).length > 0 && (

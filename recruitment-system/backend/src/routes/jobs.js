@@ -173,7 +173,9 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
             salary_range,
             location,
             deadline,
-            project_id
+            project_id,
+            is_urgent,
+            required_fields_schema
         } = req.body;
 
         if (!title || !category || !requirements) {
@@ -195,8 +197,8 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
         }
 
         const result = await pool.query(
-            `INSERT INTO jobs (title, category, description, requirements, wiggle_room, positions_available, salary_range, location, deadline, project_id, created_by, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active')
+            `INSERT INTO jobs (title, category, description, requirements, wiggle_room, positions_available, salary_range, location, deadline, project_id, created_by, status, is_urgent, required_fields_schema)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13::jsonb)
              RETURNING *`,
             [
                 title,
@@ -209,7 +211,9 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
                 location,
                 deadline,
                 project_id,
-                req.user.id
+                req.user.id,
+                Boolean(is_urgent),
+                JSON.stringify(required_fields_schema || {})
             ]
         );
 
@@ -237,7 +241,8 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
         const allowedFields = [
             'title', 'category', 'description', 'requirements',
             'wiggle_room', 'status', 'positions_available',
-            'positions_filled', 'salary_range', 'location', 'deadline', 'project_id'
+            'positions_filled', 'salary_range', 'location', 'deadline', 'project_id',
+            'is_urgent', 'required_fields_schema'
         ];
 
         const setClause = [];
@@ -246,9 +251,12 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
 
         Object.keys(updates).forEach(key => {
             if (allowedFields.includes(key)) {
-                if (key === 'requirements' || key === 'wiggle_room') {
+                if (key === 'requirements' || key === 'wiggle_room' || key === 'required_fields_schema') {
                     setClause.push(`${key} = $${paramCount}::jsonb`);
-                    values.push(JSON.stringify(updates[key]));
+                    values.push(JSON.stringify(updates[key] || {}));
+                } else if (key === 'is_urgent') {
+                    setClause.push(`${key} = $${paramCount}`);
+                    values.push(Boolean(updates[key]));
                 } else {
                     setClause.push(`${key} = $${paramCount}`);
                     values.push(updates[key]);

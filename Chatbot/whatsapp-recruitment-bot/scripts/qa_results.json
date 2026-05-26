@@ -1,0 +1,3415 @@
+[
+  {
+    "lang": "en",
+    "persona": "novice",
+    "phone": "9477009001",
+    "input_messages": [
+      "hi",
+      "i want job",
+      "?",
+      "dont know",
+      "what",
+      "name?? me Kamal",
+      "driver job lol",
+      "dubai",
+      "30 yrs",
+      "no email",
+      "5 yr"
+    ],
+    "candidate_state": {
+      "id": 79,
+      "phone": "9477009001",
+      "name": "Kamal",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": 5,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 30,
+            "name": "Kamal",
+            "country": "Dubai",
+            "job_role": "Driver",
+            "countries": [
+              "Dubai"
+            ],
+            "experience_years": 5
+          },
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "email"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "hi",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "i want job",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "dont know",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "what",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "name?? me Kamal",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "driver job lol",
+        "seq": 6
+      },
+      {
+        "type": "incoming",
+        "text": "dubai",
+        "seq": 7
+      },
+      {
+        "type": "incoming",
+        "text": "30 yrs",
+        "seq": 8
+      },
+      {
+        "type": "incoming",
+        "text": "no email",
+        "seq": 9
+      },
+      {
+        "type": "incoming",
+        "text": "5 yr",
+        "seq": 10
+      },
+      {
+        "type": "outgoing",
+        "text": "Hello Kamal! Could you please share your email address for our records?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:01.003959Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address? This will help us keep in touch regarding job opportunities.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:07.410921Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for our records?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:13.771699Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "No worries, Kamal. Could you please share your email address for our records?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:20.673638Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address for our records?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:27.440213Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for official communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:33.961022Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for official communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:41.178534Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for us to have an official contact method?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:48.400981Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for official contact?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:05:54.600413Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please upload your CV document or photo here?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:06:01.380690Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address for official communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:06:08.162139Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "en",
+    "persona": "cooperative",
+    "phone": "9477009002",
+    "input_messages": [
+      "Hello, I would like to apply for a job",
+      "My name is Nimal Perera",
+      "I am interested in welder positions",
+      "I prefer Saudi Arabia or Qatar",
+      "I am 32 years old",
+      "nimal.perera.test@example.com",
+      "I have 8 years of welding experience"
+    ],
+    "candidate_state": {
+      "id": 80,
+      "phone": "9477009002",
+      "name": "Nimal Perera",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": 8,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 32,
+            "name": "Nimal Perera",
+            "email": "nimal.perera.test@example.com",
+            "country": "Saudi Arabia",
+            "job_role": "Welder",
+            "countries": [
+              "Saudi Arabia",
+              "Qatar"
+            ],
+            "experience_years": 8
+          },
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "cv"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "Hello, I would like to apply for a job",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "My name is Nimal Perera",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "I am interested in welder positions",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "I prefer Saudi Arabia or Qatar",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "I am 32 years old",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "nimal.perera.test@example.com",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "I have 8 years of welding experience",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "Great! Could you please upload your CV so we can proceed with your application?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:06:25.803905Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Thank you, Nimal. Could you please upload your CV?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:06:32.111721Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Thank you for confirming your interest in welder positions. Could you please upload your CV?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:06:39.070325Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Thank you for sharing your preferred countries. Could you please upload your CV?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:06:46.069431Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Thank you for confirming your age. Could you please upload your CV?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:06:53.055382Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Thank you for confirming your email. Could you please upload your CV?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:06:58.958222Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please upload your CV? It will help us match you with the right opportunities.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:07:06.008410Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "en",
+    "persona": "skeptical",
+    "phone": "9477009003",
+    "input_messages": [
+      "Hi, is this a real recruitment agency?",
+      "do you charge any registration fee?",
+      "what is the salary for a driver in Dubai?",
+      "how do I know this isn't a scam?",
+      "what company is this?",
+      "what countries do you send people to?"
+    ],
+    "candidate_state": {
+      "id": 81,
+      "phone": "9477009003",
+      "name": null,
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {},
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "countries",
+            "job_role"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "countries"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "Hi, is this a real recruitment agency?",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "do you charge any registration fee?",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "what is the salary for a driver in Dubai?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "how do I know this isn't a scam?",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "what company is this?",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "what countries do you send people to?",
+        "seq": 5
+      },
+      {
+        "type": "outgoing",
+        "text": "Yes, this is Dewan Consultants, a real recruitment agency. How can I assist you today?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:07:24.077326Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "No, we do not charge any registration fees for our services.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:07:30.935091Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "The salary for a driver in Dubai can vary based on experience and the employer, but it typically ranges from AED 2,000 to AED 4,000 per month. Would you like to apply for a driver position in Dubai?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:07:37.599156Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "We understand your concern. Dewan Consultants is a reputable agency helping candidates secure legitimate overseas jobs. You can verify our credentials through our official website or contact us directly for more information.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:07:43.993101Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "We are Dewan Consultants, a recruitment agency helping candidates find overseas job opportunities. How can I assist you today?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:07:50.430620Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "We send candidates to various countries, including the UAE, Qatar, Saudi Arabia, and more. Which countries are you interested in working in?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:07:57.127297Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": [
+      {
+        "timestamp": "2026-05-22T13:07:50.430620Z",
+        "text": "2026-05-22 13:07:50,431 - app.webhooks - INFO - ? Sending reply to 9477009003: We are Dewan Consultants, a recruitment agency helping candidates find overseas job opportunities. How can I assist you today?"
+      },
+      {
+        "timestamp": "2026-05-22T13:07:24.077326Z",
+        "text": "2026-05-22 13:07:24,078 - app.webhooks - INFO - ? Sending reply to 9477009003: Yes, this is Dewan Consultants, a real recruitment agency. How can I assist you today?"
+      },
+      {
+        "timestamp": "2026-05-22T13:07:22.354932Z",
+        "text": "2026-05-22 13:07:22,355 - app.webhooks - INFO - ? Text from 9477009003: 'Hi, is this a real recruitment agency?'"
+      }
+    ]
+  },
+  {
+    "lang": "en",
+    "persona": "codeswitch",
+    "phone": "9477009004",
+    "input_messages": [
+      "hi machan, mata Dubai eke job ekak ona",
+      "salary kiyada?",
+      "name eka Sunil",
+      "im 28 years",
+      "ela jobs monawada thiyenne?"
+    ],
+    "candidate_state": {
+      "id": 82,
+      "phone": "9477009004",
+      "name": "Sunil",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "si",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 28,
+            "name": "Sunil",
+            "country": "Dubai",
+            "countries": [
+              "Dubai"
+            ]
+          },
+          "reply_register": "singlish",
+          "asked_questions": [
+            "name",
+            "experience_years",
+            "job_role",
+            "email"
+          ],
+          "confusion_count": 0,
+          "locked_language": "singlish",
+          "next_question_type": "job_role"
+        },
+        "language_register": "singlish"
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "hi machan, mata Dubai eke job ekak ona",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "salary kiyada?",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "name eka Sunil",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "im 28 years",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "ela jobs monawada thiyenne?",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "Ela jobs gana kiyanna puluwan, oyage job role eka mokakda? Driver, Nurse, Cook wage monawada hoyanne?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:12:28.580266Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "en",
+    "persona": "offtopic",
+    "phone": "9477009005",
+    "input_messages": [
+      "what's the weather like in Colombo today",
+      "who won the cricket match yesterday",
+      "tell me a joke",
+      "asdfghjkl qwerty zzz",
+      "what is 234 times 56",
+      "are you a real person or AI",
+      "fuck you",
+      "you stupid bot"
+    ],
+    "candidate_state": {
+      "id": 83,
+      "phone": "9477009005",
+      "name": null,
+      "email": null,
+      "conversation_state": "human_handoff",
+      "language": "en",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "handoff_flag": true,
+          "collected_data": {},
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "age"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "what's the weather like in Colombo today",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "who won the cricket match yesterday",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "tell me a joke",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "asdfghjkl qwerty zzz",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "what is 234 times 56",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "are you a real person or AI",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "fuck you",
+        "seq": 6
+      },
+      {
+        "type": "incoming",
+        "text": "you stupid bot",
+        "seq": 7
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to assist with job applications. Please let me know which countries you are interested in working in.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:12:53.076384Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to assist with job applications. For cricket match updates, please check the latest sports news online.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:12:55.801933Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Why don't scientists trust atoms? Because they make up everything!",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:13:00.052241Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please let me know which countries you are interested in working?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:13:06.075893Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "The result of 234 times 56 is 13,104.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:13:12.565696Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm an AI here to assist you with finding overseas job opportunities. How can I help you today?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:13:18.930343Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to help with your job application process. If you have any questions or need assistance, feel free to let me know.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:13:25.820940Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "si",
+    "persona": "novice",
+    "phone": "9477009101",
+    "input_messages": [
+      "ආයුබෝවන්",
+      "මට job එකක් ඕන",
+      "?",
+      "මොකක්ද",
+      "Kamal",
+      "driver",
+      "Dubai",
+      "මට වයස 35",
+      "email නෑ",
+      "අවුරුදු 6"
+    ],
+    "candidate_state": {
+      "id": 84,
+      "phone": "9477009101",
+      "name": "Kamal",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "si",
+      "experience_years": 6,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 35,
+            "name": "Kamal",
+            "country": "Dubai",
+            "job_role": "Driver",
+            "countries": [
+              "Dubai"
+            ],
+            "experience_years": 6
+          },
+          "reply_register": "si",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "si",
+          "next_question_type": "email"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "ආයුබෝවන්",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "මට job එකක් ඕන",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "මොකක්ද",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "Kamal",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "driver",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "Dubai",
+        "seq": 6
+      },
+      {
+        "type": "incoming",
+        "text": "මට වයස 35",
+        "seq": 7
+      },
+      {
+        "type": "incoming",
+        "text": "email නෑ",
+        "seq": 8
+      },
+      {
+        "type": "incoming",
+        "text": "අවුරුදු 6",
+        "seq": 9
+      },
+      {
+        "type": "outgoing",
+        "text": "????????! ??? CV ????? ?? ?????????? ??? ??? ??? ??????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:13:50.747908Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? Dubai ?? ????????? ??????? ?? ?? ?????. ??? ?? ???????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:13:57.114460Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? CV ????? ?? ?????????? ???????? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:14:03.942178Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? CV ????? ?? ?????????? ???????? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:14:10.775698Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? ????? ?????? ???????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:14:17.164022Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? ????? ?????? ???????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:14:23.893632Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? ????? ?????? ???????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:14:31.167249Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? ????? ?????? ???????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:14:36.952603Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? CV ????? ?? ?????????? ??? ??? ??? ??????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:14:43.989484Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? ????? ?????? ???????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:14:50.835103Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": [
+      {
+        "timestamp": "2026-05-22T13:14:50.824864Z",
+        "text": "2026-05-22 13:14:50,825 - app.services.recruitment_sync - WARNING - Recruitment sync failed for 9477009101: status 500: {\"error\":\"Sync failed\"}"
+      },
+      {
+        "timestamp": "2026-05-22T13:14:43.971798Z",
+        "text": "2026-05-22 13:14:43,972 - app.services.recruitment_sync - WARNING - Recruitment sync failed for 9477009101: status 500: {\"error\":\"Sync failed\"}"
+      },
+      {
+        "timestamp": "2026-05-22T13:14:36.943642Z",
+        "text": "2026-05-22 13:14:36,944 - app.services.recruitment_sync - WARNING - Recruitment sync failed for 9477009101: status 500: {\"error\":\"Sync failed\"}"
+      },
+      {
+        "timestamp": "2026-05-22T13:14:31.162513Z",
+        "text": "2026-05-22 13:14:31,164 - app.services.recruitment_sync - WARNING - Recruitment sync failed for 9477009101: status 500: {\"error\":\"Sync failed\"}"
+      },
+      {
+        "timestamp": "2026-05-22T13:14:23.889804Z",
+        "text": "2026-05-22 13:14:23,890 - app.services.recruitment_sync - WARNING - Recruitment sync failed for 9477009101: status 500: {\"error\":\"Sync failed\"}"
+      },
+      {
+        "timestamp": "2026-05-22T13:14:17.152398Z",
+        "text": "2026-05-22 13:14:17,153 - app.services.recruitment_sync - WARNING - Recruitment sync failed for 9477009101: status 500: {\"error\":\"Sync failed\"}"
+      },
+      {
+        "timestamp": "2026-05-22T13:14:17.124158Z",
+        "text": "2026-05-22 13:14:17,125 - sqlalchemy.engine.Engine - INFO - [generated in 0.00041s] {'candidate_id': 84, 'idempotency_key': 'e4f7654549f66de5f18d7204357ac46cd4637f19cf8662b5432fa1c5840eff50', 'payload': '{\"payload\": {\"phone\": \"9477009101\", \"name\": \"Kamal\", \"experience_years\": null, \"job_interest\": \""
+      },
+      {
+        "timestamp": "2026-05-22T13:14:17.124120Z",
+        "text": "2026-05-22 13:14:17,125 INFO sqlalchemy.engine.Engine [generated in 0.00041s] {'candidate_id': 84, 'idempotency_key': 'e4f7654549f66de5f18d7204357ac46cd4637f19cf8662b5432fa1c5840eff50', 'payload': '{\"payload\": {\"phone\": \"9477009101\", \"name\": \"Kamal\", \"experience_years\": null, \"job_interest\": \"Driver"
+      }
+    ]
+  },
+  {
+    "lang": "si",
+    "persona": "cooperative",
+    "phone": "9477009102",
+    "input_messages": [
+      "ආයුබෝවන්! මට රැකියාවක් සඳහා අයදුම් කරන්න ඕන",
+      "මගේ නම සමන් කුමාර",
+      "මට වැල්ඩර් රැකියාවක් ඕන",
+      "මට Qatar හෝ Saudi කැමතියි",
+      "මගේ වයස අවුරුදු 30",
+      "saman.test@example.com",
+      "මට වසර 7ක වැල්ඩින් පළපුරුද්ද"
+    ],
+    "candidate_state": {
+      "id": 85,
+      "phone": "9477009102",
+      "name": "සමන් කුමාර",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "si",
+      "experience_years": 7,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 30,
+            "name": "සමන් කුමාර",
+            "email": "saman.test@example.com",
+            "country": "Qatar",
+            "job_role": "වැල්ඩර්",
+            "countries": [
+              "Qatar",
+              "Saudi"
+            ],
+            "experience_years": 7
+          },
+          "reply_register": "si",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "si",
+          "next_question_type": "cv"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "ආයුබෝවන්! මට රැකියාවක් සඳහා අයදුම් කරන්න ඕන",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "මගේ නම සමන් කුමාර",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "මට වැල්ඩර් රැකියාවක් ඕන",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "මට Qatar හෝ Saudi කැමතියි",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "මගේ වයස අවුරුදු 30",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "saman.test@example.com",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "මට වසර 7ක වැල්ඩින් පළපුරුද්ද",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "????????! ??? CV ????? ?? ?????????? ??? ??? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:15:09.387380Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? CV ????? ?? ?????????? ???????? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:15:16.097492Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? CV ????? ?? ?????????? ???????? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:15:22.845814Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? CV ????? ?? ?????????? ??? ??? ??? ??????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:15:29.537006Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? CV ????? ?? ?????????? ?? ??? ???? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:15:36.590012Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? CV ????? ?? ?????????? ???????? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:15:42.858839Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "si",
+    "persona": "skeptical",
+    "phone": "9477009103",
+    "input_messages": [
+      "මේක ඇත්ත agency එකක්ද?",
+      "registration fee එකක් ගන්නවද?",
+      "Dubai එකේ driver job එකේ සැලරිය කීයද?",
+      "මේක scam එකක් නෙවෙයිද?",
+      "මේ company එකේ නම මොකක්ද?"
+    ],
+    "candidate_state": {
+      "id": 86,
+      "phone": "9477009103",
+      "name": null,
+      "email": null,
+      "conversation_state": "initial",
+      "language": "si",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {
+            "country": "Dubai",
+            "job_role": "driver"
+          },
+          "reply_register": "si",
+          "asked_questions": [
+            "name"
+          ],
+          "confusion_count": 0,
+          "locked_language": "si",
+          "next_question_type": null
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "මේක ඇත්ත agency එකක්ද?",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "registration fee එකක් ගන්නවද?",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "Dubai එකේ driver job එකේ සැලරිය කීයද?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "මේක scam එකක් නෙවෙයිද?",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "මේ company එකේ නම මොකක්ද?",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "???, Dewan Consultants ??? ?????????? ?? ???????? agency ???? ?? ???, ??? ????? ?????? ??????????? ????? ?????? ???? ?????? ??? ???????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:36:56.776707Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "???? ??????? ???? ?????? ?????????? ????????? ?? ??????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:36:59.135732Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "????, Dubai ?? driver ???????? ???????? ????? ?????? AED 2,000 ??? AED 4,000 ????? ????? ??? ???. ?????, ????????? ?? ?????? ???????? ???? ????? ??? ???.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:37:05.742801Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? ?????????? ???? ???? ??????? ?? Dewan Consultants ?????? ???????. ??? ???????? ???? ???? ??? ?? ???.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:37:13.315797Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? company ??? ?? Dewan Consultants. ??? ???? ??????? ??????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:37:18.653510Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "si",
+    "persona": "codeswitch",
+    "phone": "9477009104",
+    "input_messages": [
+      "hello, මට Saudi job ekak ona",
+      "මගේ name Nuwan",
+      "experience අවුරුදු 4",
+      "salary kiyada AED වලින්?",
+      "thank you ela"
+    ],
+    "candidate_state": {
+      "id": 87,
+      "phone": "9477009104",
+      "name": "Nuwan",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "si",
+      "experience_years": 4,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "name": "Nuwan",
+            "country": "Saudi",
+            "countries": [
+              "Saudi"
+            ],
+            "experience_years": 4
+          },
+          "reply_register": "singlish",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "email",
+            "age"
+          ],
+          "confusion_count": 0,
+          "locked_language": "singlish",
+          "next_question_type": "job_role"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "hello, මට Saudi job ekak ona",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "මගේ name Nuwan",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "experience අවුරුදු 4",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "salary kiyada AED වලින්?",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "thank you ela",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "Oyata mokada job ekata apply karanna? Driver, Nurse wage roles innawa.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:37:38.709855Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Oyata mokada job ekata apply karanna? (e.g. Driver, Nurse, Cook)",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:37:44.063580Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, oyage job role eka mokakda? Monawada oyata karanna one?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:37:50.728298Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Nuwan, mokakda oyage job role eka? Eken salary eka piliganna puluwan.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:37:58.267514Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, oyage job role eka mokakda? Driver, Nurse wage?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:38:04.194955Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "si",
+    "persona": "offtopic",
+    "phone": "9477009105",
+    "input_messages": [
+      "අද කොළඹ කාලගුණය මොකක්ද",
+      "ඊයේ ක්‍රිකට් match එක ජයග්‍රහණය කලේ කවුද",
+      "ජෝක් එකක් කියන්න",
+      "qwerty asdf",
+      "234 × 56 කීයද",
+      "ඔයා මනුෂ්‍යයෙක්ද?",
+      "තෝ බල්ලෙක්"
+    ],
+    "candidate_state": {
+      "id": 88,
+      "phone": "9477009105",
+      "name": null,
+      "email": null,
+      "conversation_state": "human_handoff",
+      "language": "si",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {},
+          "reply_register": "si",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "si",
+          "next_question_type": null,
+          "handoff_flag": true
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "අද කොළඹ කාලගුණය මොකක්ද",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "ඊයේ ක්‍රිකට් match එක ජයග්‍රහණය කලේ කවුද",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "ජෝක් එකක් කියන්න",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "qwerty asdf",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "234 × 56 කීයද",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "ඔයා මනුෂ්‍යයෙක්ද?",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "තෝ බල්ලෙක්",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "????????, ?? ?????? ??????? ??? ??? ?????. ??? ????? ??????? ?????? ???? ?????? ?? ???? ??? ??????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:38:21.778024Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?? ????????, ?? ???????? match ??????? ??????? ??? ??? ?????. ???? ?????, ??? ?????? ????????? ??? ???????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:38:28.380376Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?? ????????, ????? ?? ???? ?????? ?????. ??? ????? ??????? ???? ????????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:38:35.804734Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?? ??? ??? ???? ???????. ??? CV ????? ?? ?????????? ???????? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:38:41.992371Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "234 ? 56 = 13,104",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:38:49.130344Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?? ??? ???? ???? ??????? ??????? ?????????? ??????. ?? ???? ??????? ???????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:38:55.385918Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "ta",
+    "persona": "novice",
+    "phone": "9477009201",
+    "input_messages": [
+      "வணக்கம்",
+      "எனக்கு வேலை வேணும்",
+      "?",
+      "தெரியல",
+      "பெயர் ராமு",
+      "டிரைவர் வேலை",
+      "துபாய்",
+      "30 வயசு",
+      "email இல்லை",
+      "5 வருஷம்"
+    ],
+    "candidate_state": {
+      "id": 89,
+      "phone": "9477009201",
+      "name": "ராமு",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "ta",
+      "experience_years": 5,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 30,
+            "name": "ராமு",
+            "country": "துபாய்",
+            "job_role": "டிரைவர்",
+            "countries": [
+              "துபாய்"
+            ],
+            "experience_years": 5
+          },
+          "reply_register": "ta",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "ta",
+          "next_question_type": "email"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "வணக்கம்",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "எனக்கு வேலை வேணும்",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "தெரியல",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "பெயர் ராமு",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "டிரைவர் வேலை",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "துபாய்",
+        "seq": 6
+      },
+      {
+        "type": "incoming",
+        "text": "30 வயசு",
+        "seq": 7
+      },
+      {
+        "type": "incoming",
+        "text": "email இல்லை",
+        "seq": 8
+      },
+      {
+        "type": "incoming",
+        "text": "5 வருஷம்",
+        "seq": 9
+      },
+      {
+        "type": "outgoing",
+        "text": "???????, ?????? email ???????? ????? ?????????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:39:18.553476Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????? CV-? ????????????. ?????? ??????? ?????? ?????? ??? ????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:39:24.966042Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????? ?????????? ???????? ????? ????????? ??? ?????? ????????? ?????? ??????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:39:31.056649Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "???, ?????? CV-?? Upload ????? ?????????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:39:37.879560Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????????? ?????? Email ???????? ?????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:39:44.676154Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????????? ?????? email ???????? ??????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:39:50.900359Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??????? ????? ??? ?????????? ???????? ????? ?????????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:39:58.077954Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????? ?????????? ???????? ?????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:40:05.141102Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "???, ?????? CV-? Upload ?????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:40:10.570569Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "ta",
+    "persona": "cooperative",
+    "phone": "9477009202",
+    "input_messages": [
+      "வணக்கம், நான் வேலைக்கு apply பண்ண விரும்புகிறேன்",
+      "என் பெயர் சுரேஷ் குமார்",
+      "எனக்கு வெல்டர் வேலை வேணும்",
+      "சவுதி அரேபியா அல்லது கத்தார்",
+      "எனக்கு வயது 33",
+      "suresh.test@example.com",
+      "எனக்கு 9 வருட welding அனுபவம்"
+    ],
+    "candidate_state": {
+      "id": 90,
+      "phone": "9477009202",
+      "name": "சுரேஷ் குமார்",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "ta",
+      "experience_years": 9,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 33,
+            "name": "சுரேஷ் குமார்",
+            "email": "suresh.test@example.com",
+            "country": "சவுதி அரேபியா",
+            "job_role": "வெல்டர்",
+            "countries": [
+              "சவுதி அரேபியா",
+              "கத்தார்"
+            ],
+            "experience_years": 9
+          },
+          "reply_register": "ta",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "ta",
+          "next_question_type": "cv"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "வணக்கம், நான் வேலைக்கு apply பண்ண விரும்புகிறேன்",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "என் பெயர் சுரேஷ் குமார்",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "எனக்கு வெல்டர் வேலை வேணும்",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "சவுதி அரேபியா அல்லது கத்தார்",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "எனக்கு வயது 33",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "suresh.test@example.com",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "எனக்கு 9 வருட welding அனுபவம்",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "???????, ?????? CV ? ????????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:43:10.684503Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??????? ?????? CV ? ????????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:43:16.591921Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??????? ???? ????????? ???? ????? ??????????????????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:43:23.137886Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "???????? CV-? ????????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:43:29.657505Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??????? ?????? CV ? Upload ????? ?????????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:43:35.739285Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????????? ?????? CV ? ????????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:43:42.315944Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????? CV-? ????????????. ??? ?????? ????????? ?????? ?????? ??????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:43:48.610019Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "ta",
+    "persona": "skeptical",
+    "phone": "9477009203",
+    "input_messages": [
+      "இது உண்மையான agency-ஆ?",
+      "registration fee ஏதாவது வசூலிக்கிறீங்களா?",
+      "துபாய் driver salary எவ்வளவு?",
+      "இது scam-ஆ இருக்குமா?",
+      "என்ன company இது?"
+    ],
+    "candidate_state": {
+      "id": 91,
+      "phone": "9477009203",
+      "name": null,
+      "email": null,
+      "conversation_state": "initial",
+      "language": "ta",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {},
+          "reply_register": "ta",
+          "asked_questions": [
+            "name",
+            "job_role"
+          ],
+          "confusion_count": 0,
+          "locked_language": "ta",
+          "next_question_type": null
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "இது உண்மையான agency-ஆ?",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "registration fee ஏதாவது வசூலிக்கிறீங்களா?",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "துபாய் driver salary எவ்வளவு?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "இது scam-ஆ இருக்குமா?",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "என்ன company இது?",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "???, ??? ???????? ????????. ?????? ???? ???????? ???????? ?????? ???????? ??????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:44:05.024377Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????, ????????? ????? ????? ??????? ????????? ?????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:44:10.983349Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "???????? ??????? ????????? ??????? ?? ??????????? ???????? ?????????, ???????? ???????, ???????? ??????? ???? ?????. ?????????, ????? AED 2,000 ????? AED 4,000 ??? ?????????. ?????? ?????????, ??????? ?????????? ???????? ???????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:44:19.347893Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "??? ??? scam ????. ??????? ??????? ???????? ??????????, ?????????? ?????????? ???? ????????????? ??? ??? ???????? ?????? ????????????????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:44:24.806737Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "ta",
+    "persona": "codeswitch",
+    "phone": "9477009204",
+    "input_messages": [
+      "hi, enakku Qatar job venum",
+      "என் name Murugan",
+      "experience 6 years",
+      "salary எவ்வளவு QAR-ல",
+      "நன்றி"
+    ],
+    "candidate_state": {
+      "id": 92,
+      "phone": "9477009204",
+      "name": "Murugan",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "ta",
+      "experience_years": 6,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "name": "Murugan",
+            "country": "Qatar",
+            "countries": [
+              "Qatar"
+            ],
+            "experience_years": 6
+          },
+          "reply_register": "tanglish",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "email",
+            "age"
+          ],
+          "confusion_count": 0,
+          "locked_language": "tanglish",
+          "next_question_type": "job_role"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "hi, enakku Qatar job venum",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "என் name Murugan",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "experience 6 years",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "salary எவ்வளவு QAR-ல",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "நன்றி",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "Vanakkam Murugan! Neenga yeh job-ku apply panna virumbureenga?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:44:47.071853Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Vanakkam Murugan! Neenga yeh job-ku apply panna virumbureenga?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:44:53.351937Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Neenga yeh job-ku apply panna virumbureenga?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:45:00.248350Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Salary details paathukalam, aanaal neenga yeh job-ku apply panna virumbureenga?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:45:06.975328Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "ta",
+    "persona": "offtopic",
+    "phone": "9477009205",
+    "input_messages": [
+      "இன்று கொழும்பு வானிலை எப்படி",
+      "நேற்று cricket யார் வென்றது",
+      "ஒரு joke சொல்லுங்க",
+      "qwerty asdf",
+      "234 × 56 எவ்வளவு",
+      "நீங்க மனிதரா?",
+      "நாயே"
+    ],
+    "candidate_state": {
+      "id": 93,
+      "phone": "9477009205",
+      "name": null,
+      "email": null,
+      "conversation_state": "initial",
+      "language": "ta",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {},
+          "reply_register": "ta",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age"
+          ],
+          "confusion_count": 0,
+          "locked_language": "ta",
+          "next_question_type": "age"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "இன்று கொழும்பு வானிலை எப்படி",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "நேற்று cricket யார் வென்றது",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "ஒரு joke சொல்லுங்க",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "qwerty asdf",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "234 × 56 எவ்வளவு",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "நீங்க மனிதரா?",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "நாயே",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "????????????, ???? ?????? ?????? ???????? ????? ????????. ???? ??????? ???? ????????????? ?????????? ???????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:45:30.080318Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "????????????, ???? ???????? ?????????? ??????????? ?????? ???????? ????? ????????. ???? ??????? ??? ?????????",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:45:37.507319Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????????: ??? ????? ??????? ??????? ??????? ?????. ????? ??? ?????????????, ????????? ??? ????? ????!",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:45:43.784913Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "?????????? ??????? ???? ????? ?????????? ??????? ?????????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:45:50.299488Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "????????????, ????? ???? ???? ????????? ????? ????????. ???? ?????? ???? ????????????? ????????? ?????????.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:45:56.213278Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "singlish",
+    "persona": "novice",
+    "phone": "9477009301",
+    "input_messages": [
+      "ado",
+      "mata job ekak ona",
+      "?",
+      "monawada",
+      "name eka Kasun",
+      "driver job",
+      "Dubai",
+      "ag 29",
+      "email naha",
+      "5 awurudu"
+    ],
+    "candidate_state": {
+      "id": 94,
+      "phone": "9477009301",
+      "name": "Kasun",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": 5,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 29,
+            "name": "Kasun",
+            "country": "Dubai",
+            "job_role": "Driver",
+            "countries": [
+              "Dubai"
+            ],
+            "experience_years": 5
+          },
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "email"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "ado",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "mata job ekak ona",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "monawada",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "name eka Kasun",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "driver job",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "Dubai",
+        "seq": 6
+      },
+      {
+        "type": "incoming",
+        "text": "ag 29",
+        "seq": 7
+      },
+      {
+        "type": "incoming",
+        "text": "email naha",
+        "seq": 8
+      },
+      {
+        "type": "incoming",
+        "text": "5 awurudu",
+        "seq": 9
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address for official communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:46:24.782648Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address? This will help us keep in touch.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:46:31.384749Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address for our records?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:46:38.184815Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address? This will help us keep in touch officially.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:46:44.912595Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for official communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:46:51.343737Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Great! Could you please share your email address for official communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:46:58.043796Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for our records?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:47:04.061892Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address for official communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:47:11.081538Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address? It's useful for official communication.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:47:17.729020Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for our records?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:47:23.875104Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "singlish",
+    "persona": "cooperative",
+    "phone": "9477009302",
+    "input_messages": [
+      "hi machan, mata job ekak apply karanna ona",
+      "mage nama Pradeep Silva",
+      "mata welder job ekak ona",
+      "Saudi nathnam Qatar kemathi",
+      "mata wayasa 34",
+      "pradeep.test@example.com",
+      "mata welding experience awurudu 10k thiyenawa"
+    ],
+    "candidate_state": {
+      "id": 95,
+      "phone": "9477009302",
+      "name": "Pradeep Silva",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "si",
+      "experience_years": 10,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 34,
+            "name": "Pradeep Silva",
+            "email": "pradeep.test@example.com",
+            "country": "Saudi",
+            "job_role": "welder",
+            "countries": [
+              "Saudi",
+              "Qatar"
+            ],
+            "experience_years": 10
+          },
+          "reply_register": "singlish",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "singlish",
+          "next_question_type": "cv"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "hi machan, mata job ekak apply karanna ona",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "mage nama Pradeep Silva",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "mata welder job ekak ona",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "Saudi nathnam Qatar kemathi",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "mata wayasa 34",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "pradeep.test@example.com",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "mata welding experience awurudu 10k thiyenawa",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, mama oyage CV eka balanna ona. Karunakara upload karanna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:47:39.914704Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, Pradeep. Oya CV eka upload karanna puluwanda?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:47:45.981349Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, dan oyage CV eka upload karanna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:47:52.548568Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, dan oyage CV eka upload karanna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:47:59.663247Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, dan oyage CV eka upload karanna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:48:05.853519Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, dan oyage CV eka upload karanna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:48:19.197879Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "singlish",
+    "persona": "skeptical",
+    "phone": "9477009303",
+    "input_messages": [
+      "meka real agency ekakda?",
+      "registration fee ekak gannawada?",
+      "Dubai eke driver salary kiyada?",
+      "meka scam ekak nemeida?",
+      "company eke nama mokakda?"
+    ],
+    "candidate_state": {
+      "id": 96,
+      "phone": "9477009303",
+      "name": null,
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {},
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": null
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "meka real agency ekakda?",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "registration fee ekak gannawada?",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "Dubai eke driver salary kiyada?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "meka scam ekak nemeida?",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "company eke nama mokakda?",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "Yes, Dewan Consultants is a real recruitment agency. We're here to help you find overseas job opportunities.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:48:34.194938Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "No, we do not charge any registration fees for our services.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:48:41.476500Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Driver salaries in Dubai can vary based on experience and employer, but they typically range from AED 2,000 to AED 4,000 per month. Would you like to work in Dubai or any other countries?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:48:47.677128Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "No, this is not a scam. I'm here to help you find overseas job opportunities. Could you please tell me your age?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:48:54.242203Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "We are Dewan Consultants, assisting candidates in finding overseas job opportunities.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:49:01.100827Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": [
+      {
+        "timestamp": "2026-05-22T13:48:34.194938Z",
+        "text": "2026-05-22 13:48:34,195 - app.webhooks - INFO - ? Sending reply to 9477009303: Yes, Dewan Consultants is a real recruitment agency. We're here to help you find overseas job opportunities."
+      }
+    ]
+  },
+  {
+    "lang": "singlish",
+    "persona": "codeswitch",
+    "phone": "9477009304",
+    "input_messages": [
+      "hello sir, mata Dubai job ekak ona, salary how much?",
+      "name Roshan",
+      "im 27 years",
+      "experience 3 yrs driving",
+      "thanks bro"
+    ],
+    "candidate_state": {
+      "id": 97,
+      "phone": "9477009304",
+      "name": "Roshan",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "si",
+      "experience_years": 3,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 27,
+            "name": "Roshan",
+            "country": "Dubai",
+            "countries": [
+              "Dubai"
+            ],
+            "experience_years": 3
+          },
+          "reply_register": "singlish",
+          "asked_questions": [
+            "job_role",
+            "email",
+            "experience_years",
+            "name"
+          ],
+          "confusion_count": 0,
+          "locked_language": "singlish",
+          "next_question_type": "email"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "hello sir, mata Dubai job ekak ona, salary how much?",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "name Roshan",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "im 27 years",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "experience 3 yrs driving",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "thanks bro",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "Hello Roshan, salary eka job role ekata anuwa wenawa. Oya email eka danna, mama ewa gena details dannam.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:49:17.839210Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari Roshan, oyage email address eka denna puluwanda? Backup ekak widihata thiyaganna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:49:23.724115Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, oyage email address eka denna puluwanda? Backup ekak widiyata thiyaganna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:49:30.023053Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, dan oya email eka denna puluwanda? Backup contact ekak widihata ganna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:49:37.080677Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, oya email eka denna puluwanda? Eka backup ekak widihata thiyaganna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:49:44.236586Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "singlish",
+    "persona": "offtopic",
+    "phone": "9477009305",
+    "input_messages": [
+      "ada kalaguna kohomada",
+      "iye cricket match eka kawda jayagatte",
+      "joke ekak kiyanna",
+      "asdf qwerty",
+      "234 multiplied by 56 kiyada",
+      "oya AI ekakda?",
+      "tho ballek"
+    ],
+    "candidate_state": {
+      "id": 98,
+      "phone": "9477009305",
+      "name": null,
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {},
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "name"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "ada kalaguna kohomada",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "iye cricket match eka kawda jayagatte",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "joke ekak kiyanna",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "asdf qwerty",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "234 multiplied by 56 kiyada",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "oya AI ekakda?",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "tho ballek",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "Hi! Could you please share your full name?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:49:58.340264Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to help you with finding a job overseas. If you have any questions about that, feel free to ask!",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:50:04.950156Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Why did the scarecrow win an award? Because he was outstanding in his field!",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:50:13.031078Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please upload your CV document or photo?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:50:17.618527Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to help you find an overseas job. Could you please tell me your full name?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:50:24.235640Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Yes, I'm an AI here to assist you with finding overseas job opportunities. Could you please tell me your full name?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:50:32.071714Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to assist you with finding a job overseas. Could you please tell me your full name?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:50:37.819296Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "tanglish",
+    "persona": "novice",
+    "phone": "9477009401",
+    "input_messages": [
+      "vanakkam",
+      "enakku velai venum",
+      "?",
+      "theriyala",
+      "peyar Ravi",
+      "driver velai",
+      "Dubai",
+      "30 vayasu",
+      "email illa",
+      "5 varsham"
+    ],
+    "candidate_state": {
+      "id": 99,
+      "phone": "9477009401",
+      "name": null,
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": 5,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 30,
+            "name": "Ravi",
+            "country": "Dubai",
+            "job_role": "Driver",
+            "countries": [
+              "Dubai"
+            ],
+            "experience_years": 5
+          },
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "email"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "vanakkam",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "enakku velai venum",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "theriyala",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "peyar Ravi",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "driver velai",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "Dubai",
+        "seq": 6
+      },
+      {
+        "type": "incoming",
+        "text": "30 vayasu",
+        "seq": 7
+      },
+      {
+        "type": "incoming",
+        "text": "email illa",
+        "seq": 8
+      },
+      {
+        "type": "incoming",
+        "text": "5 varsham",
+        "seq": 9
+      },
+      {
+        "type": "outgoing",
+        "text": "Hello! Could you please share your email address? This will help us keep in touch regarding job opportunities.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:50:53.768123Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I understand you're looking for a job. Could you please share your email address for further communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:50:59.505862Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for official contact?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:51:06.285656Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address? This will help us keep in touch.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:51:12.877353Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Thank you, Ravi. Could you please share your email address for our records?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:51:20.457220Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Great! Could you please share your email address for further communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:51:26.001897Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address? This will help us keep in touch.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:51:33.091130Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please share your email address for official contact?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:51:39.030642Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please provide your email address? It's important for official communication.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:51:45.671089Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Thank you for sharing your experience. Could you please provide your email address for official contact?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:51:52.108400Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "tanglish",
+    "persona": "cooperative",
+    "phone": "9477009402",
+    "input_messages": [
+      "vanakkam, naan velai-ku apply panna virumbureen",
+      "en peyar Karthik Raj",
+      "enakku welder velai venum",
+      "Saudi Arabia illana Qatar",
+      "enakku 31 vayasu",
+      "karthik.test@example.com",
+      "enakku 8 varsham welding experience irukku"
+    ],
+    "candidate_state": {
+      "id": 100,
+      "phone": "9477009402",
+      "name": "Karthik Raj",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "ta",
+      "experience_years": 8,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 31,
+            "name": "Karthik Raj",
+            "email": "karthik.test@example.com",
+            "country": "Saudi Arabia",
+            "job_role": "Welder",
+            "countries": [
+              "Saudi Arabia",
+              "Qatar"
+            ],
+            "experience_years": 8
+          },
+          "reply_register": "tanglish",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "tanglish",
+          "next_question_type": "cv"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "vanakkam, naan velai-ku apply panna virumbureen",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "en peyar Karthik Raj",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "enakku welder velai venum",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "Saudi Arabia illana Qatar",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "enakku 31 vayasu",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "karthik.test@example.com",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "enakku 8 varsham welding experience irukku",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "Vanakkam! Neenga yeh job-ku apply panna virumbureenga?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:56:13.769621Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Nandri, Karthik! Neenga yeh job-ku apply panna virumbureenga?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:56:20.780971Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Nandri, neenga Saudi Arabia illa Qatar-la velai thedureengala? Vera edhavadhu country interest irukka?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:56:26.964857Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Sari, unga CV upload pannunga.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:56:33.026191Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Nandri! Ungaloda email address kudunga.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:56:40.096877Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Nandri! Unga email address kedaichuchu. Neenga unga CV upload pannunga.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:56:46.530475Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Sari, neenga unga CV upload pannunga.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:56:55.412952Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "tanglish",
+    "persona": "skeptical",
+    "phone": "9477009403",
+    "input_messages": [
+      "ithu real agency-a?",
+      "registration fee edhavadhu vasoolikkireengala?",
+      "Dubai driver salary evlo?",
+      "ithu scam-a irukkuma?",
+      "enna company ithu?"
+    ],
+    "candidate_state": {
+      "id": 101,
+      "phone": "9477009403",
+      "name": null,
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {
+            "country": "Dubai"
+          },
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "experience_years"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "ithu real agency-a?",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "registration fee edhavadhu vasoolikkireengala?",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "Dubai driver salary evlo?",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "ithu scam-a irukkuma?",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "enna company ithu?",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "Yes, this is a real agency. I'm here to assist you with finding overseas job opportunities. Could you please tell me your age?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:57:08.166725Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "No, there is no registration fee for our service. We are here to help you find the right job opportunity.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:57:14.280169Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Driver salaries in Dubai can vary widely based on experience and the employer, but typically range from AED 2,000 to AED 5,000 per month. Would you like to share your email address for further communication?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:57:21.540266Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "No, this is not a scam. I'm here to help you find overseas job opportunities. If you have any questions, feel free to ask.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:57:27.799266Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "tanglish",
+    "persona": "codeswitch",
+    "phone": "9477009404",
+    "input_messages": [
+      "hi sir, enakku Qatar job venum, salary how much",
+      "name Mani",
+      "im 26 yrs old",
+      "experience 4 years cleaning",
+      "thanks anna"
+    ],
+    "candidate_state": {
+      "id": 102,
+      "phone": "9477009404",
+      "name": "Mani",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "si",
+      "experience_years": 4,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": true,
+          "cv_uploaded": false,
+          "collected_data": {
+            "age": 26,
+            "name": "Mani",
+            "country": "Qatar",
+            "countries": [
+              "Qatar"
+            ],
+            "experience_years": 4
+          },
+          "reply_register": "singlish",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "email",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "singlish",
+          "next_question_type": "job_role"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "hi sir, enakku Qatar job venum, salary how much",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "name Mani",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "im 26 yrs old",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "experience 4 years cleaning",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "thanks anna",
+        "seq": 4
+      },
+      {
+        "type": "outgoing",
+        "text": "Oyata mokada job ekata apply karanna? Mokakda oyage job role eka?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:57:53.024178Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Oyata mokada job ekata apply karanna? Driver, Nurse, Cook wage monawada balanne?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:58:00.612945Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, oyata mokada job ekata apply karanna?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:58:05.422898Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Hari, oyage email eka denna puluwanda? Eya backup contact ekak widiyata thiyaganna.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:58:13.268155Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Oyata mokada job ekata apply karanna? Kiyannako.",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:58:19.501129Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": []
+  },
+  {
+    "lang": "tanglish",
+    "persona": "offtopic",
+    "phone": "9477009405",
+    "input_messages": [
+      "indru weather eppadi colombo-la",
+      "naetru cricket match-la yaar jeichuvanga",
+      "oru joke sollunga",
+      "qwerty asdf",
+      "234 multiplied by 56 evlo",
+      "neenga AI-a?",
+      "nayee"
+    ],
+    "candidate_state": {
+      "id": 103,
+      "phone": "9477009405",
+      "name": "nayee",
+      "email": null,
+      "conversation_state": "initial",
+      "language": "en",
+      "experience_years": null,
+      "skills": null,
+      "qualification": null,
+      "extracted_data": {
+        "agent_state": {
+          "step": "entry",
+          "cv_synced": false,
+          "cv_uploaded": false,
+          "collected_data": {
+            "name": "nayee"
+          },
+          "reply_register": "en",
+          "asked_questions": [
+            "name",
+            "job_role",
+            "countries",
+            "age",
+            "email",
+            "experience_years",
+            "cv"
+          ],
+          "confusion_count": 0,
+          "locked_language": "en",
+          "next_question_type": "job_role"
+        }
+      },
+      "has_cv": false
+    },
+    "transcript": [
+      {
+        "type": "incoming",
+        "text": "indru weather eppadi colombo-la",
+        "seq": 0
+      },
+      {
+        "type": "incoming",
+        "text": "naetru cricket match-la yaar jeichuvanga",
+        "seq": 1
+      },
+      {
+        "type": "incoming",
+        "text": "oru joke sollunga",
+        "seq": 2
+      },
+      {
+        "type": "incoming",
+        "text": "qwerty asdf",
+        "seq": 3
+      },
+      {
+        "type": "incoming",
+        "text": "234 multiplied by 56 evlo",
+        "seq": 4
+      },
+      {
+        "type": "incoming",
+        "text": "neenga AI-a?",
+        "seq": 5
+      },
+      {
+        "type": "incoming",
+        "text": "nayee",
+        "seq": 6
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to assist you with finding overseas job opportunities. If you have any questions about that, feel free to ask!",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:58:36.290644Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to help with job opportunities. Could you please tell me about your work experience in years?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:58:42.823928Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to help you find a job opportunity. Could you please share which countries you are interested in working?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:58:49.568568Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "Could you please upload your CV document or photo?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:58:56.083249Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to help with job opportunities. Could you please tell me your full name?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:59:03.056968Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "I'm here to assist you with finding overseas job opportunities. Could you please tell me your full name?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:59:09.760960Z"
+      },
+      {
+        "type": "outgoing",
+        "text": "What job role are you looking for?",
+        "language": null,
+        "sentiment": null,
+        "timestamp": "2026-05-22T13:59:16.566668Z"
+      }
+    ],
+    "conversation_table_rows": [],
+    "log_sync_calls": [
+      {
+        "timestamp": "2026-05-22T13:59:16.554637Z",
+        "text": "2026-05-22 13:59:16,555 - app.services.recruitment_sync - INFO - Sync deferred for 9477009405 ? job_role not yet collected"
+      }
+    ]
+  }
+]

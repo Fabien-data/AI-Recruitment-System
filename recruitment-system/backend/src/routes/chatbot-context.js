@@ -161,6 +161,8 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
                    j.location,
                    j.positions_available,
                    j.deadline,
+                   j.is_urgent,
+                   j.required_fields_schema,
                    p.id         AS project_id,
                    p.title      AS project_title,
                    p.client_name,
@@ -192,6 +194,8 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
                    j.location,
                    j.positions_available,
                    j.deadline,
+                   j.is_urgent,
+                   j.required_fields_schema,
                    p.id         AS project_id,
                    p.title      AS project_title,
                    p.client_name,
@@ -232,8 +236,15 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
         const salaryInfo = parseRequirements(row.salary_info);
         const contactInfo = parseRequirements(row.contact_info);
 
-        // Build contextual fields for the chatbot
-        const requiredFields = inferRequiredFields(requirements, row.job_category);
+        // Per-job schema overrides the inferred list when the recruiter has set one.
+        // Falls back to category-based inference so older jobs keep working unchanged.
+        const requiredFieldsSchema = parseRequirements(row.required_fields_schema);
+        const hasExplicitSchema = requiredFieldsSchema && Object.keys(requiredFieldsSchema).length > 0;
+        const requiredFields = hasExplicitSchema
+            ? Object.entries(requiredFieldsSchema)
+                  .filter(([, meta]) => meta && meta.mandatory)
+                  .map(([fieldName]) => fieldName)
+            : inferRequiredFields(requirements, row.job_category);
         const faqs = generateFAQs(
             { ...row, requirements },
             { ...row, countries, benefits }
@@ -265,7 +276,9 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
                 salary_range: row.salary_range,
                 location: row.location,
                 positions_available: row.positions_available,
-                deadline: row.deadline
+                deadline: row.deadline,
+                is_urgent: Boolean(row.is_urgent),
+                required_fields_schema: requiredFieldsSchema
             },
 
             project: {
@@ -285,6 +298,7 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
 
             chatbot_config: {
                 required_fields: requiredFields,
+                required_fields_schema: requiredFieldsSchema,
                 faqs,
                 greeting_override: greetingOverride,
                 skip_states: ['AWAITING_JOB_INTEREST', 'AWAITING_DESTINATION'],

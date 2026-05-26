@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
 from app import crud
 from app.agents.intake_agent import intake_agent
 from app.agents.recovery_agent import recovery_agent
+from app.services.ad_context_service import ad_context_service
 from app.services.cv_service import cv_service
 from app.services.language_service import language_service
 from app.services.handoff_service import handoff_service
+from app.services.intent_service import looks_like_faq_question
 from app.services.job_matching_service import job_matching_service
 from app.services.recruitment_sync import recruitment_sync
 from app.services.vacancy_service import vacancy_service
@@ -69,6 +72,14 @@ class IntakeOrchestrator:
             db.commit()
             return await self._route_interactive_action(db, candidate, state, interactive_text)
 
+        # Meta Click-to-WhatsApp ad trigger ("START:ad_ref_xyz"). Pre-fills
+        # job_interest, country, and full ad context so we skip questions the
+        # ad source already answers. Processed once per session.
+        if not state.get("ad_processed") and ad_context_service.is_ad_trigger(message_text):
+            ad_reply = await self._handle_ad_trigger(db, candidate, state, message_text)
+            if ad_reply is not None:
+                return ad_reply
+
         # Detect whether this message is an explicit language-switch request so
         # the lock can be updated; otherwise the existing lock is preserved.
         is_explicit_switch = bool(detect_language_switch_request(message_text or ""))
@@ -85,12 +96,9 @@ class IntakeOrchestrator:
         # Pass full context to AI supervisor so it knows what's already collected/asked.
         collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
         asked_questions = state.get("asked_questions") if isinstance(state.get("asked_questions"), list) else []
-
-        # Mark the field that was asked in the PREVIOUS turn as "asked" BEFORE
-        # calling the AI — this is the fix for repeated-field re-asking.
+        asked_log = state.get("asked_questions_log") if isinstance(state.get("asked_questions_log"), list) else []
         prev_question = state.get("next_question_type")
-        if prev_question and prev_question not in asked_questions:
-            asked_questions.append(prev_question)
+        collected_before = dict(collected)
 
         # Build conversation history (last 15 messages for full context).
         history_items = []
@@ -111,19 +119,15 @@ class IntakeOrchestrator:
                 ),
             })
 
-        # Build FAQ context when all core fields are captured (post-onboarding mode).
-        # Cap at 8 vacancies with a one-line summary to avoid blowing the token budget.
+        # Build FAQ context whenever vacancies exist AND either (a) the user came
+        # from an ad (ad_context present), or (b) the message looks like an FAQ.
+        # Previously this was gated on full onboarding, which silently swallowed
+        # early FAQ asks. Cap at 8 vacancies to stay inside the token budget.
         faq_context: Optional[str] = None
-        all_core_collected = (
-            collected.get("name")
-            and collected.get("job_role")
-            and (collected.get("countries") or collected.get("country"))
-            and collected.get("age") is not None
-            and collected.get("email")
-            and collected.get("experience_years") is not None
-            and state.get("cv_uploaded")
-        )
-        if all_core_collected:
+        ad_context_snippet: Optional[str] = None
+        ad_context = state.get("ad_context") if isinstance(state.get("ad_context"), dict) else None
+        wants_faq = bool(ad_context) or looks_like_faq_question(message_text)
+        if wants_faq:
             try:
                 vacancies = vacancy_service.get_all_vacancies()
                 if vacancies:
@@ -131,14 +135,36 @@ class IntakeOrchestrator:
                     for v in vacancies[:8]:
                         title = v.get("job_title") or v.get("title") or "Unknown Role"
                         country = v.get("country") or v.get("location") or ""
+                        if not country:
+                            countries = v.get("countries") or []
+                            if countries:
+                                country = str(countries[0])
                         salary = v.get("salary_range") or v.get("salary") or ""
-                        line = f"- {title} | {country}"
+                        line = f"- {title} | {country}".rstrip(" |")
                         if salary:
                             line += f" | {salary}"
                         lines.append(line)
                     faq_context = "\n".join(lines)
             except Exception as _faq_exc:
                 logger.debug("FAQ vacancy fetch skipped: %s", _faq_exc)
+
+        if ad_context:
+            ad_lines = []
+            if ad_context.get("job_title"):
+                ad_lines.append(f"Ad job: {ad_context['job_title']}")
+            if ad_context.get("job_salary"):
+                ad_lines.append(f"Salary: {ad_context['job_salary']}")
+            if ad_context.get("client_name"):
+                ad_lines.append(f"Client: {ad_context['client_name']}")
+            if ad_context.get("interview_date"):
+                ad_lines.append(f"Interview: {ad_context['interview_date']}")
+            for faq in (ad_context.get("faqs") or [])[:3]:
+                q = (faq.get("question") or "").strip()
+                a = (faq.get("answer") or "").strip()
+                if q and a:
+                    ad_lines.append(f"FAQ — {q}: {a}")
+            if ad_lines:
+                ad_context_snippet = "\n".join(ad_lines)
 
         ai_decision = await run_ai_supervisor(
             user_text=message_text,
@@ -149,6 +175,8 @@ class IntakeOrchestrator:
             locked_language=locked_language,
             cv_just_uploaded=False,
             faq_context=faq_context,
+            ad_context_snippet=ad_context_snippet,
+            rephrase_mode=bool(state.get("rephrase_mode")),
             phone_number=phone_number,
         )
 
@@ -186,13 +214,51 @@ class IntakeOrchestrator:
 
         state["collected_data"] = collected
 
-        # Store next_question_type so the NEXT turn can pre-load it into asked_questions
-        # before calling the AI (this is the fix for repeated-field loops).
-        state["next_question_type"] = ai_decision.next_question_type
-        # Also add it to asked_questions now as a belt-and-suspenders guard.
-        if ai_decision.next_question_type and ai_decision.next_question_type not in asked_questions:
-            asked_questions.append(ai_decision.next_question_type)
+        # Rephrase detection (Phase 2.4): if the AI asked the same field as the
+        # previous turn and the user's reply produced no new data for that field,
+        # flip rephrase_mode on so the NEXT turn re-asks in plainer language.
+        next_q = ai_decision.next_question_type
+        same_field_again = bool(next_q and prev_question and next_q == prev_question)
+        no_progress = collected == collected_before
+        if same_field_again and no_progress:
+            state["rephrase_mode"] = True
+        else:
+            state["rephrase_mode"] = False
+
+        # Force-pick guard (Phase 1.2): if the AI tries to ask for something
+        # we already collected (and already asked once), override with the next
+        # genuinely missing mandatory field using the deterministic dispatcher.
+        mandatory_order = self._mandatory_order(state)
+        if next_q and next_q in asked_questions and self._field_satisfied(next_q, collected):
+            replacement = self._next_unasked_missing(mandatory_order, collected, asked_questions)
+            if replacement and replacement != next_q:
+                logger.info(
+                    "Force-pick override: AI asked '%s' (already known) → asking '%s'",
+                    next_q, replacement,
+                )
+                next_q = replacement
+                deterministic_prompt = intake_agent.get_prompt_for_field(replacement, locked_language)
+                if deterministic_prompt:
+                    ai_decision.reply_message = deterministic_prompt
+                    ai_decision.next_question_type = replacement
+
+        # Store next_question_type so the NEXT turn can detect rephrase and
+        # avoid re-asking. Write-after-send: the append happens here because
+        # we are about to return the reply to the user.
+        state["next_question_type"] = next_q
+        if next_q and next_q not in asked_questions:
+            asked_questions.append(next_q)
+        if next_q:
+            asked_log.append({
+                "field": next_q,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "turn": len(asked_log) + 1,
+            })
+            # Keep the log bounded so state JSON does not grow forever.
+            if len(asked_log) > 50:
+                asked_log = asked_log[-50:]
         state["asked_questions"] = list(dict.fromkeys(asked_questions))  # deduplicate
+        state["asked_questions_log"] = asked_log
 
         if ai_decision.intervention_needed:
             candidate.intervention_needed = True
@@ -207,11 +273,16 @@ class IntakeOrchestrator:
             return ai_decision.reply_message
 
         # Sync as soon as we have a name or a CV — don't wait for all fields.
+        # IMPORTANT: only mark cv_synced=True if push() actually succeeded.
+        # Marking it True on a deferred sync (e.g. job_role not yet collected)
+        # permanently blocked subsequent retries, leaving candidates stranded
+        # on the chatbot side and never landing in CRM.
         can_sync = bool(candidate.name or collected.get("name") or state.get("cv_uploaded"))
         if can_sync and not state.get("cv_synced"):
             try:
-                await recruitment_sync.push(candidate, db)
-                state["cv_synced"] = True
+                synced = await recruitment_sync.push(candidate, db)
+                if synced:
+                    state["cv_synced"] = True
             except Exception as exc:
                 logger.warning("Recruitment sync failed during AI supervisor flow: %s", exc)
 
@@ -318,13 +389,15 @@ class IntakeOrchestrator:
         db.commit()
 
         # --- 4. Immediate sync — don't wait for user confirmation ---
+        # Only mark cv_synced=True on actual success so deferred syncs retry.
         if not state.get("cv_synced"):
             try:
                 cv_path = getattr(candidate, "resume_file_path", None)
-                await recruitment_sync.push(candidate, db, cv_path=cv_path)
-                state["cv_synced"] = True
-                self._save_agent_state(candidate, state)
-                db.commit()
+                synced = await recruitment_sync.push(candidate, db, cv_path=cv_path)
+                if synced:
+                    state["cv_synced"] = True
+                    self._save_agent_state(candidate, state)
+                    db.commit()
             except Exception as exc:
                 logger.warning("Immediate CV sync failed: %s", exc)
 
@@ -465,9 +538,9 @@ class IntakeOrchestrator:
             limit=5,
         )
         state["step"] = "vacancy_browsing"
-        self._save_agent_state(candidate, state)
 
         rows = []
+        matched_map: Dict[str, Dict[str, Any]] = {}
         for idx, job in enumerate(ranked):
             title = str(job.get("title") or "Job").strip()[:24] or "Job"
             country = ""
@@ -475,22 +548,66 @@ class IntakeOrchestrator:
             if countries:
                 country = str(countries[0])
             desc = (country or str(job.get("category") or "Open position"))[:72]
+            rid = f"job_{idx}"
             rows.append({
-                "id": f"job_{idx}",
+                "id": rid,
                 "title": title,
                 "description": desc,
             })
+            matched_map[rid] = job
+        # Stash so the next interactive turn can resolve "job_<idx>" → real job.
+        state["matched_jobs"] = matched_map
 
         if not rows:
+            # No matches for the candidate's preference. Don't dead-end the lead:
+            # offer urgent/recent jobs first, then a "Keep me informed" option
+            # that saves them into the general pool with their preferences as
+            # remarks. (Phase 3 swaps get_recent_active → get_urgent.)
+            urgent = await vacancy_service.get_recent_active(limit=3)
+            urgent_rows = []
+            urgent_map: Dict[str, Dict[str, Any]] = {}
+            for idx, job in enumerate(urgent):
+                title = str(job.get("title") or "Job").strip()[:24] or "Job"
+                countries = job.get("countries") or []
+                country = str(countries[0]) if countries else ""
+                desc = (country or str(job.get("category") or "Active opening"))[:72]
+                rid = f"urgent_{idx}"
+                urgent_rows.append({"id": rid, "title": title, "description": desc})
+                urgent_map[rid] = job
+            state["urgent_jobs"] = urgent_map
+            self._save_agent_state(candidate, state)
+
+            general_pool_row = {
+                "id": "action_general_pool",
+                "title": "Keep me informed",
+                "description": "Save my preferences for future jobs",
+            }
+            if urgent_rows:
+                return {
+                    "type": "list",
+                    "body_text": (
+                        "No exact match for that preference right now — here are our most active openings. "
+                        "Or I can save your preferences and message you when something matches."
+                    ),
+                    "button_label": "See Options",
+                    "sections": [
+                        {"title": "Active Openings", "rows": urgent_rows},
+                        {"title": "Other Options", "rows": [general_pool_row]},
+                    ],
+                }
             return {
                 "type": "buttons",
-                "body_text": "No active vacancies right now. Do you want to continue with a direct application?",
+                "body_text": (
+                    "No active vacancies match your preference right now. "
+                    "Want me to save your details and notify you when a matching job opens?"
+                ),
                 "buttons": [
-                    {"id": "action_apply", "title": "Apply"},
-                    {"id": "action_question", "title": "Ask"},
+                    {"id": "action_general_pool", "title": "Keep me informed"},
+                    {"id": "action_apply", "title": "Apply anyway"},
                 ],
             }
 
+        self._save_agent_state(candidate, state)
         return {
             "type": "list",
             "body_text": "Here are relevant vacancies. Select one to continue your application.",
@@ -514,17 +631,270 @@ class IntakeOrchestrator:
             return await self._route_apply_flow(db, candidate, state)
         if action == "action_question":
             return await self._route_question(candidate, "", state)
-        if re.match(r"^job_\d+$", action):
+        if action == "action_general_pool":
+            return await self._route_general_pool_signup(db, candidate, state)
+        if re.match(r"^urgent_\d+$", action):
+            # Treat picking an urgent job exactly like picking a regular job —
+            # capture the job id from state and continue the standard flow.
+            urgent_map = state.get("urgent_jobs") if isinstance(state.get("urgent_jobs"), dict) else {}
+            picked = urgent_map.get(action)
+            if picked:
+                state["active_job_id"] = picked.get("job_id") or picked.get("id")
+                if picked.get("title") and not state.get("collected_data", {}).get("job_role"):
+                    collected = state.setdefault("collected_data", {})
+                    collected["job_role"] = picked["title"]
+                self._apply_required_fields_schema(state, picked)
             state["step"] = "collecting_experience"
             self._save_agent_state(candidate, state)
             crud.update_candidate_state(db, candidate.id, "intake_collecting_experience")
             candidate.conversation_state = "intake_collecting_experience"
             db.commit()
+            next_field = self._next_unasked_missing(
+                self._mandatory_order(state),
+                state.get("collected_data", {}) or {},
+                state.get("asked_questions", []) or [],
+            )
+            if next_field:
+                prompt = intake_agent.get_prompt_for_field(next_field, self._candidate_language(candidate))
+                if prompt:
+                    return prompt
+            return self._experience_prompt(candidate)
+        if re.match(r"^job_\d+$", action):
+            # Look up the actual job the user picked and load its per-job
+            # required-fields schema so we ask the right questions for the
+            # specific role (mandatory first, optional opportunistically).
+            matched_map = state.get("matched_jobs") if isinstance(state.get("matched_jobs"), dict) else {}
+            picked = matched_map.get(action)
+            if picked:
+                state["active_job_id"] = picked.get("id") or picked.get("job_id")
+                if picked.get("title") and not state.get("collected_data", {}).get("job_role"):
+                    collected = state.setdefault("collected_data", {})
+                    collected["job_role"] = picked["title"]
+                self._apply_required_fields_schema(state, picked)
+            state["step"] = "collecting_experience"
+            self._save_agent_state(candidate, state)
+            crud.update_candidate_state(db, candidate.id, "intake_collecting_experience")
+            candidate.conversation_state = "intake_collecting_experience"
+            db.commit()
+            # If schema was applied and we have a next mandatory field, prompt that
+            # field directly. Otherwise fall back to the legacy experience prompt.
+            next_field = self._next_unasked_missing(
+                self._mandatory_order(state),
+                state.get("collected_data", {}) or {},
+                state.get("asked_questions", []) or [],
+            )
+            if next_field:
+                prompt = intake_agent.get_prompt_for_field(next_field, self._candidate_language(candidate))
+                if prompt:
+                    return prompt
             return self._experience_prompt(candidate)
         return await self._route_apply_flow(db, candidate, state)
 
     def _is_structured_interactive_token(self, text: str) -> bool:
-        return bool(re.match(r"^(job_\d+|action_apply|action_question)$", text or ""))
+        return bool(re.match(
+            r"^(job_\d+|urgent_\d+|action_apply|action_question|action_general_pool)$",
+            text or "",
+        ))
+
+    async def _handle_ad_trigger(
+        self,
+        db: Session,
+        candidate,
+        state: Dict[str, Any],
+        message_text: str,
+    ) -> Optional[str]:
+        """Process a `START:ad_ref_xyz` first message from a Meta ad click.
+
+        Pre-fills job_interest + destination_country into collected_data so the
+        AI never re-asks them, stores the full ad_context for FAQ grounding,
+        and returns the ad-specific greeting (skipping the AI call this turn).
+        """
+        context = await ad_context_service.detect_and_load(message_text, candidate, db)
+        if not context:
+            return None
+
+        state["ad_processed"] = True
+        prefilled = (context.get("chatbot_config") or {}).get("prefilled") or {}
+        job_interest = prefilled.get("job_interest") or (context.get("job") or {}).get("title")
+        destination = prefilled.get("destination_country") or (
+            (context.get("project") or {}).get("countries") or [None]
+        )[0]
+
+        collected = state.setdefault("collected_data", {})
+        asked_questions = state.setdefault("asked_questions", [])
+
+        if job_interest and not collected.get("job_role"):
+            collected["job_role"] = job_interest
+            if "job_role" not in asked_questions:
+                asked_questions.append("job_role")
+        if destination and not collected.get("country"):
+            collected["country"] = destination
+            if "countries" not in asked_questions:
+                asked_questions.append("countries")
+
+        # Store the full ad context snapshot so subsequent turns can ground FAQ
+        # answers in the actual job the user clicked on.
+        state["ad_context"] = (candidate.extracted_data or {}).get("ad_context")
+        state["active_job_id"] = (context.get("job") or {}).get("id")
+        state["step"] = "ad_landed"
+        self._save_agent_state(candidate, state)
+        db.commit()
+
+        greeting = ad_context_service.get_greeting(context)
+        if greeting:
+            return greeting
+
+        # Fallback if the campaign did not configure a custom greeting.
+        lang = state.get("locked_language") or "en"
+        job_title = (context.get("job") or {}).get("title") or "this role"
+        country = destination or "our partner countries"
+        defaults = {
+            "en": f"Welcome! Thanks for tapping our ad for {job_title} in {country}. May I have your full name?",
+            "si": f"සාදරයෙන් පිළිගනිමු! {country} {job_title} දැන්වීම සඳහා ඔබට ස්තූතියි. ඔබේ සම්පූර්ණ නම කියන්නද?",
+            "ta": f"வணக்கம்! {country} {job_title} விளம்பரத்திற்கு நன்றி. உங்கள் முழுப் பெயரை சொல்லுங்கள்?",
+            "singlish": f"Welcome! {country} {job_title} ad eka tap kalata sthuthi. Oyage full name eka kiyanna?",
+            "tanglish": f"Vanakkam! {country} {job_title} ad-ku thanks. Unga full name sollunga?",
+        }
+        return defaults.get(lang, defaults["en"])
+
+    async def _route_general_pool_signup(
+        self,
+        db: Session,
+        candidate,
+        state: Dict[str, Any],
+    ) -> str:
+        """Save the candidate into the general pool with their preferences as
+        remarks so the lead is never lost when no current job matches."""
+        collected = state.get("collected_data", {}) if isinstance(state.get("collected_data"), dict) else {}
+        job_role = collected.get("job_role") or "any role"
+        country = collected.get("country") or (collected.get("countries") or [None])[0] or "any country"
+        exp = collected.get("experience_years")
+        exp_part = f", {exp}y exp" if exp is not None else ""
+        remarks = f"Wants: {job_role}, {country}{exp_part} (saved from no-match fallback)"
+
+        # Mirror into state so the next sync picks it up. Phase 3 backend stores
+        # these in dedicated columns; until then extra metadata is ignored.
+        collected["general_pool_optin"] = True
+        state["collected_data"] = collected
+        state["remarks"] = remarks
+        log = state.get("preferences_log") if isinstance(state.get("preferences_log"), list) else []
+        log.append({
+            "job_role": job_role,
+            "country": country,
+            "experience_years": exp,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "source": "no_match_fallback",
+        })
+        state["preferences_log"] = log
+        if hasattr(candidate, "is_general_pool"):
+            try:
+                candidate.is_general_pool = True
+            except Exception:
+                pass
+
+        self._save_agent_state(candidate, state)
+        db.commit()
+
+        try:
+            await recruitment_sync.push(candidate, db)
+        except Exception as exc:
+            logger.warning("General-pool sync failed for %s: %s", candidate.phone_number, exc)
+
+        lang = state.get("locked_language") or self._candidate_language(candidate)
+        confirmations = {
+            "en": (
+                "Saved your preferences. We'll WhatsApp you as soon as a matching job opens. "
+                "Anything else I can help with?"
+            ),
+            "si": (
+                "ඔබේ අවශ්‍යතා සුරක්ෂිත කළා. ගැලපෙන රැකියාවක් එනවිට වහාම WhatsApp කරන්නම්. "
+                "තවත් උදව්වක් ඕනේද?"
+            ),
+            "ta": (
+                "உங்கள் தேவைகள் சேமிக்கப்பட்டன. பொருந்தும் வேலை திறக்கும்போது உடனே WhatsApp செய்வோம். "
+                "இன்னும் ஏதாவது உதவி வேண்டுமா?"
+            ),
+            "singlish": (
+                "Oyage preferences save kaala. Match wena job ekak avoth wahama WhatsApp karannam. "
+                "Thawath udawwak onada?"
+            ),
+            "tanglish": (
+                "Unga preferences save panniten. Match aana job vandhuduchu-na udane WhatsApp pannuven. "
+                "Innum ethavadhu help venuma?"
+            ),
+        }
+        return confirmations.get(lang, confirmations["en"])
+
+    def _mandatory_order(self, state: Dict[str, Any]) -> List[str]:
+        """Return the mandatory-field order. Per-job `required_fields_schema`
+        (set when the user picks a specific job) wins over the static default."""
+        per_job = state.get("mandatory_fields")
+        if isinstance(per_job, list) and per_job:
+            return [str(f) for f in per_job]
+        return ["name", "job_role", "country", "experience_years", "age", "email"]
+
+    def _apply_required_fields_schema(self, state: Dict[str, Any], job: Dict[str, Any]) -> None:
+        """Extract `required_fields_schema` from the picked job and stash the
+        ordered mandatory / optional field lists in state so subsequent turns
+        ask the right questions for the role."""
+        schema = job.get("required_fields_schema")
+        if not isinstance(schema, dict) or not schema:
+            # No per-job schema — keep defaults.
+            return
+        # Order: explicit `ask_after` chain first; everything else in dict order.
+        # We resolve `ask_after` by topological-ish sort: place fields after their
+        # dependency if it is present, otherwise append at the end.
+        mandatory = [f for f, meta in schema.items() if isinstance(meta, dict) and meta.get("mandatory")]
+        optional = [f for f, meta in schema.items() if isinstance(meta, dict) and not meta.get("mandatory")]
+
+        def _sort_by_dep(fields: List[str]) -> List[str]:
+            ordered: List[str] = []
+            remaining = list(fields)
+            guard = 0
+            while remaining and guard < len(fields) * 2 + 1:
+                progressed = False
+                for f in list(remaining):
+                    after = (schema.get(f) or {}).get("ask_after")
+                    if not after or after in ordered or after not in fields:
+                        ordered.append(f)
+                        remaining.remove(f)
+                        progressed = True
+                if not progressed:
+                    ordered.extend(remaining)
+                    break
+                guard += 1
+            return ordered
+
+        state["mandatory_fields"] = _sort_by_dep(mandatory)
+        state["optional_fields"] = _sort_by_dep(optional)
+
+    def _field_satisfied(self, field: str, collected: Dict[str, Any]) -> bool:
+        if not field:
+            return False
+        if field == "country":
+            return bool(collected.get("country") or collected.get("countries"))
+        if field == "countries":
+            return bool(collected.get("countries") or collected.get("country"))
+        if field == "cv":
+            return bool(collected.get("cv_uploaded") or collected.get("cv"))
+        value = collected.get(field)
+        if isinstance(value, (int, float)):
+            return value is not None
+        return bool(value)
+
+    def _next_unasked_missing(
+        self,
+        order: List[str],
+        collected: Dict[str, Any],
+        asked: List[str],
+    ) -> Optional[str]:
+        for field in order:
+            if self._field_satisfied(field, collected):
+                continue
+            if field in asked:
+                continue
+            return field
+        return None
 
     def _merge_entities_from_analysis(self, state: Dict[str, Any], analysis, user_text: str) -> None:
         collected = state.get("collected_data")
@@ -648,15 +1018,30 @@ class IntakeOrchestrator:
                 "handoff_flag": False,
                 "locked_language": None,
                 "asked_questions": [],
+                "asked_questions_log": [],
                 "cv_synced": False,
+                "ad_processed": False,
+                "rephrase_mode": False,
+                "urgent_jobs": {},
+                "preferences_log": [],
             }
             self._save_agent_state(candidate, state)
         else:
             # Backfill new keys for existing sessions without them
             if "asked_questions" not in state:
                 state["asked_questions"] = []
+            if "asked_questions_log" not in state:
+                state["asked_questions_log"] = []
             if "cv_synced" not in state:
                 state["cv_synced"] = False
+            if "ad_processed" not in state:
+                state["ad_processed"] = False
+            if "rephrase_mode" not in state:
+                state["rephrase_mode"] = False
+            if "urgent_jobs" not in state:
+                state["urgent_jobs"] = {}
+            if "preferences_log" not in state:
+                state["preferences_log"] = []
             # Fix 6: recover cv_uploaded from the DB-level resume_file_path column
             # so the flag survives a state flush or agent_state column reset.
             if not state.get("cv_uploaded") and getattr(candidate, "resume_file_path", None):

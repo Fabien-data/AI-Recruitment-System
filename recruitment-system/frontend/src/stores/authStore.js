@@ -61,6 +61,7 @@ export const ROLES = {
   ADMIN: 'admin',
   PROJECT_HANDLER: 'project_handler',
   SOURCING_DEPARTMENT: 'sourcing_department',
+  MARKETING_AGENT: 'marketing_agent',
 }
 
 export function useRole() {
@@ -72,6 +73,7 @@ export function useRole() {
     isAdmin: role === ROLES.ADMIN,
     isProjectHandler: role === ROLES.PROJECT_HANDLER,
     isSourcingDept: role === ROLES.SOURCING_DEPARTMENT,
+    isMarketingAgent: role === ROLES.MARKETING_AGENT,
     // Can create/edit jobs and projects
     canEdit: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT || role === ROLES.PROJECT_HANDLER,
     // Can delete jobs (admin + sourcing)
@@ -82,5 +84,7 @@ export function useRole() {
     hasFullAnalytics: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT,
     // Admin dashboard access
     hasAdminDashboard: role === ROLES.ADMIN,
+    // Marketing Hub access
+    hasMarketingHub: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT || role === ROLES.MARKETING_AGENT,
   }
 }

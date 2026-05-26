@@ -1,0 +1,33 @@
+# Environment files containing secrets — never commit
+**/env.yaml
+**/backend_env.yaml
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Node modules
+**/node_modules/
+
+# Build output
+**/dist/
+**/build/
+
+# Firebase deploy cache (regenerated on every deploy)
+**/.firebase/
+
+# Deploy + QA logs
+deploy-*.log
+frontend-*.log
+chatbot-*.log
+qa-*.log
+qa-debug.json
+
+# Local screenshots & scratch images
+image*.png
+
+# Local Claude session files
+.claude/
+
+# OS junk
+.DS_Store
+Thumbs.db

@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { showNotificationToast } from '../utils/notificationToast'
 import {
     ArrowLeft,
     Users,
@@ -379,7 +380,19 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
             notify_channels: getChannels()
         }),
         onSuccess: (result) => {
-            toast.success(`${result.certified || candidates.length} candidates certified!`)
+            const count = result?.success_count ?? result?.certified ?? candidates.length
+            // Aggregate per-candidate notification results so we can surface partial failures
+            const aggregated = { success: [], failed: [] }
+            const perResults = result?.results?.success || []
+            perResults.forEach((r) => {
+                if (r?.notification?.success) aggregated.success.push(...r.notification.success)
+                if (r?.notification?.failed) aggregated.failed.push(...r.notification.failed)
+            })
+            if (aggregated.failed.length > 0) {
+                showNotificationToast(aggregated, `${count} candidate(s) certified`)
+            } else {
+                toast.success(`${count} candidate(s) certified!`)
+            }
             onSuccess()
         },
         onError: (err) => {
@@ -966,37 +979,44 @@ Dewan Recruitment Team`
             }
             return updateApplication(data.application_id, payload)
         },
-        onSuccess: () => {
+        onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['job-candidates'] })
-            const channelNames = getChannels().map(c => c === 'whatsapp' ? '📱 WhatsApp' : c === 'sms' ? '📲 SMS' : '📧 Email')
-            toast.custom((t) => (
-                <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
-                    <div className="flex-1 w-0 p-4">
-                        <div className="flex items-start">
-                            <div className="flex-shrink-0 pt-0.5">
-                                <div className="h-10 w-10 rounded-full bg-green-100 flex items-center justify-center">
-                                    <CheckCircle2 className="h-6 w-6 text-green-600" />
+            const notif = result?.notification
+            const headline = hasPrescreening ? 'Pre-screening invitation sent' : 'Candidate certified'
+            if (notif && Array.isArray(notif.failed) && notif.failed.length > 0) {
+                // At least one channel failed — show honest partial-failure toast.
+                showNotificationToast(notif, headline)
+            } else {
+                const channelNames = getChannels().map(c => c === 'whatsapp' ? '📱 WhatsApp' : c === 'sms' ? '📲 SMS' : '📧 Email')
+                toast.custom((t) => (
+                    <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
+                        <div className="flex-1 w-0 p-4">
+                            <div className="flex items-start">
+                                <div className="flex-shrink-0 pt-0.5">
+                                    <div className="h-10 w-10 rounded-full bg-green-100 flex items-center justify-center">
+                                        <CheckCircle2 className="h-6 w-6 text-green-600" />
+                                    </div>
+                                </div>
+                                <div className="ml-3 flex-1">
+                                    <p className="text-sm font-medium text-gray-900">Candidate Certified!</p>
+                                    <p className="mt-1 text-sm text-gray-500">
+                                        {hasPrescreening ? '📅 Pre-screening invitation sent' : '✅ Status updated'}
+                                        {' via ' + channelNames.join(', ')}
+                                    </p>
                                 </div>
                             </div>
-                            <div className="ml-3 flex-1">
-                                <p className="text-sm font-medium text-gray-900">Candidate Certified!</p>
-                                <p className="mt-1 text-sm text-gray-500">
-                                    {hasPrescreening ? '📅 Pre-screening invitation sent' : '✅ Status updated'}
-                                    {' via ' + channelNames.join(', ')}
-                                </p>
-                            </div>
+                        </div>
+                        <div className="flex border-l border-gray-200">
+                            <button
+                                onClick={() => toast.dismiss(t.id)}
+                                className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-primary-600 hover:text-primary-500"
+                            >
+                                Close
+                            </button>
                         </div>
                     </div>
-                    <div className="flex border-l border-gray-200">
-                        <button
-                            onClick={() => toast.dismiss(t.id)}
-                            className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-primary-600 hover:text-primary-500"
-                        >
-                            Close
-                        </button>
-                    </div>
-                </div>
-            ), { duration: 5000 })
+                ), { duration: 5000 })
+            }
             onClose()
         },
         onError: (error) => {
@@ -1263,36 +1283,41 @@ Dewan Recruitment Team`
                 notify_channels: channels.length > 0 ? channels : ['whatsapp']
             })
         },
-        onSuccess: () => {
+        onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['job-candidates'] })
             queryClient.invalidateQueries({ queryKey: ['general-pool'] })
-            toast.custom((t) => (
-                <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
-                    <div className="flex-1 w-0 p-4">
-                        <div className="flex items-start">
-                            <div className="flex-shrink-0 pt-0.5">
-                                <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center">
-                                    <UserX className="h-6 w-6 text-amber-600" />
+            const notif = result?.notification
+            if (notif && Array.isArray(notif.failed) && notif.failed.length > 0) {
+                showNotificationToast(notif, `${candidate.name} moved to general pool`)
+            } else {
+                toast.custom((t) => (
+                    <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
+                        <div className="flex-1 w-0 p-4">
+                            <div className="flex items-start">
+                                <div className="flex-shrink-0 pt-0.5">
+                                    <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center">
+                                        <UserX className="h-6 w-6 text-amber-600" />
+                                    </div>
+                                </div>
+                                <div className="ml-3 flex-1">
+                                    <p className="text-sm font-medium text-gray-900">Moved to General Pool</p>
+                                    <p className="mt-1 text-sm text-gray-500">
+                                        {candidate.name} has been notified and moved to the general pool for future opportunities.
+                                    </p>
                                 </div>
                             </div>
-                            <div className="ml-3 flex-1">
-                                <p className="text-sm font-medium text-gray-900">Moved to General Pool</p>
-                                <p className="mt-1 text-sm text-gray-500">
-                                    {candidate.name} has been notified and moved to the general pool for future opportunities.
-                                </p>
-                            </div>
+                        </div>
+                        <div className="flex border-l border-gray-200">
+                            <button
+                                onClick={() => toast.dismiss(t.id)}
+                                className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-primary-600 hover:text-primary-500"
+                            >
+                                Close
+                            </button>
                         </div>
                     </div>
-                    <div className="flex border-l border-gray-200">
-                        <button
-                            onClick={() => toast.dismiss(t.id)}
-                            className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-primary-600 hover:text-primary-500"
-                        >
-                            Close
-                        </button>
-                    </div>
-                </div>
-            ), { duration: 4000 })
+                ), { duration: 4000 })
+            }
             onClose()
         },
         onError: (error) => {
@@ -1445,9 +1470,9 @@ function TransferModal({ data, currentJob, onClose }) {
             target_job_id: targetJobId,
             transfer_reason: reason
         }),
-        onSuccess: () => {
+        onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['job-candidates'] })
-            toast.success(`${candidate.name} transferred successfully`)
+            showNotificationToast(result?.notification, `${candidate.name} transferred successfully`)
             onClose()
         },
         onError: (error) => {

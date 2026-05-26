@@ -40,6 +40,8 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
     salary_range: '',
     location: '',
     deadline: '',
+    is_urgent: false,
+    required_fields_schema_text: '',
     requirements: {
       min_age: '',
       max_age: '',
@@ -55,6 +57,12 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       height_tolerance: 2
     }
   })
+
+  const SCHEMA_TEMPLATE = JSON.stringify({
+    name: { mandatory: true },
+    passport_number: { mandatory: true, ask_after: 'name' },
+    preferred_shift: { mandatory: false }
+  }, null, 2)
 
   const createMutation = useMutation({
     mutationFn: (data) => {
@@ -91,6 +99,8 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       salary_range: '',
       location: '',
       deadline: '',
+      is_urgent: false,
+      required_fields_schema_text: '',
       requirements: {
         min_age: '',
         max_age: '',
@@ -132,9 +142,27 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       return acc
     }, {})
 
+    // Validate the per-job required-fields schema JSON before submitting so
+    // recruiters get inline feedback instead of a 500 from the backend.
+    let requiredFieldsSchema = {}
+    if (formData.required_fields_schema_text && formData.required_fields_schema_text.trim()) {
+      try {
+        requiredFieldsSchema = JSON.parse(formData.required_fields_schema_text)
+        if (typeof requiredFieldsSchema !== 'object' || Array.isArray(requiredFieldsSchema)) {
+          toast.error('Required Fields Schema must be a JSON object')
+          return
+        }
+      } catch (err) {
+        toast.error('Required Fields Schema is not valid JSON')
+        return
+      }
+    }
+
+    const { required_fields_schema_text, ...rest } = formData
     const dataToSubmit = {
-      ...formData,
-      requirements: cleanedRequirements
+      ...rest,
+      requirements: cleanedRequirements,
+      required_fields_schema: requiredFieldsSchema,
     }
 
     createMutation.mutate(dataToSubmit)
@@ -416,6 +444,60 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
               />
               <p className="text-xs text-gray-500 mt-1">Flexibility in height requirements</p>
             </div>
+          </div>
+        </div>
+
+        {/* Chatbot Settings */}
+        <div className="space-y-4">
+          <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Chatbot Settings</h3>
+          <p className="text-sm text-gray-600">
+            Controls how the WhatsApp chatbot surfaces this job and which questions it asks candidates.
+          </p>
+
+          <div className="flex items-start gap-2">
+            <input
+              id="job-is-urgent"
+              type="checkbox"
+              checked={formData.is_urgent}
+              onChange={(e) => setFormData({ ...formData, is_urgent: e.target.checked })}
+              className="mt-1"
+            />
+            <label htmlFor="job-is-urgent" className="text-sm">
+              <span className="font-medium text-gray-800">Mark as URGENT</span>
+              <p className="text-xs text-gray-500">
+                When no exact match is found for a candidate, the chatbot will offer urgent jobs first.
+              </p>
+            </label>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-gray-700">
+                Required Fields Schema (JSON)
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setFormData((prev) => ({ ...prev, required_fields_schema_text: SCHEMA_TEMPLATE }))
+                }
+                className="text-xs text-blue-600 hover:text-blue-700"
+              >
+                Insert template
+              </button>
+            </div>
+            <textarea
+              value={formData.required_fields_schema_text}
+              onChange={(e) =>
+                setFormData({ ...formData, required_fields_schema_text: e.target.value })
+              }
+              className="input w-full font-mono text-xs"
+              rows={6}
+              placeholder='{"name": {"mandatory": true}, "passport_number": {"mandatory": true, "ask_after": "name"}}'
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Per-field intake schema for the chatbot. Mandatory fields are asked first; optional ones
+              only when the candidate is engaged. Leave blank to use category defaults.
+            </p>
           </div>
         </div>
 

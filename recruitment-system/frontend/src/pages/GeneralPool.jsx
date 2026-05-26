@@ -211,6 +211,11 @@ export default function GeneralPool() {
                                                         <span className="text-xs text-gray-400 italic">No skills tagged</span>
                                                     )}
                                                 </div>
+                                                {candidate.remarks && (
+                                                    <p className="text-xs text-gray-500 mt-1 truncate max-w-[200px]" title={candidate.remarks}>
+                                                        📝 {candidate.remarks}
+                                                    </p>
+                                                )}
                                             </td>
                                             <td className="py-4 px-4">
                                                 <span className="text-sm text-gray-600 flex items-center gap-1">
@@ -429,6 +434,42 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                             <h4 className="text-sm font-semibold text-gray-700 mb-2">Notes</h4>
                             <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm">
                                 {candidate.notes}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Chatbot Remarks — saved when the WhatsApp bot routed this lead to the general pool */}
+                    {candidate.remarks && (
+                        <div>
+                            <h4 className="text-sm font-semibold text-gray-700 mb-2">Chatbot Remarks</h4>
+                            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-sm whitespace-pre-wrap">
+                                {candidate.remarks}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Preferences Timeline — every preference the candidate declared, when */}
+                    {Array.isArray(candidate.preferences_log) && candidate.preferences_log.length > 0 && (
+                        <div>
+                            <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                                Preferences History ({candidate.preferences_log.length})
+                            </h4>
+                            <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+                                {candidate.preferences_log.map((entry, i) => (
+                                    <div key={i} className="px-4 py-2 text-sm flex items-start justify-between gap-3">
+                                        <div className="text-gray-700">
+                                            <span className="font-medium">{entry.job_role || '—'}</span>
+                                            {entry.country && <span className="text-gray-500"> · {entry.country}</span>}
+                                            {entry.experience_years != null && <span className="text-gray-500"> · {entry.experience_years}y</span>}
+                                            {entry.source && <span className="text-xs text-gray-400 ml-2">({entry.source})</span>}
+                                        </div>
+                                        {entry.ts && (
+                                            <span className="text-xs text-gray-400 whitespace-nowrap">
+                                                {new Date(entry.ts).toLocaleString()}
+                                            </span>
+                                        )}
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     )}
