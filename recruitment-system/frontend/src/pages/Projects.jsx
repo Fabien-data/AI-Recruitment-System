@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { Input } from '../components/ui/Input'
+import { PageHeader } from '../components/ui/PageHeader'
 import { useAuthStore } from '../stores/authStore'
 import toast from 'react-hot-toast'
 import { format } from 'date-fns'
@@ -177,19 +178,18 @@ export default function Projects() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Projects</h1>
-          <p className="text-gray-600 mt-1">Manage multi-country recruitment projects</p>
-        </div>
-        {canCreateProject && (
+      <PageHeader
+        icon={FolderKanban}
+        tone="mixed"
+        title="Projects"
+        subtitle="Manage multi-country recruitment projects"
+        actions={canCreateProject && (
           <Button onClick={() => setModalOpen(true)}>
-            <Plus size={20} className="mr-2" />
+            <Plus size={18} />
             New Project
           </Button>
         )}
-      </div>
+      />
 
       {/* Filters */}
       <div className="card mb-6">

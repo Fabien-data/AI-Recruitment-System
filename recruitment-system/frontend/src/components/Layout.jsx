@@ -1,11 +1,16 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore, useRole } from '../stores/authStore'
-import { LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell, FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone } from 'lucide-react'
+import {
+  LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell,
+  FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone,
+} from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { twMerge } from 'tailwind-merge'
+import { ThemeToggle } from './ui/ThemeToggle'
+import { TopProgressBar } from './ui/TopProgressBar'
+import { Logo } from './ui/Logo'
 
-// Base nav items visible to all roles
 const BASE_NAV = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/candidates', label: 'Candidates', icon: Users },
@@ -15,7 +20,6 @@ const BASE_NAV = [
   { to: '/interviews', label: 'Interviews', icon: CalendarDays },
 ]
 
-// Items visible to admin + sourcing_department only
 const FULL_NAV_EXTRAS = [
   { to: '/cv-manager', label: 'CV Manager', icon: FileSearch },
   { to: '/communications', label: 'Messages', icon: MessageSquare },
@@ -25,7 +29,6 @@ const FULL_NAV_EXTRAS = [
 ]
 
 function buildNav(role) {
-  // Marketing agents see a focused workspace — only the hub + overview.
   if (role === 'marketing_agent') {
     return [
       { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
@@ -39,13 +42,11 @@ function buildNav(role) {
     items.push(...FULL_NAV_EXTRAS)
     items.push({ to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone })
   } else {
-    // project_handler gets communications read-only + basic analytics
     items.push({ to: '/communications', label: 'Messages', icon: MessageSquare })
     items.push({ to: '/analytics', label: 'Analytics', icon: BarChart2 })
   }
 
   if (role === 'admin') {
-    // Admin Dashboard at top
     items.unshift({ to: '/admin', label: 'Admin Dashboard', icon: ShieldCheck })
   }
 
@@ -53,7 +54,7 @@ function buildNav(role) {
 }
 
 function getPageTitle(pathname, navItems) {
-  const match = navItems.find(item =>
+  const match = navItems.find((item) =>
     item.end ? pathname === item.to : pathname.startsWith(item.to)
   )
   if (match) return match.label
@@ -77,21 +78,21 @@ export default function Layout() {
 
   const pageTitle = getPageTitle(location.pathname, navItems)
 
-  // Ensure sidebar closes on route change on mobile
   useEffect(() => {
     setSidebarOpen(false)
   }, [location.pathname])
 
   return (
-    <div className="flex h-screen bg-[#FAFAFA] font-sans overflow-hidden selection:bg-zinc-900 selection:text-white">
-      {/* Mobile overlay */}
+    <div className="flex h-screen bg-zinc-50 dark:bg-zinc-950 font-sans overflow-hidden selection:bg-primary-600 selection:text-white transition-colors">
+      <TopProgressBar />
+
       <AnimatePresence>
         {sidebarOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-30 bg-zinc-900/20 backdrop-blur-sm lg:hidden"
+            className="fixed inset-0 z-30 bg-primary-950/40 backdrop-blur-sm lg:hidden"
             onClick={() => setSidebarOpen(false)}
             aria-hidden="true"
           />
@@ -101,32 +102,25 @@ export default function Layout() {
       {/* Floating Sidebar */}
       <aside
         className={twMerge(
-          "fixed lg:static inset-y-0 left-0 z-40 w-72 h-[calc(100vh-2rem)] my-4 ml-4 lg:my-4 lg:ml-4 flex flex-col bg-white rounded-3xl border border-zinc-200/50 shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+          'fixed lg:static inset-y-0 left-0 z-40 w-72 h-[calc(100vh-2rem)] my-4 ml-4 lg:my-4 lg:ml-4 flex flex-col bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          'before:content-[""] before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-brand-gradient before:rounded-l-3xl',
           sidebarOpen ? 'translate-x-0' : '-translate-x-[120%] lg:translate-x-0'
         )}
       >
-        {/* Workspace Switcher / Logo */}
+        {/* Logo */}
         <div className="flex items-center justify-between px-6 py-6">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-zinc-900 shadow-sm flex items-center justify-center">
-               <svg width="18" height="18" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-                  <path d="M16 8C11.5817 8 8 11.5817 8 16C8 20.4183 11.5817 24 16 24C20.4183 24 24 20.4183 24 16C24 11.5817 20.4183 8 16 8ZM16 21C13.2386 21 11 18.7614 11 16C11 13.2386 13.2386 11 16 11C18.7614 11 21 13.2386 21 16C21 18.7614 18.7614 21 16 21Z" fill="white" opacity="0.9"/>
-                  <path d="M20 16L15 11V21L20 16Z" fill="white"/>
-               </svg>
-            </div>
-            <span className="font-bold text-lg text-zinc-900 tracking-tight">RecruitPro</span>
-          </div>
+          <Logo size={36} />
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
-            className="lg:hidden p-1.5 text-zinc-400 hover:text-zinc-600 rounded-xl hover:bg-zinc-100 transition-colors"
+            className="lg:hidden p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
           >
             <X size={20} />
           </button>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-4 py-2 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-4 py-2 space-y-1 overflow-y-auto custom-scrollbar">
           {navItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
@@ -134,16 +128,25 @@ export default function Layout() {
               end={end}
               className={({ isActive }) =>
                 twMerge(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-2xl transition-all duration-200 group text-sm font-semibold tracking-tight",
+                  'relative flex items-center gap-3 px-3 py-2.5 rounded-2xl transition-all duration-200 group text-sm font-semibold tracking-tight',
                   isActive
-                    ? "bg-zinc-100 text-zinc-900 shadow-sm"
-                    : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"
+                    ? 'bg-primary-50 text-primary-700 dark:bg-primary-950/50 dark:text-primary-300 shadow-sm before:content-[""] before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r-full before:bg-accent-gradient before:shadow-glow-red'
+                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800/60'
                 )
               }
             >
               {({ isActive }) => (
                 <>
-                  <Icon size={18} className={twMerge("flex-shrink-0 transition-transform duration-300", isActive ? "text-zinc-900" : "text-zinc-400 group-hover:scale-105 group-hover:text-zinc-900")} aria-hidden />
+                  <Icon
+                    size={18}
+                    className={twMerge(
+                      'flex-shrink-0 transition-transform duration-300',
+                      isActive
+                        ? 'text-primary-600 dark:text-primary-400'
+                        : 'text-zinc-400 dark:text-zinc-500 group-hover:scale-110 group-hover:text-primary-600 dark:group-hover:text-primary-400'
+                    )}
+                    aria-hidden
+                  />
                   <span>{label}</span>
                 </>
               )}
@@ -152,26 +155,32 @@ export default function Layout() {
         </nav>
 
         {/* User Profile */}
-        <div className="p-4 mx-4 mb-4 bg-zinc-50 rounded-3xl border border-zinc-100">
+        <div className="p-4 mx-4 mb-4 bg-zinc-50 dark:bg-zinc-800/60 rounded-3xl border border-zinc-100 dark:border-zinc-800">
           <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-sm">
+            <div className="w-10 h-10 rounded-full bg-brand-gradient shadow-glow-blue flex items-center justify-center text-white font-bold text-sm ring-2 ring-white dark:ring-zinc-900">
               {user?.full_name?.charAt(0)?.toUpperCase() || 'U'}
             </div>
             <div className="flex-1 min-w-0">
-               <p className="font-semibold text-sm text-zinc-900 truncate tracking-tight">{user?.full_name}</p>
-               <p className="text-xs text-zinc-500 capitalize">
-                 {role === 'project_handler' ? 'Project Handler'
-                   : role === 'sourcing_department' ? 'Sourcing Dept.'
-                   : role === 'admin' ? 'Administrator'
-                   : role === 'marketing_agent' ? 'Marketing Agent'
-                   : role}
-               </p>
+              <p className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 truncate tracking-tight">
+                {user?.full_name}
+              </p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 capitalize">
+                {role === 'project_handler'
+                  ? 'Project Handler'
+                  : role === 'sourcing_department'
+                  ? 'Sourcing Dept.'
+                  : role === 'admin'
+                  ? 'Administrator'
+                  : role === 'marketing_agent'
+                  ? 'Marketing Agent'
+                  : role}
+              </p>
             </div>
           </div>
           <button
             type="button"
             onClick={handleLogout}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-zinc-600 hover:text-zinc-900 rounded-xl hover:bg-zinc-200/50 transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:text-white hover:bg-accent-gradient hover:shadow-glow-red rounded-xl transition-all"
           >
             <LogOut size={14} />
             <span>Sign out</span>
@@ -183,24 +192,31 @@ export default function Layout() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         {/* Top Header */}
         <header className="flex items-center justify-between px-8 pt-8 pb-4 lg:px-12 bg-transparent z-10 w-full relative backdrop-blur-sm">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0">
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-2.5 text-zinc-600 bg-white border border-zinc-200/50 rounded-2xl shadow-sm hover:bg-zinc-50 transition-colors"
+              className="lg:hidden p-2.5 text-zinc-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 rounded-2xl shadow-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
             >
               <Menu size={20} />
             </button>
-            <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">{pageTitle}</h2>
+            <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 tracking-tight truncate">
+              {pageTitle}
+            </h2>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
+            <ThemeToggle />
             <button
               type="button"
-              className="relative p-2.5 bg-white border border-zinc-200/50 text-zinc-500 hover:text-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-all ease-out duration-300"
+              aria-label="Notifications"
+              className="relative p-2.5 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-600 dark:text-zinc-300 hover:text-primary-600 dark:hover:text-primary-400 rounded-2xl shadow-sm hover:shadow-md transition-all ease-out duration-300"
             >
               <Bell size={18} />
-              <span className="absolute top-2 right-2.5 w-2 h-2 bg-indigo-500 rounded-full" />
+              <span className="absolute top-2 right-2.5 flex h-2.5 w-2.5">
+                <span className="animate-ping-soft absolute inline-flex h-full w-full rounded-full bg-accent-500 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-accent-gradient shadow-glow-red" />
+              </span>
             </button>
           </div>
         </header>
@@ -209,10 +225,10 @@ export default function Layout() {
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.25, ease: "easeOut" }}
+              initial={{ opacity: 0, y: 14, scale: 0.995 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.998 }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
               className="max-w-[1400px] mx-auto w-full h-full"
             >
               <Outlet />

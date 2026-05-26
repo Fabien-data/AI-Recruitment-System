@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Modal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
+import { PageHeader } from '../components/ui/PageHeader'
 import { CandidateReviewModal } from '../components/CandidateReviewModal'
 import toast from 'react-hot-toast'
 
@@ -102,16 +103,18 @@ export default function Candidates() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Candidates</h1>
-          <p className="text-gray-600 mt-1">Manage and track all candidates</p>
-        </div>
-        <Button variant="primary" className="flex items-center gap-2" onClick={() => setModalOpen(true)}>
-          <Plus size={20} aria-hidden />
-          Add Candidate
-        </Button>
-      </div>
+      <PageHeader
+        icon={Users}
+        tone="blue"
+        title="Candidates"
+        subtitle="Manage and track all candidates"
+        actions={
+          <Button variant="primary" onClick={() => setModalOpen(true)}>
+            <Plus size={18} aria-hidden />
+            Add Candidate
+          </Button>
+        }
+      />
 
       {/* Filters */}
       <div className="card mb-6">

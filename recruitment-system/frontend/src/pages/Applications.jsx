@@ -7,6 +7,7 @@ import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { TableSkeleton } from '../components/ui/Skeleton'
+import { PageHeader } from '../components/ui/PageHeader'
 
 const DEFAULT_LIMIT = 20
 
@@ -107,10 +108,12 @@ export default function Applications() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Applications</h1>
-        <p className="text-gray-600 mt-1">Track candidate applications across jobs</p>
-      </div>
+      <PageHeader
+        icon={FileText}
+        tone="blue"
+        title="Applications"
+        subtitle="Track candidate applications across jobs"
+      />
 
       <Card className="p-4 sm:p-5 mb-6">
         <div className="flex items-center justify-between mb-4">

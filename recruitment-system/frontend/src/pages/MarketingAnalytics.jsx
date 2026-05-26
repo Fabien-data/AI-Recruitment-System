@@ -13,6 +13,7 @@ import {
 import toast from 'react-hot-toast'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
+import { PageHeader } from '../components/ui/PageHeader'
 import {
   getMarketingOverview, getMarketingFunnel, getMarketingBySource,
   getMarketingByAgent, getMarketingTimeseries, getMarketingCohort,
@@ -139,32 +140,35 @@ export default function MarketingAnalytics() {
         <ArrowLeft size={14} /> Back to leads
       </Link>
 
-      {/* Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-zinc-900 tracking-tight">Marketing Analytics</h1>
-          <p className="text-sm text-zinc-500 mt-1">Lead conversion, source attribution, and agent performance.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-2xl bg-zinc-100 p-1">
-            {RANGES.map((r) => (
-              <button
-                key={r.value}
-                type="button"
-                onClick={() => setRange(r.value)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition-colors ${
-                  range === r.value ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-900'
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-          <Button variant="secondary" onClick={handleExport} loading={exporting}>
-            <Download size={14} /> Export CSV
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={TrendingUp}
+        tone="red"
+        title="Marketing Analytics"
+        subtitle="Lead conversion, source attribution, and agent performance."
+        actions={
+          <>
+            <div className="inline-flex rounded-2xl bg-zinc-100 dark:bg-zinc-800 p-1">
+              {RANGES.map((r) => (
+                <button
+                  key={r.value}
+                  type="button"
+                  onClick={() => setRange(r.value)}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition-colors ${
+                    range === r.value
+                      ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 shadow-sm'
+                      : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+            <Button variant="secondary" onClick={handleExport} loading={exporting}>
+              <Download size={14} /> Export CSV
+            </Button>
+          </>
+        }
+      />
 
       {/* KPI strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

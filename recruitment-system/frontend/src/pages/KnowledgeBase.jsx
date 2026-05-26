@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import Papa from 'papaparse'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
+import { PageHeader } from '../components/ui/PageHeader'
 import { Card } from '../components/ui/Card'
 import { ConfirmModal, Modal } from '../components/ui/Modal'
 import { Input } from '../components/ui/Input'
@@ -456,52 +457,50 @@ export default function KnowledgeBase() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="inline-flex items-center gap-2 rounded-full bg-zinc-900 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-            <BookOpen size={12} />
-            Knowledge Base
-          </div>
-          <h1 className="mt-4 text-3xl font-bold text-zinc-900">Recruiter knowledge base</h1>
-          <p className="mt-1 text-zinc-500">Maintain synced answers that the chatbot can reuse instantly across new jobs and recruiter FAQs.</p>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <Button variant="secondary" onClick={() => entriesQuery.refetch()} loading={entriesQuery.isFetching}>
-            {entriesQuery.isFetching ? <Loader2 size={16} /> : <RefreshCw size={16} />}
-            Refresh
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => resyncMutation.mutate()}
-            loading={resyncMutation.isPending}
-            title="Re-enqueue every active job, project, and FAQ to the chatbot"
-          >
-            <RadioTower size={16} />
-            Resync Chatbot
-          </Button>
-          <Button variant="secondary" onClick={() => setImportOpen(true)}>
-            <BookOpen size={16} />
-            Bulk Import
-          </Button>
-          <Button onClick={openCreate}>
-            <Plus size={16} />
-            New Entry
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={BookOpen}
+        tone="blue"
+        title="Recruiter Knowledge Base"
+        subtitle="Maintain synced answers that the chatbot can reuse instantly across new jobs and recruiter FAQs."
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => entriesQuery.refetch()} loading={entriesQuery.isFetching}>
+              {!entriesQuery.isFetching && <RefreshCw size={16} />}
+              Refresh
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => resyncMutation.mutate()}
+              loading={resyncMutation.isPending}
+              title="Re-enqueue every active job, project, and FAQ to the chatbot"
+            >
+              <RadioTower size={16} />
+              Resync Chatbot
+            </Button>
+            <Button variant="secondary" onClick={() => setImportOpen(true)}>
+              <BookOpen size={16} />
+              Bulk Import
+            </Button>
+            <Button onClick={openCreate}>
+              <Plus size={16} />
+              New Entry
+            </Button>
+          </>
+        }
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="p-5">
-          <p className="text-sm font-semibold text-zinc-500">Total entries</p>
-          <p className="mt-2 text-3xl font-bold text-zinc-900">{stats.total}</p>
+        <Card accent="blue" className="p-5">
+          <p className="text-sm font-semibold text-zinc-500 dark:text-zinc-400">Total entries</p>
+          <p className="mt-2 text-3xl font-bold text-zinc-900 dark:text-zinc-50">{stats.total}</p>
         </Card>
-        <Card className="p-5">
-          <p className="text-sm font-semibold text-zinc-500">Active entries</p>
-          <p className="mt-2 text-3xl font-bold text-zinc-900">{stats.activeCount}</p>
+        <Card accent="blue" className="p-5">
+          <p className="text-sm font-semibold text-zinc-500 dark:text-zinc-400">Active entries</p>
+          <p className="mt-2 text-3xl font-bold text-zinc-900 dark:text-zinc-50">{stats.activeCount}</p>
         </Card>
-        <Card className="p-5">
-          <p className="text-sm font-semibold text-zinc-500">Categories</p>
-          <p className="mt-2 text-3xl font-bold text-zinc-900">{categories.length}</p>
+        <Card accent="red" className="p-5">
+          <p className="text-sm font-semibold text-zinc-500 dark:text-zinc-400">Categories</p>
+          <p className="mt-2 text-3xl font-bold text-zinc-900 dark:text-zinc-50">{categories.length}</p>
         </Card>
       </div>
 

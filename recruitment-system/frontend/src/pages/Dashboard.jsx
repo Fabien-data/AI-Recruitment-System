@@ -5,20 +5,20 @@ import {
   getAnalyticsOverview, getUpcomingInterviews, batchAutoAssign
 } from '../api'
 import {
-  Users, Briefcase, FileText, TrendingUp, FolderKanban, CalendarDays,
-  MapPin, Clock, Plus, Zap, BarChart3, ArrowUpRight, ArrowDownRight,
-  Loader2, ChevronRight
+  Users, Briefcase, FileText, FolderKanban, CalendarDays, LayoutDashboard,
+  MapPin, Clock, Plus, Zap, ArrowUpRight, ArrowDownRight, ChevronRight
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts'
-import toast from 'react-hot-toast'
 import { motion } from 'framer-motion'
 import { Card } from '../components/ui/Card'
+import { PageHeader } from '../components/ui/PageHeader'
 import { twMerge } from 'tailwind-merge'
+import { notify } from '../components/ui/Toast'
 import InterventionAlerts from '../components/InterventionAlerts'
 
 function AnimatedNumber({ value, duration = 800, suffix = '' }) {
@@ -56,22 +56,31 @@ const itemVariants = {
   show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 300, damping: 24 } }
 }
 
-function KPICard({ name, value, icon, change, changeType, isLoading, suffix = '', bgClass = 'bg-white', iconColor = 'text-indigo-600' }) {
+const KPI_TONES = {
+  blue:    { tile: 'bg-brand-gradient text-white shadow-glow-blue', glow: 'hover:shadow-glow-blue' },
+  red:     { tile: 'bg-accent-gradient text-white shadow-glow-red', glow: 'hover:shadow-glow-red' },
+  amber:   { tile: 'bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-md', glow: '' },
+  emerald: { tile: 'bg-gradient-to-br from-emerald-400 to-emerald-600 text-white shadow-md', glow: '' },
+  purple:  { tile: 'bg-gradient-to-br from-violet-500 to-purple-700 text-white shadow-md', glow: '' },
+}
+
+function KPICard({ name, value, icon, change, changeType, isLoading, suffix = '', tone = 'blue' }) {
   const isPositive = changeType === 'positive'
   const isWarning = changeType === 'warning'
+  const t = KPI_TONES[tone] || KPI_TONES.blue
 
   return (
-    <Card className={twMerge("p-6 flex min-h-[10rem] flex-col justify-between gap-4", bgClass)}>
+    <Card className={twMerge('group p-6 flex min-h-[10rem] flex-col justify-between gap-4 transition-shadow', t.glow)}>
       <div className="flex items-center justify-between mb-2">
-        <div className={twMerge("p-2.5 rounded-2xl bg-zinc-100 shadow-sm", iconColor)}>
+        <div className={twMerge('p-2.5 rounded-2xl transition-transform group-hover:scale-105', t.tile)}>
           {icon}
         </div>
         {change && (
           <span className={twMerge(
-            "flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-xl shadow-sm border",
-            isPositive ? "text-emerald-700 bg-emerald-50 border-emerald-100" :
-            isWarning  ? "text-amber-700 bg-amber-50 border-amber-100" :
-                         "text-zinc-600 bg-zinc-50 border-zinc-200"
+            'flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-xl shadow-sm border',
+            isPositive ? 'text-emerald-700 bg-emerald-50 border-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50' :
+            isWarning  ? 'text-amber-700 bg-amber-50 border-amber-100 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50' :
+                         'text-zinc-600 bg-zinc-50 border-zinc-200 dark:bg-zinc-800/60 dark:text-zinc-300 dark:border-zinc-700'
           )}>
             {isPositive && <ArrowUpRight strokeWidth={3} size={12} />}
             {!isPositive && !isWarning && <ArrowDownRight strokeWidth={3} size={12} />}
@@ -81,13 +90,13 @@ function KPICard({ name, value, icon, change, changeType, isLoading, suffix = ''
       </div>
       <div>
         {isLoading ? (
-          <div className="h-8 w-24 animate-pulse rounded-lg bg-zinc-200 mb-1" />
+          <div className="skeleton h-8 w-24 mb-1" />
         ) : (
-          <p className="text-3xl font-bold text-zinc-900 tracking-tight">
+          <p className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 tracking-tight">
             <AnimatedNumber value={typeof value === 'number' ? value : parseFloat(value) || 0} suffix={suffix} />
           </p>
         )}
-        <p className="mt-1 text-sm font-medium leading-snug text-zinc-500">{name}</p>
+        <p className="mt-1 text-sm font-medium leading-snug text-zinc-500 dark:text-zinc-400">{name}</p>
       </div>
     </Card>
   )
@@ -128,32 +137,18 @@ export default function Dashboard() {
     setIsAssigning(true)
     try {
       const res = await batchAutoAssign()
-      toast.custom(
-        (t) => (
-          <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
-            className="bg-zinc-900 text-white p-4 rounded-2xl shadow-2xl flex items-center gap-3"
-          >
-            <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-              <Zap size={18} />
-            </div>
-            <div>
-              <p className="font-semibold text-sm">Magic Assigned!</p>
-              <p className="text-xs text-zinc-400">Matched {res.data.matches_found} candidates perfectly.</p>
-            </div>
-          </motion.div>
-        ), { duration: 3000 }
-      )
+      notify.success({
+        title: 'Magic Assigned!',
+        message: `Matched ${res.data.matches_found} candidates perfectly.`,
+      })
     } catch (err) {
-      toast.error('Auto-assign failed')
+      notify.error('Auto-assign failed')
     } finally {
       setIsAssigning(false)
     }
   }
 
-  const COLORS = ['#6366f1', '#a855f7', '#ec4899', '#14b8a6', '#f59e0b']
+  const COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
   const pipelineData = (analytics?.pipeline || []).map(stage => ({
     name: stage.name,
     value: Number(stage.count) || 0,
@@ -167,21 +162,24 @@ export default function Dashboard() {
       initial="hidden"
       animate="show"
     >
-      {/* Header */}
-      <motion.div variants={itemVariants} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-2 mb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-zinc-900 tracking-tight">Recruitment Hub</h1>
-          <p className="text-zinc-500 text-sm mt-1 font-medium">Your AI-powered overview of all active hiring pipelines.</p>
-        </div>
-        <div className="flex gap-3">
-          <Button variant="secondary" onClick={handleAutoAssign} loading={isAssigning} className="shadow-sm">
-            {!isAssigning && <Zap size={16} className="text-amber-500" />}
-            Auto-Match Candidates
-          </Button>
-          <Button onClick={() => navigate('/jobs/new')} className="shadow-md">
-            <Plus size={16} /> New Job
-          </Button>
-        </div>
+      <motion.div variants={itemVariants}>
+        <PageHeader
+          icon={LayoutDashboard}
+          tone="blue"
+          title="Recruitment Hub"
+          subtitle="Your AI-powered overview of all active hiring pipelines."
+          actions={
+            <>
+              <Button variant="secondary" onClick={handleAutoAssign} loading={isAssigning}>
+                {!isAssigning && <Zap size={16} className="text-amber-500" />}
+                Auto-Match Candidates
+              </Button>
+              <Button onClick={() => navigate('/jobs/new')}>
+                <Plus size={16} /> New Job
+              </Button>
+            </>
+          }
+        />
       </motion.div>
 
       <motion.div variants={itemVariants}>
@@ -190,41 +188,41 @@ export default function Dashboard() {
 
       {/* Primary KPI Bento Row */}
       <motion.div variants={itemVariants} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard 
-          name="Total Applications" 
-          value={stats.totalApplications} 
-          icon={<FileText size={20} />} 
+        <KPICard
+          name="Total Applications"
+          value={stats.totalApplications}
+          icon={<FileText size={20} />}
           change={formatChangeTag(analytics?.applications?.change_pct)}
           changeType={(analytics?.applications?.change_pct || 0) >= 0 ? 'positive' : 'neutral'}
           isLoading={isAnalyticsLoading}
-          iconColor="text-indigo-600 bg-indigo-50"
+          tone="blue"
         />
-        <KPICard 
-          name="Active Candidates" 
-          value={stats.totalCandidates} 
-          icon={<Users size={20} />} 
+        <KPICard
+          name="Active Candidates"
+          value={stats.totalCandidates}
+          icon={<Users size={20} />}
           change={formatChangeTag(analytics?.unique_candidates?.change_pct)}
           changeType={(analytics?.unique_candidates?.change_pct || 0) >= 0 ? 'positive' : 'neutral'}
           isLoading={isAnalyticsLoading}
-          iconColor="text-emerald-600 bg-emerald-50"
+          tone="emerald"
         />
-        <KPICard 
-          name="Open Roles" 
-          value={stats.totalJobs} 
-          icon={<Briefcase size={20} />} 
+        <KPICard
+          name="Open Roles"
+          value={stats.totalJobs}
+          icon={<Briefcase size={20} />}
           change={null}
           changeType="neutral"
           isLoading={isAnalyticsLoading}
-          iconColor="text-amber-600 bg-amber-50"
+          tone="red"
         />
-        <KPICard 
-          name="Interviews Today" 
-          value={stats.activeInterviews} 
-          icon={<CalendarDays size={20} />} 
+        <KPICard
+          name="Interviews Today"
+          value={stats.activeInterviews}
+          icon={<CalendarDays size={20} />}
           change={formatChangeTag(analytics?.conversion_rate?.change_pct)}
           changeType={(analytics?.conversion_rate?.change_pct || 0) >= 0 ? 'positive' : 'neutral'}
           isLoading={isAnalyticsLoading}
-          iconColor="text-purple-600 bg-purple-50"
+          tone="purple"
         />
       </motion.div>
 
@@ -232,18 +230,18 @@ export default function Dashboard() {
       <motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Pipeline Chart - Takes up 2 cols */}
-        <Card className="relative flex flex-col bg-white p-6 lg:col-span-2">
+        <Card accent="blue" className="relative flex flex-col p-6 lg:col-span-2 overflow-hidden">
           <div className="flex justify-between items-center mb-6 z-10">
             <div>
-              <h2 className="text-lg font-bold text-zinc-900">Pipeline Conversion</h2>
-              <p className="text-sm font-medium text-zinc-500">Candidate drop-off across stages</p>
+              <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">Pipeline Conversion</h2>
+              <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Candidate drop-off across stages</p>
             </div>
             <Button variant="ghost" size="sm">Report <ChevronRight size={14} /></Button>
           </div>
           <div className="z-10 min-h-[280px] flex-1">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={pipelineData} margin={{ top: 12, right: 16, left: 12, bottom: 0 }} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E4E4E7" />
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--chart-grid)" />
                 <XAxis type="number" hide />
                 <YAxis
                   dataKey="name"
@@ -252,9 +250,18 @@ export default function Dashboard() {
                   tickMargin={10}
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#71717A', fontSize: 13, fontWeight: 500 }}
+                  tick={{ fill: 'var(--chart-text)', fontSize: 13, fontWeight: 500 }}
                 />
-                <Tooltip cursor={{fill: '#F4F4F5'}} contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 8px 30px rgba(0,0,0,0.08)'}} />
+                <Tooltip
+                  cursor={{ fill: 'var(--chart-grid)', fillOpacity: 0.5 }}
+                  contentStyle={{
+                    borderRadius: '16px',
+                    border: 'none',
+                    boxShadow: 'var(--chart-tooltip-shadow)',
+                    background: 'var(--chart-tooltip-bg)',
+                    color: 'var(--chart-text)',
+                  }}
+                />
                 <Bar dataKey="value" radius={[0, 12, 12, 0]} barSize={28}>
                   {pipelineData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -263,41 +270,40 @@ export default function Dashboard() {
               </BarChart>
             </ResponsiveContainer>
           </div>
-          {/* Subtle decoration */}
-          <div className="absolute top-0 right-0 -mr-20 -mt-20 w-64 h-64 bg-indigo-50 rounded-full blur-3xl opacity-50 pointer-events-none" />
+          <div className="absolute top-0 right-0 -mr-20 -mt-20 w-64 h-64 bg-primary-200/40 dark:bg-primary-900/20 rounded-full blur-3xl opacity-60 pointer-events-none" />
         </Card>
 
         {/* Upcoming Interviews - 1 col */}
-        <Card className="p-6 flex flex-col bg-white">
+        <Card accent="red" className="p-6 flex flex-col">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-lg font-bold text-zinc-900">Upcoming</h2>
-            <Badge variant="interview" className="bg-purple-100 text-purple-700 pointer-events-none">Today</Badge>
+            <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">Upcoming</h2>
+            <Badge status="interview" className="pointer-events-none">Today</Badge>
           </div>
-          
+
           <div className="flex-1 flex flex-col gap-3">
             {isInterviewsLoading ? (
               [...Array(4)].map((_, i) => (
-                <div key={i} className="animate-pulse bg-zinc-100 h-16 rounded-2xl w-full" />
+                <div key={i} className="skeleton h-16 rounded-2xl w-full" />
               ))
             ) : (!interviews || interviews.length === 0) ? (
-               <div className="flex-1 flex flex-col items-center justify-center text-zinc-400">
-                 <CalendarDays size={32} className="mb-2 opacity-50" />
-                 <p className="text-sm font-medium">No upcoming interviews</p>
-               </div>
+              <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-500">
+                <CalendarDays size={32} className="mb-2 opacity-50" />
+                <p className="text-sm font-medium">No upcoming interviews</p>
+              </div>
             ) : (
               interviews.map((intv) => (
-                <div key={intv.id} className="group p-3 border border-zinc-100 rounded-2xl hover:bg-zinc-50 transition-colors cursor-pointer flex gap-3 items-center">
-                  <div className="w-10 h-10 rounded-xl bg-zinc-900 text-white flex items-center justify-center flex-shrink-0 font-bold shadow-sm">
+                <div key={intv.id} className="group p-3 border border-zinc-100 dark:border-zinc-800 rounded-2xl hover:bg-zinc-50 dark:hover:bg-zinc-800/60 transition-colors cursor-pointer flex gap-3 items-center">
+                  <div className="w-10 h-10 rounded-xl bg-brand-gradient text-white flex items-center justify-center flex-shrink-0 font-bold shadow-glow-blue">
                     {intv.candidate_name?.charAt(0) || 'C'}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-zinc-900 truncate tracking-tight">{intv.candidate_name}</p>
-                    <p className="text-xs text-zinc-500 truncate flex items-center gap-1 mt-0.5">
+                    <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate tracking-tight">{intv.candidate_name}</p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate flex items-center gap-1 mt-0.5">
                       <Clock size={12} />
-                      {new Date(intv.scheduled_datetime).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit' })}
+                      {new Date(intv.scheduled_datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </p>
                   </div>
-                  <ChevronRight size={16} className="text-zinc-300 group-hover:text-zinc-900 transition-colors" />
+                  <ChevronRight size={16} className="text-zinc-300 dark:text-zinc-600 group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors" />
                 </div>
               ))
             )}
@@ -307,20 +313,20 @@ export default function Dashboard() {
       </motion.div>
 
       <motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="p-6 bg-white">
+        <Card accent="red" className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-zinc-900">Urgent Projects</h2>
+            <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">Urgent Projects</h2>
             <Button variant="ghost" size="sm" onClick={() => navigate('/projects')}>Open <ChevronRight size={14} /></Button>
           </div>
           <div className="space-y-3">
             {urgentProjects.length === 0 ? (
-              <p className="text-sm text-zinc-500">No urgent projects right now.</p>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No urgent projects right now.</p>
             ) : (
               urgentProjects.map((project) => (
-                <div key={project.id} className="rounded-2xl border border-zinc-100 p-3">
-                  <p className="font-semibold text-zinc-900 truncate">{project.title}</p>
-                  <p className="text-xs text-zinc-500 mt-1">{project.client_name}</p>
-                  <div className="mt-2 text-xs text-zinc-600 flex items-center gap-3">
+                <div key={project.id} className="rounded-2xl border border-zinc-100 dark:border-zinc-800 p-3 hover:border-accent-200 dark:hover:border-accent-800 transition-colors">
+                  <p className="font-semibold text-zinc-900 dark:text-zinc-100 truncate">{project.title}</p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{project.client_name}</p>
+                  <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400 flex items-center gap-3">
                     <span>{project.total_jobs || 0} jobs</span>
                     <span>{project.total_applications || 0} applications</span>
                     {project.interview_date && <span>Interview: {new Date(project.interview_date).toLocaleDateString()}</span>}
@@ -331,20 +337,20 @@ export default function Dashboard() {
           </div>
         </Card>
 
-        <Card className="p-6 bg-white">
+        <Card accent="blue" className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-zinc-900">Interview Calendar</h2>
+            <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">Interview Calendar</h2>
             <Button variant="ghost" size="sm" onClick={() => navigate('/interviews')}>Open <ChevronRight size={14} /></Button>
           </div>
-          <div className="space-y-3 max-h-72 overflow-auto pr-1">
+          <div className="space-y-3 max-h-72 overflow-auto pr-1 custom-scrollbar">
             {interviewCalendar.length === 0 ? (
-              <p className="text-sm text-zinc-500">No interview events in the next 30 days.</p>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No interview events in the next 30 days.</p>
             ) : (
               interviewCalendar.slice(0, 8).map((event) => (
-                <div key={event.id} className="rounded-2xl border border-zinc-100 p-3">
-                  <p className="text-sm font-semibold text-zinc-900 truncate">{event.candidate_name} • {event.job_title}</p>
-                  <p className="text-xs text-zinc-500 mt-1">{event.project_title || 'Unassigned project'}</p>
-                  <div className="mt-2 text-xs text-zinc-600 flex flex-wrap items-center gap-3">
+                <div key={event.id} className="rounded-2xl border border-zinc-100 dark:border-zinc-800 p-3 hover:border-primary-200 dark:hover:border-primary-800 transition-colors">
+                  <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">{event.candidate_name} • {event.job_title}</p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{event.project_title || 'Unassigned project'}</p>
+                  <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400 flex flex-wrap items-center gap-3">
                     <span className="flex items-center gap-1"><Clock size={12} />{new Date(event.scheduled_datetime).toLocaleString()}</span>
                     <span className="flex items-center gap-1"><MapPin size={12} />{event.location || 'TBD'}</span>
                   </div>

@@ -8,6 +8,7 @@ import {
   Users, Briefcase, FolderKanban, UserCheck, Bell, ShieldCheck,
   Plus, Trash2, Edit2, Check, X, Clock, AlertCircle,
 } from 'lucide-react'
+import { PageHeader } from '../components/ui/PageHeader'
 
 const ROLE_LABELS = {
   admin: 'Administrator',
@@ -21,24 +22,29 @@ const ROLE_COLORS = {
   project_handler: 'bg-emerald-100 text-emerald-700',
 }
 
-function StatCard({ icon: Icon, label, value, sub, color = 'bg-zinc-100 text-zinc-600' }) {
+function StatCard({ icon: Icon, label, value, sub, color = 'bg-zinc-900 text-white' }) {
   return (
-    <div className="bg-white rounded-3xl border border-zinc-200/60 p-6 flex items-start gap-4 shadow-sm">
+    <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 p-6 flex items-start gap-4 shadow-sm hover:shadow-md transition-shadow">
       <div className={`w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 ${color}`}>
         <Icon size={20} />
       </div>
       <div>
-        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-0.5">{label}</p>
-        <p className="text-2xl font-bold text-zinc-900 tracking-tight">{value ?? '—'}</p>
-        {sub && <p className="text-xs text-zinc-400 mt-0.5">{sub}</p>}
+        <p className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-0.5">{label}</p>
+        <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 tracking-tight">{value ?? '—'}</p>
+        {sub && <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">{sub}</p>}
       </div>
     </div>
   )
 }
 
 function RoleBadge({ role }) {
+  const dark = {
+    admin: 'dark:bg-accent-950/40 dark:text-accent-300',
+    sourcing_department: 'dark:bg-primary-950/40 dark:text-primary-300',
+    project_handler: 'dark:bg-emerald-950/40 dark:text-emerald-300',
+  }[role] || 'dark:bg-zinc-800 dark:text-zinc-300'
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${ROLE_COLORS[role] || 'bg-zinc-100 text-zinc-600'}`}>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${ROLE_COLORS[role] || 'bg-zinc-100 text-zinc-600'} ${dark}`}>
       {ROLE_LABELS[role] || role}
     </span>
   )
@@ -104,25 +110,20 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-8 py-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 bg-zinc-900 rounded-2xl flex items-center justify-center">
-          <ShieldCheck size={20} className="text-white" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">Admin Dashboard</h1>
-          <p className="text-sm text-zinc-500">System management &amp; monitoring</p>
-        </div>
-      </div>
+      <PageHeader
+        icon={ShieldCheck}
+        tone="mixed"
+        title="Admin Dashboard"
+        subtitle="System management & monitoring"
+      />
 
-      {/* Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <StatCard icon={Users} label="Candidates" value={stats?.candidates_total} color="bg-blue-100 text-blue-600" />
-        <StatCard icon={Briefcase} label="Active Jobs" value={stats?.jobs_active} color="bg-amber-100 text-amber-600" />
-        <StatCard icon={FolderKanban} label="Projects" value={stats?.projects_active} color="bg-purple-100 text-purple-600" />
-        <StatCard icon={UserCheck} label="Hired (30d)" value={stats?.hired_last_30_days} color="bg-emerald-100 text-emerald-600" />
-        <StatCard icon={AlertCircle} label="Interventions" value={stats?.open_interventions} color="bg-red-100 text-red-600" />
-        <StatCard icon={Users} label="Active Users" value={stats?.users_active} sub={`of ${stats?.users_total} total`} color="bg-zinc-100 text-zinc-600" />
+        <StatCard icon={Users} label="Candidates" value={stats?.candidates_total} color="bg-brand-gradient text-white shadow-glow-blue" />
+        <StatCard icon={Briefcase} label="Active Jobs" value={stats?.jobs_active} color="bg-gradient-to-br from-amber-400 to-amber-600 text-white" />
+        <StatCard icon={FolderKanban} label="Projects" value={stats?.projects_active} color="bg-gradient-to-br from-violet-500 to-purple-700 text-white" />
+        <StatCard icon={UserCheck} label="Hired (30d)" value={stats?.hired_last_30_days} color="bg-gradient-to-br from-emerald-400 to-emerald-600 text-white" />
+        <StatCard icon={AlertCircle} label="Interventions" value={stats?.open_interventions} color="bg-accent-gradient text-white shadow-glow-red" />
+        <StatCard icon={Users} label="Active Users" value={stats?.users_active} sub={`of ${stats?.users_total} total`} color="bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900" />
       </div>
 
       {/* Notification Stats */}

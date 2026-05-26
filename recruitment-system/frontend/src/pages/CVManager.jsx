@@ -49,6 +49,8 @@ import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Modal, ConfirmModal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
+import { PageHeader } from '../components/ui/PageHeader'
+import { FileSearch } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const DEBOUNCE_MS = 300
@@ -206,54 +208,47 @@ export default function CVManager() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      <div className="mb-8 flex justify-between items-start">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">CV Manager</h1>
-          <p className="text-gray-600 mt-1">Review, Remark, and Assign Candidates to Projects</p>
-        </div>
-
-        {/* Controls */}
-        <div className="flex gap-2 flex-wrap justify-end">
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => autoAssignMutation.mutate()}
-            loading={autoAssignMutation.isPending}
-            className="gap-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
-          >
-            <Sparkles size={16} />
-            Auto-Assign All
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => seedMutation.mutate()}
-            loading={seedMutation.isPending}
-            className="gap-1"
-          >
-            <Database size={16} />
-            Seed Mock
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => clearMutation.mutate()}
-            loading={clearMutation.isPending}
-            className="gap-1 text-red-600 hover:text-red-700"
-          >
-            <Trash2 size={16} />
-            Clear
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => refetch()}
-            className="gap-1"
-          >
-            <RefreshCw size={16} />
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={FileSearch}
+        tone="blue"
+        title="CV Manager"
+        subtitle="Review, Remark, and Assign Candidates to Projects"
+        actions={
+          <>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => autoAssignMutation.mutate()}
+              loading={autoAssignMutation.isPending}
+            >
+              <Sparkles size={16} />
+              Auto-Assign All
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => seedMutation.mutate()}
+              loading={seedMutation.isPending}
+            >
+              <Database size={16} />
+              Seed Mock
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => clearMutation.mutate()}
+              loading={clearMutation.isPending}
+              className="text-accent-600 hover:text-accent-700"
+            >
+              <Trash2 size={16} />
+              Clear
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => refetch()} aria-label="Refresh">
+              <RefreshCw size={16} />
+            </Button>
+          </>
+        }
+      />
 
       {/* Search and Filters */}
       <div className="card mb-6">

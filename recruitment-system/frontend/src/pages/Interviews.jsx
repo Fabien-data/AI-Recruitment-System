@@ -10,6 +10,8 @@ import {
 } from '../api'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
+import { PageHeader } from '../components/ui/PageHeader'
+import { CalendarDays } from 'lucide-react'
 import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
 
 const STATUS_COLORS = {
@@ -131,12 +133,12 @@ export default function Interviews() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Interview Management</h1>
-          <p className="text-gray-600 mt-1">Schedule, track, and complete candidate interviews</p>
-        </div>
-      </div>
+      <PageHeader
+        icon={CalendarDays}
+        tone="blue"
+        title="Interview Management"
+        subtitle="Schedule, track, and complete candidate interviews"
+      />
 
       {/* Filters */}
       <div className="card p-4 mb-6 flex flex-wrap gap-4 items-end">

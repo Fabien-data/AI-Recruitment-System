@@ -9,6 +9,8 @@ import {
 } from '../api'
 import { Button } from '../components/ui/Button'
 import { StatCardSkeleton } from '../components/ui/Skeleton'
+import { PageHeader } from '../components/ui/PageHeader'
+import { BarChart2 } from 'lucide-react'
 
 const PIPELINE_COLORS = {
   applied: 'bg-blue-400',
@@ -119,28 +121,30 @@ export default function Analytics() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Analytics</h1>
-          <p className="text-gray-600 mt-1">Pipeline performance, conversion rates, and ad attribution</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={period}
-            onChange={e => setPeriod(e.target.value)}
-            className="border rounded-lg px-3 py-2 text-sm"
-          >
-            <option value="7">Last 7 days</option>
-            <option value="30">Last 30 days</option>
-            <option value="60">Last 60 days</option>
-            <option value="90">Last 90 days</option>
-          </select>
-          <Button variant="secondary" size="sm" onClick={handleExport}>
-            <Download size={14} className="mr-1" />
-            Export CSV
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={BarChart2}
+        tone="mixed"
+        title="Analytics"
+        subtitle="Pipeline performance, conversion rates, and ad attribution"
+        actions={
+          <>
+            <select
+              value={period}
+              onChange={e => setPeriod(e.target.value)}
+              className="border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-2xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            >
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="60">Last 60 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+            <Button variant="secondary" size="sm" onClick={handleExport}>
+              <Download size={14} />
+              Export CSV
+            </Button>
+          </>
+        }
+      />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">

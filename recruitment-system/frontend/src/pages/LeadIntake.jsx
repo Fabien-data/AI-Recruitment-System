@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, Upload, X, Phone, CalendarDays, Globe, FileText } from 'lucide-react'
+import { ArrowLeft, Upload, X, Phone, CalendarDays, Globe, FileText, UserPlus } from 'lucide-react'
 import toast from 'react-hot-toast'
 import {
   createLead, uploadLeadDocument,
@@ -10,6 +10,7 @@ import {
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
+import { PageHeader } from '../components/ui/PageHeader'
 import { JobAutocomplete } from '../components/JobAutocomplete'
 
 const DRAFT_KEY = 'marketing-hub-intake-draft'
@@ -172,14 +173,12 @@ export default function LeadIntake() {
         <ArrowLeft size={14} /> Back to leads
       </Link>
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-zinc-900 tracking-tight">New Lead</h1>
-          <p className="text-sm text-zinc-500 mt-1">
-            Capture caller details while you stay on the call. Draft is autosaved.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        icon={UserPlus}
+        tone="red"
+        title="New Lead"
+        subtitle="Capture caller details while you stay on the call. Draft is autosaved."
+      />
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <Card className="p-6">

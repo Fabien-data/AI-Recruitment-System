@@ -1,4 +1,3 @@
-import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
 export function Input({
@@ -13,7 +12,10 @@ export function Input({
   return (
     <div className="w-full">
       {label && (
-        <label htmlFor={inputId} className="block text-sm font-semibold text-zinc-700 mb-1.5 ml-1 tracking-tight">
+        <label
+          htmlFor={inputId}
+          className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight"
+        >
           {label}
         </label>
       )}
@@ -21,8 +23,9 @@ export function Input({
         type={type}
         id={inputId}
         className={twMerge(
-          'w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200/80 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900/15 focus:border-zinc-400 transition-all disabled:opacity-50',
-          error && 'border-red-400 focus:ring-red-400/20 focus:border-red-400 bg-red-50/50',
+          'w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200/80 text-zinc-900 placeholder-zinc-400 rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all disabled:opacity-50',
+          'dark:bg-zinc-800/60 dark:border-zinc-700 dark:text-zinc-100 dark:placeholder-zinc-500 dark:focus:border-primary-400',
+          error && 'border-accent-400 focus:ring-accent-400/30 focus:border-accent-400 bg-accent-50/50 dark:bg-accent-950/20 dark:border-accent-700',
           className
         )}
         aria-invalid={!!error}
@@ -30,11 +33,14 @@ export function Input({
         {...props}
       />
       {error && (
-        <p id={`${inputId}-error`} className="mt-1.5 ml-1 text-sm text-red-500 font-medium tracking-tight" role="alert">
+        <p
+          id={`${inputId}-error`}
+          className="mt-1.5 ml-1 text-sm text-accent-600 dark:text-accent-400 font-medium tracking-tight"
+          role="alert"
+        >
           {error}
         </p>
       )}
     </div>
   )
 }
-

@@ -8,6 +8,7 @@ import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { Card } from '../components/ui/Card'
+import { PageHeader } from '../components/ui/PageHeader'
 import { CreateJobModal } from '../components/CreateJobModal'
 import toast from 'react-hot-toast'
 
@@ -118,30 +119,32 @@ export default function Jobs() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-zinc-900">Jobs</h1>
-          <p className="text-zinc-500 mt-1">View and manage job listings. Drop a flyer to auto-create a job and push it to the chatbot knowledge base.</p>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <Button
-            variant="secondary"
-            onClick={() => refreshMutation.mutate()}
-            loading={refreshMutation.isPending}
-          >
-            {refreshMutation.isPending ? <Loader2 size={16} /> : <RefreshCw size={16} />}
-            Refresh Knowledge Base
-          </Button>
-          <Button variant="secondary" onClick={() => setIsCreateModalOpen(true)}>
-            <Plus size={16} />
-            Create Job Manually
-          </Button>
-          <Button variant="primary" onClick={open}>
-            <Sparkles size={16} />
-            Magic Create Flyers
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={Briefcase}
+        tone="blue"
+        title="Jobs"
+        subtitle="View and manage job listings. Drop a flyer to auto-create a job and push it to the chatbot knowledge base."
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => refreshMutation.mutate()}
+              loading={refreshMutation.isPending}
+            >
+              {!refreshMutation.isPending && <RefreshCw size={16} />}
+              Refresh Knowledge Base
+            </Button>
+            <Button variant="secondary" onClick={() => setIsCreateModalOpen(true)}>
+              <Plus size={16} />
+              Create Job Manually
+            </Button>
+            <Button variant="primary" onClick={open}>
+              <Sparkles size={16} />
+              Magic Create Flyers
+            </Button>
+          </>
+        }
+      />
 
       <Card className="mb-6 overflow-hidden">
         <div

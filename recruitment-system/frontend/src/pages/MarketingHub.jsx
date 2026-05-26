@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
-import { Plus, Search, Phone, Flame, BarChart2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Search, Phone, Flame, BarChart2, ChevronLeft, ChevronRight, Megaphone } from 'lucide-react'
 import { getLeads, getLeadSources } from '../api'
 import { useRole } from '../stores/authStore'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
 import { TableSkeleton } from '../components/ui/Skeleton'
+import { PageHeader } from '../components/ui/PageHeader'
 
 const STAGE_OPTIONS = [
   { value: '', label: 'All stages' },
@@ -77,25 +78,24 @@ export default function MarketingHub() {
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-zinc-900 tracking-tight">Marketing Hub</h1>
-          <p className="text-sm text-zinc-500 mt-1">
-            Lead capture and qualification for the call-handling team.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {hasFullAnalytics && (
-            <Button variant="secondary" onClick={() => navigate('/marketing-hub/analytics')}>
-              <BarChart2 size={16} /> Analytics
+      <PageHeader
+        icon={Megaphone}
+        tone="red"
+        title="Marketing Hub"
+        subtitle="Lead capture and qualification for the call-handling team."
+        actions={
+          <>
+            {hasFullAnalytics && (
+              <Button variant="secondary" onClick={() => navigate('/marketing-hub/analytics')}>
+                <BarChart2 size={16} /> Analytics
+              </Button>
+            )}
+            <Button variant="accent" onClick={() => navigate('/marketing-hub/new')}>
+              <Plus size={16} /> New Lead
             </Button>
-          )}
-          <Button variant="primary" onClick={() => navigate('/marketing-hub/new')}>
-            <Plus size={16} /> New Lead
-          </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* Filters */}
       <Card className="p-4 mb-6">

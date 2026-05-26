@@ -1,13 +1,23 @@
-import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 import { Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const variants = {
-  primary: 'bg-zinc-900 border border-zinc-800 text-white hover:bg-zinc-800 hover:shadow-lg shadow-sm active:bg-zinc-950 transition-all cursor-pointer rounded-2xl',
-  secondary: 'bg-white/80 backdrop-blur-md border border-zinc-200/60 text-zinc-900 hover:bg-white hover:shadow-sm active:bg-zinc-100 shadow-sm transition-all cursor-pointer rounded-2xl',
-  ghost: 'bg-transparent text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100/50 active:bg-zinc-200 transition-all cursor-pointer rounded-2xl',
-  danger: 'bg-red-500 text-white hover:bg-red-600 hover:shadow-lg shadow-sm active:bg-red-700 transition-all cursor-pointer rounded-2xl',
+  primary:
+    'bg-brand-gradient bg-[length:200%_100%] text-white border border-primary-700/20 shadow-md hover:bg-right hover:shadow-glow-blue active:shadow-md transition-all cursor-pointer rounded-2xl',
+  accent:
+    'bg-accent-gradient bg-[length:200%_100%] text-white border border-accent-700/20 shadow-md hover:bg-right hover:shadow-glow-red active:shadow-md transition-all cursor-pointer rounded-2xl',
+  secondary:
+    'bg-white/80 backdrop-blur-md border border-zinc-200/60 text-zinc-900 hover:bg-white hover:shadow-md active:bg-zinc-100 shadow-sm transition-all cursor-pointer rounded-2xl ' +
+    'dark:bg-zinc-900/70 dark:border-zinc-700/60 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:active:bg-zinc-800/80',
+  ghost:
+    'bg-transparent text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100/60 active:bg-zinc-200 transition-all cursor-pointer rounded-2xl ' +
+    'dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800/60 dark:active:bg-zinc-800',
+  danger:
+    'bg-accent-gradient text-white shadow-md hover:shadow-glow-red active:shadow-md transition-all cursor-pointer rounded-2xl',
+  dark:
+    'bg-zinc-900 text-white border border-zinc-800 hover:bg-zinc-800 hover:shadow-lg shadow-sm active:bg-zinc-950 transition-all cursor-pointer rounded-2xl ' +
+    'dark:bg-white dark:text-zinc-900 dark:border-zinc-200 dark:hover:bg-zinc-100',
 }
 
 const sizes = {
@@ -30,16 +40,18 @@ export function Button({
     <motion.button
       type={type}
       disabled={disabled || loading}
-      whileTap={{ scale: 0.98 }}
+      whileTap={{ scale: 0.97 }}
+      whileHover={{ y: -1 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
       className={twMerge(
-        'inline-flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed',
+        'inline-flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none',
         variants[variant],
         sizes[size],
         className
       )}
       {...props}
     >
-      {loading && <Loader2 className="h-4 w-4 animate-spin text-current opacity-70" aria-hidden="true" />}
+      {loading && <Loader2 className="h-4 w-4 animate-spin text-current opacity-80" aria-hidden="true" />}
       {children}
     </motion.button>
   )

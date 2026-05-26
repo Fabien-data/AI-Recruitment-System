@@ -1,9 +1,12 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { motion } from 'framer-motion'
 import { useAuthStore } from '../stores/authStore'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
+import { Logo } from '../components/ui/Logo'
+import { AuthHero } from '../components/AuthHero'
+import { notify } from '../components/ui/Toast'
 
 const roleOptions = [
   { value: 'admin', label: 'Admin' },
@@ -24,90 +27,100 @@ export default function Register() {
     e.preventDefault()
     setLoading(true)
     try {
-      await register({
-        email,
-        password,
-        full_name: fullName,
-        role,
-      })
-      toast.success('Account created')
+      await register({ email, password, full_name: fullName, role })
+      notify.success('Account created')
       navigate('/')
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Registration failed')
+      notify.error(error.response?.data?.error || 'Registration failed')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-blue-100 p-4 animate-fade-in">
-      <div className="card w-full max-w-md">
-        <h1 className="text-3xl font-bold text-center mb-6 text-gray-900">
-          Create Admin Account
-        </h1>
-        <p className="text-center text-gray-600 mb-8">
-          Set up your first admin user
-        </p>
+    <div className="min-h-screen grid lg:grid-cols-2 bg-zinc-50 dark:bg-zinc-950 animate-fade-in">
+      <AuthHero />
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            label="Full Name"
-            type="text"
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-            placeholder="Admin User"
-            required
-          />
-          <Input
-            label="Email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="admin@recruitment.com"
-            required
-          />
-          <Input
-            label="Password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            required
-          />
-          <div className="w-full">
-            <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-1">
-              Role
-            </label>
-            <select
-              id="role"
-              className="input"
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-            >
-              {roleOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+      <div className="flex items-center justify-center p-6 lg:p-12 relative overflow-hidden">
+        <div className="absolute inset-0 bg-hero-mesh-light dark:bg-hero-mesh-dark opacity-60 pointer-events-none" />
+
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: 'easeOut' }}
+          className="relative w-full max-w-md bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 shadow-[0_8px_30px_rgb(0,0,0,0.06)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] p-8"
+        >
+          <div className="flex justify-center lg:hidden mb-6">
+            <Logo size={40} />
           </div>
-          <Button
-            type="submit"
-            variant="primary"
-            loading={loading}
-            disabled={loading}
-            className="w-full"
-          >
-            Create Account
-          </Button>
-        </form>
+          <h1 className="text-3xl font-bold text-center text-zinc-900 dark:text-zinc-50 tracking-tight">
+            Create Admin Account
+          </h1>
+          <p className="text-center text-zinc-500 dark:text-zinc-400 mt-2 mb-8">
+            Set up your first admin user
+          </p>
 
-        <p className="mt-6 text-center text-sm text-gray-600">
-          Already have an account?{' '}
-          <Link to="/login" className="text-primary-700 hover:text-primary-800 font-medium">
-            Sign in
-          </Link>
-        </p>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Input
+              label="Full Name"
+              type="text"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Admin User"
+              required
+            />
+            <Input
+              label="Email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="admin@recruitment.com"
+              required
+            />
+            <Input
+              label="Password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+            />
+            <div className="w-full">
+              <label htmlFor="role" className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">
+                Role
+              </label>
+              <select
+                id="role"
+                className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all"
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+              >
+                {roleOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={loading}
+              disabled={loading}
+              className="w-full"
+              size="lg"
+            >
+              Create Account
+            </Button>
+          </form>
+
+          <p className="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
+            Already have an account?{' '}
+            <Link to="/login" className="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 font-semibold">
+              Sign in
+            </Link>
+          </p>
+        </motion.div>
       </div>
     </div>
   )

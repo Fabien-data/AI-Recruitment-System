@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
+import { PageHeader } from '../components/ui/PageHeader'
 import { Modal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { apiClient, getJobs, createApplication } from '../api'
@@ -64,28 +65,18 @@ export default function GeneralPool() {
 
     return (
         <div className="p-6 lg:p-8 animate-fade-in">
-            {/* Header */}
-            <div className="mb-8 flex justify-between items-start">
-                <div>
-                    <div className="flex items-center gap-3 mb-2">
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
-                            <Database className="text-white" size={24} />
-                        </div>
-                        <div>
-                            <h1 className="text-3xl font-bold text-gray-900">General Pool</h1>
-                            <p className="text-gray-600">Candidates for future job opportunities</p>
-                        </div>
-                    </div>
-                </div>
-                <Button
-                    variant="secondary"
-                    onClick={() => refetch()}
-                    className="gap-1"
-                >
-                    <RefreshCw size={16} />
-                    Refresh
-                </Button>
-            </div>
+            <PageHeader
+                icon={Database}
+                tone="blue"
+                title="General Pool"
+                subtitle="Candidates for future job opportunities"
+                actions={
+                    <Button variant="secondary" onClick={() => refetch()}>
+                        <RefreshCw size={16} />
+                        Refresh
+                    </Button>
+                }
+            />
 
             {/* Info Banner */}
             <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-4 mb-6">

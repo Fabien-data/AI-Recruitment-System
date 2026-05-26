@@ -10,15 +10,45 @@
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+
+  --chart-1: #2563eb;
+  --chart-2: #dc2626;
+  --chart-3: #7c3aed;
+  --chart-4: #0891b2;
+  --chart-5: #f59e0b;
+  --chart-grid: #e4e4e7;
+  --chart-text: #71717a;
+  --chart-tooltip-bg: #ffffff;
+  --chart-tooltip-shadow: 0 8px 30px rgba(0,0,0,0.08);
+}
+
+html.dark {
+  color-scheme: dark;
+  --chart-1: #60a5fa;
+  --chart-2: #f87171;
+  --chart-3: #a78bfa;
+  --chart-4: #22d3ee;
+  --chart-5: #fbbf24;
+  --chart-grid: #27272a;
+  --chart-text: #a1a1aa;
+  --chart-tooltip-bg: #18181b;
+  --chart-tooltip-shadow: 0 8px 30px rgba(0,0,0,0.5);
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #FAFAFA;
+  background-color: #fafafa;
   color: #18181b;
   letter-spacing: -0.01em;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+html.dark body {
+  background-color: #09090b;
+  color: #f4f4f5;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -27,18 +57,62 @@ h1, h2, h3, h4, h5, h6 {
 
 @layer components {
   .badge {
-    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold tracking-tight border;
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold tracking-tight border;
   }
-  .badge-new { @apply bg-blue-50 text-blue-700 border-blue-200/50; }
-  .badge-screening { @apply bg-amber-50 text-amber-700 border-amber-200/50; }
-  .badge-interview { @apply bg-purple-50 text-purple-700 border-purple-200/50; }
-  .badge-hired { @apply bg-emerald-50 text-emerald-700 border-emerald-200/50; }
-  .badge-rejected { @apply bg-red-50 text-red-700 border-red-200/50; }
-  .badge-active { @apply bg-emerald-50 text-emerald-700 border-emerald-200/50; }
-  .badge-paused { @apply bg-zinc-100 text-zinc-700 border-zinc-200/50; }
-  .badge-closed { @apply bg-zinc-100 text-zinc-500 border-zinc-200/50; }
-  
+  .badge-new { @apply bg-blue-50 text-blue-700 border-blue-200/50 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/50; }
+  .badge-screening { @apply bg-amber-50 text-amber-700 border-amber-200/50 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50; }
+  .badge-interview { @apply bg-purple-50 text-purple-700 border-purple-200/50 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/50; }
+  .badge-hired { @apply bg-emerald-50 text-emerald-700 border-emerald-200/50 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50; }
+  .badge-rejected { @apply bg-red-50 text-red-700 border-red-200/50 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800/50; }
+  .badge-active { @apply bg-emerald-50 text-emerald-700 border-emerald-200/50 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50; }
+  .badge-paused { @apply bg-zinc-100 text-zinc-700 border-zinc-200/50 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700; }
+  .badge-closed { @apply bg-zinc-100 text-zinc-500 border-zinc-200/50 dark:bg-zinc-800/60 dark:text-zinc-400 dark:border-zinc-700; }
+
   .glass {
-    @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-sm transition-all;
+    @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-sm transition-all dark:bg-zinc-900/70 dark:border-zinc-700/40;
   }
+
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-zinc-200 dark:bg-zinc-800;
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%);
+    background-size: 1000px 100%;
+    animation: shimmer 1.8s linear infinite;
+  }
+  html.dark .skeleton::after {
+    background-image: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.06) 50%, transparent 100%);
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+}
+html.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+}
+html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Branded toast container (react-hot-toast renders our custom toasts at top-right). */
+.brand-toast-shadow {
+  filter: drop-shadow(0 10px 25px rgba(0,0,0,0.10));
+}
+html.dark .brand-toast-shadow {
+  filter: drop-shadow(0 10px 25px rgba(0,0,0,0.5));
 }
