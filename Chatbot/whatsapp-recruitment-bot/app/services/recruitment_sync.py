@@ -76,6 +76,21 @@ class RecruitmentSyncService:
         if preferred_language:
             payload["preferred_language"] = preferred_language
 
+        # Ad-attribution: when the candidate arrived from a FB/IG job ad, surface
+        # both the ad_ref (so backend tracking knows the source link) and the
+        # resolved job_id (so the backend creates an applications row linking
+        # this candidate to the specific job they clicked).
+        ad_ref = extracted.get("ad_ref")
+        ad_job_id = (
+            extracted.get("ad_job_id")
+            or agent_state.get("active_job_id")
+        )
+        if ad_ref:
+            payload["ad_ref"] = ad_ref
+        if ad_job_id:
+            payload["job_id"] = ad_job_id
+            payload["ad_job_id"] = ad_job_id  # alias for backends that key on ad_job_id
+
         # General-pool routing: when the chatbot saves a lead with no matching
         # job, it sets remarks + preferences_log + general_pool_optin in state.
         # Send those through so the backend stores them on the candidate row

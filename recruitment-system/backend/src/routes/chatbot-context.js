@@ -136,7 +136,15 @@ function generateFAQs(job, project) {
     return faqs;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ── GET /api/public/job-context/:ad_ref ───────────────────────────────────────
+// Accepts either:
+//   (a) a short ad_ref from the `ad_tracking` table (per-campaign greeting,
+//       click counter, optional active flag), or
+//   (b) a job UUID directly (no ad_tracking row needed — synthesises greeting
+//       from job title + first project country). Marketing teams can paste
+//       `wa.me/<num>?text=START:<job_uuid>` straight from the admin UI.
 router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => {
     const { ad_ref } = req.params;
 
@@ -214,7 +222,81 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
                JOIN projects p ON at.project_id::uuid = p.id
                WHERE at.ad_ref = $1 AND at.is_active = TRUE`;
 
-        const result = await query(contextSQL, [ad_ref]);
+        let result = await query(contextSQL, [ad_ref]);
+        let resolvedViaTracking = result.rows.length > 0;
+
+        // UUID fallback: marketing pasted a raw job UUID into the ad link
+        // instead of creating an ad_tracking short code. Resolve the job
+        // directly so the chatbot still gets full context.
+        if (!resolvedViaTracking && UUID_RE.test(ad_ref)) {
+            const uuidSQL = isMySQL
+                ? `SELECT
+                       NULL         AS tracking_id,
+                       ?            AS ad_ref,
+                       NULL         AS campaign_name,
+                       1            AS is_active,
+                       j.id         AS job_id,
+                       j.title      AS job_title,
+                       j.category   AS job_category,
+                       j.description AS job_description,
+                       j.requirements,
+                       j.salary_range,
+                       j.location,
+                       j.positions_available,
+                       j.deadline,
+                       j.is_urgent,
+                       j.required_fields_schema,
+                       p.id         AS project_id,
+                       p.title      AS project_title,
+                       p.client_name,
+                       p.industry_type,
+                       p.description AS project_description,
+                       p.countries,
+                       p.benefits,
+                       p.salary_info,
+                       p.contact_info,
+                       p.interview_date,
+                       p.start_date,
+                       p.priority,
+                       p.status     AS project_status
+                   FROM jobs j
+                   JOIN projects p ON j.project_id = p.id
+                   WHERE j.id = ? AND j.status = 'active'`
+                : `SELECT
+                       NULL         AS tracking_id,
+                       $1::text     AS ad_ref,
+                       NULL         AS campaign_name,
+                       TRUE         AS is_active,
+                       j.id         AS job_id,
+                       j.title      AS job_title,
+                       j.category   AS job_category,
+                       j.description AS job_description,
+                       j.requirements,
+                       j.salary_range,
+                       j.location,
+                       j.positions_available,
+                       j.deadline,
+                       j.is_urgent,
+                       j.required_fields_schema,
+                       p.id         AS project_id,
+                       p.title      AS project_title,
+                       p.client_name,
+                       p.industry_type,
+                       p.description AS project_description,
+                       p.countries,
+                       p.benefits,
+                       p.salary_info,
+                       p.contact_info,
+                       p.interview_date,
+                       p.start_date,
+                       p.priority,
+                       p.status     AS project_status
+                   FROM jobs j
+                   JOIN projects p ON j.project_id = p.id
+                   WHERE j.id = $1::uuid AND j.status = 'active'`;
+            const params = isMySQL ? [ad_ref, ad_ref] : [ad_ref];
+            result = await query(uuidSQL, params);
+        }
 
         if (result.rows.length === 0) {
             // Log invalid/inactive ref attempts
@@ -254,13 +336,17 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
         const countryStr = countries.length > 0 ? `in ${countries[0]}` : '';
         const greetingOverride = `Hi! 👋 I see you're interested in our *${row.job_title}* position ${countryStr}!\n\nI'm here to help you apply. This will only take a few minutes. 😊`;
 
-        // Increment click counter (fire-and-forget, don't block response)
-        const clickSQL = isMySQL
-            ? 'UPDATE ad_tracking SET clicks = clicks + 1, updated_at = NOW() WHERE ad_ref = ?'
-            : 'UPDATE ad_tracking SET clicks = clicks + 1, updated_at = NOW() WHERE ad_ref = $1';
-        query(clickSQL, [ad_ref]).catch(err =>
-            logger.warn(`Failed to increment click for ${ad_ref}: ${err.message}`)
-        );
+        // Increment click counter (fire-and-forget, don't block response).
+        // Only meaningful when an ad_tracking row exists — UUID-fallback hits
+        // have no row to update, so skip the UPDATE for those.
+        if (resolvedViaTracking) {
+            const clickSQL = isMySQL
+                ? 'UPDATE ad_tracking SET clicks = clicks + 1, updated_at = NOW() WHERE ad_ref = ?'
+                : 'UPDATE ad_tracking SET clicks = clicks + 1, updated_at = NOW() WHERE ad_ref = $1';
+            query(clickSQL, [ad_ref]).catch(err =>
+                logger.warn(`Failed to increment click for ${ad_ref}: ${err.message}`)
+            );
+        }
 
         // Build and return the full context object
         return res.json({

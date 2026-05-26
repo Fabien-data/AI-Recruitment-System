@@ -240,6 +240,12 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
             skills,
             preferred_language,
             email,
+            // Ad-attribution (FB/IG job-ad funnel). When present we resolve a
+            // job_id and create an applications row tying this candidate to
+            // the specific role they clicked on.
+            ad_ref,
+            ad_job_id,
+            job_id: providedJobId,
         } = payload;
 
         const phone = normalizePhone(payload.phone);
@@ -383,9 +389,79 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
             }
         }
 
+        // 4. Ad-funnel application: when the candidate arrived via a FB/IG
+        // job ad, resolve the job_id (preferring an explicit one, falling
+        // back to ad_tracking lookup, then UUID fallback) and INSERT into
+        // applications so the candidate appears under that specific role in
+        // the recruiter dashboard. Idempotent on (candidate_id, job_id).
+        let applicationId = null;
+        try {
+            let resolvedJobId = providedJobId || ad_job_id || null;
+            const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+            if (!resolvedJobId && ad_ref) {
+                const adResult = await query(
+                    adaptQuery('SELECT job_id FROM ad_tracking WHERE ad_ref = $1 AND is_active = TRUE LIMIT 1'),
+                    [ad_ref]
+                );
+                if (adResult.rows.length > 0) {
+                    resolvedJobId = adResult.rows[0].job_id;
+                }
+            }
+
+            if (!resolvedJobId && ad_ref && UUID_RE.test(ad_ref)) {
+                const uuidResult = await query(
+                    adaptQuery(isMySQL
+                        ? `SELECT id FROM jobs WHERE id = $1 AND status = 'active' LIMIT 1`
+                        : `SELECT id FROM jobs WHERE id = $1::uuid AND status = 'active' LIMIT 1`),
+                    [ad_ref]
+                );
+                if (uuidResult.rows.length > 0) {
+                    resolvedJobId = uuidResult.rows[0].id;
+                }
+            }
+
+            if (resolvedJobId && candidate && candidate.id) {
+                const dupResult = await query(
+                    adaptQuery('SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1'),
+                    [candidate.id, resolvedJobId]
+                );
+                if (dupResult.rows.length > 0) {
+                    applicationId = dupResult.rows[0].id;
+                    logger.info(`[${traceId}] Application already exists: ${applicationId}`);
+                } else {
+                    applicationId = randomUUID();
+                    await query(
+                        adaptQuery(`
+                            INSERT INTO applications (id, candidate_id, job_id, status, metadata)
+                            VALUES ($1, $2, $3, 'applied', $4)
+                        `),
+                        [
+                            applicationId,
+                            candidate.id,
+                            resolvedJobId,
+                            JSON.stringify({
+                                source: 'whatsapp_chatbot',
+                                ad_ref: ad_ref || null,
+                                destination_country: country || null,
+                                job_interest_stated: resolvedJobInterest,
+                            }),
+                        ]
+                    );
+                    logger.info(`[${traceId}] Created application ${applicationId} for candidate ${candidate.id} → job ${resolvedJobId}`);
+                }
+            }
+        } catch (appErr) {
+            // Don't fail the whole sync if application creation hits a
+            // schema issue — the candidate row already landed and recruiters
+            // can still see them. Log loud so we notice.
+            logger.error(`[${traceId}] Application creation failed (sync continues):`, appErr);
+        }
+
         res.status(200).json({
             success: true,
             candidate_id: candidate.id,
+            application_id: applicationId,
             fields_received: {
                 name: !!name,
                 experience_years: experience_years !== undefined && experience_years !== null,
@@ -393,6 +469,8 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                 country: !!country,
                 skills_count: Array.isArray(skills) ? skills.length : 0,
                 cv_attached: !!req.file,
+                ad_ref: !!ad_ref,
+                application_linked: !!applicationId,
             },
         });
     } catch (error) {

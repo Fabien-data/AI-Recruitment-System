@@ -752,6 +752,21 @@ router.post(
                 }
             }
 
+            // UUID fallback: ad_ref may itself be a job UUID (marketing pasted
+            // the raw job UUID into the wa.me link instead of using a short
+            // ad_tracking code). Mirror the public job-context endpoint so the
+            // application row still gets created.
+            if (!resolvedJobId && ad_ref && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ad_ref)) {
+                const uuidSQL = isMySQL
+                    ? `SELECT id FROM jobs WHERE id = ? AND status = 'active' LIMIT 1`
+                    : `SELECT id FROM jobs WHERE id = $1::uuid AND status = 'active' LIMIT 1`;
+                const uuidResult = await query(uuidSQL, [ad_ref]);
+                if (uuidResult.rows.length > 0) {
+                    resolvedJobId = uuidResult.rows[0].id;
+                    logger.info(`Chatbot intake: resolved ad_ref UUID → job ${resolvedJobId}`);
+                }
+            }
+
             if (!resolvedJobId && job_interest) {
                 // Best-effort: find active job by title match
                 const jobSQL = isMySQL

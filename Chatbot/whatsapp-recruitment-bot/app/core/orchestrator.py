@@ -13,6 +13,7 @@ from app import crud
 from app.agents.intake_agent import intake_agent
 from app.agents.recovery_agent import recovery_agent
 from app.services.ad_context_service import ad_context_service
+from app.services.ad_intake_flow import ad_intake_flow
 from app.services.cv_service import cv_service
 from app.services.language_service import language_service
 from app.services.handoff_service import handoff_service
@@ -242,6 +243,48 @@ class IntakeOrchestrator:
                     ai_decision.reply_message = deterministic_prompt
                     ai_decision.next_question_type = replacement
 
+        # Ad-intake override: when the deterministic ad-flow is steering this
+        # conversation, we trust the AI's *entity extraction* (already merged
+        # above) but replace the AI's reply with the validated next-field
+        # prompt. Off-topic questions get the AI's FAQ-grounded answer prepended
+        # before the re-ask so the candidate is heard without losing the flow.
+        if ad_intake_flow.is_awaiting_field(state):
+            current_field = state["ad_flow_step"].split(":", 1)[1]
+            ai_extracted = self._ai_extracted_value(ai_decision, current_field)
+            faq_answer = None
+            # The AI may have produced a short FAQ reply when the user asked
+            # something off-topic. Detect this heuristically: AI's reply isn't
+            # asking for the current field AND the user's text didn't satisfy
+            # the field. We pass the AI reply through as the FAQ answer.
+            user_text_str = (message_text or "").strip()
+            if user_text_str and ai_decision.reply_message:
+                faq_answer = ai_decision.reply_message
+            ad_reply = ad_intake_flow.process_field_reply(
+                state=state,
+                lang=locked_language,
+                user_text=user_text_str,
+                ai_extracted=ai_extracted,
+                faq_answer=faq_answer if not self._field_satisfied(current_field, collected) else None,
+            )
+            ai_decision.reply_message = ad_reply
+            ai_decision.next_question_type = self._current_ad_field(state)
+            next_q = ai_decision.next_question_type
+        elif ad_intake_flow.is_awaiting_cv(state):
+            # CV is the only acceptable input here — text replies get a gentle
+            # nudge back to upload. (Off-topic FAQ answer is still surfaced.)
+            user_text_str = (message_text or "").strip()
+            cv_prompt = ad_intake_flow.cv_prompt(locked_language)
+            if user_text_str and ai_decision.reply_message and not self._looks_like_cv_intent(user_text_str):
+                ai_decision.reply_message = f"{ai_decision.reply_message.strip()}\n\n{cv_prompt}"
+            else:
+                ai_decision.reply_message = cv_prompt
+            ai_decision.next_question_type = "cv"
+            next_q = "cv"
+        elif ad_intake_flow.is_complete(state):
+            # Ad-flow already submitted — let the AI handle further chitchat
+            # (FAQ / general questions). No override needed.
+            pass
+
         # Store next_question_type so the NEXT turn can detect rephrase and
         # avoid re-asking. Write-after-send: the append happens here because
         # we are about to return the reply to the user.
@@ -403,6 +446,18 @@ class IntakeOrchestrator:
 
         # --- 5. Resolve language from prior conversation state ---
         locked_language = state.get("locked_language") or "en"
+
+        # --- 5a. Ad-flow short-circuit ---
+        # If the deterministic ad-flow was waiting for the CV (or even still
+        # mid-field — a candidate can upload opportunistically), close the
+        # loop now: emit the branded completion message and skip the generic
+        # AI post-CV response. Only fires when the ad-flow is the steering
+        # state machine for this conversation.
+        if ad_intake_flow.is_active(state) and not ad_intake_flow.is_complete(state):
+            completion = ad_intake_flow.completion_message(state, locked_language)
+            self._save_agent_state(candidate, state)
+            db.commit()
+            return completion
 
         # --- 6. Load conversation history for AI context ---
         history_items = []
@@ -627,6 +682,17 @@ class IntakeOrchestrator:
         )
 
     async def _route_interactive_action(self, db: Session, candidate, state: Dict[str, Any], action: str) -> Any:
+        # Ad-flow language pick: lock the chosen language, then send the
+        # branded job welcome + first intake prompt in that language.
+        if ad_intake_flow.is_language_button(action):
+            lang = ad_intake_flow.language_for_button(action)
+            self._apply_language_lock(db, candidate, state, lang, is_explicit_switch=True)
+            pending = state.pop("pending_job_welcome", None)
+            reply = ad_intake_flow.welcome_and_first_prompt(state, lang, pending)
+            self._save_agent_state(candidate, state)
+            db.commit()
+            return reply
+
         if action == "action_apply":
             return await self._route_apply_flow(db, candidate, state)
         if action == "action_question":
@@ -692,7 +758,7 @@ class IntakeOrchestrator:
 
     def _is_structured_interactive_token(self, text: str) -> bool:
         return bool(re.match(
-            r"^(job_\d+|urgent_\d+|action_apply|action_question|action_general_pool)$",
+            r"^(job_\d+|urgent_\d+|action_apply|action_question|action_general_pool|lang_ad_(?:en|si|ta))$",
             text or "",
         ))
 
@@ -702,12 +768,16 @@ class IntakeOrchestrator:
         candidate,
         state: Dict[str, Any],
         message_text: str,
-    ) -> Optional[str]:
-        """Process a `START:ad_ref_xyz` first message from a Meta ad click.
+    ) -> Optional[Any]:
+        """Process a `START:<job_uuid>` first message from a Meta ad click.
 
-        Pre-fills job_interest + destination_country into collected_data so the
-        AI never re-asks them, stores the full ad_context for FAQ grounding,
-        and returns the ad-specific greeting (skipping the AI call this turn).
+        Hands the conversation off to the deterministic ``ad_intake_flow`` —
+        either by sending the trilingual language selector (new user) or by
+        going straight to the branded welcome + first prompt in the language
+        the candidate previously locked. Either way we (a) load full ad
+        context, (b) pre-fill job_interest + destination from the ad, and
+        (c) apply the picked job's required_fields_schema so subsequent turns
+        ask the right questions for the role.
         """
         context = await ad_context_service.detect_and_load(message_text, candidate, db)
         if not context:
@@ -715,10 +785,13 @@ class IntakeOrchestrator:
 
         state["ad_processed"] = True
         prefilled = (context.get("chatbot_config") or {}).get("prefilled") or {}
-        job_interest = prefilled.get("job_interest") or (context.get("job") or {}).get("title")
+        job = context.get("job") or {}
+        project = context.get("project") or {}
+        job_interest = prefilled.get("job_interest") or job.get("title")
+        countries = project.get("countries") or []
         destination = prefilled.get("destination_country") or (
-            (context.get("project") or {}).get("countries") or [None]
-        )[0]
+            countries[0] if countries else None
+        )
 
         collected = state.setdefault("collected_data", {})
         asked_questions = state.setdefault("asked_questions", [])
@@ -729,33 +802,38 @@ class IntakeOrchestrator:
                 asked_questions.append("job_role")
         if destination and not collected.get("country"):
             collected["country"] = destination
+            collected.setdefault("countries", [destination])
             if "countries" not in asked_questions:
                 asked_questions.append("countries")
 
-        # Store the full ad context snapshot so subsequent turns can ground FAQ
-        # answers in the actual job the user clicked on.
+        # Persist full ad context for FAQ grounding + downstream sync.
         state["ad_context"] = (candidate.extracted_data or {}).get("ad_context")
-        state["active_job_id"] = (context.get("job") or {}).get("id")
+        state["active_job_id"] = job.get("id")
         state["step"] = "ad_landed"
+
+        # Per-job required_fields_schema → mandatory_fields list used by the
+        # ad-intake flow to drive question order. Falls back to defaults if
+        # the job didn't define a schema (handled inside the flow).
+        self._apply_required_fields_schema(state, job)
+
+        # Branch: returning user (language locked) skips the language step.
+        locked = state.get("locked_language")
+        if locked:
+            reply = ad_intake_flow.welcome_and_first_prompt(
+                state,
+                locked,
+                {"job_title": job.get("title") or "", "country": destination or ""},
+            )
+        else:
+            reply = ad_intake_flow.language_selector_payload(
+                state,
+                job_title=job.get("title") or "",
+                country=destination or "",
+            )
+
         self._save_agent_state(candidate, state)
         db.commit()
-
-        greeting = ad_context_service.get_greeting(context)
-        if greeting:
-            return greeting
-
-        # Fallback if the campaign did not configure a custom greeting.
-        lang = state.get("locked_language") or "en"
-        job_title = (context.get("job") or {}).get("title") or "this role"
-        country = destination or "our partner countries"
-        defaults = {
-            "en": f"Welcome! Thanks for tapping our ad for {job_title} in {country}. May I have your full name?",
-            "si": f"සාදරයෙන් පිළිගනිමු! {country} {job_title} දැන්වීම සඳහා ඔබට ස්තූතියි. ඔබේ සම්පූර්ණ නම කියන්නද?",
-            "ta": f"வணக்கம்! {country} {job_title} விளம்பரத்திற்கு நன்றி. உங்கள் முழுப் பெயரை சொல்லுங்கள்?",
-            "singlish": f"Welcome! {country} {job_title} ad eka tap kalata sthuthi. Oyage full name eka kiyanna?",
-            "tanglish": f"Vanakkam! {country} {job_title} ad-ku thanks. Unga full name sollunga?",
-        }
-        return defaults.get(lang, defaults["en"])
+        return reply
 
     async def _route_general_pool_signup(
         self,
@@ -867,6 +945,41 @@ class IntakeOrchestrator:
 
         state["mandatory_fields"] = _sort_by_dep(mandatory)
         state["optional_fields"] = _sort_by_dep(optional)
+
+    def _current_ad_field(self, state: Dict[str, Any]) -> Optional[str]:
+        step = str(state.get("ad_flow_step") or "")
+        if step.startswith("awaiting_field:"):
+            return step.split(":", 1)[1] or None
+        if step in ("awaiting_cv", "awaiting_field:cv"):
+            return "cv"
+        return None
+
+    def _ai_extracted_value(self, ai_decision, field: str) -> Optional[Any]:
+        """Surface the AI-supervisor's structured extraction for the field
+        we're currently asking, so a verbose reply like 'I'm Ahmed and I'm 28'
+        can satisfy the name step via ai_decision.extracted_name."""
+        mapping = {
+            "name": getattr(ai_decision, "extracted_name", None),
+            "age": getattr(ai_decision, "extracted_age", None),
+            "email": getattr(ai_decision, "extracted_email", None),
+            "experience_years": getattr(ai_decision, "experience_years", None),
+            "country": getattr(ai_decision, "country", None),
+            "job_role": getattr(ai_decision, "job_interest", None),
+        }
+        return mapping.get(field)
+
+    def _looks_like_cv_intent(self, text: str) -> bool:
+        """Heuristic: did the user signal they're about to upload/lack a CV?
+        Used in the ad-flow CV step so a 'sending now' / 'I don't have one'
+        message doesn't get a redundant CV nudge tacked on."""
+        if not text:
+            return False
+        lowered = text.lower()
+        keywords = (
+            "cv", "resume", "uploading", "sending", "send karanna", "send pannuven",
+            "no cv", "don't have", "dont have", "haven't", "havent",
+        )
+        return any(k in lowered for k in keywords)
 
     def _field_satisfied(self, field: str, collected: Dict[str, Any]) -> bool:
         if not field:
