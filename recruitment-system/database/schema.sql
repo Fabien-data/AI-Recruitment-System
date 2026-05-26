@@ -374,40 +374,6 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER check_duplicate_before_insert BEFORE INSERT ON candidates
     FOR EACH ROW EXECUTE FUNCTION check_duplicate_candidate();
 
--- ===============================================
--- SAMPLE DATA FOR TESTING
--- ===============================================
-
--- Insert sample job categories
-INSERT INTO jobs (title, category, requirements, wiggle_room, status, positions_available) VALUES
-('Security Guard - Dubai', 'security', 
-    '{"min_height_cm": 170, "max_height_cm": 190, "required_languages": ["English"], "min_age": 21, "max_age": 45, "licenses": ["security_license"]}'::jsonb,
-    '{"height_tolerance_cm": 5, "age_tolerance_years": 2}'::jsonb,
-    'active', 10
-),
-('Hospitality Staff - Qatar', 'hospitality',
-    '{"min_height_cm": 160, "required_languages": ["English"], "min_age": 21, "max_age": 40, "experience_years": 2}'::jsonb,
-    '{"height_tolerance_cm": 3, "experience_tolerance_years": 1}'::jsonb,
-    'active', 5
-),
-('Factory Worker - Saudi Arabia', 'manufacturing',
-    '{"required_languages": ["English"], "min_age": 21, "max_age": 45}'::jsonb,
-    '{"age_tolerance_years": 3}'::jsonb,
-    'active', 20
-);
-
--- Insert sample translations
-INSERT INTO translations (key, language, value, context) VALUES
-('greeting', 'en', 'Hello! Welcome to our recruitment agency.', 'chatbot'),
-('greeting', 'si', 'ආයුබෝවන්! අපගේ රැකියා නියෝජිතායතනය වෙත සාදරයෙන් පිළිගනිමු.', 'chatbot'),
-('greeting', 'ta', 'வணக்கம்! எங்கள் ஆட்சேர்ப்பு நிறுவனத்திற்கு வரவேற்கிறோம்.', 'chatbot'),
-('ask_name', 'en', 'What is your name?', 'chatbot'),
-('ask_name', 'si', 'ඔබේ නම කුමක්ද?', 'chatbot'),
-('ask_name', 'ta', 'உங்கள் பெயர் என்ன?', 'chatbot'),
-('ask_position', 'en', 'Which position are you interested in?', 'chatbot'),
-('ask_position', 'si', 'ඔබ කැමති රැකියාව කුමක්ද?', 'chatbot'),
-('ask_position', 'ta', 'நீங்கள் எந்த வேலைக்கு ஆர்வமாக உள்ளீர்கள்?', 'chatbot');
-
 COMMENT ON TABLE candidates IS 'Stores candidate information from all sources';
 COMMENT ON TABLE cv_files IS 'Stores CV file references and parsed data';
 COMMENT ON TABLE jobs IS 'Job listings with requirements and tolerances';

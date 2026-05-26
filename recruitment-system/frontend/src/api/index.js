@@ -158,19 +158,6 @@ export const sendCommunication = (data) =>
       : undefined
   ).then(res => res.data)
 
-// Mock Data API (for testing)
-export const seedMockData = () =>
-  apiClient.post('/api/mock/seed').then(res => res.data)
-
-export const clearMockData = () =>
-  apiClient.delete('/api/mock/clear').then(res => res.data)
-
-export const getMockCandidates = () =>
-  apiClient.get('/api/mock/candidates').then(res => res.data)
-
-export const getMockProjects = () =>
-  apiClient.get('/api/mock/projects').then(res => res.data)
-
 // Auto-Assign API
 export const getJobCandidates = (jobId) =>
   apiClient.get(`/api/auto-assign/job/${jobId}/candidates`).then(res => res.data)

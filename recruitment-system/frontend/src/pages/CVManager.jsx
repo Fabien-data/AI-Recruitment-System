@@ -11,8 +11,6 @@ import {
   updateApplication,
   transferApplication,
   updateCandidate,
-  seedMockData,
-  clearMockData,
   batchAutoAssign
 } from '../api'
 import {
@@ -24,7 +22,6 @@ import {
   Briefcase,
   User,
   Database,
-  Trash2,
   Star,
   Clock,
   Download,
@@ -149,31 +146,6 @@ export default function CVManager() {
     queryFn: () => getCandidates({ page, search, limit: 20, status: statusFilter || undefined, source: sourceFilter || undefined })
   })
 
-  // Mutations for mock data
-  const seedMutation = useMutation({
-    mutationFn: seedMockData,
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['candidates'] })
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
-      toast.success(`Mock data seeded: ${data.results.candidates.filter(c => c.status === 'created').length} candidates, ${data.results.jobs.filter(j => j.status === 'created').length} jobs`)
-    },
-    onError: (error) => {
-      toast.error('Failed to seed mock data: ' + error.message)
-    }
-  })
-
-  const clearMutation = useMutation({
-    mutationFn: clearMockData,
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['candidates'] })
-      queryClient.invalidateQueries({ queryKey: ['applications'] })
-      toast.success(`Cleared ${data.deleted_count} mock candidates`)
-    },
-    onError: (error) => {
-      toast.error('Failed to clear mock data: ' + error.message)
-    }
-  })
-
   // Auto-assign all new candidates to matching jobs
   const autoAssignMutation = useMutation({
     mutationFn: () => batchAutoAssign(50, 'new'),
@@ -234,25 +206,6 @@ export default function CVManager() {
             >
               <Sparkles size={16} />
               Auto-Assign All
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => seedMutation.mutate()}
-              loading={seedMutation.isPending}
-            >
-              <Database size={16} />
-              Seed Mock
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => clearMutation.mutate()}
-              loading={clearMutation.isPending}
-              className="text-accent-600 hover:text-accent-700"
-            >
-              <Trash2 size={16} />
-              Clear
             </Button>
             <Button variant="secondary" size="sm" onClick={() => refetch()} aria-label="Refresh">
               <RefreshCw size={16} />

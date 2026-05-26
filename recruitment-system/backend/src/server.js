@@ -18,7 +18,6 @@ const webhooksRouter = require('./routes/webhooks');
 const authRouter = require('./routes/auth');
 const adminRouter = require('./routes/admin');
 const gmailRouter = require('./routes/gmail');
-const mockDataRouter = require('./routes/mock-data');
 const autoAssignRouter = require('./routes/auto-assign');
 const projectsRouter = require('./routes/projects');
 const interviewsRouter = require('./routes/interviews');
@@ -156,7 +155,6 @@ app.use('/api/projects', projectsRouter); // Projects management
 app.use('/api/applications', applicationsRouter);
 app.use('/api/communications', communicationsRouter);
 app.use('/api/gmail', gmailRouter);
-app.use('/api/mock', mockDataRouter); // Mock data for development/testing
 app.use('/api/auto-assign', autoAssignRouter); // Auto-assign CVs to jobs
 
 // ── Interview & Analytics routes ──────────────────────────────────────────────

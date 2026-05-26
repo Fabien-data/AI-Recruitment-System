@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "seed:mock": "node scripts/seed-mock.js",
     "backfill:cv-urls": "node scripts/backfill-chatbot-cv-urls.js",
     "backfill:cv-urls:apply": "node scripts/backfill-chatbot-cv-urls.js --apply",
     "integration:verify": "node scripts/verify-chatbot-integration.js",
