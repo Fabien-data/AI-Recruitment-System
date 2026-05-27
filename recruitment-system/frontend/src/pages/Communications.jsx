@@ -602,11 +602,11 @@ export default function Communications() {
   // ── Takeover / Release mutations ───────────────────────────────────────────
   const takeoverMut = useMutation({
     mutationFn: (candidateId) => takeover(candidateId),
-    onSuccess: () => queryClient.invalidateQueries(['active-chats']),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['active-chats'] }),
   })
   const releaseMut = useMutation({
     mutationFn: () => release(selectedId),
-    onSuccess: () => queryClient.invalidateQueries(['active-chats']),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['active-chats'] }),
   })
 
   const identityMut = useMutation({
@@ -626,7 +626,7 @@ export default function Communications() {
       )))
       setShowEditContactModal(false)
       setIdentityError(null)
-      queryClient.invalidateQueries(['active-chats'])
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
     },
     onError: () => {
       setIdentityError('Failed to save identity. Please try again.')

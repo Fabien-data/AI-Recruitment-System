@@ -287,7 +287,7 @@ export default function JobCandidates() {
                     onSuccess={() => {
                         setShowBatchCertifyModal(false)
                         setSelectedIds(new Set())
-                        queryClient.invalidateQueries(['job-candidates', jobId])
+                        queryClient.invalidateQueries({ queryKey: ['job-candidates', jobId] })
                     }}
                 />
             )}

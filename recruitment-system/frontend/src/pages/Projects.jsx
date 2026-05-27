@@ -103,7 +103,7 @@ export default function Projects() {
   const createMutation = useMutation({
     mutationFn: createProject,
     onSuccess: () => {
-      queryClient.invalidateQueries(['projects'])
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       setModalOpen(false)
       resetForm()
       toast.success('Project created successfully')
@@ -116,7 +116,7 @@ export default function Projects() {
   const deleteMutation = useMutation({
     mutationFn: deleteProject,
     onSuccess: () => {
-      queryClient.invalidateQueries(['projects'])
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       toast.success('Project deleted successfully')
     },
     onError: (error) => {

@@ -73,7 +73,7 @@ export default function CandidateDetail() {
 
   const photoMutation = useMutation({
     mutationFn: (formData) => uploadCandidatePhoto(id, formData),
-    onSuccess: () => qc.invalidateQueries(['candidate', id]),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['candidate', id] }),
   })
 
   function handlePhotoChange(e) {

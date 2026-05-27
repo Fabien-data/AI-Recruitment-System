@@ -94,15 +94,18 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       return createJob({ ...data, project_id: selectedProjectId })
     },
     onSuccess: () => {
-      if (projectId) {
-        queryClient.invalidateQueries(['project', projectId])
-        queryClient.invalidateQueries(['project-jobs', projectId])
-      } else if (selectedProjectId) {
-        queryClient.invalidateQueries(['project', selectedProjectId])
-        queryClient.invalidateQueries(['project-jobs', selectedProjectId])
+      // TanStack Query v5: invalidateQueries requires { queryKey } object.
+      // The old v3-style array argument was a silent no-op, which is why
+      // the project detail page never refreshed when a job was added.
+      const linkedProjectId = projectId || selectedProjectId
+      if (linkedProjectId) {
+        queryClient.invalidateQueries({ queryKey: ['project', linkedProjectId] })
+        queryClient.invalidateQueries({ queryKey: ['project-jobs', linkedProjectId] })
+        queryClient.invalidateQueries({ queryKey: ['project-stats', linkedProjectId] })
+        queryClient.invalidateQueries({ queryKey: ['project-candidates', linkedProjectId] })
       }
-      queryClient.invalidateQueries(['jobs'])
-      queryClient.invalidateQueries(['projects'])
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       toast.success('Job created successfully')
       onClose()
       resetForm()

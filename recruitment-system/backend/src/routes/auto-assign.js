@@ -367,8 +367,23 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
         const { jobId } = req.params;
         const { status } = req.query;
 
+        // Look up the job FIRST. If it doesn't exist we want a clean 404
+        // before any complex JOINs. Previous order (candidates first, job
+        // second) meant a typo in a CV-files column would 500-then-look-like-
+        // "job not found", which is exactly the bug we're fixing here.
+        const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+        if (jobResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Job not found' });
+        }
+        const job = jobResult.rows[0];
+
+        // cv_files canonical columns are file_url + is_primary (per
+        // schema.sql and the chatbot-intake writer). The old query used
+        // storage_url / is_latest, which don't exist on cv_files in any
+        // deployed schema — that threw a SQL error and the frontend
+        // surfaced it as "Job Not Found". Fixed by using the real columns.
         let query = `
-            SELECT 
+            SELECT
                 a.id as application_id,
                 a.status as application_status,
                 a.match_score,
@@ -387,11 +402,17 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                 c.metadata,
                 c.notes as candidate_notes,
                 c.preferred_language,
-                cv.storage_url as cv_url,
+                cv.file_url as cv_url,
                 cv.file_name as cv_filename
             FROM applications a
             JOIN candidates c ON a.candidate_id = c.id
-            LEFT JOIN cv_files cv ON c.id = cv.candidate_id AND cv.is_latest = true
+            LEFT JOIN LATERAL (
+                SELECT file_url, file_name
+                FROM cv_files
+                WHERE candidate_id = c.id
+                ORDER BY is_primary DESC NULLS LAST, uploaded_at DESC
+                LIMIT 1
+            ) cv ON true
             WHERE a.job_id = $1
         `;
 
@@ -405,15 +426,6 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
         query += ` ORDER BY a.match_score DESC, a.applied_at DESC`;
 
         const result = await pool.query(query, params);
-
-        // Get job details
-        const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
-
-        if (jobResult.rows.length === 0) {
-            return res.status(404).json({ error: 'Job not found' });
-        }
-
-        const job = jobResult.rows[0];
 
         // Enhance each candidate with recalculated match if needed
         const candidates = result.rows.map(row => {
@@ -483,9 +495,15 @@ router.get('/pool', authenticate, async (req, res, next) => {
         const offset = (page - 1) * limit;
 
         const result = await pool.query(
-            `SELECT c.*, cv.storage_url as cv_url
+            `SELECT c.*, cv.file_url as cv_url
              FROM candidates c
-             LEFT JOIN cv_files cv ON c.id = cv.candidate_id AND cv.is_latest = true
+             LEFT JOIN LATERAL (
+                SELECT file_url
+                FROM cv_files
+                WHERE candidate_id = c.id
+                ORDER BY is_primary DESC NULLS LAST, uploaded_at DESC
+                LIMIT 1
+             ) cv ON true
              WHERE c.status = 'future_pool'
              ORDER BY c.updated_at DESC
              LIMIT $1 OFFSET $2`,
