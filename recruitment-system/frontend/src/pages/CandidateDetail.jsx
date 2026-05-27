@@ -9,6 +9,7 @@ import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
 import { useRole } from '../stores/authStore'
 import { format } from 'date-fns'
+import { getDocumentCategory, resolveDocumentUrl, PENDING_URL } from '../utils/documents'
 
 const LANGUAGE_LABELS = {
   en: 'English',
@@ -19,26 +20,6 @@ const LANGUAGE_LABELS = {
 }
 
 const INACTIVE_APPLICATION_STATUSES = new Set(['rejected', 'withdrawn', 'dropped', 'archived'])
-
-function getDocumentCategory(cv) {
-  if (cv?.document_category) return cv.document_category
-  try {
-    const parsed = typeof cv?.parsed_data === 'string' ? JSON.parse(cv.parsed_data) : cv?.parsed_data
-    return parsed?.__document_category === 'additional' ? 'additional' : 'cv'
-  } catch {
-    return 'cv'
-  }
-}
-
-const PENDING_URL = '__pending__'
-
-function resolveDocumentUrl(cv) {
-  const raw = cv?.resolved_file_url || cv?.file_url || ''
-  if (!raw) return null
-  if (raw.startsWith('chatbot://')) return PENDING_URL
-  if (raw.startsWith('http')) return raw
-  return `${import.meta.env.VITE_API_URL || ''}${raw}`
-}
 
 function parseCandidateMetadata(metadata) {
   if (!metadata) return {}

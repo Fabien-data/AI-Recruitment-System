@@ -52,6 +52,7 @@ import { Tabs } from '../components/ui/Tabs'
 import { EmptyState } from '../components/ui/EmptyState'
 import { FileSearch } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { getDocumentCategory } from '../utils/documents'
 
 const DEBOUNCE_MS = 300
 
@@ -78,15 +79,11 @@ function getCvSourceUrl(cv) {
   return cv?.resolved_file_url || cv?.file_url || ''
 }
 
-function getDocumentCategory(cv) {
-  if (cv?.document_category) return cv.document_category
-  try {
-    const parsed = typeof cv?.parsed_data === 'string' ? JSON.parse(cv.parsed_data) : cv?.parsed_data
-    return parsed?.__document_category === 'additional' ? 'additional' : 'cv'
-  } catch {
-    return 'cv'
-  }
-}
+// getDocumentCategory now lives in utils/documents.js (imported at top of
+// file) so Communications + CandidateDetail + this page all classify the
+// same way. resolveCvUrl above stays here because CVManager passes a raw
+// URL string (rather than a cv object) and many downstream call sites would
+// need to be touched to migrate.
 
 // Remark types for CV evaluation
 const REMARK_TYPES = [

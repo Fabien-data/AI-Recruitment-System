@@ -32,6 +32,7 @@ import { Skeleton } from '../components/ui/Skeleton'
 import { Modal } from '../components/ui/Modal'
 import { getCommunications, sendCommunication } from '../api'
 import { useAuthStore } from '../stores/authStore'
+import { ConversationDocumentsPanel } from '../components/communications/ConversationDocumentsPanel'
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
@@ -498,6 +499,12 @@ export default function Communications() {
           ? { ...c, last_message: msg.content, last_message_at: msg.sent_at, last_direction: msg.direction }
           : c
       ))
+      // Refresh the documents panel for this candidate when a new document
+      // upload arrives over WebSocket — otherwise the sidebar shows the
+      // pre-upload count until the user manually refreshes.
+      if (msg.message_type === 'document' || msg.message_type === 'image') {
+        queryClient.invalidateQueries({ queryKey: ['candidate', msg.candidate_id] })
+      }
     })
 
     socket.on('receive_message', (newMessage) => {
@@ -1382,6 +1389,11 @@ export default function Communications() {
                 <span className="text-xs">{formatDistanceToNow(new Date(selectedCandidate.last_message_at), { addSuffix: true })}</span>
               </div>
             )}
+          </div>
+
+          {/* Documents & CVs sent by this candidate */}
+          <div className="px-3 pb-3">
+            <ConversationDocumentsPanel candidateId={selectedId} />
           </div>
 
           {/* Quick actions */}
