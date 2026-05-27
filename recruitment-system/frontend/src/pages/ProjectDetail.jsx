@@ -1,10 +1,12 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { getProject, getProjectJobs, getProjectCandidates, getProjectStats, exportProjectCsv } from '../api'
-import { 
-  ArrowLeft, FolderKanban, MapPin, Calendar, Users, Briefcase, 
-  DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User, Download
+import { motion } from 'framer-motion'
+import { getProject, getProjectCandidates, getProjectStats, exportProjectCsv } from '../api'
+import {
+  ArrowLeft, FolderKanban, MapPin, Calendar, Users, Briefcase,
+  DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User, Download,
+  HeartPulse, UtensilsCrossed, CheckCircle2, Clock, Award, XCircle, TrendingUp, Building2,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
@@ -13,6 +15,7 @@ import { Button } from '../components/ui/Button'
 import { CreateJobModal } from '../components/CreateJobModal'
 import { format } from 'date-fns'
 import { useAuthStore } from '../stores/authStore'
+import { STATUS_LABELS, STATUS_COLORS } from '../constants/lifecycle'
 
 function ProjectCandidateList({ projectId, jobFilter }) {
   const params = jobFilter ? { job_id: jobFilter, limit: 8 } : { limit: 8 }
@@ -64,7 +67,9 @@ function ProjectCandidateList({ projectId, jobFilter }) {
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium leading-tight text-zinc-900 dark:text-zinc-50 break-words group-hover:text-primary-600">{c.name}</p>
-                  <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400 break-words">{c.application_status || c.status || 'applied'}</p>
+                  <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400 break-words">
+                    {STATUS_LABELS[c.application_status] || c.application_status || c.status || 'Applied'}
+                  </p>
                 </div>
                 {c.match_score != null && (
                   <span className="text-xs font-semibold text-primary-600 flex-shrink-0">
@@ -78,6 +83,122 @@ function ProjectCandidateList({ projectId, jobFilter }) {
       ))}
     </div>
   )
+}
+
+// Radial progress ring — animated via Framer Motion.
+function ProgressRing({ percent, size = 140, strokeWidth = 12 }) {
+  const radius = (size - strokeWidth) / 2
+  const circumference = 2 * Math.PI * radius
+  const safePct = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0))
+  const offset = circumference - (safePct / 100) * circumference
+  return (
+    <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          fill="none"
+          className="text-zinc-200 dark:text-zinc-800"
+        />
+        <motion.circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="url(#progressGrad)"
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          fill="none"
+          strokeDasharray={circumference}
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: offset }}
+          transition={{ duration: 0.9, ease: 'easeOut' }}
+        />
+        <defs>
+          <linearGradient id="progressGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#3b82f6" />
+            <stop offset="100%" stopColor="#10b981" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 tabular-nums">{safePct}%</span>
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">Filled</span>
+      </div>
+    </div>
+  )
+}
+
+// Icon-led stat card used in the overview grid.
+function OverviewStatCard({ icon: Icon, label, value, tone = 'blue' }) {
+  const tones = {
+    blue:    { ring: 'ring-blue-200/60 dark:ring-blue-900/60',       bg: 'bg-blue-50 dark:bg-blue-950/40',       text: 'text-blue-700 dark:text-blue-300',       value: 'text-blue-900 dark:text-blue-100' },
+    purple:  { ring: 'ring-purple-200/60 dark:ring-purple-900/60',   bg: 'bg-purple-50 dark:bg-purple-950/40',   text: 'text-purple-700 dark:text-purple-300',   value: 'text-purple-900 dark:text-purple-100' },
+    amber:   { ring: 'ring-amber-200/60 dark:ring-amber-900/60',     bg: 'bg-amber-50 dark:bg-amber-950/40',     text: 'text-amber-700 dark:text-amber-300',     value: 'text-amber-900 dark:text-amber-100' },
+    emerald: { ring: 'ring-emerald-200/60 dark:ring-emerald-900/60', bg: 'bg-emerald-50 dark:bg-emerald-950/40', text: 'text-emerald-700 dark:text-emerald-300', value: 'text-emerald-900 dark:text-emerald-100' },
+    indigo:  { ring: 'ring-indigo-200/60 dark:ring-indigo-900/60',   bg: 'bg-indigo-50 dark:bg-indigo-950/40',   text: 'text-indigo-700 dark:text-indigo-300',   value: 'text-indigo-900 dark:text-indigo-100' },
+  }
+  const t = tones[tone] || tones.blue
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className={`rounded-2xl ring-1 ring-inset ${t.ring} ${t.bg} p-4 flex items-center gap-3`}
+    >
+      <div className={`rounded-xl bg-white/70 dark:bg-zinc-900/40 p-2 ${t.text}`}>
+        <Icon size={20} />
+      </div>
+      <div className="min-w-0">
+        <p className={`text-[11px] font-semibold uppercase tracking-wider ${t.text}`}>{label}</p>
+        <p className={`text-2xl font-bold ${t.value} tabular-nums leading-tight`}>{value}</p>
+      </div>
+    </motion.div>
+  )
+}
+
+// Compact lifecycle pill (Applied / Certified / Pre Screened / ...).
+function LifecyclePill({ status, count }) {
+  return (
+    <div className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${STATUS_COLORS[status] || 'bg-zinc-50 text-zinc-700 border-zinc-200'}`}>
+      <span className="text-xs font-medium">{STATUS_LABELS[status] || status}</span>
+      <span className="text-sm font-bold tabular-nums">{count || 0}</span>
+    </div>
+  )
+}
+
+const BENEFIT_ICON_MAP = {
+  accommodation: Home,
+  transport: Bus,
+  meals: Utensils,
+  meals_included: UtensilsCrossed,
+  meals_not_included: UtensilsCrossed,
+  medical: HeartPulse,
+  visa: FileText,
+  ticket: Plane,
+}
+
+const BENEFIT_LABEL_MAP = {
+  accommodation: 'Accommodation',
+  transport: 'Transport',
+  meals: 'Meals',
+  meals_included: 'Meals in salary',
+  meals_not_included: 'Meals NOT in salary',
+  medical: 'Medical',
+  visa: 'Visa',
+  ticket: 'Air Ticket',
+}
+
+function parseJsonField(value, fallback) {
+  if (value == null) return fallback
+  if (typeof value === 'object') return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return fallback
+  }
 }
 
 export default function ProjectDetail() {
@@ -102,15 +223,14 @@ export default function ProjectDetail() {
     return (
       <div className="p-6 lg:p-8 animate-fade-in">
         <Skeleton className="h-8 w-48 mb-4" />
-        <Skeleton className="h-4 w-full mb-2" />
-        <Skeleton className="h-4 w-2/3 mb-8" />
+        <Skeleton className="h-32 w-full mb-6 rounded-2xl" />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
             <Card><Skeleton className="h-32" /></Card>
             <Card><Skeleton className="h-48" /></Card>
           </div>
           <div className="space-y-6">
-            <Card><Skeleton className="h-24" /></Card>
+            <Card><Skeleton className="h-48" /></Card>
             <Card><Skeleton className="h-32" /></Card>
           </div>
         </div>
@@ -131,75 +251,99 @@ export default function ProjectDetail() {
     )
   }
 
-  const countries = typeof project.countries === 'string' ? JSON.parse(project.countries) : project.countries
-  const benefits = typeof project.benefits === 'string' ? JSON.parse(project.benefits) : project.benefits
-  const salaryInfo = typeof project.salary_info === 'string' ? JSON.parse(project.salary_info) : project.salary_info
-  const contactInfo = typeof project.contact_info === 'string' ? JSON.parse(project.contact_info) : project.contact_info
-  
-  const benefitIcons = {
-    accommodation: Home,
-    transport: Bus,
-    meals: Utensils,
-    visa: FileText,
-    ticket: Plane
-  }
+  const countries = parseJsonField(project.countries, [])
+  const benefits = parseJsonField(project.benefits, {})
+  const salaryInfo = parseJsonField(project.salary_info, {})
+  const contactInfo = parseJsonField(project.contact_info, {})
 
-  const activeBenefits = Object.entries(benefits).filter(([_, value]) => value)
+  // Resolve industries — prefer the new array column, fall back to legacy text.
+  const industryArr = parseJsonField(project.industry_types, [])
+  const industries = Array.isArray(industryArr) && industryArr.length > 0
+    ? industryArr
+    : (project.industry_type ? [project.industry_type] : [])
+
+  const activeBenefits = Object.entries(benefits || {}).filter(([_, v]) => v)
   const stats = statsData || {}
-  const completionRate = stats.total_positions > 0 
-    ? Math.round((stats.filled_positions / stats.total_positions) * 100) 
+  const totalPositions = Number(stats.total_positions) || 0
+  const filledPositions = Number(stats.filled_positions) || 0
+  const completionRate = totalPositions > 0
+    ? Math.round((filledPositions / totalPositions) * 100)
     : 0
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
-      {/* Back Navigation */}
       <Link to="/projects" className="inline-flex items-center gap-2 text-primary-600 hover:text-primary-700 mb-6 font-medium">
         <ArrowLeft size={20} /> Back to Projects
       </Link>
 
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
-        <div>
-          <div className="mb-2 flex flex-wrap items-center gap-3">
-            <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 break-words">{project.title}</h1>
-            <Badge status={project.status} />
-            <Badge status={project.priority} />
+      {/* Hero header with gradient banner */}
+      <motion.div
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35 }}
+        className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-500 via-blue-500 to-emerald-500 p-6 sm:p-8 text-white mb-6 shadow-lg"
+      >
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.25),transparent_60%)] pointer-events-none" />
+        <div className="relative flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-3 mb-2">
+              <h1 className="text-3xl sm:text-4xl font-bold leading-tight break-words">{project.title}</h1>
+              <Badge status={project.status} className="bg-white/20 text-white border-white/30" />
+              <Badge status={project.priority} className="bg-white/20 text-white border-white/30" />
+            </div>
+            <p className="text-lg text-white/90 mb-3 inline-flex items-center gap-2">
+              <Building2 size={18} className="opacity-80" /> {project.client_name}
+            </p>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+              {industries.map((ind) => (
+                <span key={ind} className="inline-flex items-center gap-1 bg-white/20 text-white px-2.5 py-0.5 rounded-full ring-1 ring-white/30 text-xs font-medium">
+                  <FolderKanban size={12} />
+                  {ind}
+                </span>
+              ))}
+              {countries?.slice(0, 4).map((c) => (
+                <span key={c} className="inline-flex items-center gap-1 bg-white/15 text-white px-2.5 py-0.5 rounded-full text-xs font-medium">
+                  <MapPin size={12} />
+                  {c}
+                </span>
+              ))}
+              {countries?.length > 4 && (
+                <span className="text-xs text-white/80">+{countries.length - 4} more</span>
+              )}
+            </div>
           </div>
-          <p className="text-xl text-zinc-600 dark:text-zinc-400 mb-3">{project.client_name}</p>
-          <div className="flex flex-wrap items-center gap-4 text-zinc-600 dark:text-zinc-400">
-            <span className="inline-flex items-center gap-1">
-              <FolderKanban size={18} /> {project.industry_type}
-            </span>
-            {project.interview_date && (
-              <span className="inline-flex items-center gap-1">
-                <Calendar size={18} /> Interview: {format(new Date(project.interview_date), 'MMM d, yyyy')}
-              </span>
-            )}
-            <span className="inline-flex items-center gap-1">
-              <Users size={18} /> {project.team?.length || 0} Team Members
-            </span>
+          <div className="flex sm:items-end items-start gap-2">
+            <ProgressRing percent={completionRate} size={120} strokeWidth={10} />
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="inline-flex items-center gap-1 bg-white/15 text-white hover:bg-white/25 border-white/20"
+                onClick={() => exportProjectCsv(id)}
+              >
+                <Download size={15} /> CSV
+              </Button>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            className="inline-flex items-center gap-1"
-            onClick={() => exportProjectCsv(id)}
-          >
-            <Download size={15} /> Export CSV
-          </Button>
-        </div>
+      </motion.div>
+
+      {/* Top stats grid */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+        <OverviewStatCard icon={Briefcase} label="Total Jobs" value={stats.total_jobs || 0} tone="blue" />
+        <OverviewStatCard icon={Users} label="Candidates" value={stats.unique_candidates || 0} tone="purple" />
+        <OverviewStatCard icon={FileText} label="Applications" value={stats.total_applications || 0} tone="amber" />
+        <OverviewStatCard icon={Calendar} label="Interviews" value={stats.interviews_count || 0} tone="indigo" />
+        <OverviewStatCard icon={Award} label="Hired" value={stats.placed_count || stats.selected_count || 0} tone="emerald" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Content */}
+        {/* Main column */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Overview Card */}
+          {/* Project Info */}
           <Card>
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">Project Overview</h2>
-            
-            {/* Countries */}
+
             <div className="mb-4">
               <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Target Countries</h3>
               <div className="flex flex-wrap gap-2">
@@ -212,7 +356,6 @@ export default function ProjectDetail() {
               </div>
             </div>
 
-            {/* Description */}
             {project.description && (
               <div className="mb-4">
                 <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Description</h3>
@@ -220,7 +363,6 @@ export default function ProjectDetail() {
               </div>
             )}
 
-            {/* Timeline */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
               {project.start_date && (
                 <div>
@@ -242,22 +384,22 @@ export default function ProjectDetail() {
               )}
             </div>
 
-            {/* Benefits */}
             {activeBenefits.length > 0 && (
               <div className="mb-4">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-3">Benefits Included</h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                   {activeBenefits.map(([benefit]) => {
-                    const Icon = benefitIcons[benefit]
+                    const Icon = BENEFIT_ICON_MAP[benefit] || FileText
+                    const label = BENEFIT_LABEL_MAP[benefit] || benefit.replace(/_/g, ' ')
                     return (
                       <div
                         key={benefit}
                         className="flex items-center gap-2.5 rounded-xl bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/40 dark:to-zinc-900 ring-1 ring-inset ring-emerald-100 dark:ring-emerald-900/60 px-3 py-2.5"
                       >
                         <div className="rounded-lg bg-emerald-100 dark:bg-emerald-900/60 p-1.5 text-emerald-700 dark:text-emerald-200 shadow-sm">
-                          {Icon && <Icon size={14} aria-hidden />}
+                          <Icon size={14} aria-hidden />
                         </div>
-                        <span className="capitalize text-sm font-medium text-zinc-800 dark:text-zinc-200">{benefit}</span>
+                        <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200 capitalize">{label}</span>
                       </div>
                     )
                   })}
@@ -265,7 +407,6 @@ export default function ProjectDetail() {
               </div>
             )}
 
-            {/* Salary */}
             {(salaryInfo?.min || salaryInfo?.max) && (
               <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg">
                 <DollarSign size={20} className="text-blue-600" />
@@ -276,7 +417,6 @@ export default function ProjectDetail() {
               </div>
             )}
 
-            {/* Contact Information */}
             {(contactInfo?.whatsapp || contactInfo?.email || contactInfo?.address) && (
               <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                 <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">Contact Information</h3>
@@ -304,7 +444,7 @@ export default function ProjectDetail() {
             )}
           </Card>
 
-          {/* Jobs Card */}
+          {/* Jobs Panel — with mini progress bars per job */}
           <Card>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Jobs in Project</h2>
@@ -320,36 +460,46 @@ export default function ProjectDetail() {
                     Add Job
                   </Button>
                 )}
-                <Link to="/jobs" className="text-primary-600 hover:text-primary-700 text-sm font-medium">
+                <Link to={`/jobs?project_id=${id}`} className="text-primary-600 hover:text-primary-700 text-sm font-medium">
                   View All Jobs
                 </Link>
               </div>
             </div>
             {project.jobs && project.jobs.length > 0 ? (
               <div className="space-y-3">
-                {project.jobs.map((job) => (
-                  <Link
-                    key={job.id}
-                    to={`/jobs/${job.id}`}
-                    className="block rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
-                  >
-                    <div className="mb-2 flex items-start justify-between gap-3">
-                      <h3 className="font-medium text-zinc-900 dark:text-zinc-50">{job.title}</h3>
-                      <Badge status={job.status} />
-                    </div>
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-zinc-600 dark:text-zinc-400">
-                      <span className="inline-flex items-center gap-1">
-                        <Briefcase size={14} /> {job.category}
-                      </span>
-                      <span>
-                        {job.candidate_count || 0} candidates
-                      </span>
-                      <span>
-                        {job.positions_filled || 0} / {job.positions_available || 1} filled
-                      </span>
-                    </div>
-                  </Link>
-                ))}
+                {project.jobs.map((job) => {
+                  const filled = Number(job.positions_filled) || 0
+                  const total = Number(job.positions_available) || 1
+                  const pct = Math.min(100, Math.round((filled / Math.max(1, total)) * 100))
+                  const bar = pct >= 100 ? 'from-emerald-500 to-emerald-600' : pct >= 60 ? 'from-amber-400 to-amber-500' : 'from-primary-500 to-primary-600'
+                  return (
+                    <Link
+                      key={job.id}
+                      to={`/jobs/${job.id}`}
+                      className="block rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 transition-all hover:shadow-sm hover:border-primary-200 dark:hover:border-primary-900/40"
+                    >
+                      <div className="mb-2 flex items-start justify-between gap-3">
+                        <h3 className="font-medium text-zinc-900 dark:text-zinc-50">{job.title}</h3>
+                        <Badge status={job.status} />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-zinc-600 dark:text-zinc-400 mb-2">
+                        <span className="inline-flex items-center gap-1">
+                          <Briefcase size={14} /> {job.category}
+                        </span>
+                        <span>{job.candidate_count || 0} candidates</span>
+                        <span className="ml-auto text-xs tabular-nums font-semibold text-zinc-700 dark:text-zinc-200">
+                          {filled} / {total} filled
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                        <div
+                          className={`h-full rounded-full bg-gradient-to-r ${bar} transition-all duration-500`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </Link>
+                  )
+                })}
               </div>
             ) : (
               <div className="text-center py-8">
@@ -369,7 +519,7 @@ export default function ProjectDetail() {
             )}
           </Card>
 
-          {/* Candidates Card */}
+          {/* Candidates */}
           <Card>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Candidates</h2>
@@ -394,57 +544,48 @@ export default function ProjectDetail() {
                 </Link>
               </div>
             </div>
-
-            {/* Pipeline stats */}
-            {stats.total_applications > 0 && (
-              <div className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
-                <PipelineStat tone="blue" label="Total" value={stats.total_applications} />
-                <PipelineStat tone="amber" label="Screening" value={stats.screening_count || 0} />
-                <PipelineStat tone="purple" label="Interview" value={stats.interview_count || 0} />
-                <PipelineStat tone="emerald" label="Selected" value={stats.selected_count || 0} />
-              </div>
-            )}
-
-            {/* Candidate cards */}
             <ProjectCandidateList projectId={id} jobFilter={candidatesJobFilter} />
           </Card>
         </div>
 
         {/* Sidebar */}
         <div className="space-y-6">
-          {/* Stats Card */}
-          <Card accent="blue">
-            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">Progress</h2>
-            <div className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between text-sm mb-2">
-                  <span className="text-zinc-600 dark:text-zinc-400">Positions Filled</span>
-                  <span className="font-semibold text-zinc-900 dark:text-zinc-50">{completionRate}%</span>
-                </div>
-                <div className="w-full bg-zinc-200/70 dark:bg-zinc-800 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-primary-500 to-primary-600 transition-all duration-500"
-                    style={{ width: `${completionRate}%` }}
-                  />
-                </div>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                  {stats.filled_positions || 0} of {stats.total_positions || 0} positions filled
-                </p>
+          {/* Pipeline Status — clickable, filters /applications by status */}
+          <Card>
+            <div className="flex items-center gap-2 mb-3">
+              <TrendingUp size={18} className="text-primary-600" />
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Pipeline Status</h2>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              {[
+                { status: 'applied',             count: stats.applied_count },
+                { status: 'certified',           count: stats.certified_count },
+                { status: 'pre_screened',        count: stats.pre_screened_count },
+                { status: 'interview_scheduled', count: stats.interview_count },
+                { status: 'selected',            count: stats.selected_count },
+                { status: 'rejected',            count: stats.rejected_count },
+              ].map(({ status, count }) => (
+                <Link
+                  key={status}
+                  to={`/applications?project_id=${id}&status=${status}`}
+                  className="block"
+                >
+                  <LifecyclePill status={status} count={count} />
+                </Link>
+              ))}
+            </div>
+            <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-600 dark:text-zinc-400">Positions filled</span>
+                <span className="font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                  {filledPositions} / {totalPositions}
+                </span>
               </div>
-
-              <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Total Jobs</span>
-                  <span className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{stats.total_jobs || 0}</span>
-                </div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Total Candidates</span>
-                  <span className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{stats.unique_candidates || 0}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Applications</span>
-                  <span className="text-lg font-bold text-zinc-900 dark:text-zinc-50">{stats.total_applications || 0}</span>
-                </div>
+              <div className="mt-2 w-full bg-zinc-200/70 dark:bg-zinc-800 rounded-full h-2 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary-500 to-emerald-500 transition-all duration-700"
+                  style={{ width: `${completionRate}%` }}
+                />
               </div>
             </div>
           </Card>
@@ -475,7 +616,7 @@ export default function ProjectDetail() {
             )}
           </Card>
 
-          {/* Quick Actions Card */}
+          {/* Quick Actions */}
           <Card>
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3">Quick Actions</h2>
             <div className="space-y-2">
@@ -491,6 +632,12 @@ export default function ProjectDetail() {
               >
                 View Applications
               </Link>
+              <Link
+                to={`/interviews?project_id=${id}`}
+                className="block w-full text-center px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg font-medium text-sm transition-colors"
+              >
+                View Interviews
+              </Link>
             </div>
           </Card>
         </div>
@@ -502,23 +649,6 @@ export default function ProjectDetail() {
         isOpen={isJobModalOpen}
         onClose={() => setIsJobModalOpen(false)}
       />
-    </div>
-  )
-}
-
-const pipelineTones = {
-  blue:    { wrap: 'section-grad-blue ring-blue-200/60 dark:ring-blue-900/60',       label: 'text-blue-700 dark:text-blue-300',       value: 'text-blue-900 dark:text-blue-100' },
-  amber:   { wrap: 'section-grad-amber ring-amber-200/60 dark:ring-amber-900/60',    label: 'text-amber-700 dark:text-amber-300',     value: 'text-amber-900 dark:text-amber-100' },
-  purple:  { wrap: 'section-grad-purple ring-purple-200/60 dark:ring-purple-900/60', label: 'text-purple-700 dark:text-purple-300',   value: 'text-purple-900 dark:text-purple-100' },
-  emerald: { wrap: 'section-grad-emerald ring-emerald-200/60 dark:ring-emerald-900/60', label: 'text-emerald-700 dark:text-emerald-300', value: 'text-emerald-900 dark:text-emerald-100' },
-}
-
-function PipelineStat({ tone = 'blue', label, value }) {
-  const t = pipelineTones[tone] || pipelineTones.blue
-  return (
-    <div className={`rounded-xl ring-1 ring-inset p-3 text-center ${t.wrap}`}>
-      <p className={`text-[10px] font-semibold uppercase tracking-wider ${t.label}`}>{label}</p>
-      <p className={`text-xl font-bold mt-0.5 ${t.value}`}>{value}</p>
     </div>
   )
 }

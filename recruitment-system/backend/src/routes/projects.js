@@ -756,46 +756,77 @@ router.delete('/:id/team/:userId', authenticate, authorize('admin', 'sourcing_de
 });
 
 /**
- * Get project statistics
+ * Get project statistics — full lifecycle breakdown.
+ * One query, aggregates over all jobs in the project. Returns counts for
+ * every status the UI cares about (applied / certified / pre_screened /
+ * scheduled / selected / rejected) so the Project Detail progress panel
+ * can render real-time numbers without per-status round-trips.
  */
 router.get('/:id/stats', authenticate, async (req, res, next) => {
     try {
         const { id } = req.params;
 
-        // Overall stats
         const statsQuery = isMySQL
-            ? `SELECT 
+            ? `SELECT
                    COUNT(DISTINCT j.id) as total_jobs,
-                   SUM(j.positions_available) as total_positions,
-                   SUM(j.positions_filled) as filled_positions,
+                   COALESCE(SUM(j.positions_available), 0) as total_positions,
+                   COALESCE(SUM(j.positions_filled), 0) as filled_positions,
                    COUNT(DISTINCT a.id) as total_applications,
                    COUNT(DISTINCT CASE WHEN a.status = 'applied' THEN a.id END) as applied_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as screening_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'pre_screened' THEN a.id END) as pre_screened_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interviewed' THEN a.id END) as interviewed_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'placed' THEN a.id END) as placed_count,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
                WHERE j.project_id = ?`
-            : `SELECT 
+            : `SELECT
                    COUNT(DISTINCT j.id) as total_jobs,
-                   SUM(j.positions_available) as total_positions,
-                   SUM(j.positions_filled) as filled_positions,
+                   COALESCE(SUM(j.positions_available), 0) as total_positions,
+                   COALESCE(SUM(j.positions_filled), 0) as filled_positions,
                    COUNT(DISTINCT a.id) as total_applications,
                    COUNT(DISTINCT CASE WHEN a.status = 'applied' THEN a.id END) as applied_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as screening_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'pre_screened' THEN a.id END) as pre_screened_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interviewed' THEN a.id END) as interviewed_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'placed' THEN a.id END) as placed_count,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
                WHERE j.project_id = $1`;
 
-        const statsResult = await query(statsQuery, [id]);
+        // Interview schedules for this project (separate count, not via app.status)
+        const interviewsCountQuery = isMySQL
+            ? `SELECT COUNT(*) AS count FROM interview_schedules s
+               JOIN applications a ON s.application_id = a.id
+               JOIN jobs j ON a.job_id = j.id
+               WHERE j.project_id = ?`
+            : `SELECT COUNT(*)::int AS count FROM interview_schedules s
+               JOIN applications a ON s.application_id = a.id
+               JOIN jobs j ON a.job_id = j.id
+               WHERE j.project_id = $1`;
 
-        res.json(statsResult.rows[0]);
+        const [statsResult, interviewsResult] = await Promise.all([
+            query(statsQuery, [id]),
+            query(interviewsCountQuery, [id]).catch(() => ({ rows: [{ count: 0 }] })),
+        ]);
+
+        const row = statsResult.rows[0] || {};
+        const interviewsCount = parseInt(interviewsResult.rows[0]?.count, 10) || 0;
+
+        res.json({
+            ...row,
+            interviews_count: interviewsCount,
+        });
     } catch (error) {
         next(error);
     }
