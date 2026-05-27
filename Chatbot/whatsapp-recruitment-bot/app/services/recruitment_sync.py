@@ -29,10 +29,18 @@ class RecruitmentSyncService:
         extracted = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
         agent_state = candidate.agent_state if isinstance(candidate.agent_state, dict) else {}
         collected = agent_state.get("collected_data") if isinstance(agent_state.get("collected_data"), dict) else {}
+        ad_context = agent_state.get("ad_context") if isinstance(agent_state.get("ad_context"), dict) else {}
+        # Ad-flow candidates: the job they clicked on is stashed in
+        # state["ad_context"]["job_title"], not in extracted/collected. Without
+        # this fallback, _resolve_job_interest returns None and push() bails
+        # out with "Sync deferred — job_role not yet collected" — exactly the
+        # path that left CV Manager rows empty even though the candidate
+        # finished the conversation and saw "application submitted".
         return (
             extracted.get("job_interest")
             or extracted.get("job_role")
             or collected.get("job_role")
+            or ad_context.get("job_title")
         )
 
     def _build_payload(self, candidate) -> Dict[str, Any]:
@@ -231,14 +239,18 @@ class RecruitmentSyncService:
             return False
 
         # Don't sync until we know the candidate's job interest — a "General"
-        # placeholder makes job matching useless in the CRM. Exception: when
-        # the chatbot has opted the lead into the general pool (no match found),
-        # we DO want to push so the lead is captured with their remarks.
+        # placeholder makes job matching useless in the CRM. Exceptions:
+        # - chatbot opted the lead into general_pool (capture w/ remarks)
+        # - candidate came via a Meta ad with a known job_id → backend can
+        #   create the application directly from job_id regardless of free-
+        #   text interest.
         job_interest = self._resolve_job_interest(candidate)
         agent_state = candidate.agent_state if isinstance(candidate.agent_state, dict) else {}
         collected = agent_state.get("collected_data") if isinstance(agent_state.get("collected_data"), dict) else {}
+        extracted = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
         is_general_pool = bool(collected.get("general_pool_optin"))
-        if (not job_interest or job_interest.strip().lower() in ("general", "")) and not is_general_pool:
+        has_ad_job = bool(extracted.get("ad_job_id") or agent_state.get("active_job_id"))
+        if (not job_interest or job_interest.strip().lower() in ("general", "")) and not is_general_pool and not has_ad_job:
             logger.info(
                 "Sync deferred for %s — job_role not yet collected",
                 candidate.phone_number,
