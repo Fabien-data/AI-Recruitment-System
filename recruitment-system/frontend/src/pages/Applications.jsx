@@ -5,6 +5,7 @@ import { getApplications, getJobs, getProjects } from '../api'
 import {
   CalendarDays, FileText, FolderKanban, Briefcase, ListFilter, Plus,
   MoreHorizontal, Eye, Pencil, ArrowRightLeft, Trash2, User,
+  ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -108,6 +109,37 @@ export default function Applications() {
       ? applications
       : []
   const pagination = applications?.pagination || null
+
+  // Group applications by project so each project appears as its own
+  // section. Applications whose job has no project (legacy data) fall into
+  // a single "No Project" bucket at the bottom. Order: projects with the
+  // most recent application first, so the active work is at the top.
+  const groupedByProject = useMemo(() => {
+    const groups = new Map()
+    for (const app of list) {
+      const key = app.project_id || '__no_project__'
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          project_id: app.project_id || null,
+          project_title: app.project_title || (app.project_id ? 'Project' : 'No Project'),
+          project_client: app.project_client || null,
+          applications: [],
+          latest_applied_at: 0,
+        })
+      }
+      const g = groups.get(key)
+      g.applications.push(app)
+      const t = app.applied_at ? new Date(app.applied_at).getTime() : 0
+      if (t > g.latest_applied_at) g.latest_applied_at = t
+    }
+    return [...groups.values()].sort((a, b) => {
+      // "No Project" always last; otherwise newest activity first.
+      if (a.key === '__no_project__') return 1
+      if (b.key === '__no_project__') return -1
+      return b.latest_applied_at - a.latest_applied_at
+    })
+  }, [list])
 
   const syncSearchParams = ({ nextPage = 1 } = {}) => {
     const next = new URLSearchParams()
@@ -229,12 +261,14 @@ export default function Applications() {
         </div>
       </Card>
 
-      <Card className="overflow-hidden p-0">
-        {isLoading ? (
+      {isLoading ? (
+        <Card className="overflow-hidden p-0">
           <div className="p-5">
             <TableSkeleton rows={6} cols={6} />
           </div>
-        ) : list.length === 0 ? (
+        </Card>
+      ) : list.length === 0 ? (
+        <Card className="overflow-hidden p-0">
           <EmptyState
             icon={FileText}
             tone="blue"
@@ -247,20 +281,106 @@ export default function Applications() {
               </Button>
             }
           />
-        ) : isTable ? (
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {groupedByProject.map((group) => (
+            <ProjectSection
+              key={group.key}
+              group={group}
+              isTable={isTable}
+              isAdmin={isAdmin}
+              statusAccent={statusAccent}
+              onEdit={setEditTarget}
+              onTransfer={setTransferTarget}
+              onDelete={setDeleteTarget}
+            />
+          ))}
+          {pagination && (
+            <Card className="overflow-hidden p-0">
+              <Pagination
+                page={pagination.page}
+                totalPages={pagination.totalPages}
+                total={pagination.total}
+                pageSize={pagination.limit || DEFAULT_LIMIT}
+                onChange={handlePageChange}
+              />
+            </Card>
+          )}
+        </div>
+      )}
+
+      <CreateApplicationModal open={createOpen} onClose={() => setCreateOpen(false)} />
+      <EditApplicationModal open={!!editTarget} application={editTarget} onClose={() => setEditTarget(null)} />
+      <TransferApplicationModal open={!!transferTarget} application={transferTarget} onClose={() => setTransferTarget(null)} />
+      <DeleteApplicationConfirm open={!!deleteTarget} application={deleteTarget} onClose={() => setDeleteTarget(null)} />
+    </div>
+  )
+}
+
+// ── ProjectSection ───────────────────────────────────────────────────────
+// One section per project. Header shows project name + link + application
+// count; body renders either the table or the card grid for just this
+// project's applications. Collapsible (default expanded).
+function ProjectSection({ group, isTable, isAdmin, statusAccent, onEdit, onTransfer, onDelete }) {
+  const [expanded, setExpanded] = useState(true)
+  const isUnassigned = group.key === '__no_project__'
+
+  return (
+    <Card className="overflow-hidden p-0">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 px-4 sm:px-5 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-gradient-to-r from-indigo-50/60 to-transparent dark:from-indigo-950/30 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors text-left"
+        aria-expanded={expanded}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          {expanded ? (
+            <ChevronDown size={18} className="text-indigo-600 dark:text-indigo-300 flex-shrink-0" />
+          ) : (
+            <ChevronRight size={18} className="text-indigo-600 dark:text-indigo-300 flex-shrink-0" />
+          )}
+          <div className="rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-200 p-1.5 flex-shrink-0">
+            <FolderKanban size={16} />
+          </div>
+          <div className="min-w-0">
+            {isUnassigned ? (
+              <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 truncate">
+                {group.project_title}
+              </h3>
+            ) : (
+              <Link
+                to={`/projects/${group.project_id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="text-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:underline truncate inline-block"
+              >
+                {group.project_title}
+              </Link>
+            )}
+            {group.project_client && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{group.project_client}</p>
+            )}
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-2.5 py-0.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex-shrink-0">
+          {group.applications.length} application{group.applications.length === 1 ? '' : 's'}
+        </span>
+      </button>
+
+      {expanded && (
+        isTable ? (
           <Table>
             <Table.Head>
               <Table.Tr hover={false}>
                 <Table.Th icon={User}>Candidate</Table.Th>
                 <Table.Th icon={Briefcase}>Job</Table.Th>
-                <Table.Th icon={FolderKanban}>Project</Table.Th>
                 <Table.Th>Status</Table.Th>
                 <Table.Th icon={CalendarDays}>Applied</Table.Th>
                 <Table.Th align="right">Actions</Table.Th>
               </Table.Tr>
             </Table.Head>
             <Table.Body>
-              {list.map((app) => {
+              {group.applications.map((app) => {
                 const accent = statusAccent[app.status] || 'zinc'
                 return (
                   <Table.Tr key={app.id} accent={accent}>
@@ -277,16 +397,8 @@ export default function Applications() {
                     <Table.Td>
                       <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
                         <Briefcase size={13} />
-                        <span className="truncate max-w-[160px]">{app.job_title || 'Job'}</span>
+                        <span className="truncate max-w-[180px]">{app.job_title || 'Job'}</span>
                       </Link>
-                    </Table.Td>
-                    <Table.Td>
-                      {app.project_title ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-900/60">
-                          <FolderKanban size={10} />
-                          {app.project_title}
-                        </span>
-                      ) : <span className="text-zinc-400 text-sm">—</span>}
                     </Table.Td>
                     <Table.Td><Badge status={app.status} /></Table.Td>
                     <Table.Td className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
@@ -296,9 +408,9 @@ export default function Applications() {
                       <RowActions
                         app={app}
                         isAdmin={isAdmin}
-                        onEdit={() => setEditTarget(app)}
-                        onTransfer={() => setTransferTarget(app)}
-                        onDelete={() => setDeleteTarget(app)}
+                        onEdit={() => onEdit(app)}
+                        onTransfer={() => onTransfer(app)}
+                        onDelete={() => onDelete(app)}
                       />
                     </Table.Td>
                   </Table.Tr>
@@ -308,7 +420,7 @@ export default function Applications() {
           </Table>
         ) : (
           <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {list.map((app) => {
+            {group.applications.map((app) => {
               const accent = statusAccent[app.status] || 'zinc'
               const stripeClass = {
                 blue: 'before:bg-blue-500',
@@ -321,10 +433,9 @@ export default function Applications() {
                 zinc: 'before:bg-zinc-400',
               }[accent]
               return (
-                <Card
+                <div
                   key={app.id}
-                  className={`relative p-4 border border-zinc-100 dark:border-zinc-800 before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r ${stripeClass}`}
-                  hover
+                  className={`relative p-4 rounded-2xl border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900 transition-shadow hover:shadow-md before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r ${stripeClass}`}
                 >
                   <div className="flex items-start gap-3 pl-2">
                     <Link
@@ -344,17 +455,11 @@ export default function Applications() {
                     <Badge status={app.status} />
                   </div>
 
-                  <div className="mt-3 space-y-1 text-sm">
+                  <div className="mt-3 text-sm">
                     <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
                       <Briefcase size={13} />
                       <span className="truncate">{app.job_title || 'Job'}</span>
                     </Link>
-                    {app.project_title && (
-                      <p className="inline-flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400 ml-2">
-                        <FolderKanban size={11} />
-                        <span className="truncate">{app.project_title}</span>
-                      </p>
-                    )}
                   </div>
 
                   <div className="mt-3 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-500">
@@ -362,33 +467,18 @@ export default function Applications() {
                     <RowActions
                       app={app}
                       isAdmin={isAdmin}
-                      onEdit={() => setEditTarget(app)}
-                      onTransfer={() => setTransferTarget(app)}
-                      onDelete={() => setDeleteTarget(app)}
+                      onEdit={() => onEdit(app)}
+                      onTransfer={() => onTransfer(app)}
+                      onDelete={() => onDelete(app)}
                     />
                   </div>
-                </Card>
+                </div>
               )
             })}
           </div>
-        )}
-
-        {pagination && (
-          <Pagination
-            page={pagination.page}
-            totalPages={pagination.totalPages}
-            total={pagination.total}
-            pageSize={pagination.limit || DEFAULT_LIMIT}
-            onChange={handlePageChange}
-          />
-        )}
-      </Card>
-
-      <CreateApplicationModal open={createOpen} onClose={() => setCreateOpen(false)} />
-      <EditApplicationModal open={!!editTarget} application={editTarget} onClose={() => setEditTarget(null)} />
-      <TransferApplicationModal open={!!transferTarget} application={transferTarget} onClose={() => setTransferTarget(null)} />
-      <DeleteApplicationConfirm open={!!deleteTarget} application={deleteTarget} onClose={() => setDeleteTarget(null)} />
-    </div>
+        )
+      )}
+    </Card>
   )
 }
 
