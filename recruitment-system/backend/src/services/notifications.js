@@ -61,6 +61,55 @@ Dewan Recruitment Team`
 Dewan Recruitment Team`
         }
     },
+    pre_screened_passed: {
+        en: {
+            subject: 'Pre-Screening Passed — Interview Next',
+            message: `🎉 Dear {name},
+
+Great news! You have successfully passed our pre-screening for the position of {job_title}.
+
+📋 What happens next:
+1. Our team will schedule a formal interview with the employer
+2. You will receive a separate WhatsApp message with the date, time, and location
+3. Keep your documents ready (ID, certificates, work experience letters)
+4. Make sure your phone is reachable so we can confirm
+
+Stay tuned and feel free to reply to this message if you have any questions.
+
+Best regards,
+Dewan Recruitment Team`
+        },
+        si: {
+            subject: 'පූර්ව පරීක්ෂණය සමත් — සම්මුඛ පරීක්ෂණය ඊළඟට',
+            message: `🎉 ආදරණීය {name},
+
+සුභ ආරංචියක්! {job_title} තනතුර සඳහා අපගේ පූර්ව පරීක්ෂණය ඔබ සාර්ථකව සමත් වී ඇත.
+
+📋 ඊළඟ පියවර:
+1. රැකියා හිමියා සමඟ විධිමත් සම්මුඛ පරීක්ෂණයක් අපගේ කණ්ඩායම සැලසුම් කරනු ඇත
+2. දිනය, වේලාව සහ ස්ථානය සහිත වෙනම WhatsApp පණිවිඩයක් ඔබට ලැබෙනු ඇත
+3. ලේඛන සූදානම්ව තබා ගන්න (හැඳුනුම්පත, සහතික, රැකියා අත්දැකීම් ලිපි)
+4. දුරකථනය ළඟා විය හැකි බව සහතික කරන්න
+
+සුබ පැතුම්,
+Dewan Recruitment Team`
+        },
+        ta: {
+            subject: 'முன்-திரையிடல் தேர்ச்சி — அடுத்தது நேர்காணல்',
+            message: `🎉 அன்புள்ள {name},
+
+சிறந்த செய்தி! {job_title} பதவிக்கான எங்கள் முன்-திரையிடலை நீங்கள் வெற்றிகரமாக கடந்துள்ளீர்கள்.
+
+📋 அடுத்த படிகள்:
+1. வேலை வழங்குபவருடன் முறையான நேர்காணலை எங்கள் குழு திட்டமிடும்
+2. தேதி, நேரம், இடம் கொண்ட தனி WhatsApp செய்தி உங்களுக்கு வரும்
+3. ஆவணங்களை தயாராக வைக்கவும் (அடையாள அட்டை, சான்றிதழ்கள், அனுபவ கடிதங்கள்)
+4. தொலைபேசி அழைப்பில் இருப்பதை உறுதிசெய்யவும்
+
+வாழ்த்துக்கள்,
+Dewan Recruitment Team`
+        }
+    },
     prescreening_certified: {
         en: {
             subject: 'Congratulations! Pre-Screening Invitation - {job_title}',
@@ -588,6 +637,20 @@ async function sendInterviewReminderNotification(candidateId, jobTitle, intervie
 /**
  * Send pre-screening certification notification (with date/time/location)
  */
+/**
+ * Send "you passed pre-screening" notification — fired when the recruiter
+ * moves an application from certified → pre_screened. The interview
+ * scheduled message is a separate event (sent when interview is created).
+ */
+async function sendPreScreenedPassedNotification(candidateId, jobTitle, channels = ['whatsapp']) {
+    return sendNotification({
+        candidateId,
+        type: 'pre_screened_passed',
+        data: { job_title: jobTitle },
+        channels,
+    });
+}
+
 async function sendPreScreeningNotification(candidateId, jobTitle, prescreeningDatetime, prescreeningLocation, channels = ['whatsapp']) {
     const formattedDateTime = new Date(prescreeningDatetime).toLocaleString('en-US', {
         weekday: 'long',
@@ -872,6 +935,7 @@ async function processNotificationQueue() {
 module.exports = {
     sendNotification,
     sendCertificationNotification,
+    sendPreScreenedPassedNotification,
     sendPreScreeningNotification,
     sendInterviewNotification,
     sendInterviewReminderNotification,

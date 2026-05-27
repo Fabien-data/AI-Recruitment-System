@@ -167,22 +167,56 @@ router.post('/', authenticate, async (req, res, next) => {
 /**
  * Update application status  auto-sends WhatsApp/SMS/email notifications
  */
+// Lifecycle transition map. Mirrors frontend constants/lifecycle.js so the
+// backend can reject impossible jumps (e.g. applied → selected) regardless
+// of what the UI sends. `placed` is terminal in the post-deployment sense
+// so it intentionally has no successors here.
+const VALID_TRANSITIONS = {
+    applied:             ['certified', 'rejected', 'screening'],
+    screening:           ['certified', 'rejected'],
+    certified:           ['pre_screened', 'rejected'],
+    pre_screened:        ['interview_scheduled', 'rejected'],
+    interview_scheduled: ['selected', 'rejected', 'interviewed'],
+    interviewed:         ['selected', 'rejected'],
+    selected:            ['placed', 'rejected'],
+    rejected:            [],
+    placed:              [],
+};
+
 router.put('/:id', authenticate, async (req, res, next) => {
     try {
         const { id } = req.params;
         const {
             status, rejection_reason, interview_datetime, interview_location,
             interview_notes, certification_notes, prescreening_datetime,
-            prescreening_location, notify_channels = ['whatsapp']
+            prescreening_location, prescreening_notes, prescreening_rating,
+            notify_channels = ['whatsapp']
         } = req.body;
 
         const effDt = prescreening_datetime || interview_datetime;
         const effLoc = prescreening_location || interview_location;
 
-        if (status === 'certified' && !effDt) {
-            return res.status(400).json({
-                error: 'Interview date/time is required when certifying a candidate'
-            });
+        // Validate the requested status transition against the current state.
+        // Skipped when no status was passed (this PUT also accepts pure metadata
+        // updates like adding interview_notes without a state change).
+        let currentStatus = null;
+        if (status) {
+            const currentRes = await query(
+                adaptQuery('SELECT status FROM applications WHERE id = $1'),
+                [id],
+            );
+            if (currentRes.rows.length === 0) {
+                return res.status(404).json({ error: 'Application not found' });
+            }
+            currentStatus = currentRes.rows[0].status;
+            const allowed = VALID_TRANSITIONS[currentStatus] || [];
+            // Same-state writes are a no-op upstream — let them through so
+            // recruiters can re-trigger notifications without an error.
+            if (status !== currentStatus && !allowed.includes(status)) {
+                return res.status(400).json({
+                    error: `Invalid lifecycle transition: ${currentStatus} → ${status}. Allowed next states: ${allowed.join(', ') || '(none, terminal)'}.`,
+                });
+            }
         }
 
         const setClauses = [];
@@ -195,12 +229,23 @@ router.put('/:id', authenticate, async (req, res, next) => {
                 setClauses.push('certified_at = NOW()');
                 setClauses.push(`certified_by = ${p()}`); values.push(req.user.id);
             }
+            if (status === 'pre_screened') {
+                setClauses.push('prescreening_completed_at = NOW()');
+            }
         }
         if (certification_notes)  { setClauses.push(`certification_notes = ${p()}`); values.push(certification_notes); }
         if (rejection_reason)     { setClauses.push(`rejection_reason = ${p()}`);    values.push(rejection_reason); }
         if (effDt)  { setClauses.push(`interview_datetime = ${p()}`); values.push(effDt); }
         if (effLoc) { setClauses.push(`interview_location = ${p()}`); values.push(effLoc); }
         if (interview_notes) { setClauses.push(`interview_notes = ${p()}`); values.push(interview_notes); }
+        if (prescreening_notes) { setClauses.push(`prescreening_notes = ${p()}`); values.push(prescreening_notes); }
+        if (prescreening_rating != null) {
+            const r = parseInt(prescreening_rating, 10);
+            if (!Number.isNaN(r) && r >= 1 && r <= 5) {
+                setClauses.push(`prescreening_rating = ${p()}`);
+                values.push(r);
+            }
+        }
 
         if (setClauses.length === 0) return res.status(400).json({ error: 'No valid fields to update' });
 
@@ -302,6 +347,10 @@ router.put('/:id', authenticate, async (req, res, next) => {
             try {
                 switch (status) {
                     case 'certified':
+                        // Certify is now just the status flip + "you've been
+                        // certified, pre-screen coming next" message. Optional
+                        // prescreening_datetime is still supported for the
+                        // legacy bundled flow but no longer required.
                         if (prescreening_datetime && prescreening_location) {
                             notification = await notifications.sendPreScreeningNotification(
                                 application.candidate_id, jobTitle, prescreening_datetime, prescreening_location, channels);
@@ -309,6 +358,10 @@ router.put('/:id', authenticate, async (req, res, next) => {
                             notification = await notifications.sendCertificationNotification(
                                 application.candidate_id, jobTitle, certification_notes, channels);
                         }
+                        break;
+                    case 'pre_screened':
+                        notification = await notifications.sendPreScreenedPassedNotification(
+                            application.candidate_id, jobTitle, channels);
                         break;
                     case 'interview_scheduled':
                         if (effDt && effLoc)

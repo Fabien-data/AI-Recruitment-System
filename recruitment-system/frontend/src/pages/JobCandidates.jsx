@@ -56,6 +56,8 @@ export default function JobCandidates() {
 
     const [selectedCandidate, setSelectedCandidate] = useState(null)
     const [showCertifyModal, setShowCertifyModal] = useState(false)
+    const [showPreScreenModal, setShowPreScreenModal] = useState(false)
+    const [showScheduleModal, setShowScheduleModal] = useState(false)
     const [showTransferModal, setShowTransferModal] = useState(false)
     const [showRejectModal, setShowRejectModal] = useState(false)
     const [showApproveModal, setShowApproveModal] = useState(false)
@@ -239,6 +241,14 @@ export default function JobCandidates() {
                                     setSelectedCandidate(candidateData)
                                     setShowCertifyModal(true)
                                 }}
+                                onPreScreen={() => {
+                                    setSelectedCandidate(candidateData)
+                                    setShowPreScreenModal(true)
+                                }}
+                                onSchedule={() => {
+                                    setSelectedCandidate(candidateData)
+                                    setShowScheduleModal(true)
+                                }}
                                 onTransfer={() => {
                                     setSelectedCandidate(candidateData)
                                     setShowTransferModal(true)
@@ -311,6 +321,30 @@ export default function JobCandidates() {
                     job={job}
                     onClose={() => {
                         setShowCertifyModal(false)
+                        setSelectedCandidate(null)
+                    }}
+                />
+            )}
+
+            {/* Mark Pre-Screened Modal */}
+            {showPreScreenModal && selectedCandidate && (
+                <MarkPreScreenedModal
+                    data={selectedCandidate}
+                    job={job}
+                    onClose={() => {
+                        setShowPreScreenModal(false)
+                        setSelectedCandidate(null)
+                    }}
+                />
+            )}
+
+            {/* Schedule Interview Modal */}
+            {showScheduleModal && selectedCandidate && (
+                <ScheduleInterviewModal
+                    data={selectedCandidate}
+                    job={job}
+                    onClose={() => {
+                        setShowScheduleModal(false)
                         setSelectedCandidate(null)
                     }}
                 />
@@ -626,7 +660,7 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
     )
 }
 
-function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCertify, onTransfer, onReject, onApprove }) {
+function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCertify, onTransfer, onReject, onApprove, onPreScreen, onSchedule }) {
     const { candidate, match_score, match_details, application_status, certified_at } = data
 
     const getScoreColor = (score) => {
@@ -728,56 +762,100 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                     <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{getScoreLabel(match_score)} Match</p>
                 </div>
 
-                {/* Actions */}
-                <div className="flex gap-2 flex-shrink-0">
+                {/* Actions — driven by lifecycle status */}
+                <div className="flex flex-wrap gap-2 flex-shrink-0 justify-end">
                     <Button variant="secondary" size="sm" onClick={onSelect} className="gap-1">
                         <Eye size={14} />
                         Quick View
                     </Button>
-                    {application_status === 'selected' || application_status === 'placed' ? (
-                        <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1 px-2 font-medium">
-                            <Award size={12} />
-                            Approved
-                        </span>
-                    ) : application_status !== 'certified' && application_status !== 'rejected' ? (
-                        <>
-                            <Button size="sm" onClick={onApprove} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white">
-                                <Award size={14} />
-                                Approve
-                            </Button>
-                            <Button variant="secondary" size="sm" onClick={onCertify} className="gap-1">
-                                <CheckCircle size={14} />
-                                Certify
-                            </Button>
-                            <Button variant="secondary" size="sm" onClick={onTransfer} className="gap-1">
-                                <ArrowRightLeft size={14} />
-                                Transfer
-                            </Button>
-                            <Button variant="danger" size="sm" onClick={onReject} className="gap-1" style={{ backgroundColor: '#ef4444', color: 'white', border: 'none' }}>
-                                <UserX size={14} />
-                                Reject
-                            </Button>
-                        </>
-                    ) : application_status === 'certified' ? (
-                        <>
-                            <Button size="sm" onClick={onApprove} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white">
-                                <Award size={14} />
-                                Approve
-                            </Button>
-                            <span className="text-xs text-green-600 flex items-center gap-1 px-2 font-medium">
-                                <CheckCircle2 size={12} />
-                                Certified {certified_at && new Date(certified_at).toLocaleDateString()}
-                            </span>
-                        </>
-                    ) : (
-                        <span className="text-xs text-red-500 flex items-center gap-1 px-2">
-                            <XCircle size={12} />
-                            Moved to Pool
-                        </span>
-                    )}
+                    <LifecycleActions
+                        status={application_status}
+                        certifiedAt={certified_at}
+                        onCertify={onCertify}
+                        onPreScreen={onPreScreen}
+                        onSchedule={onSchedule}
+                        onApprove={onApprove}
+                        onTransfer={onTransfer}
+                        onReject={onReject}
+                    />
                 </div>
             </div>
         </div>
+    )
+}
+
+// Status-aware action button cluster. Mirrors the candidate lifecycle the
+// product spec describes: Applied → Certified → Pre Screened → Scheduled →
+// Selected | Rejected. Each step exposes only the legal next actions so
+// recruiters can't skip steps or trigger the wrong notification by accident.
+function LifecycleActions({ status, certifiedAt, onCertify, onPreScreen, onSchedule, onApprove, onTransfer, onReject }) {
+    if (status === 'selected' || status === 'placed') {
+        return (
+            <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1 px-2 font-medium">
+                <Award size={12} /> Approved
+            </span>
+        )
+    }
+    if (status === 'rejected') {
+        return (
+            <span className="text-xs text-red-500 flex items-center gap-1 px-2">
+                <XCircle size={12} /> Moved to Pool
+            </span>
+        )
+    }
+    if (status === 'pre_screened') {
+        return (
+            <>
+                <Button size="sm" onClick={onSchedule} className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white">
+                    <Calendar size={14} /> Schedule Interview
+                </Button>
+                <Button variant="danger" size="sm" onClick={onReject} className="gap-1" style={{ backgroundColor: '#ef4444', color: 'white', border: 'none' }}>
+                    <UserX size={14} /> Reject
+                </Button>
+            </>
+        )
+    }
+    if (status === 'interview_scheduled' || status === 'interviewed') {
+        return (
+            <>
+                <Button size="sm" onClick={onApprove} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white">
+                    <Award size={14} /> Mark Selected
+                </Button>
+                <Button variant="danger" size="sm" onClick={onReject} className="gap-1" style={{ backgroundColor: '#ef4444', color: 'white', border: 'none' }}>
+                    <UserX size={14} /> Reject
+                </Button>
+            </>
+        )
+    }
+    if (status === 'certified') {
+        return (
+            <>
+                <Button size="sm" onClick={onPreScreen} className="gap-1 bg-teal-600 hover:bg-teal-700 text-white">
+                    <CheckCircle2 size={14} /> Mark Pre-Screened
+                </Button>
+                <span className="text-xs text-green-600 flex items-center gap-1 px-2 font-medium">
+                    <CheckCircle2 size={12} />
+                    Certified {certifiedAt && new Date(certifiedAt).toLocaleDateString()}
+                </span>
+                <Button variant="danger" size="sm" onClick={onReject} className="gap-1" style={{ backgroundColor: '#ef4444', color: 'white', border: 'none' }}>
+                    <UserX size={14} /> Reject
+                </Button>
+            </>
+        )
+    }
+    // Default = applied / auto_assigned / reviewing / screening
+    return (
+        <>
+            <Button variant="secondary" size="sm" onClick={onCertify} className="gap-1">
+                <CheckCircle size={14} /> Certify
+            </Button>
+            <Button variant="secondary" size="sm" onClick={onTransfer} className="gap-1">
+                <ArrowRightLeft size={14} /> Transfer
+            </Button>
+            <Button variant="danger" size="sm" onClick={onReject} className="gap-1" style={{ backgroundColor: '#ef4444', color: 'white', border: 'none' }}>
+                <UserX size={14} /> Reject
+            </Button>
+        </>
     )
 }
 
@@ -1011,9 +1089,6 @@ function CertifyModal({ data, job, onClose }) {
     const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
     const [notifySMS, setNotifySMS] = useState(false)
     const [notifyEmail, setNotifyEmail] = useState(false)
-    const [prescreeningDate, setPrescreeningDate] = useState('')
-    const [prescreeningTime, setPrescreeningTime] = useState('')
-    const [prescreeningLocation, setPrescreeningLocation] = useState('')
     const [showPreview, setShowPreview] = useState(false)
     const queryClient = useQueryClient()
 
@@ -1028,61 +1103,9 @@ function CertifyModal({ data, job, onClose }) {
         return channels.length > 0 ? channels : ['whatsapp']
     }
 
-    const hasPrescreening = prescreeningDate && prescreeningTime && prescreeningLocation
-
-    // Generate automatic message
+    // Generate automatic message — simple "you've been certified" since the
+    // pre-screen date/time is now a separate step.
     const generateMessage = () => {
-        const prescreeningDateTimeStr = hasPrescreening
-            ? new Date(`${prescreeningDate}T${prescreeningTime}`).toLocaleString('en-US', {
-                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-                hour: '2-digit', minute: '2-digit'
-            })
-            : null
-
-        if (hasPrescreening) {
-            const messages = {
-                en: `🎉 Dear ${candidate.name},
-
-Congratulations! You have been certified for the position of ${job.title} and are invited for pre-screening!
-
-📅 Pre-Screening Details:
-📆 Date & Time: ${prescreeningDateTimeStr}
-📍 Location: ${prescreeningLocation}
-
-📋 Please bring the following:
-1. Original NIC / Passport
-2. Educational certificates
-3. Work experience letters
-4. Passport-size photographs (2 copies)
-
-⚠️ Please arrive 15 minutes early for registration.
-
-If you need to reschedule, please contact us immediately by replying to this message.
-
-Best regards,
-Dewan Recruitment Team`,
-                si: `🎉 ආදරණීය ${candidate.name},
-
-සුභ පැතුම්! ඔබ ${job.title} තනතුර සඳහා සහතික කර ඇති අතර පූර්ව පරීක්ෂණය සඳහා ආරාධනා කරනු ලැබේ!
-
-📅 පූර්ව පරීක්ෂණ විස්තර:
-📆 දිනය සහ වේලාව: ${prescreeningDateTimeStr}
-📍 ස්ථානය: ${prescreeningLocation}
-
-📋 කරුණාකර පහත දෑ රැගෙන එන්න:
-1. මුල් හැඳුනුම්පත / විදේශ ගමන් බලපත්‍රය
-2. අධ්‍යාපන සහතික
-3. රැකියා අත්දැකීම් ලිපි
-4. විදේශ ගමන් බලපත්‍ර ප්‍රමාණයේ ඡායාරූප (පිටපත් 2ක්)
-
-⚠️ ලියාපදිංචිය සඳහා මිනිත්තු 15කට පෙර පැමිණෙන්න.
-
-සුබ පැතුම්,
-Dewan Recruitment Team`
-            }
-            return messages[candidate.preferred_language] || messages.en
-        }
-
         const messages = {
             en: `🎉 Dear ${candidate.name},
 
@@ -1121,21 +1144,16 @@ Dewan Recruitment Team`
 
     const certifyMutation = useMutation({
         mutationFn: () => {
-            const payload = {
+            return updateApplication(data.application_id, {
                 status: 'certified',
                 certification_notes: notes,
-                notify_channels: getChannels()
-            }
-            if (hasPrescreening) {
-                payload.prescreening_datetime = `${prescreeningDate}T${prescreeningTime}`
-                payload.prescreening_location = prescreeningLocation
-            }
-            return updateApplication(data.application_id, payload)
+                notify_channels: getChannels(),
+            })
         },
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['job-candidates'] })
             const notif = result?.notification
-            const headline = hasPrescreening ? 'Pre-screening invitation sent' : 'Candidate certified'
+            const headline = 'Candidate certified'
             if (notif && Array.isArray(notif.failed) && notif.failed.length > 0) {
                 // At least one channel failed — show honest partial-failure toast.
                 showNotificationToast(notif, headline)
@@ -1153,8 +1171,7 @@ Dewan Recruitment Team`
                                 <div className="ml-3 flex-1">
                                     <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Candidate Certified!</p>
                                     <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                                        {hasPrescreening ? '📅 Pre-screening invitation sent' : '✅ Status updated'}
-                                        {' via ' + channelNames.join(', ')}
+                                        ✅ Status updated{' via ' + channelNames.join(', ')}
                                     </p>
                                 </div>
                             </div>
@@ -1193,49 +1210,12 @@ Dewan Recruitment Team`
                     </div>
                 </div>
 
-                {/* Pre-Screening Date/Time/Location */}
-                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <h4 className="font-semibold text-blue-800 mb-3 flex items-center gap-2">
-                        <Calendar size={16} />
-                        Pre-Screening Schedule (Optional)
-                    </h4>
-                    <p className="text-xs text-blue-600 mb-3">
-                        If you set a date/time, the candidate will receive a specific pre-screening invitation with the details below.
-                    </p>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="block text-xs font-medium text-blue-700 mb-1">Date</label>
-                            <input
-                                type="date"
-                                className="input w-full text-sm"
-                                value={prescreeningDate}
-                                onChange={(e) => setPrescreeningDate(e.target.value)}
-                                min={new Date().toISOString().split('T')[0]}
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-blue-700 mb-1">Time</label>
-                            <input
-                                type="time"
-                                className="input w-full text-sm"
-                                value={prescreeningTime}
-                                onChange={(e) => setPrescreeningTime(e.target.value)}
-                            />
-                        </div>
-                    </div>
-                    <div className="mt-3">
-                        <label className="block text-xs font-medium text-blue-700 mb-1 flex items-center gap-1">
-                            <MapPinned size={12} />
-                            Location / Venue
-                        </label>
-                        <input
-                            type="text"
-                            className="input w-full text-sm"
-                            placeholder="e.g., Dewan Office, 123 Main St, Colombo"
-                            value={prescreeningLocation}
-                            onChange={(e) => setPrescreeningLocation(e.target.value)}
-                        />
-                    </div>
+                {/* Certify is now just the status flip — pre-screening
+                    scheduling and interview scheduling are separate steps
+                    handled by the Mark Pre-Screened and Schedule Interview
+                    buttons that appear after certification. */}
+                <div className="p-3 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-200 dark:border-zinc-800 text-sm text-zinc-600 dark:text-zinc-400">
+                    Certifying marks the candidate as approved for pre-screening and sends them a "you've been certified, pre-screen coming next" message. After they attend pre-screen, use <strong>Mark Pre-Screened</strong>; once they've passed, use <strong>Schedule Interview</strong>.
                 </div>
 
                 {/* Notification Channels */}
@@ -1324,7 +1304,7 @@ Dewan Recruitment Team`
                             <div className="flex items-center gap-2 mb-2">
                                 <Sparkles size={14} className="text-amber-500" />
                                 <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase">
-                                    {hasPrescreening ? 'Pre-Screening Invitation' : 'Certification Message'}
+                                    Certification Message
                                 </span>
                                 <button
                                     onClick={() => {
@@ -1365,7 +1345,7 @@ Dewan Recruitment Team`
                         className="gap-2"
                     >
                         <CheckCircle size={16} />
-                        {hasPrescreening ? 'Certify & Send Invitation' : 'Certify & Notify'}
+                        Certify & Notify
                     </Button>
                 </div>
             </div>
@@ -1679,6 +1659,239 @@ function TransferModal({ data, currentJob, onClose }) {
                     >
                         <ArrowRightLeft size={16} />
                         Transfer
+                    </Button>
+                </div>
+            </div>
+        </Modal>
+    )
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// MarkPreScreenedModal — records the outcome of the in-person pre-screen
+// and transitions certified → pre_screened. The chatbot sends the candidate
+// a "you passed pre-screening" WhatsApp via the new pre_screened_passed
+// notification template.
+// ──────────────────────────────────────────────────────────────────────────
+function MarkPreScreenedModal({ data, job, onClose }) {
+    const queryClient = useQueryClient()
+    const candidate = data.candidate || {}
+    const [notes, setNotes] = useState('')
+    const [rating, setRating] = useState(0)
+    const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
+
+    const mutation = useMutation({
+        mutationFn: () => updateApplication(data.application_id, {
+            status: 'pre_screened',
+            prescreening_notes: notes || undefined,
+            prescreening_rating: rating || undefined,
+            notify_channels: notifyWhatsApp ? ['whatsapp'] : [],
+        }),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['job-candidates'] })
+            const notif = result?.notification
+            if (notif && Array.isArray(notif.failed) && notif.failed.length > 0) {
+                showNotificationToast(notif, 'Pre-screen recorded')
+            } else {
+                toast.success(`${candidate.name} marked as Pre Screened`)
+            }
+            onClose()
+        },
+        onError: (err) => toast.error(err?.response?.data?.error || 'Failed to mark pre-screened'),
+    })
+
+    return (
+        <Modal open onClose={onClose} title="Mark Pre-Screened" size="md">
+            <div className="space-y-4">
+                <div className="rounded-xl bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-900/50 p-4 flex items-start gap-3">
+                    <CheckCircle2 className="text-teal-600 mt-0.5 flex-shrink-0" size={20} />
+                    <div>
+                        <h4 className="font-semibold text-teal-800 dark:text-teal-200">
+                            Confirm pre-screen for {candidate.name}
+                        </h4>
+                        <p className="text-sm text-teal-700 dark:text-teal-300 mt-1">
+                            Records the outcome of the in-person pre-screen for <strong>{job.title}</strong> and notifies the candidate. After this, you can schedule the formal interview.
+                        </p>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                        Pre-screen rating (optional, 1–5)
+                    </label>
+                    <div className="flex gap-2">
+                        {[1, 2, 3, 4, 5].map((r) => (
+                            <button
+                                type="button"
+                                key={r}
+                                onClick={() => setRating(rating === r ? 0 : r)}
+                                className={`h-9 w-9 rounded-lg text-sm font-semibold border ${rating >= r
+                                    ? 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700'
+                                    : 'bg-white text-zinc-500 border-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:border-zinc-800'}`}
+                            >
+                                <Star size={14} className="mx-auto" />
+                            </button>
+                        ))}
+                        {rating > 0 && (
+                            <span className="text-sm text-zinc-500 dark:text-zinc-400 self-center ml-2">{rating} / 5</span>
+                        )}
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                        Pre-screen notes (optional)
+                    </label>
+                    <textarea
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        rows={3}
+                        placeholder="What stood out? Any concerns?"
+                        className="input w-full"
+                    />
+                </div>
+
+                <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={notifyWhatsApp}
+                        onChange={(e) => setNotifyWhatsApp(e.target.checked)}
+                        className="accent-primary-600"
+                    />
+                    Send "you passed pre-screening" WhatsApp message
+                </label>
+
+                <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                    <Button variant="secondary" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+                    <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="gap-2 bg-teal-600 hover:bg-teal-700 text-white">
+                        <CheckCircle2 size={16} />
+                        {mutation.isPending ? 'Saving…' : 'Mark Pre-Screened'}
+                    </Button>
+                </div>
+            </div>
+        </Modal>
+    )
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// ScheduleInterviewModal — creates an interview_schedules row via POST
+// /api/interviews. That endpoint already sets application.status to
+// interview_scheduled and dispatches the interview-scheduled WhatsApp,
+// so we don't need a separate updateApplication call.
+// ──────────────────────────────────────────────────────────────────────────
+function ScheduleInterviewModal({ data, job, onClose }) {
+    const queryClient = useQueryClient()
+    const candidate = data.candidate || {}
+    const [date, setDate] = useState('')
+    const [time, setTime] = useState('')
+    const [location, setLocation] = useState('')
+    const [duration, setDuration] = useState(30)
+    const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
+
+    const mutation = useMutation({
+        mutationFn: async () => {
+            if (!date || !time) throw new Error('Date and time are required')
+            const scheduledDatetime = `${date}T${time}`
+            const channels = []
+            if (notifyWhatsApp) channels.push('whatsapp')
+            return apiClient.post('/api/interviews', {
+                application_id: data.application_id,
+                scheduled_datetime: scheduledDatetime,
+                location: location || null,
+                duration_minutes: Number(duration) || 30,
+                notify_channels: channels.length > 0 ? channels : ['whatsapp'],
+            }).then((res) => res.data)
+        },
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['job-candidates'] })
+            queryClient.invalidateQueries({ queryKey: ['interviews'] })
+            const notif = result?.notification
+            if (notif && Array.isArray(notif.failed) && notif.failed.length > 0) {
+                showNotificationToast(notif, 'Interview scheduled')
+            } else {
+                toast.success(`Interview scheduled for ${candidate.name}`)
+            }
+            onClose()
+        },
+        onError: (err) => toast.error(err?.response?.data?.error || err.message || 'Failed to schedule interview'),
+    })
+
+    return (
+        <Modal open onClose={onClose} title="Schedule Interview" size="md">
+            <div className="space-y-4">
+                <div className="rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 p-4 flex items-start gap-3">
+                    <Calendar className="text-indigo-600 mt-0.5 flex-shrink-0" size={20} />
+                    <div>
+                        <h4 className="font-semibold text-indigo-800 dark:text-indigo-200">
+                            Interview for {candidate.name} — {job.title}
+                        </h4>
+                        <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-1">
+                            Creates the interview record, moves the application to <strong>Scheduled</strong>, and sends the candidate a WhatsApp invitation with the date, time, and location.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Date</label>
+                        <input
+                            type="date"
+                            value={date}
+                            onChange={(e) => setDate(e.target.value)}
+                            min={new Date().toISOString().slice(0, 10)}
+                            className="input w-full"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Time</label>
+                        <input
+                            type="time"
+                            value={time}
+                            onChange={(e) => setTime(e.target.value)}
+                            className="input w-full"
+                        />
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
+                        <MapPinned size={12} /> Location / Venue
+                    </label>
+                    <input
+                        type="text"
+                        value={location}
+                        onChange={(e) => setLocation(e.target.value)}
+                        placeholder="e.g., Head Office, Colombo 3"
+                        className="input w-full"
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Duration (minutes)</label>
+                    <input
+                        type="number"
+                        min="10"
+                        max="240"
+                        value={duration}
+                        onChange={(e) => setDuration(e.target.value)}
+                        className="input w-full"
+                    />
+                </div>
+
+                <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={notifyWhatsApp}
+                        onChange={(e) => setNotifyWhatsApp(e.target.checked)}
+                        className="accent-primary-600"
+                    />
+                    Send interview invitation via WhatsApp
+                </label>
+
+                <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                    <Button variant="secondary" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+                    <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white">
+                        <Calendar size={16} />
+                        {mutation.isPending ? 'Scheduling…' : 'Schedule Interview'}
                     </Button>
                 </div>
             </div>

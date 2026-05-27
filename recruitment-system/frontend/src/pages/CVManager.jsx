@@ -39,7 +39,8 @@ import {
   Send,
   Bell,
   Smartphone,
-  Sparkles
+  Sparkles,
+  Plus,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -469,11 +470,11 @@ function CVReviewModal({ candidate, onClose }) {
   const applications = Array.isArray(applicationsData) ? applicationsData : []
 
   const tabs = [
-    { value: 'overview',     label: 'Overview',        icon: User,          tone: 'blue' },
-    { value: 'ai_insights',  label: 'AI Insights',     icon: Sparkles,      tone: 'purple' },
-    { value: 'remarks',      label: 'Remarks & Notes', icon: MessageSquare, tone: 'amber' },
-    { value: 'applications', label: 'Projects',        icon: Briefcase,     tone: 'emerald', count: applications.length },
-    { value: 'allocate',     label: 'Assign Project',  icon: Building,      tone: 'indigo' },
+    { value: 'overview',     label: 'Overview',         icon: User,          tone: 'blue' },
+    { value: 'ai_insights',  label: 'AI Insights',      icon: Sparkles,      tone: 'purple' },
+    { value: 'remarks',      label: 'Remarks & Notes',  icon: MessageSquare, tone: 'amber' },
+    { value: 'applications', label: 'Applied Position', icon: Briefcase,     tone: 'emerald', count: applications.length },
+    { value: 'allocate',     label: 'Assign Project',   icon: Building,      tone: 'indigo' },
   ]
 
   return (
@@ -491,7 +492,7 @@ function CVReviewModal({ candidate, onClose }) {
           <RemarksTab candidate={fullCandidate} />
         )}
         {activeTab === 'applications' && (
-          <ApplicationsTab applications={applications} />
+          <ApplicationsTab applications={applications} candidate={fullCandidate} jobs={jobs} />
         )}
         {activeTab === 'allocate' && (
           <AllocateTab candidate={fullCandidate} jobs={jobs} existingApplications={applications} />
@@ -1102,10 +1103,64 @@ Examples:
   )
 }
 
-function ApplicationsTab({ applications }) {
+function ApplicationsTab({ applications, candidate, jobs }) {
   const queryClient = useQueryClient()
   const [certifyId, setCertifyId] = useState(null)
   const [transferId, setTransferId] = useState(null)
+  const [assignJobId, setAssignJobId] = useState('')
+
+  // Pull the WhatsApp-stated job interest from candidate metadata. The
+  // chatbot writes this to candidates.metadata.job_interest_stated in
+  // backend/src/routes/chatbot-intake.js. Display it prominently so the
+  // recruiter can confirm the candidate's intent at a glance.
+  const meta = typeof candidate?.metadata === 'string'
+    ? (() => { try { return JSON.parse(candidate.metadata) } catch { return {} } })()
+    : (candidate?.metadata || {})
+  const statedJob = meta.job_interest_stated || ''
+  const destinationCountry = meta.destination_country || ''
+
+  // If the candidate already has an application matching the stated job
+  // by title, hide the "assign" CTA. Otherwise surface the top 3 suggested
+  // jobs (best matches by title fuzzy + same category) so the recruiter
+  // can one-click create the application.
+  const normalizedStated = String(statedJob).trim().toLowerCase()
+  const appliedJobIds = new Set(applications.map(a => a.job_id))
+  const activeJobs = (jobs || []).filter(j => j.status === 'active')
+  const exactStatedAlreadyApplied = applications.some(a =>
+    String(a.job_title || '').trim().toLowerCase() === normalizedStated
+  )
+  const suggestedJobs = !normalizedStated
+    ? []
+    : activeJobs
+        .filter(j => !appliedJobIds.has(j.id))
+        .map((j) => {
+          const title = String(j.title || '').toLowerCase()
+          let score = 0
+          if (title === normalizedStated) score = 100
+          else if (title.includes(normalizedStated) || normalizedStated.includes(title)) score = 75
+          else {
+            // Token overlap heuristic for cases like "Security Guard" vs "Security"
+            const a = new Set(normalizedStated.split(/\s+/).filter(Boolean))
+            const b = new Set(title.split(/\s+/).filter(Boolean))
+            const overlap = [...a].filter(t => b.has(t)).length
+            if (overlap > 0) score = 30 + overlap * 15
+          }
+          return { ...j, _score: score }
+        })
+        .filter(j => j._score > 0)
+        .sort((x, y) => y._score - x._score)
+        .slice(0, 3)
+
+  const assignMutation = useMutation({
+    mutationFn: () => createApplication({ candidate_id: candidate.id, job_id: assignJobId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['applications'] })
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      toast.success('Candidate assigned to position')
+      setAssignJobId('')
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Failed to assign'),
+  })
 
   const certifyMutation = useMutation({
     mutationFn: ({ id, payload }) => updateApplication(id, payload),
@@ -1119,19 +1174,75 @@ function ApplicationsTab({ applications }) {
     }
   })
 
-  if (applications.length === 0) {
-    return (
-      <div className="text-center py-12">
-        <Briefcase className="mx-auto h-16 w-16 text-zinc-300 dark:text-zinc-600 mb-4" />
-        <p className="font-semibold text-zinc-700 dark:text-zinc-300">No Project Assignments</p>
-        <p className="text-zinc-500 dark:text-zinc-400 mt-1">Go to "Assign Project" tab to allocate this candidate to a job</p>
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-4">
-      {applications.map(app => (
+      {/* WhatsApp-stated position card (always shown when chatbot captured one) */}
+      {statedJob && (
+        <div className="rounded-2xl border border-emerald-200 dark:border-emerald-900/40 bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-950/30 dark:to-zinc-900 p-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200 p-2">
+              <MessageSquare size={18} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                Stated position from WhatsApp
+              </p>
+              <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 text-lg mt-0.5">{statedJob}</h4>
+              {destinationCountry && (
+                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-0.5">
+                  Destination: <span className="font-medium">{destinationCountry}</span>
+                </p>
+              )}
+
+              {exactStatedAlreadyApplied ? (
+                <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1">
+                  <CheckCircle2 size={14} /> Already applied — see the open application below.
+                </p>
+              ) : suggestedJobs.length === 0 ? (
+                <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+                  No active job matches "{statedJob}" right now. You can still pick any open job via <strong>Assign Project</strong>.
+                </p>
+              ) : (
+                <div className="mt-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">
+                    Suggested open positions
+                  </p>
+                  <div className="space-y-2">
+                    {suggestedJobs.map((j) => (
+                      <div key={j.id} className="flex items-center gap-3 rounded-xl bg-white dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 p-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-zinc-900 dark:text-zinc-50 text-sm truncate">{j.title}</p>
+                          <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{j.category}{j.location ? ` · ${j.location}` : ''}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => { setAssignJobId(j.id); assignMutation.mutate() }}
+                          disabled={assignMutation.isPending}
+                          className="gap-1"
+                        >
+                          <Plus size={14} /> Assign
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {applications.length === 0 ? (
+        <div className="text-center py-8">
+          <Briefcase className="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600 mb-3" />
+          <p className="font-semibold text-zinc-700 dark:text-zinc-300">No active applications</p>
+          <p className="text-zinc-500 dark:text-zinc-400 mt-1 text-sm">
+            {statedJob
+              ? 'Use the suggested positions above or the Assign Project tab to allocate this candidate.'
+              : 'Go to "Assign Project" tab to allocate this candidate to a job.'}
+          </p>
+        </div>
+      ) : applications.map(app => (
         <div key={app.id} className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 hover:shadow-md transition-shadow">
           <div className="flex justify-between items-start mb-3">
             <div>
