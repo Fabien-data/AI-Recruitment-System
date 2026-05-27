@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { getProjects, createProject, deleteProject } from '../api'
 import {
   FolderKanban, Plus, Trash2, Users, Briefcase, Building2, Globe2, Tag,
-  Calendar, BarChart3, Activity, PauseCircle, CheckCircle2, Eye,
+  Calendar, BarChart3, Activity, PauseCircle, CheckCircle2, Eye, X,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -21,8 +21,7 @@ import toast from 'react-hot-toast'
 import { format } from 'date-fns'
 import { clsx } from 'clsx'
 import { COUNTRY_OPTIONS, currencyForCountry } from '../constants/countries'
-
-const INDUSTRIES = ['Hypermarket', 'Restaurant', 'Construction', 'Healthcare', 'Hospitality', 'Manufacturing', 'Retail', 'Logistics']
+import { INDUSTRY_OPTIONS, BENEFIT_OPTIONS, DEFAULT_BENEFITS_STATE } from '../constants/lifecycle'
 
 export default function Projects() {
   const { user } = useAuthStore()
@@ -40,7 +39,7 @@ export default function Projects() {
   const [formData, setFormData] = useState({
     title: '',
     client_name: '',
-    industry_type: '',
+    industry_types: [],
     description: '',
     countries: [],
     priority: 'normal',
@@ -48,13 +47,7 @@ export default function Projects() {
     start_date: '',
     interview_date: '',
     end_date: '',
-    benefits: {
-      accommodation: false,
-      transport: false,
-      meals: false,
-      visa: false,
-      ticket: false
-    },
+    benefits: { ...DEFAULT_BENEFITS_STATE },
     salary_info: {
       min: '',
       max: '',
@@ -68,6 +61,9 @@ export default function Projects() {
       special_details: ''
     }
   })
+
+  // Free-text input for the "Other" industry — appended to industry_types on add
+  const [otherIndustry, setOtherIndustry] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['projects', {
@@ -130,11 +126,51 @@ export default function Projects() {
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (!formData.title || !formData.client_name || !formData.industry_type || formData.countries.length === 0) {
-      toast.error('Please fill in all required fields')
+    if (!formData.title || !formData.client_name || formData.industry_types.length === 0 || formData.countries.length === 0) {
+      toast.error('Please fill in all required fields (incl. at least one industry)')
       return
     }
-    createMutation.mutate(formData)
+    // Maintain backwards-compat: also send industry_type = first of the array
+    // so any old reader keeps working until they migrate.
+    createMutation.mutate({
+      ...formData,
+      industry_type: formData.industry_types[0],
+    })
+  }
+
+  const handleIndustryToggle = (industry) => {
+    setFormData((prev) => ({
+      ...prev,
+      industry_types: prev.industry_types.includes(industry)
+        ? prev.industry_types.filter((i) => i !== industry)
+        : [...prev.industry_types, industry],
+    }))
+  }
+
+  const handleAddOtherIndustry = () => {
+    const trimmed = otherIndustry.trim()
+    if (!trimmed) return
+    if (formData.industry_types.includes(trimmed)) {
+      toast.error(`"${trimmed}" already added`)
+      return
+    }
+    setFormData((prev) => ({
+      ...prev,
+      industry_types: [...prev.industry_types, trimmed],
+    }))
+    setOtherIndustry('')
+  }
+
+  const handleBenefitToggle = (key) => {
+    setFormData((prev) => {
+      const next = { ...prev.benefits, [key]: !prev.benefits[key] }
+      // Mutual exclusion: meals_included <-> meals_not_included
+      const opt = BENEFIT_OPTIONS.find((o) => o.key === key)
+      if (opt?.exclusiveWith && next[key]) {
+        next[opt.exclusiveWith] = false
+      }
+      return { ...prev, benefits: next }
+    })
   }
 
   const handleDelete = (id) => {
@@ -147,7 +183,7 @@ export default function Projects() {
     setFormData({
       title: '',
       client_name: '',
-      industry_type: '',
+      industry_types: [],
       description: '',
       countries: [],
       priority: 'normal',
@@ -155,13 +191,7 @@ export default function Projects() {
       start_date: '',
       interview_date: '',
       end_date: '',
-      benefits: {
-        accommodation: false,
-        transport: false,
-        meals: false,
-        visa: false,
-        ticket: false
-      },
+      benefits: { ...DEFAULT_BENEFITS_STATE },
       salary_info: {
         min: '',
         max: '',
@@ -175,6 +205,7 @@ export default function Projects() {
         special_details: ''
       }
     })
+    setOtherIndustry('')
   }
 
   const handleCountryToggle = (country) => {
@@ -271,7 +302,7 @@ export default function Projects() {
               className="input w-full"
             >
               <option value="">All Industries</option>
-              {INDUSTRIES.map(industry => (
+              {INDUSTRY_OPTIONS.map(industry => (
                 <option key={industry} value={industry}>{industry}</option>
               ))}
             </select>
@@ -377,13 +408,33 @@ export default function Projects() {
                       </div>
                     </Table.Td>
                     <Table.Td>
-                      {project.industry_type ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-200 dark:ring-blue-900/60">
-                          {project.industry_type}
-                        </span>
-                      ) : (
-                        <span className="text-zinc-400 text-sm">—</span>
-                      )}
+                      {(() => {
+                        const raw = project.industry_types
+                        const arr = Array.isArray(raw)
+                          ? raw
+                          : typeof raw === 'string' && raw.length > 0
+                            ? (() => { try { return JSON.parse(raw) } catch { return [] } })()
+                            : []
+                        const list = arr.length > 0 ? arr : (project.industry_type ? [project.industry_type] : [])
+                        if (list.length === 0) return <span className="text-zinc-400 text-sm">—</span>
+                        return (
+                          <div className="flex flex-wrap gap-1 max-w-[220px]">
+                            {list.slice(0, 3).map((ind) => (
+                              <span
+                                key={ind}
+                                className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-200 dark:ring-blue-900/60"
+                              >
+                                {ind}
+                              </span>
+                            ))}
+                            {list.length > 3 && (
+                              <span className="text-xs px-2 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-full ring-1 ring-inset ring-zinc-200 dark:ring-zinc-700">
+                                +{list.length - 3}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </Table.Td>
                     <Table.Td><Badge status={project.status} /></Table.Td>
                     <Table.Td><Badge status={project.priority} /></Table.Td>
@@ -483,22 +534,6 @@ export default function Projects() {
                 onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
               />
               <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                  Industry Type <span className="text-red-500">*</span>
-                </label>
-                <select
-                  required
-                  value={formData.industry_type}
-                  onChange={(e) => setFormData({ ...formData, industry_type: e.target.value })}
-                  className="input w-full"
-                >
-                  <option value="">Select industry</option>
-                  {INDUSTRIES.map(industry => (
-                    <option key={industry} value={industry}>{industry}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Priority</label>
                 <select
                   value={formData.priority}
@@ -509,6 +544,84 @@ export default function Projects() {
                   <option value="high">High</option>
                   <option value="urgent">Urgent</option>
                 </select>
+              </div>
+            </div>
+
+            {/* Industry multi-select */}
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                Industry Type <span className="text-red-500">*</span>
+                <span className="ml-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">
+                  (select one or more; use Other for custom)
+                </span>
+              </label>
+
+              {/* Selected chips */}
+              {formData.industry_types.length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {formData.industry_types.map((ind) => (
+                    <span
+                      key={ind}
+                      className="inline-flex items-center gap-2 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 px-3 py-1 rounded-full text-sm border border-blue-200 dark:border-blue-900/60"
+                    >
+                      {ind}
+                      <button
+                        type="button"
+                        onClick={() => handleIndustryToggle(ind)}
+                        className="text-blue-700 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                        aria-label={`Remove ${ind}`}
+                      >
+                        <X size={14} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Standard options */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
+                {INDUSTRY_OPTIONS.map((industry) => {
+                  const selected = formData.industry_types.includes(industry)
+                  return (
+                    <label
+                      key={industry}
+                      className={clsx(
+                        'flex items-center gap-2 p-2 border-2 rounded-lg cursor-pointer transition-all',
+                        selected
+                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/30'
+                          : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/40',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => handleIndustryToggle(industry)}
+                        className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4"
+                      />
+                      <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{industry}</span>
+                    </label>
+                  )
+                })}
+              </div>
+
+              {/* Other free-text */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Other (e.g., Marine Services) and press Add"
+                  value={otherIndustry}
+                  onChange={(e) => setOtherIndustry(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      handleAddOtherIndustry()
+                    }
+                  }}
+                  className="input flex-1"
+                />
+                <Button type="button" variant="secondary" onClick={handleAddOtherIndustry}>
+                  Add
+                </Button>
               </div>
             </div>
             <div>
@@ -622,27 +735,27 @@ export default function Projects() {
             />
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">Benefits Included</label>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                {['accommodation', 'transport', 'meals', 'visa', 'ticket'].map(benefit => (
-                  <label key={benefit} className={clsx(
-                    "flex items-center gap-2 p-3 border-2 rounded-lg cursor-pointer transition-all",
-                    formData.benefits[benefit]
-                      ? "border-primary-500 bg-primary-50"
-                      : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {BENEFIT_OPTIONS.map(({ key, label }) => (
+                  <label key={key} className={clsx(
+                    'flex items-center gap-2 p-3 border-2 rounded-lg cursor-pointer transition-all',
+                    formData.benefits[key]
+                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-950/30'
+                      : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/40',
                   )}>
                     <input
                       type="checkbox"
-                      checked={formData.benefits[benefit]}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        benefits: { ...formData.benefits, [benefit]: e.target.checked }
-                      })}
+                      checked={!!formData.benefits[key]}
+                      onChange={() => handleBenefitToggle(key)}
                       className="rounded text-primary-600 focus:ring-primary-500 w-4 h-4"
                     />
-                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300 capitalize">{benefit}</span>
+                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{label}</span>
                   </label>
                 ))}
               </div>
+              <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                Note: "Meals included in salary" and "Meals NOT included in salary" are mutually exclusive.
+              </p>
             </div>
           </div>
 

@@ -46,6 +46,19 @@ function normalizeProjectPayload(body = {}) {
     const countriesInput = body.countries || body.country_of_recruitment || [];
     const countries = Array.isArray(countriesInput) ? countriesInput : [];
 
+    // Industries: prefer the new array column, fall back to single legacy field.
+    let industry_types = [];
+    if (Array.isArray(body.industry_types)) {
+        industry_types = body.industry_types
+            .map((s) => (typeof s === 'string' ? s.trim() : ''))
+            .filter(Boolean);
+    } else if (typeof body.industry_type === 'string' && body.industry_type.trim()) {
+        industry_types = [body.industry_type.trim()];
+    }
+    // Derive the legacy single field from the first element so old readers
+    // still see a sensible value. Empty string when nothing was provided.
+    const industry_type = industry_types[0] || (typeof body.industry_type === 'string' ? body.industry_type : '');
+
     const salaryInfo = {
         ...(body.salary_info || {}),
     };
@@ -68,6 +81,8 @@ function normalizeProjectPayload(body = {}) {
 
     return {
         countries,
+        industry_types,
+        industry_type,
         salary_info: salaryInfo,
         contact_info: mergedContactInfo,
     };
@@ -105,9 +120,18 @@ router.get('/', authenticate, async (req, res, next) => {
         }
 
         if (industry_type) {
-            whereClause += isMySQL ? ' AND industry_type = ?' : ` AND industry_type = $${paramCount}`;
-            params.push(industry_type);
-            paramCount++;
+            // Match either the legacy single column OR the new JSONB array — so
+            // projects created after the multi-industry migration are still
+            // filterable by a single-value dropdown.
+            if (isMySQL) {
+                whereClause += ` AND (industry_type = ? OR JSON_CONTAINS(industry_types, JSON_QUOTE(?)))`;
+                params.push(industry_type, industry_type);
+                paramCount += 2;
+            } else {
+                whereClause += ` AND (industry_type = $${paramCount} OR industry_types @> $${paramCount + 1}::jsonb)`;
+                params.push(industry_type, JSON.stringify([industry_type]));
+                paramCount += 2;
+            }
         }
 
         if (priority) {
@@ -307,9 +331,7 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
         const {
             title,
             client_name,
-            industry_type,
             description,
-            countries,
             status = 'planning',
             priority = 'normal',
             total_positions = 0,
@@ -317,29 +339,28 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
             interview_date,
             end_date,
             benefits,
-            salary_info,
-            contact_info,
             requirements,
             metadata
         } = req.body;
 
         const normalized = normalizeProjectPayload(req.body);
 
-        if (!title || !client_name || !industry_type || !normalized.countries || normalized.countries.length === 0) {
-            return res.status(400).json({ error: 'Title, client name, industry type, and at least one country are required' });
+        if (!title || !client_name || normalized.industry_types.length === 0 || !normalized.countries || normalized.countries.length === 0) {
+            return res.status(400).json({ error: 'Title, client name, at least one industry, and at least one country are required' });
         }
 
         const userId = req.user.id;
+        const industryTypesJson = JSON.stringify(normalized.industry_types);
 
         if (isMySQL) {
             const id = generateUUID();
             await query(
-                `INSERT INTO projects (id, title, client_name, industry_type, description, countries, status, priority, 
-                 total_positions, start_date, interview_date, end_date, benefits, salary_info, contact_info, 
+                `INSERT INTO projects (id, title, client_name, industry_type, industry_types, description, countries, status, priority,
+                 total_positions, start_date, interview_date, end_date, benefits, salary_info, contact_info,
                  requirements, metadata, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
-                    id, title, client_name, industry_type, description,
+                    id, title, client_name, normalized.industry_type, industryTypesJson, description,
                     JSON.stringify(normalized.countries), status, priority, total_positions,
                     start_date, interview_date, end_date,
                     JSON.stringify(benefits || {}),
@@ -363,13 +384,13 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
             res.status(201).json(result.rows[0]);
         } else {
             const result = await query(
-                `INSERT INTO projects (title, client_name, industry_type, description, countries, status, priority, 
-                 total_positions, start_date, interview_date, end_date, benefits, salary_info, contact_info, 
+                `INSERT INTO projects (title, client_name, industry_type, industry_types, description, countries, status, priority,
+                 total_positions, start_date, interview_date, end_date, benefits, salary_info, contact_info,
                  requirements, metadata, created_by)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                 VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18)
                  RETURNING *`,
                 [
-                    title, client_name, industry_type, description,
+                    title, client_name, normalized.industry_type, industryTypesJson, description,
                     JSON.stringify(normalized.countries), status, priority, total_positions,
                     start_date, interview_date, end_date,
                     JSON.stringify(benefits || {}),
@@ -407,6 +428,20 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
             updates.countries = updates.country_of_recruitment;
         }
 
+        // Normalize multi-industry input. If the client sends an array, also
+        // sync the legacy industry_type column to the first element.
+        if (Array.isArray(updates.industry_types)) {
+            updates.industry_types = updates.industry_types
+                .map((s) => (typeof s === 'string' ? s.trim() : ''))
+                .filter(Boolean);
+            if (updates.industry_types.length > 0) {
+                updates.industry_type = updates.industry_types[0];
+            }
+        } else if (typeof updates.industry_type === 'string' && updates.industry_type.trim()) {
+            // If only the legacy field was sent, mirror it into the array.
+            updates.industry_types = [updates.industry_type.trim()];
+        }
+
         if (updates.currency) {
             updates.salary_info = {
                 ...(updates.salary_info || {}),
@@ -425,7 +460,7 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
         }
 
         const allowedFields = [
-            'title', 'client_name', 'industry_type', 'description', 'countries',
+            'title', 'client_name', 'industry_type', 'industry_types', 'description', 'countries',
             'status', 'priority', 'total_positions', 'filled_positions',
             'start_date', 'interview_date', 'end_date', 'benefits',
             'salary_info', 'contact_info', 'requirements', 'metadata'
@@ -444,8 +479,8 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
                     paramCount++;
                 }
 
-                // Stringify JSON fields
-                if (['countries', 'benefits', 'salary_info', 'contact_info', 'requirements', 'metadata'].includes(key)) {
+                // Stringify JSON fields (industry_types joins this group post-migration).
+                if (['countries', 'industry_types', 'benefits', 'salary_info', 'contact_info', 'requirements', 'metadata'].includes(key)) {
                     values.push(JSON.stringify(updates[key]));
                 } else {
                     values.push(updates[key]);
