@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { getApplications, getJobs, getProjects } from '../api'
+import { getApplications, getJobs, getProjects, apiClient } from '../api'
 import {
   CalendarDays, FileText, FolderKanban, Briefcase, ListFilter, Plus,
   MoreHorizontal, Eye, Pencil, ArrowRightLeft, Trash2, User,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, Send, MapPinned, X, Clock,
 } from 'lucide-react'
+import { Modal } from '../components/ui/Modal'
+import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
+import toast from 'react-hot-toast'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -74,6 +77,30 @@ export default function Applications() {
   const [editTarget, setEditTarget] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [transferTarget, setTransferTarget] = useState(null)
+
+  // Multi-select: project handlers tick the applications they want to
+  // process together (schedule interview + notify all in one go).
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false)
+  const queryClient = useQueryClient()
+
+  const toggleSelected = (id) => setSelectedIds((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  const clearSelected = () => setSelectedIds(new Set())
+  const selectAllInGroup = (ids) => setSelectedIds((prev) => {
+    const next = new Set(prev)
+    for (const id of ids) next.add(id)
+    return next
+  })
+  const unselectAllInGroup = (ids) => setSelectedIds((prev) => {
+    const next = new Set(prev)
+    for (const id of ids) next.delete(id)
+    return next
+  })
 
   const queryParams = useMemo(() => ({
     page,
@@ -283,7 +310,7 @@ export default function Applications() {
           />
         </Card>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-4 pb-24">
           {groupedByProject.map((group) => (
             <ProjectSection
               key={group.key}
@@ -291,13 +318,17 @@ export default function Applications() {
               isTable={isTable}
               isAdmin={isAdmin}
               statusAccent={statusAccent}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelected}
+              onSelectAllInGroup={() => selectAllInGroup(group.applications.map(a => a.id))}
+              onUnselectAllInGroup={() => unselectAllInGroup(group.applications.map(a => a.id))}
               onEdit={setEditTarget}
               onTransfer={setTransferTarget}
               onDelete={setDeleteTarget}
             />
           ))}
           {pagination && (
-            <Card className="overflow-hidden p-0">
+            <Card className="p-0">
               <Pagination
                 page={pagination.page}
                 totalPages={pagination.totalPages}
@@ -310,6 +341,40 @@ export default function Applications() {
         </div>
       )}
 
+      {/* Floating bulk-action bar — appears when 1+ applications selected */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white rounded-2xl shadow-2xl px-6 py-3 flex items-center gap-4 max-w-[95vw]">
+          <span className="text-sm font-medium">
+            {selectedIds.size} candidate{selectedIds.size > 1 ? 's' : ''} selected
+          </span>
+          <Button
+            size="sm"
+            onClick={() => setBulkScheduleOpen(true)}
+            className="bg-indigo-500 hover:bg-indigo-400 text-white border-0 gap-1"
+          >
+            <CalendarDays size={14} />
+            Schedule Interview
+          </Button>
+          <button onClick={clearSelected} className="text-zinc-400 hover:text-white text-sm flex items-center gap-1">
+            <X size={14} /> Clear
+          </button>
+        </div>
+      )}
+
+      {bulkScheduleOpen && (
+        <BulkScheduleInterviewModal
+          applicationIds={Array.from(selectedIds)}
+          applicationDetails={list.filter(a => selectedIds.has(a.id))}
+          onClose={() => setBulkScheduleOpen(false)}
+          onSuccess={() => {
+            setBulkScheduleOpen(false)
+            clearSelected()
+            queryClient.invalidateQueries({ queryKey: ['applications'] })
+            queryClient.invalidateQueries({ queryKey: ['interviews'] })
+          }}
+        />
+      )}
+
       <CreateApplicationModal open={createOpen} onClose={() => setCreateOpen(false)} />
       <EditApplicationModal open={!!editTarget} application={editTarget} onClose={() => setEditTarget(null)} />
       <TransferApplicationModal open={!!transferTarget} application={transferTarget} onClose={() => setTransferTarget(null)} />
@@ -318,60 +383,242 @@ export default function Applications() {
   )
 }
 
+// ── BulkScheduleInterviewModal ─────────────────────────────────────────────
+// Drives POST /api/interviews/bulk-schedule. Single shared date/time/location
+// across all selected candidates; each gets a WhatsApp invitation and the
+// application status flips to interview_scheduled.
+function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClose, onSuccess }) {
+  const [date, setDate] = useState('')
+  const [time, setTime] = useState('')
+  const [location, setLocation] = useState('')
+  const [duration, setDuration] = useState(30)
+  const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!date || !time) throw new Error('Date and time are required')
+      const channels = []
+      if (notifyWhatsApp) channels.push('whatsapp')
+      return apiClient.post('/api/interviews/bulk-schedule', {
+        application_ids: applicationIds,
+        scheduled_datetime: `${date}T${time}`,
+        location: location || null,
+        duration_minutes: Number(duration) || 30,
+        notify_channels: channels.length > 0 ? channels : ['whatsapp'],
+      }).then(r => r.data)
+    },
+    onSuccess: (result) => {
+      const created = result?.total_created || 0
+      const skipped = result?.skipped?.length || 0
+      // Aggregate per-candidate notification results so partial failures
+      // surface as a per-channel breakdown instead of a generic success toast.
+      const aggregated = { success: [], failed: [] }
+      for (const r of result?.notifications || []) {
+        if (r?.notification?.success) aggregated.success.push(...r.notification.success)
+        if (r?.notification?.failed) aggregated.failed.push(...r.notification.failed)
+      }
+      if (aggregated.failed.length > 0) {
+        showNotificationToast(aggregated, `Scheduled ${created} interview${created === 1 ? '' : 's'}`)
+      } else {
+        toast.success(`Scheduled ${created} interview${created === 1 ? '' : 's'}` + (skipped ? ` (${skipped} skipped)` : ''))
+      }
+      onSuccess()
+    },
+    onError: (err) => showErrorToast(err, 'Bulk schedule failed'),
+  })
+
+  return (
+    <Modal open onClose={onClose} title="Schedule interview for selected candidates" size="md">
+      <div className="space-y-4">
+        <div className="rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 p-3 max-h-40 overflow-y-auto">
+          <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-300 mb-2">
+            {applicationDetails.length} candidate{applicationDetails.length === 1 ? '' : 's'}
+          </p>
+          <div className="space-y-1">
+            {applicationDetails.map((a) => (
+              <div key={a.id} className="flex items-center gap-2 text-sm">
+                <span className="w-6 h-6 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
+                  {a.candidate_name?.charAt(0)?.toUpperCase() || '?'}
+                </span>
+                <span className="font-medium text-zinc-800 dark:text-zinc-100 truncate">{a.candidate_name || 'Candidate'}</span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400 truncate">— {a.job_title || 'Job'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              min={new Date().toISOString().slice(0, 10)}
+              className="input w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Time</label>
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="input w-full"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
+            <MapPinned size={12} /> Location / Venue
+          </label>
+          <input
+            type="text"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="e.g., Head Office, Colombo 3"
+            className="input w-full"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
+            <Clock size={12} /> Duration (minutes)
+          </label>
+          <input
+            type="number"
+            min="10"
+            max="240"
+            value={duration}
+            onChange={(e) => setDuration(e.target.value)}
+            className="input w-full"
+          />
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={notifyWhatsApp}
+            onChange={(e) => setNotifyWhatsApp(e.target.checked)}
+            className="accent-primary-600"
+          />
+          Send interview invitation via WhatsApp
+        </label>
+
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          Each candidate's status will be set to <strong>Scheduled</strong> and they'll receive the same date/time/location.
+        </p>
+
+        <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+          <Button variant="secondary" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending}
+            className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white"
+          >
+            <Send size={16} />
+            {mutation.isPending ? 'Scheduling…' : `Schedule ${applicationIds.length} Interview${applicationIds.length === 1 ? '' : 's'}`}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // ── ProjectSection ───────────────────────────────────────────────────────
 // One section per project. Header shows project name + link + application
-// count; body renders either the table or the card grid for just this
-// project's applications. Collapsible (default expanded).
-function ProjectSection({ group, isTable, isAdmin, statusAccent, onEdit, onTransfer, onDelete }) {
+// count + select-all checkbox. Body renders either table or card grid
+// with per-row checkboxes for bulk actions.
+// Note: NO `overflow-hidden` on the container — the Actions dropdown menu
+// would otherwise get clipped against the section boundary (the bug from
+// image 02 in the user's report).
+function ProjectSection({
+  group, isTable, isAdmin, statusAccent, selectedIds,
+  onToggleSelect, onSelectAllInGroup, onUnselectAllInGroup,
+  onEdit, onTransfer, onDelete,
+}) {
   const [expanded, setExpanded] = useState(true)
   const isUnassigned = group.key === '__no_project__'
 
+  const ids = group.applications.map((a) => a.id)
+  const selectedCount = ids.filter((id) => selectedIds.has(id)).length
+  const allSelected = ids.length > 0 && selectedCount === ids.length
+  const someSelected = selectedCount > 0 && selectedCount < ids.length
+
   return (
-    <Card className="overflow-hidden p-0">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center justify-between gap-3 px-4 sm:px-5 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-gradient-to-r from-indigo-50/60 to-transparent dark:from-indigo-950/30 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors text-left"
-        aria-expanded={expanded}
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          {expanded ? (
-            <ChevronDown size={18} className="text-indigo-600 dark:text-indigo-300 flex-shrink-0" />
-          ) : (
-            <ChevronRight size={18} className="text-indigo-600 dark:text-indigo-300 flex-shrink-0" />
-          )}
-          <div className="rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-200 p-1.5 flex-shrink-0">
-            <FolderKanban size={16} />
-          </div>
-          <div className="min-w-0">
-            {isUnassigned ? (
-              <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 truncate">
-                {group.project_title}
-              </h3>
+    <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
+      <div className="flex items-center gap-3 px-4 sm:px-5 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-gradient-to-r from-indigo-50/60 to-transparent dark:from-indigo-950/30 rounded-t-2xl">
+        <input
+          type="checkbox"
+          aria-label={`Select all applications in ${group.project_title}`}
+          className="w-4 h-4 rounded accent-primary-600 cursor-pointer flex-shrink-0"
+          checked={allSelected}
+          ref={(el) => { if (el) el.indeterminate = someSelected }}
+          onChange={(e) => e.target.checked ? onSelectAllInGroup() : onUnselectAllInGroup()}
+        />
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex-1 flex items-center justify-between gap-3 min-w-0 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/40 -mx-2 px-2 py-1 rounded-lg transition-colors text-left"
+          aria-expanded={expanded}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            {expanded ? (
+              <ChevronDown size={18} className="text-indigo-600 dark:text-indigo-300 flex-shrink-0" />
             ) : (
-              <Link
-                to={`/projects/${group.project_id}`}
-                onClick={(e) => e.stopPropagation()}
-                className="text-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:underline truncate inline-block"
-              >
-                {group.project_title}
-              </Link>
+              <ChevronRight size={18} className="text-indigo-600 dark:text-indigo-300 flex-shrink-0" />
             )}
-            {group.project_client && (
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{group.project_client}</p>
-            )}
+            <div className="rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-200 p-1.5 flex-shrink-0">
+              <FolderKanban size={16} />
+            </div>
+            <div className="min-w-0">
+              {isUnassigned ? (
+                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 truncate">
+                  {group.project_title}
+                </h3>
+              ) : (
+                <Link
+                  to={`/projects/${group.project_id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:underline truncate inline-block"
+                >
+                  {group.project_title}
+                </Link>
+              )}
+              {group.project_client && (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{group.project_client}</p>
+              )}
+            </div>
           </div>
-        </div>
-        <span className="inline-flex items-center gap-1 rounded-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-2.5 py-0.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex-shrink-0">
-          {group.applications.length} application{group.applications.length === 1 ? '' : 's'}
-        </span>
-      </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {selectedCount > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 text-white px-2.5 py-0.5 text-xs font-semibold">
+                {selectedCount} selected
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1 rounded-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-2.5 py-0.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              {group.applications.length} application{group.applications.length === 1 ? '' : 's'}
+            </span>
+          </div>
+        </button>
+      </div>
 
       {expanded && (
         isTable ? (
           <Table>
             <Table.Head>
               <Table.Tr hover={false}>
+                <Table.Th>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all"
+                    className="w-4 h-4 rounded accent-primary-600 cursor-pointer"
+                    checked={allSelected}
+                    ref={(el) => { if (el) el.indeterminate = someSelected }}
+                    onChange={(e) => e.target.checked ? onSelectAllInGroup() : onUnselectAllInGroup()}
+                  />
+                </Table.Th>
                 <Table.Th icon={User}>Candidate</Table.Th>
                 <Table.Th icon={Briefcase}>Job</Table.Th>
                 <Table.Th>Status</Table.Th>
@@ -382,8 +629,18 @@ function ProjectSection({ group, isTable, isAdmin, statusAccent, onEdit, onTrans
             <Table.Body>
               {group.applications.map((app) => {
                 const accent = statusAccent[app.status] || 'zinc'
+                const isSelected = selectedIds.has(app.id)
                 return (
                   <Table.Tr key={app.id} accent={accent}>
+                    <Table.Td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${app.candidate_name || 'application'}`}
+                        className="w-4 h-4 rounded accent-primary-600 cursor-pointer"
+                        checked={isSelected}
+                        onChange={() => onToggleSelect(app.id)}
+                      />
+                    </Table.Td>
                     <Table.Td className="font-semibold text-zinc-900 dark:text-zinc-50 min-w-[200px]">
                       <Link to={`/candidates/${app.candidate_id}`} className="group inline-flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900">
@@ -422,6 +679,7 @@ function ProjectSection({ group, isTable, isAdmin, statusAccent, onEdit, onTrans
           <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {group.applications.map((app) => {
               const accent = statusAccent[app.status] || 'zinc'
+              const isSelected = selectedIds.has(app.id)
               const stripeClass = {
                 blue: 'before:bg-blue-500',
                 amber: 'before:bg-amber-500',
@@ -435,9 +693,16 @@ function ProjectSection({ group, isTable, isAdmin, statusAccent, onEdit, onTrans
               return (
                 <div
                   key={app.id}
-                  className={`relative p-4 rounded-2xl border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900 transition-shadow hover:shadow-md before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r ${stripeClass}`}
+                  className={`relative p-4 rounded-2xl border bg-white dark:bg-zinc-900 transition-shadow hover:shadow-md before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r ${stripeClass} ${isSelected ? 'border-indigo-400 ring-2 ring-indigo-200 dark:ring-indigo-900/50' : 'border-zinc-100 dark:border-zinc-800'}`}
                 >
                   <div className="flex items-start gap-3 pl-2">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${app.candidate_name || 'application'}`}
+                      className="w-4 h-4 mt-1 rounded accent-primary-600 cursor-pointer flex-shrink-0"
+                      checked={isSelected}
+                      onChange={() => onToggleSelect(app.id)}
+                    />
                     <Link
                       to={`/candidates/${app.candidate_id}`}
                       className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900"
@@ -478,7 +743,7 @@ function ProjectSection({ group, isTable, isAdmin, statusAccent, onEdit, onTrans
           </div>
         )
       )}
-    </Card>
+    </div>
   )
 }
 
