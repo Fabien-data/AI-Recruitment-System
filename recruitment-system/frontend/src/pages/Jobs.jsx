@@ -226,7 +226,7 @@ export default function Jobs() {
         }
       />
 
-      <Card className="mb-6 overflow-hidden">
+      <Card className="mb-6 overflow-hidden p-0">
         <div
           {...getRootProps()}
           className={`group relative rounded-3xl border border-dashed p-6 md:p-8 transition-all duration-300 ${

@@ -133,7 +133,7 @@ export default function MarketingHub() {
       </Card>
 
       {/* Table */}
-      <Card className="overflow-hidden">
+      <Card className="overflow-hidden p-0">
         {isLoading ? (
           <div className="p-4"><TableSkeleton rows={8} cols={6} /></div>
         ) : leads.length === 0 ? (

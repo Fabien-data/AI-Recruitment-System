@@ -580,7 +580,7 @@ export default function KnowledgeBase() {
         </div>
       </Card>
 
-      <Card className="overflow-hidden">
+      <Card className="overflow-hidden p-0">
         {entriesQuery.isLoading ? (
           <TableSkeleton rows={6} cols={6} />
         ) : entries.length === 0 ? (
