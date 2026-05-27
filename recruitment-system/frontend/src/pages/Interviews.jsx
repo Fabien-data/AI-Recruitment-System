@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Calendar, CalendarDays, Clock, MapPin, Briefcase, User, Phone,
   CheckCircle2, XCircle, Bell, Star, BarChart3, CalendarCheck, Hourglass, Filter,
+  Send, FolderKanban,
 } from 'lucide-react'
 import {
-  getInterviews, updateInterview, deleteInterview, sendInterviewReminder
+  getInterviews, updateInterview, deleteInterview, sendInterviewReminder, getProjects, apiClient,
 } from '../api'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -148,12 +149,69 @@ function FeedbackModal({ open, interview, onClose, onSave, loading }) {
 
 export default function Interviews() {
   const queryClient = useQueryClient()
-  const [filters, setFilters] = useState({ status: '', date_from: '', date_to: '' })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [filters, setFilters] = useState({
+    status: '',
+    date_from: '',
+    date_to: '',
+    project_id: searchParams.get('project_id') || '',
+  })
   const [feedbackTarget, setFeedbackTarget] = useState(null)
+  const [selectedIds, setSelectedIds] = useState(new Set())
 
   const { data: interviews = [], isLoading } = useQuery({
     queryKey: ['interviews', filters],
     queryFn: () => getInterviews(filters)
+  })
+
+  // Project list for the project tabs at the top. Inactive projects show up
+  // too — recruiters sometimes want to see legacy interviews.
+  const { data: projectsData } = useQuery({
+    queryKey: ['projects', 'interviews-filter'],
+    queryFn: () => getProjects({ limit: 200 }),
+    staleTime: 60_000,
+  })
+  const projects = Array.isArray(projectsData?.data) ? projectsData.data : []
+
+  // Toggle handler — clears selection when project changes so we don't
+  // accidentally bulk-notify interviews from a hidden project.
+  const setProjectFilter = (id) => {
+    setSelectedIds(new Set())
+    setFilters((f) => ({ ...f, project_id: id }))
+    const next = new URLSearchParams(searchParams)
+    if (id) next.set('project_id', id)
+    else next.delete('project_id')
+    setSearchParams(next, { replace: true })
+  }
+
+  const toggleSelected = (id) => setSelectedIds((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  const selectAllVisible = () => setSelectedIds(new Set(interviews.map(iv => iv.id)))
+  const clearSelected = () => setSelectedIds(new Set())
+
+  const bulkNotifyMutation = useMutation({
+    mutationFn: (ids) => apiClient.post('/api/interviews/bulk-notify', {
+      interview_ids: ids,
+    }).then(r => r.data),
+    onSuccess: (result) => {
+      const sent = result?.successes?.length || 0
+      const failed = result?.failures?.length || 0
+      if (failed > 0) {
+        showNotificationToast(
+          { success: result.successes || [], failed: result.failures || [] },
+          `Notified ${sent} candidate(s)`
+        )
+      } else {
+        showNotificationToast(null, `Notified ${sent} candidate(s)`)
+      }
+      queryClient.invalidateQueries({ queryKey: ['interviews'] })
+      clearSelected()
+    },
+    onError: (err) => showErrorToast(err, 'Bulk notify failed'),
   })
 
   const updateMutation = useMutation({
@@ -206,6 +264,36 @@ export default function Interviews() {
         title="Interview Management"
         subtitle="Schedule, track, and complete candidate interviews"
       />
+
+      {/* Project tabs — group all interviews by project */}
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setProjectFilter('')}
+          className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-sm font-medium transition ${
+            !filters.project_id
+              ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+              : 'bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300 dark:border-zinc-700'
+          }`}
+        >
+          All Projects
+        </button>
+        {projects.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => setProjectFilter(p.id)}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition ${
+              filters.project_id === p.id
+                ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                : 'bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300 dark:border-zinc-700'
+            }`}
+          >
+            <FolderKanban size={12} />
+            <span className="truncate max-w-[200px]">{p.title}</span>
+          </button>
+        ))}
+      </div>
 
       {/* Stats strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -279,11 +367,36 @@ export default function Interviews() {
             description="Schedule an interview by certifying an application — it will appear here."
           />
         ) : (
+          <>
+          <div className="px-4 py-2 border-b border-zinc-100 dark:border-zinc-800/60 flex items-center justify-between text-sm">
+            <span className="text-zinc-600 dark:text-zinc-400">
+              {selectedIds.size > 0 ? `${selectedIds.size} selected` : `${interviews.length} interview${interviews.length === 1 ? '' : 's'}`}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={selectedIds.size === interviews.length ? clearSelected : selectAllVisible}
+                className="text-xs font-medium text-primary-600 hover:text-primary-700"
+              >
+                {selectedIds.size === interviews.length && interviews.length > 0 ? 'Clear selection' : 'Select all visible'}
+              </button>
+            </div>
+          </div>
           <Table>
             <Table.Head>
               <Table.Tr hover={false}>
+                <Table.Th>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all"
+                    className="w-4 h-4 rounded accent-primary-600 cursor-pointer"
+                    checked={interviews.length > 0 && selectedIds.size === interviews.length}
+                    onChange={(e) => e.target.checked ? selectAllVisible() : clearSelected()}
+                  />
+                </Table.Th>
                 <Table.Th icon={User}>Candidate</Table.Th>
                 <Table.Th icon={Briefcase}>Job</Table.Th>
+                <Table.Th icon={FolderKanban}>Project</Table.Th>
                 <Table.Th icon={Clock}>Date &amp; Time</Table.Th>
                 <Table.Th icon={MapPin}>Location</Table.Th>
                 <Table.Th>Status</Table.Th>
@@ -294,8 +407,17 @@ export default function Interviews() {
             <Table.Body>
               {interviews.map(iv => {
                 const accent = STATUS_META[iv.status]?.tone || 'zinc'
+                const isSelected = selectedIds.has(iv.id)
                 return (
                   <Table.Tr key={iv.id} accent={accent}>
+                    <Table.Td>
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 rounded accent-primary-600 cursor-pointer"
+                        checked={isSelected}
+                        onChange={() => toggleSelected(iv.id)}
+                      />
+                    </Table.Td>
                     <Table.Td className="min-w-[200px]">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold shrink-0 ring-2 ring-white dark:ring-zinc-900">
@@ -316,6 +438,14 @@ export default function Interviews() {
                         <Briefcase size={13} />
                         <span className="truncate max-w-[160px]">{iv.job_title}</span>
                       </Link>
+                    </Table.Td>
+                    <Table.Td>
+                      {iv.project_title ? (
+                        <Link to={`/projects/${iv.project_id}`} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-900/60">
+                          <FolderKanban size={10} />
+                          <span className="truncate max-w-[140px]">{iv.project_title}</span>
+                        </Link>
+                      ) : <span className="text-zinc-400 text-sm">—</span>}
                     </Table.Td>
                     <Table.Td className="whitespace-nowrap">
                       <div className="inline-flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300 text-sm">
@@ -374,8 +504,28 @@ export default function Interviews() {
               })}
             </Table.Body>
           </Table>
+          </>
         )}
       </Card>
+
+      {/* Floating bulk-action bar */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white rounded-2xl shadow-2xl px-6 py-3 flex items-center gap-4">
+          <span className="text-sm font-medium">
+            {selectedIds.size} interview{selectedIds.size > 1 ? 's' : ''} selected
+          </span>
+          <Button
+            size="sm"
+            onClick={() => bulkNotifyMutation.mutate(Array.from(selectedIds))}
+            disabled={bulkNotifyMutation.isPending}
+            className="bg-blue-500 hover:bg-blue-400 text-white border-0 gap-1"
+          >
+            <Send size={14} />
+            {bulkNotifyMutation.isPending ? 'Notifying…' : 'Send Interview Notification'}
+          </Button>
+          <button onClick={clearSelected} className="text-zinc-400 hover:text-white text-sm">Clear</button>
+        </div>
+      )}
 
       <FeedbackModal
         open={!!feedbackTarget}

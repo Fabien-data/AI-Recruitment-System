@@ -21,7 +21,7 @@ const logger = require('../utils/logger');
 // ── List / filter interviews ──────────────────────────────────────────────────
 router.get('/', authenticate, async (req, res, next) => {
     try {
-        const { job_id, status, date_from, date_to, limit = 50, offset = 0 } = req.query;
+        const { job_id, project_id, status, date_from, date_to, limit = 50, offset = 0 } = req.query;
 
         const params = [];
         const conditions = ['1=1'];
@@ -29,6 +29,12 @@ router.get('/', authenticate, async (req, res, next) => {
         if (job_id) {
             params.push(job_id);
             conditions.push(`a.job_id = $${params.length}`);
+        }
+        // Group-by-project support: filter all interviews that belong to any
+        // job inside the given project. Joined via applications → jobs already.
+        if (project_id) {
+            params.push(project_id);
+            conditions.push(`j.project_id = $${params.length}`);
         }
         if (status) {
             params.push(status);
@@ -50,12 +56,15 @@ router.get('/', authenticate, async (req, res, next) => {
             SELECT
                 iv.*,
                 c.name AS candidate_name, c.phone AS candidate_phone,
-                j.title AS job_title, j.id AS job_id,
+                j.title AS job_title, j.id AS job_id, j.project_id,
+                p.title AS project_title,
+                a.id AS application_id,
                 u.full_name AS interviewer_name
             FROM interview_schedules iv
             JOIN applications a ON iv.application_id = a.id
             JOIN candidates c ON a.candidate_id = c.id
             JOIN jobs j ON a.job_id = j.id
+            LEFT JOIN projects p ON j.project_id = p.id
             LEFT JOIN users u ON iv.interviewer_id = u.id
             WHERE ${conditions.join(' AND ')}
             ORDER BY iv.scheduled_datetime ASC
@@ -275,6 +284,170 @@ router.post('/:id/remind', authenticate, async (req, res, next) => {
             success: ok,
             message: ok ? 'Reminder sent' : 'Reminder send failed',
             notification,
+        });
+    } catch (err) { next(err); }
+});
+
+// ── Bulk notify — re-send the interview WhatsApp to multiple scheduled
+// candidates at once. Used by the Interview Management page when a project
+// handler picks several rows and clicks "Notify selected".
+router.post('/bulk-notify', authenticate, async (req, res, next) => {
+    try {
+        const { interview_ids } = req.body || {};
+        if (!Array.isArray(interview_ids) || interview_ids.length === 0) {
+            return res.status(400).json({ error: 'interview_ids must be a non-empty array' });
+        }
+        if (interview_ids.length > 200) {
+            return res.status(400).json({ error: 'Cannot notify more than 200 interviews at once' });
+        }
+
+        // Pull the rows we need to send notifications. Skip any that no
+        // longer exist instead of failing the whole batch.
+        const result = await query(
+            adaptQuery(`
+                SELECT iv.id, iv.scheduled_datetime, iv.location,
+                       a.candidate_id, j.title AS job_title
+                FROM interview_schedules iv
+                JOIN applications a ON iv.application_id = a.id
+                JOIN jobs j ON a.job_id = j.id
+                WHERE iv.id = ANY($1::uuid[])
+            `),
+            [interview_ids]
+        );
+
+        const successes = [];
+        const failures = [];
+        for (const row of result.rows) {
+            try {
+                const notif = await notifications.sendInterviewNotification(
+                    row.candidate_id,
+                    row.job_title,
+                    row.scheduled_datetime,
+                    row.location || 'TBD',
+                    ['whatsapp']
+                );
+                if (notif.success.length > 0) {
+                    successes.push({ interview_id: row.id, channels: notif.success.map(s => s.channel) });
+                    await query(
+                        adaptQuery('UPDATE interview_schedules SET confirmation_sent_at = NOW() WHERE id = $1'),
+                        [row.id]
+                    );
+                }
+                if (notif.failed.length > 0) {
+                    failures.push({ interview_id: row.id, errors: notif.failed });
+                }
+            } catch (err) {
+                logger.warn(`Bulk-notify: interview ${row.id} failed: ${err.message}`);
+                failures.push({ interview_id: row.id, errors: [{ channel: 'whatsapp', error: err.message }] });
+            }
+        }
+
+        res.json({
+            total_requested: interview_ids.length,
+            total_processed: result.rows.length,
+            successes,
+            failures,
+        });
+    } catch (err) { next(err); }
+});
+
+// ── Bulk schedule — create N interview rows sharing the same datetime/
+// location, flip each application's status to interview_scheduled, and
+// dispatch the invitation WhatsApp per candidate. One round-trip from the
+// UI instead of N.
+router.post('/bulk-schedule', authenticate, async (req, res, next) => {
+    try {
+        const {
+            application_ids,
+            scheduled_datetime,
+            location,
+            duration_minutes = 30,
+            interviewer_id,
+            notify_channels = ['whatsapp'],
+        } = req.body || {};
+
+        if (!Array.isArray(application_ids) || application_ids.length === 0) {
+            return res.status(400).json({ error: 'application_ids must be a non-empty array' });
+        }
+        if (!scheduled_datetime) {
+            return res.status(400).json({ error: 'scheduled_datetime is required' });
+        }
+        if (application_ids.length > 100) {
+            return res.status(400).json({ error: 'Cannot schedule more than 100 interviews at once' });
+        }
+
+        // Fetch the apps we'll touch, joined to candidate+job for notification.
+        const appsResult = await query(
+            adaptQuery(`
+                SELECT a.id, a.candidate_id, a.job_id, c.name, j.title AS job_title
+                FROM applications a
+                JOIN candidates c ON a.candidate_id = c.id
+                JOIN jobs j ON a.job_id = j.id
+                WHERE a.id = ANY($1::uuid[])
+            `),
+            [application_ids]
+        );
+
+        const created = [];
+        const skipped = [];
+        const notificationResults = [];
+        const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
+
+        for (const app of appsResult.rows) {
+            try {
+                const id = generateUUID();
+                await query(
+                    adaptQuery(`
+                        INSERT INTO interview_schedules
+                            (id, application_id, scheduled_datetime, location, interviewer_id,
+                             duration_minutes, status, created_by)
+                        VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
+                    `),
+                    [id, app.id, scheduled_datetime, location || null, interviewer_id || null,
+                     duration_minutes, req.user.id]
+                );
+                await query(
+                    adaptQuery(`
+                        UPDATE applications
+                        SET status = 'interview_scheduled',
+                            interview_datetime = $1,
+                            interview_location = $2,
+                            updated_at = NOW()
+                        WHERE id = $3
+                    `),
+                    [scheduled_datetime, location || null, app.id]
+                );
+
+                let notification = { success: [], failed: [] };
+                try {
+                    notification = await notifications.sendInterviewNotification(
+                        app.candidate_id, app.job_title, scheduled_datetime, location || 'TBD', channels
+                    );
+                    if (notification.success.some(s => s.channel === 'whatsapp')) {
+                        await query(
+                            adaptQuery('UPDATE interview_schedules SET confirmation_sent_at = NOW() WHERE id = $1'),
+                            [id]
+                        );
+                    }
+                } catch (notifErr) {
+                    logger.warn(`Bulk-schedule: notification failed for ${id}: ${notifErr.message}`);
+                    notification.failed.push({ channel: 'all', error: notifErr.message });
+                }
+
+                created.push({ interview_id: id, application_id: app.id, candidate_name: app.name });
+                notificationResults.push({ application_id: app.id, notification });
+            } catch (err) {
+                logger.warn(`Bulk-schedule: failed for application ${app.id}: ${err.message}`);
+                skipped.push({ application_id: app.id, error: err.message });
+            }
+        }
+
+        res.status(201).json({
+            total_requested: application_ids.length,
+            total_created: created.length,
+            created,
+            skipped,
+            notifications: notificationResults,
         });
     } catch (err) { next(err); }
 });
