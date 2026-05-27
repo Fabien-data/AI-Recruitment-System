@@ -755,6 +755,25 @@ class IntakeOrchestrator:
         if ad_intake_flow.is_language_button(action):
             lang = ad_intake_flow.language_for_button(action)
             self._apply_language_lock(db, candidate, state, lang, is_explicit_switch=True)
+
+            # Idempotency: when Meta retries the webhook or the candidate taps
+            # a language button after already advancing past awaiting_language,
+            # do NOT re-emit the branded welcome (which caused production
+            # transcripts to show the welcome 3× in a row). Just update the
+            # language lock and re-ask the current field in the new language.
+            step = str(state.get("ad_flow_step") or "")
+            if step and step != "awaiting_language":
+                current_field = self._current_ad_field(state)
+                if current_field == "cv":
+                    reply = ad_intake_flow.cv_prompt(lang)
+                elif current_field:
+                    reply = intake_agent.get_prompt_for_field(current_field, lang)
+                else:
+                    reply = intake_agent.name_prompt(lang)
+                self._save_agent_state(candidate, state)
+                db.commit()
+                return reply
+
             pending = state.pop("pending_job_welcome", None)
             reply = ad_intake_flow.welcome_and_first_prompt(state, lang, pending)
             self._save_agent_state(candidate, state)

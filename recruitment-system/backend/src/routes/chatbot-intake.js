@@ -524,6 +524,29 @@ router.post(
                 metadataUpdates.future_pool_role = cv_parsed_data.future_pool_role || job_interest || '';
             }
 
+            // Per-job collected fields the chatbot's ad-flow now forwards
+            // (passport, NIC, DOB, English proficiency, alternate phone,
+            // licences, previous employer). Stored on candidates.metadata so
+            // recruiters can see the full profile in CV Manager without
+            // schema migrations. Accept both top-level and cv_parsed_data
+            // envelopes — the chatbot ships them in both places.
+            const PER_JOB_META_FIELDS = [
+                'passport_number',
+                'nic',
+                'date_of_birth',
+                'dob',
+                'english_proficiency',
+                'phone_alternative',
+                'licenses',
+                'previous_employer',
+            ];
+            for (const field of PER_JOB_META_FIELDS) {
+                const val = firstDefined(parsed[field], topLevel[field]);
+                if (val !== undefined) {
+                    metadataUpdates[field] = val;
+                }
+            }
+
             const mergedMetadata = { ...existingMetadata, ...metadataUpdates };
             // Produce a valid JSON value (never the string "null")
             const metadataJson = Object.keys(mergedMetadata).length > 0

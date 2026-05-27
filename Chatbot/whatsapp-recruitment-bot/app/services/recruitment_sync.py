@@ -115,6 +115,30 @@ class RecruitmentSyncService:
         mismatches = extracted.get("mismatches")
         if isinstance(mismatches, list) and mismatches:
             cv_parsed["mismatches"] = mismatches
+
+        # Per-job collected fields — anything the ad-intake state machine
+        # asked the candidate for, beyond the core name/age/email/experience.
+        # Backend (chatbot-intake.js) merges these into candidates.metadata so
+        # recruiters see the full profile in CV Manager. Send at top level AND
+        # under cv_parsed_data so older / newer backend variants both pick up.
+        for field in (
+            "passport_number",
+            "nic",
+            "date_of_birth",
+            "dob",
+            "english_proficiency",
+            "phone_alternative",
+            "licenses",
+            "previous_employer",
+        ):
+            val = collected.get(field)
+            if val in (None, "", []):
+                val = extracted.get(field)
+            if val in (None, "", []):
+                continue
+            payload[field] = val
+            cv_parsed[field] = val
+
         if cv_parsed:
             payload["cv_parsed_data"] = cv_parsed
 

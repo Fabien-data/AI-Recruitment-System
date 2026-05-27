@@ -68,23 +68,23 @@ class IntakeAgent:
         prompts = {
             "en": (
                 "We have urgent openings across the Gulf right now 🔥 "
-                "What job role are you looking for? (e.g. Driver, Nurse, Cook, Mason, Electrician, Security Guard)"
+                "Which role are you interested in? (e.g. Security Officer)"
             ),
             "si": (
-                "දැන් Gulf රටවල urgent vacancies තිබෙනවා 🔥 "
-                "ඔයාට ඕන job role eka mokakda? (Driver, Nurse, Cook, Mason, Electrician wage)"
+                "දැන් Gulf රටවල හදිසි පුරප්පාඩු තිබෙනවා 🔥 "
+                "ඔබට කැමති රැකියාව මොකක්ද? (උදා: Security Officer)"
             ),
             "ta": (
-                "இப்போது Gulf நாடுகளில் urgent vacancies இருக்கு 🔥 "
-                "நீங்கள் தேடும் job role என்ன? (Driver, Nurse, Cook, Mason, Electrician mathiri)"
+                "இப்போது Gulf நாடுகளில் அவசர வேலைவாய்ப்புகள் உள்ளன 🔥 "
+                "உங்களுக்கு விருப்பமான வேலை என்ன? (எ.கா: Security Officer)"
             ),
             "singlish": (
-                "Ipata Gulf ratawal urgent jobs tiyenawa 🔥 "
-                "Oyata ona job role eka mokakda? (Driver, Nurse, Cook, Mason, Electrician wage)"
+                "Dan Gulf ratawal urgent vacancies tiyenawa 🔥 "
+                "Oyata kemathi job role eka mokakda? (eg: Security Officer)"
             ),
             "tanglish": (
-                "Ippo Gulf naadugal-la urgent jobs irukku 🔥 "
-                "Neenga thedra job role enna? (Driver, Nurse, Cook, Mason, Electrician mathiri)"
+                "Ippo Gulf naadugal-la urgent vacancies irukku 🔥 "
+                "Ungaluku virumbura job role enna? (eg: Security Officer)"
             ),
         }
         return prompts.get(lang, prompts["en"])
@@ -123,10 +123,10 @@ class IntakeAgent:
     def age_prompt(self, lang: str) -> str:
         prompts = {
             "en": "Most of our Gulf vacancies are open to ages 22–50. How old are you? (just the number is fine)",
-            "si": "Gulf vacancies ගොඩාක් 22–50 age range. ඔයාගේ වයස කොපමණද? (number eka vitharai kiyanna)",
-            "ta": "Gulf vacancies பெரும்பாலும் 22–50 age range. உங்கள் வயது என்ன? (number மட்டும் சொன்னா போதும்)",
-            "singlish": "Gulf jobs akka 22–50 age range wadi. Oyage wasaya kiyada? (number eka kiyanna puluwanda)",
-            "tanglish": "Gulf jobs paartha 22–50 age range sarithaan. Unga vayasu enna? (number mattum sollunga)",
+            "si": "Gulf රැකියා බොහෝමයක් වයස 22–50 අතර අයට. ඔබේ වයස කීයද? (number එක පමණක් කියන්න)",
+            "ta": "பெரும்பாலான Gulf வேலைகள் 22–50 வயதுக்கு இடைப்பட்டவர்களுக்கு. உங்கள் வயது என்ன? (number மட்டும் சொன்னால் போதும்)",
+            "singlish": "Gulf jobs godak 22–50 atharei wadi. Oyage wasaya kochcharada? (number eka vitharai kiyanna)",
+            "tanglish": "Perumbalum Gulf jobs 22–50 vayasuku-thaan. Unga vayasu enna? (number mattum sollunga)",
         }
         return prompts.get(lang, prompts["en"])
 
@@ -140,20 +140,20 @@ class IntakeAgent:
                 "Could you share your email address so we can send you job offers and updates?"
             ),
             "si": (
-                "ඉතා ලඟ! 😊 WhatsApp number eka ගෙනගෙන ඉන්නවා. "
-                "Job offers email කරන්න ඔයාගේ email address eka දෙනවද?"
+                "ඉතාම ළඟයි! 😊 ඔබේ WhatsApp number එක අප ළඟ තියෙනවා. "
+                "රැකියා offers එවන්න ඔබේ email ලිපිනය කියන්නද?"
             ),
             "ta": (
-                "கிட்டத்தட்ட முடியும்! 😊 WhatsApp number ஒண்ணு இருக்கு. "
-                "Job offers அனுப்ப உங்கள் email address என்ன?"
+                "கிட்டத்தட்ட முடிந்துவிட்டது! 😊 உங்கள் WhatsApp number எங்களிடம் உள்ளது. "
+                "வேலை offers அனுப்ப உங்கள் email முகவரியை சொல்லுங்கள்."
             ),
             "singlish": (
-                "Almost done da! 😊 WhatsApp number eka tiyenawa. "
-                "Job offers email karanna oyage email address eka denna puluwanda?"
+                "Almost done! 😊 Oyage WhatsApp number eka apita tiyenawa. "
+                "Job offers evanna oyage email address eka denna puluwanda?"
             ),
             "tanglish": (
-                "Almost done da! 😊 WhatsApp number kidaichuchu. "
-                "Job offers anuppa unga email address enna?"
+                "Almost done! 😊 Unga WhatsApp number engalukku irukku. "
+                "Job offers anuppa unga email address-a sollunga."
             ),
         }
         return prompts.get(lang, prompts["en"])
@@ -164,10 +164,10 @@ class IntakeAgent:
     def experience_prompt(self, lang: str) -> str:
         prompts = {
             "en": "Employers love experienced candidates 💪 How many years of experience do you have in this field?",
-            "si": "Employers-ta experienced candidates gomara kamathi 💪 Meka genata kochchara avurudu experience thiyenawada?",
-            "ta": "Employers-ku experienced candidates romba pudikkum 💪 Inga ungalukku evalo varusham experience irukku?",
-            "singlish": "Employers-ta experienced eka gomara kamathi 💪 Oyata meka genata kochchara avurudu experience thiyenawada?",
-            "tanglish": "Employers-ku experience ullavangala romba pudikkum 💪 Ungalukku inta field-la evvalo varudam experience irukku?",
+            "si": "අත්දැකීම් සහිත අයට employers-ට වැඩි කැමැත්තක් 💪 මේ ක්ෂේත්‍රයේ ඔබට වසර කීයක අත්දැකීම් තිබෙනවද?",
+            "ta": "அனுபவம் உள்ளவர்களை employers-க்கு மிகவும் பிடிக்கும் 💪 இந்த துறையில் உங்களுக்கு எத்தனை வருட அனுபவம் உள்ளது?",
+            "singlish": "Anubawa thiyena ayata employers-ta wadi kamathi 💪 Me field eke oyata kochchara avurudu anubawa thiyenawada?",
+            "tanglish": "Anubavam ullavangala employers-ku romba pudikkum 💪 Inta field-la ungalukku evvalo varusham anubavam irukku?",
         }
         return prompts.get(lang, prompts["en"])
 
@@ -179,27 +179,27 @@ class IntakeAgent:
             "en": (
                 "🎉 Your profile is almost complete! Just one last step — "
                 "please upload your CV (PDF or Word). "
-                "It helps our recruiters match you to the best jobs faster 📄"
+                "It helps our recruiters match you to the best jobs faster. 📄"
             ),
             "si": (
-                "🎉 Profile eka ලෝකේ! Last step — "
-                "ඔයාගේ CV eka upload කරන්න (PDF හෝ Word). "
-                "Recruiters-ta ඔයාව best job ekata match කරන්න giyak wela yanawa 📄"
+                "🎉 ඔබේ profile එක සම්පූර්ණයි! අවසන් පියවර — "
+                "කරුණාකර ඔබේ CV එක upload කරන්න (PDF හෝ Word). "
+                "මෙය recruiters-ට ඔබට ගැලපෙන හොඳම රැකියාව ඉක්මනින් සොයාගන්න උපකාරී වේ. 📄"
             ),
             "ta": (
-                "🎉 Profile கிட்டத்தட்ட complete! Last step — "
-                "உங்கள் CV upload பண்ணுங்கள் (PDF or Word). "
-                "Recruiters உங்களுக்கு best job match பண்ண help ஆகும் 📄"
+                "🎉 உங்கள் profile கிட்டத்தட்ட முடிந்துவிட்டது! கடைசி படி — "
+                "உங்கள் CV-ஐ upload செய்யுங்கள் (PDF அல்லது Word). "
+                "இது recruiters-க்கு உங்களுக்கு ஏற்ற சிறந்த வேலையை விரைவாக கண்டுபிடிக்க உதவும். 📄"
             ),
             "singlish": (
-                "🎉 Profile eka aluth! Dan last step — "
-                "oyage CV eka upload karanna (PDF atau Word). "
-                "Recruiters-ta oyawa best job ekata match karanna puluwanda wenawa 📄"
+                "🎉 Profile eka almost complete! Last step — "
+                "oyage CV eka upload karanna (PDF or Word). "
+                "Eken recruiters-ta oyata gelapena hondama job eka ikmanata hoyaganna pulwan. 📄"
             ),
             "tanglish": (
-                "🎉 Profile almost complete da! Last step — "
-                "unga CV upload pannunga (PDF or Word). "
-                "Recruiters-ku best job match pannanum-na help aagum 📄"
+                "🎉 Profile almost complete! Last step — "
+                "unga CV-ya upload pannunga (PDF or Word). "
+                "Ithu recruiters-ku ungalukku porutha-ndha best job-a sikram thedi-edukka help pannum. 📄"
             ),
         }
         return prompts.get(lang, prompts["en"])

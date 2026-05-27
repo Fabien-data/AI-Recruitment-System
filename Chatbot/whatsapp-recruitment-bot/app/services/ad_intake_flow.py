@@ -130,10 +130,23 @@ class AdIntakeFlow:
         # canonical first prompt but if name is somehow already collected
         # (e.g. AI extracted it from a verbose first message) we jump ahead.
         first_field = self._first_unsatisfied_field(state)
+
+        # Defensive guard: if the per-job schema's mandatory list happens to be
+        # fully pre-filled by ad context (e.g. job_role + country from referral
+        # data), the welcome ALREADY ends with "please share your full name?".
+        # Force the flow to wait for the name before progressing — never staple
+        # the CV ask onto the welcome bubble, which produced a confusing
+        # "give me your name AND upload your CV" message in production.
+        collected = state.get("collected_data") or {}
+        if not first_field and not collected.get("name"):
+            first_field = "name"
+
         if not first_field:
-            # All mandatory fields somehow already filled — go straight to CV.
+            # Truly everything (including name) was pre-filled. Park the flow
+            # at awaiting_cv and let the next inbound message ask for the CV
+            # via the orchestrator's awaiting_cv branch — don't append it here.
             state["ad_flow_step"] = "awaiting_cv"
-            return f"{welcome}\n\n{intake_agent.cv_prompt(lang)}"
+            return welcome
 
         state["ad_flow_step"] = f"awaiting_field:{first_field}"
         # When the first missing field IS name, the welcome already asks for
