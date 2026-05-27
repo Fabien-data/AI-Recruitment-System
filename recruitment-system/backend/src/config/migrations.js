@@ -572,6 +572,13 @@ async function applyMigrations() {
     // applications.status is plain TEXT (no CHECK constraint) so pre_screened
     // is already accepted by the column itself — we only need the timestamp
     // tracker and the optional projects.industry_types backfill.
+    //
+    // Also patches a pre-existing schema gap: auto-assign.js has always
+    // SELECTed (and INSERTed) applications.screening_details but the column
+    // was never added by any migration or schema.sql, so /api/auto-assign/
+    // job/:id/candidates returned 500 in prod ("column does not exist") and
+    // the frontend rendered that as "Job Not Found". JSONB so the existing
+    // JSON.parse callers keep working.
     const pipelineV2Cols = [
         [
             `ALTER TABLE applications ADD COLUMN IF NOT EXISTS prescreening_completed_at TIMESTAMPTZ`,
@@ -584,6 +591,10 @@ async function applyMigrations() {
         [
             `ALTER TABLE applications ADD COLUMN IF NOT EXISTS prescreening_rating SMALLINT`,
             'applications.prescreening_rating',
+        ],
+        [
+            `ALTER TABLE applications ADD COLUMN IF NOT EXISTS screening_details JSONB DEFAULT '{}'::jsonb`,
+            'applications.screening_details',
         ],
         [
             `ALTER TABLE projects ADD COLUMN IF NOT EXISTS industry_types JSONB DEFAULT '[]'::jsonb`,
