@@ -1,6 +1,7 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Component } from 'react'
 import { useAuthStore } from './stores/authStore'
+import { ErrorBoundary as LocalErrorBoundary } from './components/ui/ErrorBoundary'
 import Layout from './components/Layout'
 import RoleGuard from './components/RoleGuard'
 import Login from './pages/Login'
@@ -69,6 +70,18 @@ function PrivateRoute({ children }) {
   return isAuthenticated ? children : <Navigate to="/login" replace />
 }
 
+// Wrap each route in a per-pathname boundary so a crash on one page can be
+// recovered by navigating away (or hitting "Try again") instead of locking
+// the whole app behind the top-level fallback.
+function RouteBoundary({ children, name }) {
+  const location = useLocation()
+  return (
+    <LocalErrorBoundary resetKey={location.pathname} name={name || location.pathname}>
+      {children}
+    </LocalErrorBoundary>
+  )
+}
+
 function App() {
   return (
     <ErrorBoundary>
@@ -82,20 +95,20 @@ function App() {
         </PrivateRoute>
       }>
         <Route index element={<Dashboard />} />
-        <Route path="candidates" element={<Candidates />} />
-        <Route path="candidates/:id" element={<CandidateDetail />} />
-        <Route path="jobs" element={<Jobs />} />
-        <Route path="jobs/:id" element={<JobDetail />} />
-        <Route path="jobs/:jobId/candidates" element={<JobCandidates />} />
-        <Route path="projects" element={<Projects />} />
-        <Route path="projects/:id" element={<ProjectDetail />} />
-        <Route path="general-pool" element={<GeneralPool />} />
-        <Route path="applications" element={<Applications />} />
-        <Route path="cv-manager" element={<CVManager />} />
-        <Route path="communications" element={<Communications />} />
-        <Route path="interviews" element={<Interviews />} />
-        <Route path="analytics" element={<Analytics />} />
-        <Route path="knowledge-base" element={<KnowledgeBase />} />
+        <Route path="candidates" element={<RouteBoundary name="Candidates"><Candidates /></RouteBoundary>} />
+        <Route path="candidates/:id" element={<RouteBoundary name="CandidateDetail"><CandidateDetail /></RouteBoundary>} />
+        <Route path="jobs" element={<RouteBoundary name="Jobs"><Jobs /></RouteBoundary>} />
+        <Route path="jobs/:id" element={<RouteBoundary name="JobDetail"><JobDetail /></RouteBoundary>} />
+        <Route path="jobs/:jobId/candidates" element={<RouteBoundary name="JobCandidates"><JobCandidates /></RouteBoundary>} />
+        <Route path="projects" element={<RouteBoundary name="Projects"><Projects /></RouteBoundary>} />
+        <Route path="projects/:id" element={<RouteBoundary name="ProjectDetail"><ProjectDetail /></RouteBoundary>} />
+        <Route path="general-pool" element={<RouteBoundary name="GeneralPool"><GeneralPool /></RouteBoundary>} />
+        <Route path="applications" element={<RouteBoundary name="Applications"><Applications /></RouteBoundary>} />
+        <Route path="cv-manager" element={<RouteBoundary name="CVManager"><CVManager /></RouteBoundary>} />
+        <Route path="communications" element={<RouteBoundary name="Communications"><Communications /></RouteBoundary>} />
+        <Route path="interviews" element={<RouteBoundary name="Interviews"><Interviews /></RouteBoundary>} />
+        <Route path="analytics" element={<RouteBoundary name="Analytics"><Analytics /></RouteBoundary>} />
+        <Route path="knowledge-base" element={<RouteBoundary name="KnowledgeBase"><KnowledgeBase /></RouteBoundary>} />
         <Route path="marketing-hub" element={
           <RoleGuard allowedRoles={['admin', 'sourcing_department', 'marketing_agent']} fallback={<Navigate to="/" replace />}>
             <MarketingHub />

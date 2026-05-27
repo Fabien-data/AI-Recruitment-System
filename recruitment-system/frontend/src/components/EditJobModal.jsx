@@ -21,9 +21,39 @@ const STATUS_OPTIONS = [
   { value: 'pending_review', label: 'Pending Review' },
 ]
 
+// Parse JSON fields that may arrive as: a real object, a JSON string, null, or
+// something else entirely if the DB has corrupt data. Always return an object.
+function safeParseObject(value) {
+  if (!value) return {}
+  if (typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+// Normalize a date-ish value (Date object, ISO string, naive date string) to
+// the YYYY-MM-DD format that <input type="date"> expects. Returns '' for
+// anything we can't make sense of.
+function toDateInputValue(value) {
+  if (!value) return ''
+  const str = String(value)
+  // Already in ISO/short form?
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10)
+  const d = new Date(str)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toISOString().slice(0, 10)
+}
+
 function toFormState(job) {
   if (!job) return null
-  const reqs = job.requirements && typeof job.requirements === 'object' ? job.requirements : {}
+  const reqs = safeParseObject(job.requirements)
+  const wiggle = safeParseObject(job.wiggle_room)
   return {
     title: job.title || '',
     category: job.category || '',
@@ -36,7 +66,7 @@ function toFormState(job) {
     domain: job.domain || '',
     urgency_level: job.urgency_level || 'normal',
     status: job.status || 'active',
-    deadline: job.deadline ? String(job.deadline).slice(0, 10) : '',
+    deadline: toDateInputValue(job.deadline),
     requirements: {
       min_age: reqs.min_age ?? '',
       max_age: reqs.max_age ?? '',
@@ -47,9 +77,10 @@ function toFormState(job) {
       languages: Array.isArray(reqs.required_languages) ? reqs.required_languages.join(', ') : (reqs.languages ?? ''),
       skills: Array.isArray(reqs.required_skills) ? reqs.required_skills.join(', ') : (reqs.skills ?? ''),
     },
-    wiggle_room: job.wiggle_room && typeof job.wiggle_room === 'object'
-      ? { age_tolerance: job.wiggle_room.age_tolerance ?? 2, height_tolerance: job.wiggle_room.height_tolerance ?? 2 }
-      : { age_tolerance: 2, height_tolerance: 2 },
+    wiggle_room: {
+      age_tolerance: Number.isFinite(Number(wiggle.age_tolerance)) ? Number(wiggle.age_tolerance) : 2,
+      height_tolerance: Number.isFinite(Number(wiggle.height_tolerance)) ? Number(wiggle.height_tolerance) : 2,
+    },
   }
 }
 
@@ -106,10 +137,30 @@ export function EditJobModal({ isOpen, job, onClose }) {
       return acc
     }, {})
 
-    updateMutation.mutate({
-      ...formData,
+    // Strip empty-string values that map to DATE / INT columns — passing '' to
+    // a PostgreSQL DATE column throws "invalid input syntax for type date".
+    // The backend then 500s, the modal traps the toast but the parent page
+    // can still re-render from a half-stale cache and crash.
+    const payload = {
+      title: formData.title,
+      category: formData.category,
+      description: formData.description,
+      positions_available: Number(formData.positions_available) || 1,
+      salary_range: formData.salary_range,
+      location: formData.location,
+      country: formData.country,
+      country_code: formData.country_code,
+      domain: formData.domain,
+      urgency_level: formData.urgency_level,
+      status: formData.status,
       requirements: cleanedRequirements,
-    })
+      wiggle_room: formData.wiggle_room,
+    }
+    if (formData.deadline && formData.deadline.trim()) {
+      payload.deadline = formData.deadline
+    }
+
+    updateMutation.mutate(payload)
   }
 
   return (
