@@ -19,6 +19,7 @@ import { EditApplicationModal } from '../components/applications/EditApplication
 import { DeleteApplicationConfirm } from '../components/applications/DeleteApplicationConfirm'
 import { TransferApplicationModal } from '../components/applications/TransferApplicationModal'
 import { useAuthStore } from '../stores/authStore'
+import { useViewMode, ViewToggle } from '../components/ui/ViewToggle'
 
 const DEFAULT_LIMIT = 20
 
@@ -59,7 +60,13 @@ export default function Applications() {
   const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '')
   const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '')
   const [page, setPage] = useState(Math.max(parseInt(searchParams.get('page') || '1', 10), 1))
-  const [isCompact, setIsCompact] = useState(searchParams.get('view') !== 'expanded')
+  // Card vs Table view — persisted in localStorage by useViewMode. The legacy
+  // ?view=expanded URL param still flips to Card mode so old bookmarks work.
+  const [viewMode, setViewMode] = useViewMode(
+    'applications.view',
+    searchParams.get('view') === 'expanded' ? 'card' : 'card',
+  )
+  const isTable = viewMode === 'table'
 
   // Modal state
   const [createOpen, setCreateOpen] = useState(false)
@@ -102,7 +109,7 @@ export default function Applications() {
       : []
   const pagination = applications?.pagination || null
 
-  const syncSearchParams = ({ nextPage = 1, nextView = isCompact } = {}) => {
+  const syncSearchParams = ({ nextPage = 1 } = {}) => {
     const next = new URLSearchParams()
     if (projectId) next.set('project_id', projectId)
     if (jobId) next.set('job_id', jobId)
@@ -110,7 +117,6 @@ export default function Applications() {
     if (dateFrom) next.set('date_from', dateFrom)
     if (dateTo) next.set('date_to', dateTo)
     if (nextPage > 1) next.set('page', String(nextPage))
-    if (!nextView) next.set('view', 'expanded')
     setSearchParams(next, { replace: true })
   }
 
@@ -129,11 +135,6 @@ export default function Applications() {
     setSearchParams(new URLSearchParams(), { replace: true })
   }
 
-  const handleViewToggle = (compact) => {
-    setIsCompact(compact)
-    syncSearchParams({ nextPage: page, nextView: compact })
-  }
-
   const handlePageChange = (nextPage) => {
     setPage(nextPage)
     syncSearchParams({ nextPage })
@@ -147,39 +148,20 @@ export default function Applications() {
         title="Applications"
         subtitle="Track candidate applications across jobs"
         actions={
-          <Button variant="primary" onClick={() => setCreateOpen(true)}>
-            <Plus size={16} />
-            New Application
-          </Button>
+          <>
+            <ViewToggle mode={viewMode} onChange={setViewMode} />
+            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+              <Plus size={16} />
+              New Application
+            </Button>
+          </>
         }
       />
 
       <Card className="p-4 sm:p-5 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200">
-            <ListFilter size={18} aria-hidden />
-            <h2 className="text-base font-semibold">Filters</h2>
-          </div>
-          <div className="inline-flex rounded-2xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900/60 p-1">
-            <button
-              type="button"
-              onClick={() => handleViewToggle(true)}
-              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-colors ${
-                isCompact ? 'bg-white dark:bg-zinc-800 shadow text-zinc-900 dark:text-zinc-100' : 'text-zinc-600 dark:text-zinc-400'
-              }`}
-            >
-              Compact
-            </button>
-            <button
-              type="button"
-              onClick={() => handleViewToggle(false)}
-              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-colors ${
-                !isCompact ? 'bg-white dark:bg-zinc-800 shadow text-zinc-900 dark:text-zinc-100' : 'text-zinc-600 dark:text-zinc-400'
-              }`}
-            >
-              Expanded
-            </button>
-          </div>
+        <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200 mb-4">
+          <ListFilter size={18} aria-hidden />
+          <h2 className="text-base font-semibold">Filters</h2>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
@@ -265,7 +247,7 @@ export default function Applications() {
               </Button>
             }
           />
-        ) : isCompact ? (
+        ) : isTable ? (
           <Table>
             <Table.Head>
               <Table.Tr hover={false}>
@@ -325,7 +307,7 @@ export default function Applications() {
             </Table.Body>
           </Table>
         ) : (
-          <div className="p-4 sm:p-5 space-y-3">
+          <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {list.map((app) => {
               const accent = statusAccent[app.status] || 'zinc'
               const stripeClass = {
@@ -335,6 +317,7 @@ export default function Applications() {
                 purple: 'before:bg-purple-500',
                 rose: 'before:bg-rose-500',
                 indigo: 'before:bg-indigo-500',
+                teal: 'before:bg-teal-500',
                 zinc: 'before:bg-zinc-400',
               }[accent]
               return (
@@ -343,32 +326,46 @@ export default function Applications() {
                   className={`relative p-4 border border-zinc-100 dark:border-zinc-800 before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r ${stripeClass}`}
                   hover
                 >
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 pl-2">
+                  <div className="flex items-start gap-3 pl-2">
+                    <Link
+                      to={`/candidates/${app.candidate_id}`}
+                      className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900"
+                    >
+                      {app.candidate_name?.charAt(0)?.toUpperCase() || '?'}
+                    </Link>
                     <div className="min-w-0 flex-1">
-                      <Link to={`/candidates/${app.candidate_id}`} className="text-base font-semibold text-primary-700 hover:text-primary-800 dark:text-primary-300 truncate block">
+                      <Link to={`/candidates/${app.candidate_id}`} className="text-base font-semibold text-zinc-900 dark:text-zinc-50 hover:text-primary-700 dark:hover:text-primary-300 truncate block">
                         {app.candidate_name || 'Candidate'}
                       </Link>
-                      <p className="text-sm text-zinc-600 dark:text-zinc-400 truncate">
-                        {app.job_title || 'Job'} {app.project_title ? `• ${app.project_title}` : ''}
-                      </p>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
-                        Applied {app.applied_at ? new Date(app.applied_at).toLocaleDateString() : '—'}
+                      <p className="text-xs text-zinc-500 dark:text-zinc-500 truncate mt-0.5">
+                        {app.candidate_phone || ''}
                       </p>
                     </div>
+                    <Badge status={app.status} />
+                  </div>
 
-                    <div className="flex items-center gap-3">
-                      <Badge status={app.status} />
-                      <Link to={`/jobs/${app.job_id}`} className="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
-                        View Job
-                      </Link>
-                      <RowActions
-                        app={app}
-                        isAdmin={isAdmin}
-                        onEdit={() => setEditTarget(app)}
-                        onTransfer={() => setTransferTarget(app)}
-                        onDelete={() => setDeleteTarget(app)}
-                      />
-                    </div>
+                  <div className="mt-3 space-y-1 text-sm">
+                    <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
+                      <Briefcase size={13} />
+                      <span className="truncate">{app.job_title || 'Job'}</span>
+                    </Link>
+                    {app.project_title && (
+                      <p className="inline-flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400 ml-2">
+                        <FolderKanban size={11} />
+                        <span className="truncate">{app.project_title}</span>
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-500">
+                    <span>Applied {app.applied_at ? new Date(app.applied_at).toLocaleDateString() : '—'}</span>
+                    <RowActions
+                      app={app}
+                      isAdmin={isAdmin}
+                      onEdit={() => setEditTarget(app)}
+                      onTransfer={() => setTransferTarget(app)}
+                      onDelete={() => setDeleteTarget(app)}
+                    />
                   </div>
                 </Card>
               )

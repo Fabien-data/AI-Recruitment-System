@@ -2,9 +2,10 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useDropzone } from 'react-dropzone'
+import { motion } from 'framer-motion'
 import {
   Briefcase, FolderKanban, Plus, Sparkles, UploadCloud, RefreshCw, Loader2,
-  Search, MoreHorizontal, Pencil, Trash2, Eye, Users,
+  Search, MoreHorizontal, Pencil, Trash2, Eye, Users, MapPin,
 } from 'lucide-react'
 import { getJobs, extractJobFlyers, refreshJobKnowledgeBase } from '../api'
 import { Badge } from '../components/ui/Badge'
@@ -23,6 +24,7 @@ import { DomainPill, DOMAIN_OPTIONS } from '../components/jobs/DomainPill'
 import { CountrySelect } from '../components/jobs/CountrySelect'
 import { CountryFlag } from '../components/jobs/CountryFlag'
 import { useAuthStore } from '../stores/authStore'
+import { useViewMode, ViewToggle } from '../components/ui/ViewToggle'
 import toast from 'react-hot-toast'
 
 const MAX_FLYERS_PER_BATCH = 20
@@ -57,6 +59,7 @@ export default function Jobs() {
   const [searchParams, setSearchParams] = useSearchParams()
   const user = useAuthStore((s) => s.user)
   const isAdmin = user?.role === 'admin' || user?.role === 'sourcing_department'
+  const [viewMode, setViewMode] = useViewMode('jobs.view', 'card')
 
   // URL-driven filters — recruiters can share links and the back button works.
   const statusesFromUrl = (searchParams.get('status') || 'active')
@@ -202,6 +205,7 @@ export default function Jobs() {
         subtitle="View and manage job listings. Drop a flyer to AI-extract roles; you review each one before it goes live."
         actions={
           <>
+            <ViewToggle mode={viewMode} onChange={setViewMode} />
             <Button
               variant="secondary"
               onClick={() => refreshMutation.mutate()}
@@ -426,12 +430,14 @@ export default function Jobs() {
       </div>
 
       {/* Jobs List */}
-      <Card className="overflow-hidden p-0">
-        {isLoading ? (
+      {isLoading ? (
+        <Card className="overflow-hidden p-0">
           <div className="p-5">
             <TableSkeleton rows={6} cols={6} />
           </div>
-        ) : jobsList.length === 0 ? (
+        </Card>
+      ) : jobsList.length === 0 ? (
+        <Card className="overflow-hidden p-0">
           <EmptyState
             icon={Briefcase}
             tone="blue"
@@ -444,8 +450,22 @@ export default function Jobs() {
               </Button>
             }
           />
-        ) : (
-          <Table>
+        </Card>
+      ) : viewMode === 'card' ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {jobsList.map((job, i) => (
+            <JobCard
+              key={job.id}
+              job={job}
+              isAdmin={isAdmin}
+              index={i}
+              onEdit={() => setEditJob(job)}
+              onDelete={() => setDeleteJob(job)}
+            />
+          ))}
+        </div>
+      ) : (
+        <Card className="overflow-hidden p-0"><Table>
             <Table.Head>
               <Table.Tr hover={false}>
                 <Table.Th icon={Briefcase}>Title</Table.Th>
@@ -536,9 +556,8 @@ export default function Jobs() {
                 )
               })}
             </Table.Body>
-          </Table>
-        )}
-      </Card>
+          </Table></Card>
+      )}
 
       <CreateJobModal
         isOpen={isCreateModalOpen}
@@ -565,6 +584,92 @@ export default function Jobs() {
         />
       )}
     </div>
+  )
+}
+
+// Card view for a single job — used by the new Card/Table toggle.
+function JobCard({ job, isAdmin, index = 0, onEdit, onDelete }) {
+  const filled = job.positions_filled ?? 0
+  const available = job.positions_available ?? 1
+  const pct = Math.min(100, Math.round((filled / Math.max(1, available)) * 100))
+  const barTone = pct >= 100
+    ? 'from-emerald-500 to-emerald-600'
+    : pct >= 60
+      ? 'from-amber-400 to-amber-500'
+      : 'from-primary-500 to-primary-600'
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, delay: Math.min(index * 0.025, 0.25) }}
+      className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 transition-shadow hover:shadow-md flex flex-col gap-3"
+    >
+      <div className="flex items-start gap-3">
+        <Link to={`/jobs/${job.id}`} className="flex items-start gap-3 flex-1 min-w-0 group">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900 shadow-sm">
+            {job.title?.charAt(0)?.toUpperCase() || 'J'}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 group-hover:text-primary-600 dark:group-hover:text-primary-400 truncate">
+              {job.title}
+            </h3>
+            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+              <UrgencyPill level={job.urgency_level} />
+              {job.category && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-200 dark:ring-blue-900/60">
+                  {job.category}
+                </span>
+              )}
+            </div>
+          </div>
+        </Link>
+        <div className="flex flex-col items-end gap-2">
+          <Badge status={job.status} />
+          <RowActions job={job} isAdmin={isAdmin} onEdit={onEdit} onDelete={onDelete} />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+        {job.project_title && (
+          <Link
+            to={`/projects/${job.project_id}`}
+            className="inline-flex items-center gap-1 font-medium text-primary-600 hover:text-primary-700"
+          >
+            <FolderKanban size={12} /> {job.project_title}
+          </Link>
+        )}
+        {(job.country || job.country_code) && (
+          <CountryFlag code={job.country_code} name={job.country} />
+        )}
+        {job.location && (
+          <span className="inline-flex items-center gap-1">
+            <MapPin size={12} /> {job.location}
+          </span>
+        )}
+        <DomainPill domain={job.domain} />
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between text-xs mb-1">
+          <span className="text-zinc-500 dark:text-zinc-400">Positions filled</span>
+          <span className="font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">{filled} / {available}</span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+          <div
+            className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+
+      <Link
+        to={`/jobs/${job.id}/candidates`}
+        className="mt-auto inline-flex items-center justify-center gap-1.5 rounded-xl bg-primary-50 hover:bg-primary-100 dark:bg-primary-950/40 dark:hover:bg-primary-900/40 text-primary-700 dark:text-primary-300 px-3 py-2 text-sm font-medium transition-colors"
+      >
+        <Users size={14} /> View Candidates
+      </Link>
+    </motion.div>
   )
 }
 
