@@ -567,6 +567,55 @@ async function applyMigrations() {
         'idx_user_sessions_open'
     );
 
+    // ── Migration 022: Pipeline v2 — pre_screened status, industry_types array ──
+    // Adds the new lifecycle status step and the multi-industry array column.
+    // applications.status is plain TEXT (no CHECK constraint) so pre_screened
+    // is already accepted by the column itself — we only need the timestamp
+    // tracker and the optional projects.industry_types backfill.
+    const pipelineV2Cols = [
+        [
+            `ALTER TABLE applications ADD COLUMN IF NOT EXISTS prescreening_completed_at TIMESTAMPTZ`,
+            'applications.prescreening_completed_at',
+        ],
+        [
+            `ALTER TABLE applications ADD COLUMN IF NOT EXISTS prescreening_notes TEXT`,
+            'applications.prescreening_notes',
+        ],
+        [
+            `ALTER TABLE applications ADD COLUMN IF NOT EXISTS prescreening_rating SMALLINT`,
+            'applications.prescreening_rating',
+        ],
+        [
+            `ALTER TABLE projects ADD COLUMN IF NOT EXISTS industry_types JSONB DEFAULT '[]'::jsonb`,
+            'projects.industry_types',
+        ],
+    ];
+    for (const [sql, label] of pipelineV2Cols) {
+        await safeAlter(sql, label);
+    }
+
+    // Backfill industry_types from the legacy industry_type column.
+    // Idempotent: only updates rows where industry_types is still the empty
+    // default but industry_type has a value.
+    await safeAlter(
+        `UPDATE projects
+            SET industry_types = jsonb_build_array(industry_type)
+          WHERE (industry_types IS NULL OR industry_types = '[]'::jsonb)
+            AND industry_type IS NOT NULL
+            AND industry_type <> ''`,
+        'projects.industry_types backfill from industry_type',
+    );
+
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_projects_industry_types ON projects USING gin (industry_types)`,
+        'idx_projects_industry_types (GIN)',
+    );
+
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_app_prescreened ON applications(prescreening_completed_at) WHERE prescreening_completed_at IS NOT NULL`,
+        'idx_app_prescreened',
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 
