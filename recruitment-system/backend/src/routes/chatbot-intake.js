@@ -440,28 +440,69 @@ router.post(
                 } catch (e) { }
             }
 
-            let metadataUpdates = {};
-            if (cv_parsed_data) {
-                if (cv_parsed_data.mismatches) metadataUpdates.mismatches = cv_parsed_data.mismatches;
-                if (cv_parsed_data.age != null) metadataUpdates.age = cv_parsed_data.age;
-                if (cv_parsed_data.height_cm != null) metadataUpdates.height_cm = cv_parsed_data.height_cm;
-                // Store the precise language register (singlish/tanglish/si/ta/en)
-                if (cv_parsed_data.language_register) {
-                    metadataUpdates.language_register = cv_parsed_data.language_register;
-                }
-                // Store experience_years from CV parsed data in metadata for UI display
-                const cvExp = cv_parsed_data.total_experience_years ?? cv_parsed_data.experience_years;
-                if (cvExp != null) metadataUpdates.experience_years = cvExp;
+            // Be permissive about payload shape: the chatbot has shipped at
+            // least three different envelope conventions over time. Accept
+            // each field at the top level OR nested inside cv_parsed_data,
+            // preferring the more-structured CV-parsed value when both exist.
+            const topLevel = req.body || {};
+            const parsed = cv_parsed_data || {};
 
-                // Fallback: derive skills string from CV's technical_skills if top-level skills is missing
-                if (!skills && cv_parsed_data.technical_skills) {
-                    const ts = cv_parsed_data.technical_skills;
-                    skills = Array.isArray(ts) ? ts.join(', ') : String(ts);
-                }
-            }
-            // Also capture language_register from top-level if not already in cv_parsed_data
-            if (!metadataUpdates.language_register && language_register) {
+            const firstDefined = (...vals) => {
+                for (const v of vals) if (v !== undefined && v !== null && v !== '') return v;
+                return undefined;
+            };
+
+            // Numeric coercion that tolerates strings like "27" / "175cm".
+            const toIntOrNull = (v) => {
+                if (v === undefined || v === null || v === '') return null;
+                const n = parseInt(String(v).replace(/[^\d-]/g, ''), 10);
+                return Number.isFinite(n) ? n : null;
+            };
+
+            // Diagnostic log — keys only, NOT values, so PII stays out of the
+            // logs. Helps trace which envelope the chatbot is currently
+            // sending when CV manager rows look incomplete.
+            logger.info(
+                `Chatbot intake payload keys=${Object.keys(topLevel).join(',')} ` +
+                `parsedKeys=${Object.keys(parsed || {}).join(',')}`
+            );
+
+            let metadataUpdates = {};
+
+            // Age: cv_parsed_data.age || top-level age (some chatbot builds)
+            const ageVal = toIntOrNull(firstDefined(parsed.age, topLevel.age, parsed.age_years));
+            if (ageVal != null) metadataUpdates.age = ageVal;
+
+            // Height: try cm-specific first, fall back to a generic "height".
+            const heightVal = toIntOrNull(
+                firstDefined(parsed.height_cm, topLevel.height_cm, parsed.height, topLevel.height)
+            );
+            if (heightVal != null) metadataUpdates.height_cm = heightVal;
+
+            // Mismatches — only ever nested under cv_parsed_data.
+            if (parsed.mismatches) metadataUpdates.mismatches = parsed.mismatches;
+
+            // Language register (singlish/tanglish/si/ta/en).
+            if (parsed.language_register) {
+                metadataUpdates.language_register = parsed.language_register;
+            } else if (language_register) {
                 metadataUpdates.language_register = language_register;
+            }
+
+            // Experience years — multiple aliases observed in the wild.
+            const cvExp = toIntOrNull(firstDefined(
+                parsed.total_experience_years,
+                parsed.experience_years,
+                topLevel.experience_years,
+            ));
+            if (cvExp != null) metadataUpdates.experience_years = cvExp;
+
+            // Skills — top-level wins, then technical_skills, then skills array.
+            if (!skills) {
+                const skillsSource = firstDefined(parsed.technical_skills, parsed.skills, topLevel.skills_list);
+                if (skillsSource) {
+                    skills = Array.isArray(skillsSource) ? skillsSource.join(', ') : String(skillsSource);
+                }
             }
 
             // Always store the candidate's stated job interest and destination in metadata
