@@ -69,12 +69,46 @@ class RecruitmentSyncService:
 
         if country:
             payload["country"] = country
+            payload["destination_country"] = country  # alias used by CV manager
         if candidate.email:
             payload["email"] = candidate.email
         if skills_list:
             payload["skills"] = skills_list[:20]
         if preferred_language:
             payload["preferred_language"] = preferred_language
+
+        # Demographic data — the backend reads these into candidates.metadata
+        # so the CV Manager can show age/height without a separate fetch.
+        # Send both at top level AND nested under cv_parsed_data so older /
+        # newer backend variants both pick them up.
+        age_val = getattr(candidate, "age", None)
+        if age_val is None and isinstance(collected.get("age"), (int, float)):
+            age_val = int(collected["age"])
+        height_val = collected.get("height_cm") or extracted.get("height_cm")
+        try:
+            height_val = int(height_val) if height_val is not None else None
+        except (TypeError, ValueError):
+            height_val = None
+
+        cv_parsed: Dict[str, Any] = {}
+        if age_val is not None:
+            payload["age"] = age_val
+            cv_parsed["age"] = age_val
+        if height_val is not None:
+            payload["height_cm"] = height_val
+            cv_parsed["height_cm"] = height_val
+        if candidate.experience_years is not None:
+            cv_parsed["total_experience_years"] = candidate.experience_years
+        if skills_list:
+            cv_parsed["technical_skills"] = skills_list[:20]
+        if preferred_language:
+            cv_parsed["language_register"] = preferred_language
+        # Surface CV mismatches if the parser produced them
+        mismatches = extracted.get("mismatches")
+        if isinstance(mismatches, list) and mismatches:
+            cv_parsed["mismatches"] = mismatches
+        if cv_parsed:
+            payload["cv_parsed_data"] = cv_parsed
 
         # Ad-attribution: when the candidate arrived from a FB/IG job ad, surface
         # both the ad_ref (so backend tracking knows the source link) and the
