@@ -597,10 +597,14 @@ class MetaWhatsAppClient:
             "ඔබට කැමති භාෂාව තෝරන්න.\n"
             "உங்கள் மொழியை தேர்ந்தெடுக்கவும்."
         )
+        # Button IDs match the ad-flow's `lang_ad_*` handler in orchestrator
+        # so language taps from the greeting fast-path route through the same
+        # code path as the ad-flow's own selector. The handler falls back to
+        # the generic intake flow when there's no ad context in state.
         buttons = [
-            {"id": "lang_en", "title": "🇬🇧 English"},
-            {"id": "lang_si", "title": "🇱🇰 සිංහල"},
-            {"id": "lang_ta", "title": "🇱🇰 தமிழ்"},
+            {"id": "lang_ad_en", "title": "🇬🇧 English"},
+            {"id": "lang_ad_si", "title": "🇱🇰 සිංහල"},
+            {"id": "lang_ad_ta", "title": "🇱🇰 தமிழ்"},
         ]
         return await self.send_interactive_buttons(
             to_number=to_number,

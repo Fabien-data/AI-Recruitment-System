@@ -101,8 +101,26 @@ class AdIntakeFlow:
     ) -> str:
         """Render the branded welcome (names the clicked job) followed by the
         first mandatory field's prompt. Both are sent as a single message so
-        the user gets one tight greeting, not a chain of separate sends."""
+        the user gets one tight greeting, not a chain of separate sends.
+
+        Fallback: when there is NO ad context (candidate landed via the
+        greeting fast-path without an ad), return the generic intake-agent
+        name prompt instead of pretending we know which job they want. This
+        keeps the legacy AI-driven flow intact for non-ad candidates even
+        though the unified language-button IDs now route every tap through
+        this same handler.
+        """
         pending = pending or state.get("pending_job_welcome") or {}
+        ad_ctx = state.get("ad_context") if isinstance(state.get("ad_context"), dict) else None
+        has_ad_context = bool(ad_ctx) or bool(pending.get("job_title"))
+
+        if not has_ad_context:
+            # Non-ad candidate — keep them on the legacy AI flow. Clear any
+            # stale ad-flow markers so the orchestrator's text path doesn't
+            # later override AI behaviour for this candidate.
+            state.pop("ad_flow_step", None)
+            return intake_agent.name_prompt(lang)
+
         job_title = pending.get("job_title") or self._job_title_from_state(state)
         country = pending.get("country") or self._country_from_state(state)
 

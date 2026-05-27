@@ -226,4 +226,34 @@ class MetaReferralService:
         return ReferralMatchResult(best=best, candidates=top)
 
 
+    def match_from_text(self, text: str) -> ReferralMatchResult:
+        """Headline-style fuzzy match against the candidate's message body.
+
+        Used when Meta did NOT supply a ``referral`` object on the first
+        message (paid-ad referrals sometimes drop, plus candidates who
+        copy-paste the friendly pre-fill text). Treats the message body as
+        if it were the ad headline AND body, and runs the same scoring as
+        ``match()``. This catches cases like:
+
+            "Hi! I want to apply for this Security Officer - Female position
+             in Dubai."
+
+        which contains the exact CRM title as a substring → high-confidence
+        auto-route into the per-job ad flow.
+
+        Returns the same ``ReferralMatchResult`` shape so the caller can
+        reuse the existing handler logic unchanged.
+        """
+        if not text or not text.strip():
+            return ReferralMatchResult(best=None, candidates=[])
+        synthetic = {"headline": text, "body": text, "source_type": "text"}
+        result = self.match(synthetic)
+        if result.best:
+            logger.info(
+                "Ad-intent body match: text=%r -> job=%r (score=%.2f, candidates=%d)",
+                text[:80], result.best.title, result.best.score, len(result.candidates),
+            )
+        return result
+
+
 meta_referral_service = MetaReferralService()

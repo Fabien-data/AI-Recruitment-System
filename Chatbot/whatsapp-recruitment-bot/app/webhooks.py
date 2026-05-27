@@ -30,6 +30,27 @@ from app.services.voice_service import voice_service
 from app.config import settings
 from app.nlp.language_detector import is_greeting
 
+
+_AD_INTENT_KEYWORDS = (
+    "apply for", "i want to apply", "interested in",
+    "position in", "vacancy", "vacancies", "i'd like to apply",
+    "id like to apply", "applying for", "this job",
+)
+
+
+def _looks_like_ad_intent(text: str) -> bool:
+    """Cheap substring check used to skip the greeting fast-path when the
+    candidate's first message looks like the friendly ad pre-fill text
+    ("Hi! 🙏 I want to apply for this Security Officer position in Dubai.").
+    Routing such messages through the orchestrator lets the body-text
+    matcher in meta_referral_service detect the job even when Meta did
+    not supply a referral object on the webhook. False positives are
+    recovered by the matcher's confidence floor in the orchestrator."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(k in lowered for k in _AD_INTENT_KEYWORDS)
+
 try:
     from redis import Redis
 except Exception:
@@ -487,13 +508,17 @@ async def process_single_message(message: dict, contacts: list, db):
         logger.info(f"💬 Text from {from_number}: {text_body!r}")
 
         # Fast-path: for simple greetings in early onboarding states, send language selector
-        # immediately and skip heavy chatbot orchestration. SKIPPED when a CTWA
-        # referral is present — that needs the orchestrator's headline match
-        # to fire so the candidate lands in the per-job ad flow, not the
-        # generic language selector.
+        # immediately and skip heavy chatbot orchestration. SKIPPED when:
+        #   (a) a CTWA referral is present — needs the orchestrator's headline
+        #       match to land the candidate in the per-job ad flow, OR
+        #   (b) the text itself looks like an ad pre-fill ("I want to apply
+        #       for this Security Officer position in Dubai") — needs the
+        #       orchestrator's body-text matcher to detect the job even when
+        #       Meta didn't supply a referral object. The greeting fast-path
+        #       would otherwise hijack the conversation and lose ad context.
         try:
             greet, _ = is_greeting(text_body)
-            if greet and not referral_obj:
+            if greet and not referral_obj and not _looks_like_ad_intent(text_body):
                 candidate = crud.get_or_create_candidate(db, from_number)
                 if candidate.conversation_state in (STATE_INITIAL, STATE_AWAITING_LANGUAGE_SELECTION):
                     sel = await meta_client.send_language_selector(from_number)

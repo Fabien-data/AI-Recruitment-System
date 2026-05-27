@@ -102,6 +102,29 @@ class IntakeOrchestrator:
             if ad_reply is not None:
                 return ad_reply
 
+        # Ad-intent body-text fallback — used when Meta did NOT include the
+        # referral object on a first message that LOOKS like an ad pre-fill
+        # ("Hi! I want to apply for this Security Officer - Female position
+        # in Dubai."). Fires only on the first turn (ad_processed gates it)
+        # and only when the text actually mentions apply/position/job intent.
+        # This catches: copy-pasted pre-fill text, paid ads where Meta drops
+        # the referral object, and manual test paths.
+        if (
+            not state.get("ad_processed")
+            and self._looks_like_ad_intent(message_text)
+        ):
+            body_match = meta_referral_service.match_from_text(message_text)
+            if body_match.is_confident and body_match.best and body_match.best.job_id:
+                context = await ad_context_service.load_for_ad_ref(
+                    body_match.best.job_id, candidate, db
+                )
+                if context:
+                    logger.info(
+                        "Ad-intent auto-routed to job '%s' (body match, score=%.2f)",
+                        body_match.best.title, body_match.best.score,
+                    )
+                    return self._route_to_ad_flow_with_context(db, candidate, state, context)
+
         # Detect whether this message is an explicit language-switch request so
         # the lock can be updated; otherwise the existing lock is preserved.
         is_explicit_switch = bool(detect_language_switch_request(message_text or ""))
@@ -247,22 +270,46 @@ class IntakeOrchestrator:
         else:
             state["rephrase_mode"] = False
 
-        # Force-pick guard (Phase 1.2): if the AI tries to ask for something
-        # we already collected (and already asked once), override with the next
-        # genuinely missing mandatory field using the deterministic dispatcher.
+        # Force-pick guard (Phase 1.2, hardened 2026-05-27): if the AI tries
+        # to ask for something we already collected, OR for a field that's
+        # not in this job's mandatory schema, override with the next genuinely
+        # missing mandatory field using the deterministic dispatcher.
+        #
+        # The original guard required `next_q in asked_questions` first which
+        # let the FIRST re-ask through. Now we also fire when:
+        #   (a) the field is already satisfied (regardless of whether the AI
+        #       had asked it before), OR
+        #   (b) the field is not in the per-job mandatory schema (e.g. AI
+        #       hallucinates 'job_role' for a Security Officer job whose
+        #       required_fields_schema is name/phone/experience_years/dob).
         mandatory_order = self._mandatory_order(state)
-        if next_q and next_q in asked_questions and self._field_satisfied(next_q, collected):
+        override_reason = None
+        if next_q and self._field_satisfied(next_q, collected):
+            override_reason = "already-satisfied"
+        elif next_q and mandatory_order and next_q not in mandatory_order:
+            override_reason = "not-in-job-schema"
+
+        if override_reason:
             replacement = self._next_unasked_missing(mandatory_order, collected, asked_questions)
             if replacement and replacement != next_q:
                 logger.info(
-                    "Force-pick override: AI asked '%s' (already known) → asking '%s'",
-                    next_q, replacement,
+                    "Force-pick override (%s): AI asked '%s' → asking '%s'",
+                    override_reason, next_q, replacement,
                 )
                 next_q = replacement
                 deterministic_prompt = intake_agent.get_prompt_for_field(replacement, locked_language)
                 if deterministic_prompt:
                     ai_decision.reply_message = deterministic_prompt
                     ai_decision.next_question_type = replacement
+            elif not replacement:
+                # All mandatory fields satisfied — don't re-ask anything.
+                # Let the AI's reply_message stand (likely a closing remark).
+                logger.info(
+                    "Force-pick: all mandatory fields satisfied, AI was asking '%s' (%s) — no replacement",
+                    next_q, override_reason,
+                )
+                next_q = None
+                ai_decision.next_question_type = None
 
         # Ad-intake override: when the deterministic ad-flow is steering this
         # conversation, we trust the AI's *entity extraction* (already merged
@@ -1097,6 +1144,23 @@ class IntakeOrchestrator:
             "job_role": getattr(ai_decision, "job_interest", None),
         }
         return mapping.get(field)
+
+    def _looks_like_ad_intent(self, text: str) -> bool:
+        """Heuristic: does this message look like the friendly ad pre-fill
+        text ('Hi! I want to apply for this Security Officer position in
+        Dubai.')? Used as a fallback when Meta did not supply a referral
+        object on a first message that clearly came from an ad. Cheap
+        substring check — false positives are recovered by the matcher's
+        confidence floor."""
+        if not text:
+            return False
+        lowered = text.lower()
+        keywords = (
+            "apply for", "i want to apply", "interested in",
+            "position in", "vacancy", "vacancies", "i'd like to apply",
+            "id like to apply", "applying for", "this job",
+        )
+        return any(k in lowered for k in keywords)
 
     def _looks_like_cv_intent(self, text: str) -> bool:
         """Heuristic: did the user signal they're about to upload/lack a CV?
