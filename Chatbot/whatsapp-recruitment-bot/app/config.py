@@ -27,18 +27,17 @@ class Settings(BaseSettings):
     
     # OpenAI
     openai_api_key: str
-    # Single source of truth for the conversational brain. Bump this env var
-    # (OPENAI_CHAT_MODEL) when OpenAI releases a newer flagship.
-    chat_model: str = "gpt-5.5"
+    # Single source of truth for the conversational brain. Override CHAT_MODEL
+    # in env.yaml to bump to a newer flagship as OpenAI releases one.
+    chat_model: str = "gpt-4o"
     # Used by sync_validator for the final pre-CRM-sync AI pass. Defaults to
     # the chat model so we get the same intelligence — override only if a
     # cheaper validator model is preferred.
-    pre_sync_validator_model: str = "gpt-5.5"
-    # Legacy aliases kept for one release so deployments without the new env
-    # vars still boot. New code MUST read settings.chat_model.
-    llm_primary_model: str = "gpt-5.5"
-    llm_fallback_model: str = "gpt-5.5"
-    classifier_model: str = "gpt-5.5"
+    pre_sync_validator_model: str = "gpt-4o"
+    # Legacy aliases used by the run_ai_supervisor fallback path.
+    llm_primary_model: str = "gpt-4o"
+    llm_fallback_model: str = "gpt-4o-mini"
+    classifier_model: str = "gpt-4o-mini"
     
     # Pinecone (OPTIONAL — if empty, falls back to PostgreSQL text search)
     pinecone_api_key: Optional[str] = None
