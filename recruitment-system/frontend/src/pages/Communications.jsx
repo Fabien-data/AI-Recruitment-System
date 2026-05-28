@@ -142,11 +142,19 @@ const parseAttachments = (value) => {
 
 const getPrimaryAttachment = (msg) => {
   const attachments = parseAttachments(msg.attachments)
-  if (attachments.length === 0) return null
-
-  const first = attachments[0]
-  if (typeof first === 'string') return first
-  if (first && typeof first === 'object') return first.url || null
+  if (attachments.length > 0) {
+    const first = attachments[0]
+    if (typeof first === 'string') return first
+    if (first && typeof first === 'object') return first.url || null
+  }
+  // Chatbot media (voice notes, images) arrives with the playable/openable URL
+  // on media_url or inside the metadata JSON (sync-message stores it there).
+  if (msg.media_url) return msg.media_url
+  let meta = msg.metadata
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta) } catch { meta = null }
+  }
+  if (meta && meta.media_url) return meta.media_url
   return null
 }
 
@@ -493,10 +501,19 @@ export default function Communications() {
         if (exists) return prev.map(m => m.id === msg.id ? { ...msg, _optimistic: false } : m)
         return [...prev, msg]
       })
-      // Update last message in chat list
+      // Update last message in chat list (+ promote a real captured name)
+      const _realName = msg.candidate_name && String(msg.candidate_name).trim()
+      const _phoneDigits = String(msg.phone || '').replace(/[^0-9]/g, '')
+      const _nameIsReal = _realName && _realName.replace(/[^0-9]/g, '') !== _phoneDigits
       setChatList(prev => prev.map(c =>
         c.candidate_id === msg.candidate_id
-          ? { ...c, last_message: msg.content, last_message_at: msg.sent_at, last_direction: msg.direction }
+          ? {
+              ...c,
+              last_message: msg.content,
+              last_message_at: msg.sent_at,
+              last_direction: msg.direction,
+              ...(_nameIsReal ? { name: _realName, display_name: _realName } : {}),
+            }
           : c
       ))
       // Refresh the documents panel for this candidate when a new document
@@ -530,14 +547,26 @@ export default function Communications() {
     })
 
     socket.on('chat_activity', (activity) => {
+      // Real-time identity: when the bot has captured the candidate's name,
+      // candidate_name arrives as the real name (not the phone). Promote it to
+      // name/display_name so the header + list switch from phone → name live.
+      const realName = activity.candidate_name && String(activity.candidate_name).trim()
+      const phoneStr = String(activity.phone || '').replace(/[^0-9]/g, '')
+      const nameIsReal = realName && realName.replace(/[^0-9]/g, '') !== phoneStr
       setChatList(prev => {
         const exists = prev.find(c => c.candidate_id === activity.candidate_id)
         if (!exists && activity.candidate_name) {
-          return [{ ...activity, name: activity.candidate_name }, ...prev]
+          return [{ ...activity, name: activity.candidate_name, display_name: activity.candidate_name }, ...prev]
         }
         return prev.map(c =>
           c.candidate_id === activity.candidate_id
-            ? { ...c, ...activity, last_message: activity.last_message, last_message_at: activity.ts }
+            ? {
+                ...c,
+                ...activity,
+                last_message: activity.last_message,
+                last_message_at: activity.ts,
+                ...(nameIsReal ? { name: realName, display_name: realName } : {}),
+              }
             : c
         )
       })

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +14,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.agents.intake_agent import intake_agent
 from app.agents.recovery_agent import recovery_agent
+from app.config import settings
 from app.services.ad_context_service import ad_context_service
 from app.services.ad_intake_flow import ad_intake_flow
 from app.services.meta_referral_service import (
@@ -28,8 +31,52 @@ from app.services.recruitment_sync import recruitment_sync
 from app.services.vacancy_service import vacancy_service
 from app.nlp.language_detector import detect_language_switch_request
 from app.utils.candidate_validator import run_ai_supervisor
+# AI-driven intake (GPT-5.5 brain) — replaces run_ai_supervisor when
+# settings.use_ai_driven_intake is True. Import is unconditional so module
+# import errors are caught at boot, not the first flagged turn.
+from app.llm.conversation_agent import run_turn as ai_run_turn
 
 logger = logging.getLogger(__name__)
+
+
+_EXT_BY_MEDIA = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+}
+
+
+def _persist_media_bytes(
+    media_content: bytes,
+    media_type: str,
+    media_filename: Optional[str],
+    candidate_id: Any,
+) -> Optional[str]:
+    """Write downloaded WhatsApp media to a local file and return its path.
+
+    Without this, the CV bytes are parsed in memory and then discarded —
+    recruitment_sync.push receives cv_path=None and never uploads the file, so
+    the CV never reaches the backend's cv_files table. Returns None on failure
+    (sync still proceeds with text-only fields).
+    """
+    if not media_content:
+        return None
+    try:
+        base_dir = os.path.join(getattr(settings, "upload_dir", "./uploads") or "./uploads", "cvs")
+        os.makedirs(base_dir, exist_ok=True)
+        ext = ""
+        if media_filename and "." in media_filename:
+            ext = os.path.splitext(media_filename)[1].lower()
+        if not ext:
+            ext = ".pdf" if media_type == "document" else ".jpg"
+        path = os.path.join(base_dir, f"cv_{candidate_id}_{uuid.uuid4().hex[:8]}{ext}")
+        with open(path, "wb") as fh:
+            fh.write(media_content)
+        return path
+    except Exception as exc:    # noqa: BLE001
+        logger.warning("Failed to persist CV media bytes: %s", exc)
+        return None
 
 
 class IntakeOrchestrator:
@@ -137,6 +184,47 @@ class IntakeOrchestrator:
             db, candidate, state, resolved_language, is_explicit_switch=is_explicit_switch
         )
         locked_language = state.get("locked_language") or resolved_language or "en"
+
+        # ── AI-driven intake branch ──────────────────────────────────────────
+        # When enabled, the GPT-5.5 conversation_agent handles every turn via
+        # tool calls. Legacy supervisor + FAQ/ad_context_snippet plumbing below
+        # is bypassed entirely. Flip settings.use_ai_driven_intake (or env var
+        # USE_AI_DRIVEN_INTAKE) to False for instant rollback to legacy.
+        if getattr(settings, "use_ai_driven_intake", False):
+            try:
+                turn_result = await ai_run_turn(
+                    candidate=candidate,
+                    db=db,
+                    state=state,
+                    locked_language=locked_language,
+                    user_message=message_text or "",
+                )
+            except Exception as exc:    # noqa: BLE001
+                logger.exception("ai_run_turn failed, falling back to legacy supervisor: %s", exc)
+                turn_result = None
+
+            if turn_result is not None:
+                # If the AI requested the language selector, surface the
+                # interactive payload to the webhook layer so it can render
+                # buttons instead of plain text.
+                if turn_result.get("interactive", {}).get("kind") == "language_selector":
+                    job_title = (state.get("ad_context") or {}).get("job_title") or ""
+                    country = ""
+                    countries = (state.get("ad_context") or {}).get("countries") or []
+                    if countries:
+                        country = str(countries[0])
+                    payload = ad_intake_flow.language_selector_payload(
+                        state, job_title=job_title, country=country,
+                    )
+                    self._save_agent_state(candidate, state)
+                    db.commit()
+                    return payload
+
+                self._save_agent_state(candidate, state)
+                db.commit()
+                return turn_result.get("reply_text") or ""
+            # If ai_run_turn raised, control falls through to the legacy
+            # supervisor below so the conversation isn't dropped on the floor.
 
         # Pass full context to AI supervisor so it knows what's already collected/asked.
         collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
@@ -499,12 +587,28 @@ class IntakeOrchestrator:
         self._save_agent_state(candidate, state)
         db.commit()
 
-        # --- 4. Immediate sync — don't wait for user confirmation ---
+        # --- 4. Persist the CV file bytes so the sync can actually upload it ---
+        # Previously cv_path was always None (resume_file_path was never set),
+        # so the CV never reached the backend. Save the downloaded bytes to a
+        # local file and hand that path to recruitment_sync.push, which uploads
+        # it as multipart cv_file → backend creates the cv_files row.
+        saved_cv_path = _persist_media_bytes(
+            media_content, media_type, media_filename, candidate.id
+        )
+        if saved_cv_path:
+            try:
+                candidate.resume_file_path = saved_cv_path
+            except Exception:    # noqa: BLE001 — column may not exist on legacy schema
+                pass
+            state["cv_filename"] = media_filename or os.path.basename(saved_cv_path)
+            if media_url:
+                state["cv_file_url"] = media_url
+
+        # --- 4b. Immediate sync — don't wait for user confirmation ---
         # Only mark cv_synced=True on actual success so deferred syncs retry.
         if not state.get("cv_synced"):
             try:
-                cv_path = getattr(candidate, "resume_file_path", None)
-                synced = await recruitment_sync.push(candidate, db, cv_path=cv_path)
+                synced = await recruitment_sync.push(candidate, db, cv_path=saved_cv_path)
                 if synced:
                     state["cv_synced"] = True
                     self._save_agent_state(candidate, state)
@@ -514,6 +618,39 @@ class IntakeOrchestrator:
 
         # --- 5. Resolve language from prior conversation state ---
         locked_language = state.get("locked_language") or "en"
+
+        # --- 5-AI. AI-driven post-CV response ----------------------------------
+        # When the GPT-5.5 brain is active, let it acknowledge the CV naturally
+        # and ask the next missing field, instead of the legacy completion
+        # template + run_ai_supervisor. The CV bytes/extraction are already
+        # saved and synced above; here we just hand the agent a synthetic
+        # message describing what arrived.
+        if getattr(settings, "use_ai_driven_intake", False):
+            try:
+                summary_bits = []
+                if extracted.get("name"):
+                    summary_bits.append(f"name={extracted['name']}")
+                if extracted.get("experience_years") is not None:
+                    summary_bits.append(f"experience={extracted['experience_years']} years")
+                if extracted.get("skills"):
+                    skills = extracted["skills"]
+                    skills_str = ", ".join(skills) if isinstance(skills, list) else str(skills)
+                    summary_bits.append(f"skills={skills_str[:120]}")
+                summary = "; ".join(summary_bits) or "no fields extracted"
+                synthetic = f"[The candidate just uploaded their CV. Extracted: {summary}.]"
+                turn_result = await ai_run_turn(
+                    candidate=candidate,
+                    db=db,
+                    state=state,
+                    locked_language=locked_language,
+                    user_message=synthetic,
+                )
+                if turn_result is not None:
+                    self._save_agent_state(candidate, state)
+                    db.commit()
+                    return turn_result.get("reply_text") or ""
+            except Exception as exc:    # noqa: BLE001
+                logger.exception("ai_run_turn (CV path) failed, falling back to legacy: %s", exc)
 
         # --- 5a. Ad-flow short-circuit ---
         # If the deterministic ad-flow was waiting for the CV (or even still

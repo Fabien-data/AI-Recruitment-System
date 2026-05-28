@@ -19,8 +19,32 @@ const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate, authorize } = require('../middleware/auth');
+const { syncJobAsync, syncJobDeleteAsync } = require('./chatbot-sync');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
+
+// Keep the chatbot's "advertised jobs" view in sync with ad-campaign changes.
+// A job is visible to the bot's cold-path / cross-suggestion logic only while
+// it has >=1 active ad_tracking row. Pushing/deleting the job to the chatbot
+// here makes that reflect within seconds instead of waiting for the 5-min
+// bootstrap reconcile.
+async function _resyncJobAdVisibility(jobId) {
+    if (!jobId) return;
+    try {
+        const countSQL = isMySQL
+            ? 'SELECT COUNT(*) AS n FROM ad_tracking WHERE job_id = ? AND is_active = 1'
+            : 'SELECT COUNT(*)::int AS n FROM ad_tracking WHERE job_id::uuid = $1::uuid AND is_active = TRUE';
+        const r = await query(countSQL, [jobId]);
+        const activeAds = parseInt((r.rows[0] && r.rows[0].n) || 0, 10);
+        if (activeAds > 0) {
+            await syncJobAsync(jobId);
+        } else {
+            await syncJobDeleteAsync(jobId);
+        }
+    } catch (err) {
+        logger.warn(`Ad-visibility chatbot resync failed for job ${jobId}: ${err.message}`);
+    }
+}
 
 // ── Helper: generate a short unique ad_ref ────────────────────────────────────
 // Format: "job_" + 8 random hex chars → e.g. "job_3f9a12b4"
@@ -51,7 +75,7 @@ router.post(
     authenticate,
     authorize('admin', 'sourcing_department'),
     async (req, res) => {
-        const { job_id, project_id, campaign_name } = req.body;
+        const { job_id, project_id, campaign_name, ad_ref: customAdRef } = req.body;
 
         if (!job_id || !project_id) {
             return res.status(400).json({ error: 'job_id and project_id are required' });
@@ -84,17 +108,45 @@ router.post(
                 });
             }
 
-            // Generate unique ad_ref (retry if collision)
+            // Caller supplied a custom ad_ref → check collision up-front and
+            // return 409 with the existing campaign details (better UX than
+            // letting the UNIQUE constraint fail mid-INSERT).
             let adRef;
-            let attempts = 0;
-            while (attempts < 5) {
-                adRef = generateAdRef(job.title);
-                const checkSQL = isMySQL
-                    ? 'SELECT id FROM ad_tracking WHERE ad_ref = ? LIMIT 1'
-                    : 'SELECT id FROM ad_tracking WHERE ad_ref = $1 LIMIT 1';
-                const checkResult = await query(checkSQL, [adRef]);
-                if (checkResult.rows.length === 0) break;
-                attempts++;
+            if (customAdRef) {
+                if (typeof customAdRef !== 'string' || !/^[A-Za-z0-9_\-]{3,100}$/.test(customAdRef)) {
+                    return res.status(400).json({
+                        error: 'ad_ref must be 3–100 chars, [A-Za-z0-9_-] only'
+                    });
+                }
+                const collisionSQL = isMySQL
+                    ? `SELECT id, ad_ref, campaign_name, job_id, is_active
+                         FROM ad_tracking WHERE ad_ref = ? LIMIT 1`
+                    : `SELECT id, ad_ref, campaign_name, job_id, is_active
+                         FROM ad_tracking WHERE ad_ref = $1 LIMIT 1`;
+                const collision = await query(collisionSQL, [customAdRef]);
+                if (collision.rows.length > 0) {
+                    const existing = collision.rows[0];
+                    return res.status(409).json({
+                        error: 'ad_ref already in use',
+                        existing_campaign: existing.campaign_name,
+                        existing_job_id: existing.job_id,
+                        is_active: Boolean(existing.is_active),
+                        ad_ref: existing.ad_ref
+                    });
+                }
+                adRef = customAdRef;
+            } else {
+                // Generate unique ad_ref (retry if collision)
+                let attempts = 0;
+                while (attempts < 5) {
+                    adRef = generateAdRef(job.title);
+                    const checkSQL = isMySQL
+                        ? 'SELECT id FROM ad_tracking WHERE ad_ref = ? LIMIT 1'
+                        : 'SELECT id FROM ad_tracking WHERE ad_ref = $1 LIMIT 1';
+                    const checkResult = await query(checkSQL, [adRef]);
+                    if (checkResult.rows.length === 0) break;
+                    attempts++;
+                }
             }
 
             const waLink = buildWhatsAppLink(whatsappPhone, adRef);
@@ -123,6 +175,9 @@ router.post(
             ]);
 
             logger.info(`Ad link generated: ${adRef} for job ${job.title} by user ${req.user.id}`);
+
+            // Make the bot aware of this now-advertised job within seconds.
+            _resyncJobAdVisibility(job_id);
 
             return res.status(201).json({
                 id: trackingId,
@@ -279,8 +334,8 @@ router.patch(
 
         try {
             const currentSQL = isMySQL
-                ? 'SELECT id, is_active FROM ad_tracking WHERE ad_ref = ?'
-                : 'SELECT id, is_active FROM ad_tracking WHERE ad_ref = $1';
+                ? 'SELECT id, is_active, job_id FROM ad_tracking WHERE ad_ref = ?'
+                : 'SELECT id, is_active, job_id FROM ad_tracking WHERE ad_ref = $1';
             const currentResult = await query(currentSQL, [ad_ref]);
 
             if (currentResult.rows.length === 0) {
@@ -294,6 +349,10 @@ router.patch(
                 ? 'UPDATE ad_tracking SET is_active = ?, updated_at = NOW() WHERE ad_ref = ?'
                 : 'UPDATE ad_tracking SET is_active = $1, updated_at = NOW() WHERE ad_ref = $2';
             await query(updateSQL, [newState, ad_ref]);
+
+            // Refresh the bot's view — the job may have just lost (or regained)
+            // its last active campaign.
+            _resyncJobAdVisibility(current.job_id);
 
             return res.json({
                 ad_ref,
@@ -316,6 +375,14 @@ router.delete(
         const { ad_ref } = req.params;
 
         try {
+            // Capture the job_id before deleting so we can refresh the bot's
+            // advertised-jobs view afterwards.
+            const ownerSQL = isMySQL
+                ? 'SELECT job_id FROM ad_tracking WHERE ad_ref = ?'
+                : 'SELECT job_id FROM ad_tracking WHERE ad_ref = $1';
+            const ownerResult = await query(ownerSQL, [ad_ref]);
+            const ownerJobId = ownerResult.rows.length > 0 ? ownerResult.rows[0].job_id : null;
+
             const deleteSQL = isMySQL
                 ? 'DELETE FROM ad_tracking WHERE ad_ref = ?'
                 : 'DELETE FROM ad_tracking WHERE ad_ref = $1 RETURNING id';
@@ -327,6 +394,9 @@ router.delete(
             if (!isMySQL && result.rows.length === 0) {
                 return res.status(404).json({ error: 'Ad link not found' });
             }
+
+            // If that was the job's last active campaign, the bot drops it.
+            _resyncJobAdVisibility(ownerJobId);
 
             return res.json({ message: `Ad link ${ad_ref} deleted successfully` });
         } catch (error) {

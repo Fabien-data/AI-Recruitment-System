@@ -87,6 +87,19 @@ export const fullResyncChatbot = () =>
 export const getChatbotOutboxStatus = () =>
   apiClient.get('/api/chatbot-sync/outbox-status').then(res => res.data)
 
+// Ad Links (Meta Click-to-WhatsApp campaign links per job)
+export const getAdLinks = (params) =>
+  apiClient.get('/api/ad-links', { params }).then(res => res.data)
+
+export const generateAdLink = (data) =>
+  apiClient.post('/api/ad-links/generate', data).then(res => res.data)
+
+export const toggleAdLink = (adRef) =>
+  apiClient.patch(`/api/ad-links/${adRef}/toggle`).then(res => res.data)
+
+export const deleteAdLink = (adRef) =>
+  apiClient.delete(`/api/ad-links/${adRef}`).then(res => res.data)
+
 // Knowledge Base
 export const getKnowledgeBaseEntries = (params) =>
   apiClient.get('/api/knowledge-base', { params }).then(res => res.data)

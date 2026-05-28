@@ -175,10 +175,12 @@ async def bootstrap_job_cache() -> int:
         # Keywords that identify test/demo jobs — never show these to real users
         _TEST_TITLE_KEYWORDS = {"test", "e2e", "cache test", "demo", "dummy", "tbd", "sample"}
         loaded_count = 0
+        fetched_ids: set[str] = set()
         for job in jobs:
             job_id = str(job.get("job_id", ""))
             if not job_id:
                 continue
+            fetched_ids.add(job_id)
 
             # Skip jobs that are not active
             if job.get("status", "active") != "active":
@@ -238,13 +240,30 @@ async def bootstrap_job_cache() -> int:
                 "positions_filled":     job.get("positions_filled"),
                 "positions_remaining":  job.get("positions_remaining"),
                 "required_fields_schema": schema,
+                # True when the job has >=1 live ad campaign. The /api/chatbot/jobs
+                # endpoint only returns advertised jobs, so this is always True
+                # here; the field lets the orchestrator filter the cache even if
+                # a non-advertised job slips in via a push.
+                "has_active_ad":  bool(job.get("has_active_ad", True)),
                 "created_at":     job.get("created_at"),
                 "updated_at":     job.get("updated_at"),
             }
             loaded_count += 1
 
+        # Evict jobs that are no longer in the advertised set (ad campaign
+        # toggled off, job closed, etc.). Only runs on a successful fetch so a
+        # transient API error never wipes the cache. Jobs added via push since
+        # the last bootstrap are preserved only if the backend still returns
+        # them (i.e. they're active + advertised).
+        stale_ids = [jid for jid in list(job_cache.keys()) if jid not in fetched_ids]
+        for jid in stale_ids:
+            job_cache.pop(jid, None)
+
         global _cache_last_refreshed
-        logger.info(f"✅ Job cache bootstrap: loaded {loaded_count} active jobs ({len(jobs) - loaded_count} test/inactive skipped)")
+        logger.info(
+            f"✅ Job cache bootstrap: loaded {loaded_count} active advertised jobs "
+            f"({len(jobs) - loaded_count} test/inactive skipped, {len(stale_ids)} stale evicted)"
+        )
         _cache_last_refreshed = time.time()
         return len(jobs)
 

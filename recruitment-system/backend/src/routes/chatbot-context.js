@@ -348,6 +348,45 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
             );
         }
 
+        // Seed for cross-job suggestion: the second-newest active job, used by
+        // the chatbot if the candidate turns out to be a better fit elsewhere.
+        // Single-query, fire-and-wait so we hand it to the bot on the same hop.
+        let alternativeJob = null;
+        try {
+            const altSQL = isMySQL
+                ? `SELECT j.id, j.title, j.category, j.requirements, j.salary_range,
+                          p.countries
+                     FROM jobs j
+                     LEFT JOIN projects p ON j.project_id = p.id
+                    WHERE j.status = 'active' AND j.id <> ?
+                 ORDER BY j.created_at DESC
+                    LIMIT 1`
+                : `SELECT j.id, j.title, j.category, j.requirements, j.salary_range,
+                          p.countries
+                     FROM jobs j
+                     LEFT JOIN projects p ON j.project_id = p.id
+                    WHERE j.status = 'active' AND j.id <> $1::uuid
+                 ORDER BY j.created_at DESC
+                    LIMIT 1`;
+            const altResult = await query(altSQL, [row.job_id]);
+            if (altResult.rows.length > 0) {
+                const altRow = altResult.rows[0];
+                const altCountries = typeof altRow.countries === 'string'
+                    ? (() => { try { return JSON.parse(altRow.countries); } catch { return []; } })()
+                    : (Array.isArray(altRow.countries) ? altRow.countries : []);
+                alternativeJob = {
+                    id: altRow.id,
+                    title: altRow.title,
+                    category: altRow.category,
+                    requirements: parseRequirements(altRow.requirements),
+                    salary_range: altRow.salary_range,
+                    countries: altCountries
+                };
+            }
+        } catch (altErr) {
+            logger.warn(`Alternative-job lookup failed for ${ad_ref}: ${altErr.message}`);
+        }
+
         // Build and return the full context object
         return res.json({
             ad_ref: row.ad_ref,
@@ -366,6 +405,8 @@ router.get('/:ad_ref', contextLimiter, authenticateChatbot, async (req, res) => 
                 is_urgent: Boolean(row.is_urgent),
                 required_fields_schema: requiredFieldsSchema
             },
+
+            alternative_job: alternativeJob,
 
             project: {
                 id: row.project_id,

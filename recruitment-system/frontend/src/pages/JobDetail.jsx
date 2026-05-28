@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getJob, getJobCandidates } from '../api'
 import {
   ArrowLeft, Briefcase, MapPin, Calendar, FolderKanban, Users, User, Pencil, Trash2,
-  Building2, Globe2, Layers, DollarSign, Tag, Clock, ListChecks, Hash, GraduationCap, Languages,
+  Building2, Globe2, Layers, DollarSign, Tag, Clock, ListChecks, Hash, GraduationCap, Languages, Megaphone,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -12,6 +12,7 @@ import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
 import { EditJobModal } from '../components/EditJobModal'
 import { DeleteJobConfirm } from '../components/DeleteJobConfirm'
+import { AdLinkModal } from '../components/AdLinkModal'
 import { UrgencyPill } from '../components/jobs/UrgencyPill'
 import { DomainPill } from '../components/jobs/DomainPill'
 import { CountryFlag } from '../components/jobs/CountryFlag'
@@ -176,6 +177,7 @@ export default function JobDetail() {
 
   const [editOpen, setEditOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [adLinkOpen, setAdLinkOpen] = useState(false)
 
   const { data: job, isLoading, error } = useQuery({
     queryKey: ['job', id],
@@ -276,6 +278,9 @@ export default function JobDetail() {
                 <Users size={15} /> Candidates ({totalApplicants})
               </Button>
             </Link>
+            <Button variant="secondary" size="sm" onClick={() => setAdLinkOpen(true)} className="shrink-0">
+              <Megaphone size={15} /> Ad Link
+            </Button>
             <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)} className="shrink-0">
               <Pencil size={15} /> Edit
             </Button>
@@ -410,6 +415,9 @@ export default function JobDetail() {
       )}
       {deleteOpen && (
         <DeleteJobConfirm isOpen={deleteOpen} job={job} onClose={() => setDeleteOpen(false)} />
+      )}
+      {adLinkOpen && (
+        <AdLinkModal isOpen={adLinkOpen} job={job} onClose={() => setAdLinkOpen(false)} />
       )}
     </div>
   )

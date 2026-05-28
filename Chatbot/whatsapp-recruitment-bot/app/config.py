@@ -27,9 +27,18 @@ class Settings(BaseSettings):
     
     # OpenAI
     openai_api_key: str
-    llm_primary_model: str = "gpt-4o"
-    llm_fallback_model: str = "gpt-4o-mini"
-    classifier_model: str = "gpt-4o-mini"
+    # Single source of truth for the conversational brain. Bump this env var
+    # (OPENAI_CHAT_MODEL) when OpenAI releases a newer flagship.
+    chat_model: str = "gpt-5.5"
+    # Used by sync_validator for the final pre-CRM-sync AI pass. Defaults to
+    # the chat model so we get the same intelligence — override only if a
+    # cheaper validator model is preferred.
+    pre_sync_validator_model: str = "gpt-5.5"
+    # Legacy aliases kept for one release so deployments without the new env
+    # vars still boot. New code MUST read settings.chat_model.
+    llm_primary_model: str = "gpt-5.5"
+    llm_fallback_model: str = "gpt-5.5"
+    classifier_model: str = "gpt-5.5"
     
     # Pinecone (OPTIONAL — if empty, falls back to PostgreSQL text search)
     pinecone_api_key: Optional[str] = None
@@ -83,6 +92,12 @@ class Settings(BaseSettings):
     enable_voice_pipeline: bool = True
     enable_cv_priority_interrupt: bool = True
     handoff_confusion_threshold: int = 3
+
+    # AI-driven intake feature flag. When True, every webhook turn routes
+    # through app/llm/conversation_agent.run_turn (the new GPT-5.5 brain).
+    # When False, the legacy ad_intake_flow state machine + run_ai_supervisor
+    # path runs — same code, instant rollback without redeploy.
+    use_ai_driven_intake: bool = True
 
     @property
     def test_number_list(self) -> list[str]:

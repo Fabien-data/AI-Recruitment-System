@@ -299,6 +299,8 @@ async def _sync_chat_message(
     chatbot_state: str = "",
     pipeline_stage: str = "",
     whatsapp_message_id: str = "",
+    message_type: str = "text",
+    media_url: str = "",
 ) -> None:
     """
     Push a single message (inbound customer msg or outbound bot reply)
@@ -324,7 +326,8 @@ async def _sync_chat_message(
             "phone":         phone,
             "direction":     direction,
             "content":       content[:2000],  # Truncate to avoid oversized payloads
-            "message_type":  "text",
+            "message_type":  message_type or "text",
+            "media_url":     media_url or "",
             "language":      language,
             "chatbot_state": chatbot_state,
             "pipeline_stage": pipeline_stage or "",
@@ -460,6 +463,14 @@ async def process_single_message(message: dict, contacts: list, db):
     message_id   = message.get("id")
     from_number  = message.get("from")
     message_type = message.get("type")
+
+    # Captured during media branches so the agent panel can show a readable
+    # transcript: voice transcription text + a re-hosted (playable) media URL.
+    _voice_text = ""
+    _media_url_captured = ""
+    # Readable version of an outbound interactive message (buttons/list/lang
+    # selector), captured before response_text is replaced with a placeholder.
+    _outbound_display = ""
 
     if not from_number:
         logger.warning("Message missing 'from' field — skipping")
@@ -680,6 +691,27 @@ async def process_single_message(message: dict, contacts: list, db):
                     conversation_state=conv_state,
                 )
                 transcribed_text = str((transcribed or {}).get("raw_text") or "").strip()
+
+                # Re-host the voice note so agents can play it in the panel
+                # (WhatsApp's own media URL is auth-gated, not browser-playable).
+                _voice_text = transcribed_text
+                try:
+                    import base64 as _b64
+                    async with httpx.AsyncClient(timeout=8.0) as _mc:
+                        _mr = await _mc.post(
+                            f"{settings.recruitment_api_url}/api/chatbot/media-upload",
+                            headers={"x-chatbot-api-key": settings.chatbot_api_key or ""},
+                            json={
+                                "base64": _b64.b64encode(audio_bytes).decode("ascii"),
+                                "filename": fname,
+                                "phone": from_number,
+                                "mime_type": mime.split(";")[0],
+                            },
+                        )
+                        if _mr.status_code == 200:
+                            _media_url_captured = (_mr.json() or {}).get("url", "") or ""
+                except Exception as _vu_err:
+                    logger.debug(f"Voice re-host skipped: {_vu_err}")
                 if transcribed_text and transcribed_text != "AUDIO_UNREADABLE_FALLBACK":
                     logger.info(f"🎤→💬 Transcribed: {transcribed_text[:80]!r}")
                     response_text = await _safe_process_message(
@@ -752,6 +784,15 @@ async def process_single_message(message: dict, contacts: list, db):
                     header_text=response_text.get("header_text"),
                     footer_text=response_text.get("footer_text")
                 )
+                try:
+                    _opts = []
+                    for _sec in response_text.get("sections", []):
+                        for _row in _sec.get("rows", []):
+                            _opts.append(str(_row.get("title", "")).strip())
+                    _body = response_text.get("body_text", "")
+                    _outbound_display = (f"{_body}\nOptions: " + " / ".join([o for o in _opts if o])).strip()
+                except Exception:
+                    _outbound_display = response_text.get("body_text", "")
                 response_text = "[Interactive List]"  # for sync logging
             elif msg_type == "buttons":
                 logger.info(f"📤 Sending interactive buttons to {from_number}")
@@ -762,6 +803,12 @@ async def process_single_message(message: dict, contacts: list, db):
                     header_text=response_text.get("header_text"),
                     footer_text=response_text.get("footer_text")
                 )
+                try:
+                    _btns = [str(b.get("title", "")).strip() for b in response_text.get("buttons", [])]
+                    _body = response_text.get("body_text", "")
+                    _outbound_display = (f"{_body}\nButtons: " + " / ".join([b for b in _btns if b])).strip()
+                except Exception:
+                    _outbound_display = response_text.get("body_text", "")
                 response_text = "[Interactive Buttons]"
             else:
                 logger.error(f"Unknown structured message type: {msg_type}")
@@ -778,7 +825,12 @@ async def process_single_message(message: dict, contacts: list, db):
                 
             logger.info(f"📤 Sending interactive language selector to {from_number}")
             result = await meta_client.send_language_selector(from_number)
-            
+
+            # Readable for the agent panel: which options the candidate saw.
+            _outbound_display = (
+                (prefix_text + "\n" if prefix_text else "")
+                + "Language options: English / සිංහල / தமிழ்"
+            )
             # Remove the flag so the sync doesn't have the ugly token
             response_text = response_text.replace("__INTERACTIVE_LANGUAGE_SELECTOR__", "[Interactive Language Selector]")
         else:
@@ -810,17 +862,46 @@ async def process_single_message(message: dict, contacts: list, db):
                 _msgs = result.get("messages", [])
                 if _msgs and isinstance(_msgs, list) and isinstance(_msgs[0], dict):
                     _outbound_msg_id = _msgs[0].get("id", "")
-            _inbound_text = (
-                message.get("text", {}).get("body")
-                or message.get("document", {}).get("filename")
-                or f"[{message_type} message]"
-            )
+            # Build a readable inbound transcript entry + normalized type/media.
+            _inbound_type = message_type
+            if message_type == "interactive":
+                _interactive = message.get("interactive", {})
+                if _interactive.get("type") == "button_reply":
+                    _inbound_text = (
+                        _interactive.get("button_reply", {}).get("title")
+                        or _interactive.get("button_reply", {}).get("id")
+                        or "[button reply]"
+                    )
+                elif _interactive.get("type") == "list_reply":
+                    _inbound_text = (
+                        _interactive.get("list_reply", {}).get("title")
+                        or _interactive.get("list_reply", {}).get("id")
+                        or "[list reply]"
+                    )
+                else:
+                    _inbound_text = "[interactive reply]"
+            elif message_type in ("audio", "voice"):
+                _inbound_type = "voice"
+                _inbound_text = (
+                    f"🎤 Voice message: {_voice_text}" if _voice_text else "🎤 Voice message"
+                )
+            elif message_type == "document":
+                _inbound_text = message.get("document", {}).get("filename") or "📄 Document"
+            elif message_type == "image":
+                _inbound_text = "🖼️ Image"
+            else:
+                _inbound_text = message.get("text", {}).get("body") or f"[{message_type} message]"
+
+            _outbound_text = _outbound_display or response_text
             await asyncio.gather(
-                _sync_chat_message(from_number, "inbound",  _inbound_text, _lang, _state),
+                _sync_chat_message(
+                    from_number, "inbound", _inbound_text, _lang, _state,
+                    message_type=_inbound_type, media_url=_media_url_captured,
+                ),
                 _sync_chat_message(
                     from_number,
                     "outbound",
-                    response_text,
+                    _outbound_text,
                     _lang,
                     _state,
                     whatsapp_message_id=_outbound_msg_id,

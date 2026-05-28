@@ -43,7 +43,7 @@ class RecruitmentSyncService:
             or ad_context.get("job_title")
         )
 
-    def _build_payload(self, candidate) -> Dict[str, Any]:
+    def _build_payload(self, candidate, force_general_pool: bool = False) -> Dict[str, Any]:
         extracted = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
         agent_state = candidate.agent_state if isinstance(candidate.agent_state, dict) else {}
         collected = agent_state.get("collected_data") if isinstance(agent_state.get("collected_data"), dict) else {}
@@ -167,7 +167,7 @@ class RecruitmentSyncService:
         prefs_log = agent_state.get("preferences_log")
         if isinstance(prefs_log, list) and prefs_log:
             payload["preferences_log"] = prefs_log
-        if collected.get("general_pool_optin"):
+        if collected.get("general_pool_optin") or force_general_pool:
             payload["is_general_pool"] = True
 
         return payload
@@ -262,26 +262,37 @@ class RecruitmentSyncService:
         if not SYNC_ENABLED:
             return False
 
-        # Don't sync until we know the candidate's job interest — a "General"
-        # placeholder makes job matching useless in the CRM. Exceptions:
-        # - chatbot opted the lead into general_pool (capture w/ remarks)
-        # - candidate came via a Meta ad with a known job_id → backend can
-        #   create the application directly from job_id regardless of free-
-        #   text interest.
+        # Partial-lead policy: save the candidate as soon as we have a NAME so
+        # name/age/email/CV are never lost, then enrich on later syncs (push is
+        # idempotent on phone). If the job interest is still unknown — and the
+        # candidate isn't an ad/general-pool flow — save them as a general-pool
+        # lead (backend routes is_general_pool=true → status 'future_pool') so a
+        # recruiter can follow up rather than the data being dropped entirely.
         job_interest = self._resolve_job_interest(candidate)
         agent_state = candidate.agent_state if isinstance(candidate.agent_state, dict) else {}
         collected = agent_state.get("collected_data") if isinstance(agent_state.get("collected_data"), dict) else {}
         extracted = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
         is_general_pool = bool(collected.get("general_pool_optin"))
         has_ad_job = bool(extracted.get("ad_job_id") or agent_state.get("active_job_id"))
-        if (not job_interest or job_interest.strip().lower() in ("general", "")) and not is_general_pool and not has_ad_job:
+        job_unknown = (not job_interest or job_interest.strip().lower() in ("general", ""))
+
+        # Need at least a name to make a useful CRM lead. Without one there's
+        # nothing worth saving yet — defer to a later turn.
+        has_name = bool((candidate.name or "").strip()) or bool(str(collected.get("name") or "").strip())
+        if not has_name:
             logger.info(
-                "Sync deferred for %s — job_role not yet collected",
-                candidate.phone_number,
+                "Sync deferred for %s — no name captured yet", candidate.phone_number
             )
             return False
 
-        payload = self._build_payload(candidate)
+        force_general_pool = job_unknown and not is_general_pool and not has_ad_job
+        if force_general_pool:
+            logger.info(
+                "Partial-lead sync for %s — job unknown, saving to general pool",
+                candidate.phone_number,
+            )
+
+        payload = self._build_payload(candidate, force_general_pool=force_general_pool)
         resolved_cv = self._resolve_cv_path(candidate, cv_path)
         ok, error = await self._post_payload(payload, resolved_cv)
 

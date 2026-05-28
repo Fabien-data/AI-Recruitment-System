@@ -14,12 +14,13 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const { query, generateUUID } = require('../config/database');
-const { saveCVFile } = require('../utils/gcs-upload');
+const { saveCVFile, uploadToGCS } = require('../utils/gcs-upload');
 const { isMySQL } = require('../utils/query-adapter');
 const rateLimit = require('express-rate-limit');
 const logger = require('../utils/logger');
 const { recruiterAlert } = require('../services/recruiter-alerts');
 const { checkForDuplicate } = require('../services/duplicate-detection');
+const { searchKnowledgeBase } = require('../services/knowledge-base');
 const multer = require('multer');
 const { normalizeIncomingCvUrl } = require('../utils/cv-url');
 
@@ -73,6 +74,12 @@ function authenticateChatbot(req, res, next) {
 // ── GET /api/chatbot/jobs — Active jobs for chatbot job cache bootstrap ───────
 router.get('/jobs', authenticateChatbot, async (req, res) => {
     try {
+        // The chatbot only "knows about" active jobs that have a live ad
+        // campaign (>=1 active ad_tracking row). Ad-clicked candidates still
+        // reach ANY job directly via /api/public/job-context/:ad_ref — this
+        // list governs only what the bot can discuss with cold candidates and
+        // what it may suggest as an alternative. EXISTS keeps it to one row
+        // per job regardless of how many ad links a job has.
         const jobsSQL = isMySQL
             ? `SELECT j.id, j.title, j.category, j.status, j.salary_range,
                       j.requirements, j.positions_available, j.location, j.description,
@@ -82,6 +89,10 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
                FROM jobs j
                LEFT JOIN projects p ON j.project_id = p.id
                WHERE j.status = 'active'
+                 AND EXISTS (
+                     SELECT 1 FROM ad_tracking at
+                      WHERE at.job_id = j.id AND at.is_active = 1
+                 )
                ORDER BY j.created_at DESC`
             : `SELECT j.id, j.title, j.category, j.status, j.salary_range,
                       j.requirements, j.positions_available, j.location, j.description,
@@ -91,6 +102,10 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
                FROM jobs j
                LEFT JOIN projects p ON j.project_id = p.id
                WHERE j.status = 'active'
+                 AND EXISTS (
+                     SELECT 1 FROM ad_tracking at
+                      WHERE at.job_id::uuid = j.id AND at.is_active = TRUE
+                 )
                ORDER BY j.created_at DESC`;
 
         const result = await query(jobsSQL, []);
@@ -121,16 +136,165 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
                 project_title:  job.project_title  || null,
                 is_urgent:      Boolean(job.is_urgent),
                 required_fields_schema: _parseJsonSafe(job.required_fields_schema, {}),
+                has_active_ad:  true,
                 created_at:     job.created_at || null,
                 updated_at:     job.updated_at || null,
             };
         });
 
-        logger.info(`Chatbot jobs fetch: returned ${jobs.length} active jobs`);
+        logger.info(`Chatbot jobs fetch: returned ${jobs.length} active advertised jobs`);
         return res.json({ jobs });
     } catch (error) {
         logger.error('Chatbot jobs fetch error:', error);
         return res.status(500).json({ error: 'Failed to fetch jobs', detail: error.message });
+    }
+});
+
+// ── GET /api/chatbot/job-info/:job_id ────────────────────────────────────────
+// Live lookup for a single job by UUID. Unlike /jobs, this is NOT limited to
+// the 2 newest active jobs — the chatbot needs it to resolve historical jobs
+// it learned about via an ad_ref, even if the job is no longer in the
+// bot's visible cache.
+router.get('/job-info/:job_id', authenticateChatbot, async (req, res) => {
+    const { job_id } = req.params;
+    if (!job_id || job_id.length > 64) {
+        return res.status(400).json({ error: 'Invalid job_id' });
+    }
+    try {
+        const sql = isMySQL
+            ? `SELECT j.id, j.title, j.category, j.status, j.salary_range,
+                      j.requirements, j.positions_available, j.location, j.description,
+                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
+                      p.id as project_id, p.countries, p.benefits, p.salary_info,
+                      p.interview_date, p.start_date, p.title as project_title
+                 FROM jobs j
+                 LEFT JOIN projects p ON j.project_id = p.id
+                WHERE j.id = ?`
+            : `SELECT j.id, j.title, j.category, j.status, j.salary_range,
+                      j.requirements, j.positions_available, j.location, j.description,
+                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
+                      p.id as project_id, p.countries, p.benefits, p.salary_info,
+                      p.interview_date, p.start_date, p.title as project_title
+                 FROM jobs j
+                 LEFT JOIN projects p ON j.project_id = p.id
+                WHERE j.id = $1::uuid`;
+        const result = await query(sql, [job_id]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Job not found', job_id });
+        }
+        const job = result.rows[0];
+        const _parseJsonSafe = (v, fallback) => {
+            if (!v) return fallback;
+            if (typeof v === 'object') return v;
+            try { return JSON.parse(v); } catch { return fallback; }
+        };
+        return res.json({
+            job_id: job.id,
+            title: job.title,
+            category: job.category,
+            status: job.status,
+            salary_range: job.salary_range,
+            positions_available: job.positions_available,
+            location: job.location || '',
+            description: job.description || '',
+            project_id: job.project_id,
+            requirements:           _parseJsonSafe(job.requirements, {}),
+            countries:              _parseJsonSafe(job.countries, []),
+            benefits:               _parseJsonSafe(job.benefits, {}),
+            salary_info:            _parseJsonSafe(job.salary_info, {}),
+            start_date:             job.start_date     || null,
+            interview_date:         job.interview_date || null,
+            project_title:          job.project_title  || null,
+            is_urgent:              Boolean(job.is_urgent),
+            required_fields_schema: _parseJsonSafe(job.required_fields_schema, {}),
+            created_at:             job.created_at || null,
+            updated_at:             job.updated_at || null,
+        });
+    } catch (error) {
+        logger.error(`Chatbot job-info fetch error for ${job_id}:`, error);
+        return res.status(500).json({ error: 'Failed to fetch job', detail: error.message });
+    }
+});
+
+// ── GET /api/chatbot/general-info?q=... ──────────────────────────────────────
+// Live lookup for non-job questions (registration fees, office hours, address,
+// hotline, application process etc.). Searches the knowledge_base table and
+// returns up to 3 multilingual results. When q is empty/missing, returns a
+// small default packet (company address + hotline + registration fee) so the
+// AI always has a fallback for "what is your office" style questions.
+router.get('/general-info', authenticateChatbot, async (req, res) => {
+    try {
+        const raw = (req.query.q || '').toString().trim();
+        const lang = ['en', 'si', 'ta'].includes(req.query.lang) ? req.query.lang : 'en';
+
+        if (!raw) {
+            // Default packet — fixed, non-hallucinated company facts.
+            return res.json({
+                query: '',
+                language: lang,
+                results: [
+                    {
+                        id: 'default_address',
+                        category: 'company',
+                        question: 'Where is your office?',
+                        answer: process.env.DEWAN_OFFICE_ADDRESS
+                            || 'Dewan Consultants, Colombo, Sri Lanka. See https://wa.me/94727533155 to reach us.'
+                    },
+                    {
+                        id: 'default_hotline',
+                        category: 'company',
+                        question: 'What is your hotline?',
+                        answer: process.env.DEWAN_HOTLINE || '+94 72 753 3155 (WhatsApp)'
+                    },
+                    {
+                        id: 'default_fee',
+                        category: 'application_process',
+                        question: 'Is there a registration fee?',
+                        answer: process.env.DEWAN_REGISTRATION_FEE
+                            || 'There is no registration fee to apply through Dewan Consultants.'
+                    }
+                ]
+            });
+        }
+
+        const kbHits = await searchKnowledgeBase(raw, lang, null, 3);
+        const results = (kbHits || []).map(row => ({
+            id: row.id,
+            category: row.category,
+            question: row[`question_${lang}`] || row.question_en,
+            answer:   row[`answer_${lang}`]   || row.answer_en
+        }));
+
+        return res.json({ query: raw, language: lang, results });
+    } catch (error) {
+        logger.error('Chatbot general-info fetch error:', error);
+        return res.status(500).json({ error: 'Failed to search general info', detail: error.message });
+    }
+});
+
+// ── POST /api/chatbot/media-upload ───────────────────────────────────────────
+// Re-hosts WhatsApp media (voice notes, images) the chatbot downloaded, so the
+// conversation panel can play/show them. WhatsApp's own media URLs are
+// auth-gated and not browser-playable, so the bot sends us the bytes (base64)
+// and we return a public GCS URL to store as the message's media_url.
+router.post('/media-upload', chatbotLimiter, authenticateChatbot, async (req, res) => {
+    try {
+        const { base64, filename = 'voice.ogg', phone = '', mime_type = 'audio/ogg' } = req.body || {};
+        if (!base64 || typeof base64 !== 'string') {
+            return res.status(400).json({ error: 'base64 is required' });
+        }
+        const safePhone = (phone || 'unknown').toString().replace(/[^0-9]/g, '') || 'unknown';
+        const safeName = filename.toString().replace(/[^a-zA-Z0-9._-]/g, '_');
+        const destPath = `voice/${safePhone}/${Date.now()}_${safeName}`;
+        const buffer = Buffer.from(base64, 'base64');
+        const url = await uploadToGCS(buffer, destPath, mime_type);
+        if (!url) {
+            return res.status(502).json({ error: 'media storage unavailable' });
+        }
+        return res.json({ url });
+    } catch (error) {
+        logger.error('Chatbot media-upload error:', error);
+        return res.status(500).json({ error: 'Failed to store media', detail: error.message });
     }
 });
 
@@ -1111,6 +1275,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         direction,
         content,
         message_type = 'text',
+        media_url = '',
         language = 'en',
         chatbot_state = '',
         pipeline_stage,
@@ -1196,6 +1361,9 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
             sender_type: senderType,
             chatbot_state: chatbot_state || null,
             detected_language: language || null,
+            // media_url lives in metadata so voice/image/document messages are
+            // playable/openable in the conversation panel without a schema change.
+            media_url: media_url || null,
         });
 
         const insertWithMessageIdSQL = isMySQL
@@ -1295,6 +1463,8 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     direction,
                     message_type,
                     content: safeContent.slice(0, 4000),
+                    media_url: media_url || null,
+                    metadata: { media_url: media_url || null },
                     sender_type: senderType,
                     chatbot_state: chatbot_state || null,
                     detected_language: language || null,
