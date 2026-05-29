@@ -207,7 +207,7 @@ class IntakeOrchestrator:
                 # If the AI requested the language selector, surface the
                 # interactive payload to the webhook layer so it can render
                 # buttons instead of plain text.
-                if turn_result.get("interactive", {}).get("kind") == "language_selector":
+                if (turn_result.get("interactive") or {}).get("kind") == "language_selector":
                     job_title = (state.get("ad_context") or {}).get("job_title") or ""
                     country = ""
                     countries = (state.get("ad_context") or {}).get("countries") or []
