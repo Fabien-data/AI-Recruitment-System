@@ -145,11 +145,12 @@ def _build_history(db: Any, candidate_id: Any) -> List[Dict[str, str]]:
         text = (getattr(conv, "message_text", "") or "").strip()
         if not text:
             continue
-        direction = (getattr(conv, "direction", "") or "").lower()
-        if direction in ("outbound", "bot", "assistant"):
-            role = "assistant"
-        else:
-            role = "user"
+        # The chatbot Conversation model stores the sender in message_type
+        # (USER/BOT enum), not a `direction` column. Read it correctly so bot
+        # turns are replayed as assistant turns rather than all-user.
+        mt = getattr(conv, "message_type", None)
+        mt_val = str(getattr(mt, "value", mt) or "").lower()
+        role = "assistant" if mt_val in ("bot", "assistant", "outbound") else "user"
         out.append({"role": role, "content": text})
     return out
 

@@ -907,6 +907,34 @@ async def process_single_message(message: dict, contacts: list, db):
                     whatsapp_message_id=_outbound_msg_id,
                 ),
             )
+            # Persist the turn to the chatbot's own conversations table so
+            # conversation_agent._build_history() can replay prior turns. The
+            # AI-driven path (the only live path) does not otherwise write here,
+            # which left the LLM with no verbatim memory across turns.
+            try:
+                from app.models import Conversation as _ConvModel, MessageType as _MT
+                _persist_lang = _lang if _lang in ("si", "ta", "en") else None
+                db.add(_ConvModel(
+                    candidate_id=_cand.id,
+                    message_type=_MT.USER,
+                    message_text=_inbound_text,
+                    detected_language=_persist_lang,
+                    media_type=(_inbound_type if _inbound_type != "text" else None),
+                    media_url=_media_url_captured or None,
+                ))
+                db.add(_ConvModel(
+                    candidate_id=_cand.id,
+                    message_type=_MT.BOT,
+                    message_text=_outbound_text,
+                    detected_language=_persist_lang,
+                ))
+                db.commit()
+            except Exception as _persist_err:
+                logger.warning(f"Local conversation persistence failed: {_persist_err}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
         except Exception as _sc_err:
             logger.debug(f"Chat sync gather error: {_sc_err}")
     else:
