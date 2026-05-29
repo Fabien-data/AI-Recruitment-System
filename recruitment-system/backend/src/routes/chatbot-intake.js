@@ -1368,11 +1368,11 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
 
         const insertWithMessageIdSQL = isMySQL
             ? `INSERT INTO communications
-               (id, candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id)
-               VALUES (?, ?, 'whatsapp', ?, ?, ?, ?, ?)`
+               (id, candidate_id, channel, direction, message_type, content, metadata, sender_type, whatsapp_message_id)
+               VALUES (?, ?, 'whatsapp', ?, ?, ?, ?, ?, ?)`
             : `INSERT INTO communications
-               (id, candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id)
-               VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6, $7)`;
+               (id, candidate_id, channel, direction, message_type, content, metadata, sender_type, whatsapp_message_id)
+               VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6, $7, $8)`;
 
         try {
             await query(insertWithMessageIdSQL, [
@@ -1382,6 +1382,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                 message_type,
                 safeContent.slice(0, 4000),
                 metadataJson,
+                senderType,
                 whatsapp_message_id || null,
             ]);
         } catch (insertErr) {
