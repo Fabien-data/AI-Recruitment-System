@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { clsx } from 'clsx'
 import { Link, useSearchParams } from 'react-router-dom'
 import { showNotificationToast } from '../utils/notificationToast'
 import {
@@ -11,7 +12,8 @@ import {
   updateApplication,
   transferApplication,
   updateCandidate,
-  batchAutoAssign
+  batchAutoAssign,
+  reparseCv
 } from '../api'
 import {
   Search,
@@ -501,9 +503,26 @@ function CVReviewModal({ candidate, onClose }) {
 
 function OverviewTab({ candidate }) {
   const [expandedCVs, setExpandedCVs] = useState({})
+  const [reparsingId, setReparsingId] = useState(null)
+  const queryClient = useQueryClient()
 
   const toggleCV = (id) => {
     setExpandedCVs(prev => ({ ...prev, [id]: !prev[id] }))
+  }
+
+  const handleReparse = async (cvId) => {
+    setReparsingId(cvId)
+    try {
+      await reparseCv(cvId)
+      await queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      await queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      showNotificationToast?.({ title: 'Re-parsed', message: 'CV details refreshed from the document.', type: 'success' })
+    } catch (e) {
+      const msg = e?.response?.data?.error || e.message || 'Re-parse failed'
+      showNotificationToast?.({ title: 'Re-parse failed', message: msg, type: 'error' })
+    } finally {
+      setReparsingId(null)
+    }
   }
 
   const metadata = typeof candidate.metadata === 'string'
@@ -512,7 +531,8 @@ function OverviewTab({ candidate }) {
 
   const mismatches = metadata.mismatches || []
   const cvDocuments = (candidate.cvs || []).filter(cv => getDocumentCategory(cv) === 'cv')
-  const additionalDocuments = (candidate.cvs || []).filter(cv => getDocumentCategory(cv) === 'additional')
+  // Everything that isn't a primary CV (passport / certificate / photo / other).
+  const additionalDocuments = (candidate.cvs || []).filter(cv => getDocumentCategory(cv) !== 'cv')
 
   const safeParseJSON = (str) => {
     if (!str) return null;
@@ -563,6 +583,54 @@ function OverviewTab({ candidate }) {
         <DetailCard label="Age"        value={(candidate.age || metadata.age) ? `${candidate.age || metadata.age} years` : 'N/A'} icon={User} tone="amber" />
         <DetailCard label="Experience" value={(candidate.experience_years || metadata.experience_years) ? `${candidate.experience_years || metadata.experience_years} years` : 'N/A'} icon={Briefcase} tone="purple" />
       </div>
+
+      {/* Extra profile details captured from chat + CV extraction */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <DetailCard label="Country"   value={metadata.destination_country || metadata.country || candidate.preferred_country || 'N/A'} icon={MapPin} tone="indigo" />
+        <DetailCard label="Licenses"  value={metadata.licenses || 'N/A'} icon={Tag} tone="amber" />
+        <DetailCard label="Prev. Employer" value={metadata.previous_employer || 'N/A'} icon={Building} tone="purple" />
+        <DetailCard label="English"   value={metadata.english_proficiency || 'N/A'} icon={CheckCircle} tone="emerald" />
+      </div>
+
+      {/* Profile completeness + needs-review flag */}
+      {(() => {
+        const checks = [
+          !!candidate.name,
+          !!(candidate.age || metadata.age),
+          (candidate.experience_years != null || metadata.experience_years != null),
+          parseTags(candidate.skills || candidate.tags).length > 0,
+          !!(metadata.destination_country || metadata.country || candidate.preferred_country),
+          (cvDocuments?.length || 0) > 0,
+        ]
+        const pct = Math.round((checks.filter(Boolean).length / checks.length) * 100)
+        const needsReview = (cvDocuments?.length || 0) === 0 || (cvDocuments || []).some((cv) => {
+          let pd = cv.parsed_data
+          if (typeof pd === 'string') { try { pd = JSON.parse(pd) } catch { pd = {} } }
+          pd = pd || {}
+          const missing = Array.isArray(pd.missing_critical_fields) ? pd.missing_critical_fields.length : 0
+          const conf = typeof pd.overall_confidence === 'number' ? pd.overall_confidence : 1
+          return missing > 0 || conf < 0.6
+        })
+        const barTone = pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500'
+        return (
+          <div className="rounded-2xl ring-1 ring-inset ring-zinc-200 dark:ring-zinc-800 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Profile completeness</span>
+              <div className="flex items-center gap-2">
+                {needsReview && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    <AlertCircle size={11} /> Needs review
+                  </span>
+                )}
+                <span className="text-sm font-bold text-zinc-800 dark:text-zinc-200">{pct}%</span>
+              </div>
+            </div>
+            <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+              <div className={clsx('h-full rounded-full transition-all', barTone)} style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Mismatches Alert */}
       {mismatches.length > 0 && (
@@ -671,6 +739,16 @@ function OverviewTab({ candidate }) {
                       >
                         <Sparkles size={14} /> {expandedCVs[cv.id] ? 'Hide Insights' : 'AI Insights'}
                       </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1"
+                        onClick={() => handleReparse(cv.id)}
+                        loading={reparsingId === cv.id}
+                        title="Re-run AI extraction on this document"
+                      >
+                        <RefreshCw size={14} /> Re-parse
+                      </Button>
                       {resolvedUrl && (
                         <>
                           <a href={resolvedUrl} target="_blank" rel="noopener noreferrer">
@@ -746,8 +824,13 @@ function OverviewTab({ candidate }) {
                     <div className="flex items-center gap-3">
                       <FileText className="text-primary-500" size={24} />
                       <div>
-                        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                          {doc.file_name || 'Additional Document'}
+                        <span className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                            {doc.file_name || 'Additional Document'}
+                          </span>
+                          <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                            {getDocumentCategory(doc)}
+                          </span>
                         </span>
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">
                           {doc.uploaded_at
@@ -766,6 +849,16 @@ function OverviewTab({ candidate }) {
                         title={parsedInsights ? 'Show AI insights' : 'AI insights not available'}
                       >
                         <Sparkles size={14} /> {expandedCVs[doc.id] ? 'Hide Insights' : 'AI Insights'}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1"
+                        onClick={() => handleReparse(doc.id)}
+                        loading={reparsingId === doc.id}
+                        title="Re-run AI extraction on this document"
+                      >
+                        <RefreshCw size={14} /> Re-parse
                       </Button>
                       {resolvedUrl && (
                         <>

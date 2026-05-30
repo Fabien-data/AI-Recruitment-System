@@ -7,6 +7,7 @@ const { normalizePhone } = require('../utils/phone');
 const axios = require('axios');
 const logger = require('../utils/logger');
 const { resolveCvAccessUrl } = require('../utils/cv-url');
+const { openai, createChatCompletion } = require('../config/openai');
 
 function parseCandidateMetadata(metadata) {
     if (!metadata) return {};
@@ -157,20 +158,22 @@ router.get('/', authenticate, async (req, res, next) => {
         if (search) {
             // Strip non-digits to also match phone numbers stored with/without country code/spaces.
             const digits = String(search).replace(/\D/g, '');
+            // Search now also covers skills + the metadata JSON (so recruiters can
+            // find candidates by skill, licence, previous employer, country, etc.).
             if (isMySQL) {
                 if (digits) {
-                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR REPLACE(REPLACE(REPLACE(c.phone, \' \', \'\'), \'-\', \'\'), \'+\', \'\') LIKE ?)';
-                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${digits}%`);
+                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR c.skills LIKE ? OR c.metadata LIKE ? OR REPLACE(REPLACE(REPLACE(c.phone, \' \', \'\'), \'-\', \'\'), \'+\', \'\') LIKE ?)';
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${digits}%`);
                 } else {
-                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)';
-                    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR c.skills LIKE ? OR c.metadata LIKE ?)';
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
                 }
             } else {
                 if (digits) {
-                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR regexp_replace(c.phone, '\\D', '', 'g') ILIKE $${params.length + 2})`;
+                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR c.skills ILIKE $${params.length + 1} OR c.metadata::text ILIKE $${params.length + 1} OR regexp_replace(c.phone, '\\D', '', 'g') ILIKE $${params.length + 2})`;
                     params.push(`%${search}%`, `%${digits}%`);
                 } else {
-                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1})`;
+                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR c.skills ILIKE $${params.length + 1} OR c.metadata::text ILIKE $${params.length + 1})`;
                     params.push(`%${search}%`);
                 }
             }
@@ -262,6 +265,21 @@ router.get('/', authenticate, async (req, res, next) => {
 /**
  * Get candidate by ID with full details
  */
+/**
+ * GET /api/candidates/duplicates — MUST be registered before "/:id", otherwise
+ * the literal "duplicates" path is captured by the :id param route (which then
+ * fails the UUID lookup with a 500). This activates the existing
+ * duplicate-detection service + the "Scan for Duplicates" UI.
+ */
+router.get('/duplicates', authenticate, async (req, res, next) => {
+    try {
+        const { min_confidence = 0.5, limit = 100 } = req.query;
+        const { findDuplicates } = require('../services/duplicate-detection');
+        const pairs = await findDuplicates(parseFloat(min_confidence), parseInt(limit, 10));
+        res.json(pairs);
+    } catch (err) { next(err); }
+});
+
 router.get('/:id', authenticate, async (req, res, next) => {
     try {
         const { id } = req.params;
@@ -339,8 +357,11 @@ router.get('/:id', authenticate, async (req, res, next) => {
                 })()
                 : cv?.parsed_data;
 
-            const documentCategory = parsedData?.__document_category === 'additional'
-                ? 'additional'
+            // Preserve specific document types (passport/certificate/photo) so the
+            // UI can label them; anything else is treated as the primary CV.
+            const dc = String(parsedData?.__document_category || '').toLowerCase();
+            const documentCategory = ['passport', 'certificate', 'photo', 'id', 'additional'].includes(dc)
+                ? dc
                 : 'cv';
 
             return {
@@ -594,19 +615,6 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) =
 // ── Duplicate detection routes ─────────────────────────────────────────────────
 
 /**
- * GET /api/candidates/duplicates
- * Returns potential duplicate pairs with confidence scores.
- */
-router.get('/duplicates', authenticate, async (req, res, next) => {
-    try {
-        const { min_confidence = 0.5, limit = 100 } = req.query;
-        const { findDuplicates } = require('../services/duplicate-detection');
-        const pairs = await findDuplicates(parseFloat(min_confidence), parseInt(limit, 10));
-        res.json(pairs);
-    } catch (err) { next(err); }
-});
-
-/**
  * POST /api/candidates/merge
  * Merges merge_id into keep_id — migrates all data, soft-deletes the duplicate.
  */
@@ -769,5 +777,106 @@ async function _notifyChatbotStatusChange(candidate, newStatus) {
         logger.warn(`Failed to notify chatbot of status change for ${candidate.id}: ${err.message}`);
     }
 }
+
+// ── POST /api/candidates/cv/:cvId/reparse — Auto-OCR / re-extract a stored CV ─
+// Re-runs extraction on a CV whose parsed_data is thin/empty. Images go to
+// GPT-4o vision (file_url is a public GCS URL); documents are re-parsed from
+// their stored raw/OCR text. Updates cv_files.parsed_data + enriches metadata.
+const CV_REPARSE_PROMPT = 'Extract recruitment data from this CV/document and return JSON with keys '
+    + '(use null/[] when absent): full_name, email, phone, age (number), height_cm (number), '
+    + 'nationality, current_job_title, current_company, previous_employer, total_experience_years (number), '
+    + 'highest_qualification, technical_skills (array), soft_skills (array), languages_spoken (array), '
+    + 'certifications (array), licenses (string), country, '
+    + 'document_type (one of: cv, passport, certificate, photo, other), raw_text, overall_confidence (0-1).';
+
+router.post('/cv/:cvId/reparse', authenticate, async (req, res) => {
+    const { cvId } = req.params;
+    try {
+        const sql = isMySQL ? 'SELECT * FROM cv_files WHERE id = ? LIMIT 1' : 'SELECT * FROM cv_files WHERE id = $1 LIMIT 1';
+        const result = await query(sql, [cvId]);
+        if (!result.rows.length) return res.status(404).json({ error: 'CV not found' });
+        const cv = result.rows[0];
+        const existingParsed = parseCandidateMetadata(cv.parsed_data);
+        const resolved = resolveCvAccessUrl(cv);
+        const fileUrl = (resolved && resolved.url) || cv.file_url;
+        const nameLower = String(cv.file_name || cv.file_url || '').toLowerCase();
+        const isImage = (cv.file_type && String(cv.file_type).includes('image')) || /\.(jpg|jpeg|png|webp|gif|bmp)\b/.test(nameLower);
+
+        let parsedJson = null;
+        if (isImage && fileUrl && /^https?:\/\//.test(fileUrl)) {
+            const resp = await openai.chat.completions.create({
+                model: 'gpt-4o',
+                messages: [
+                    { role: 'system', content: 'You are an expert CV parser. Return valid JSON only.' },
+                    { role: 'user', content: [
+                        { type: 'text', text: CV_REPARSE_PROMPT },
+                        { type: 'image_url', image_url: { url: fileUrl, detail: 'high' } },
+                    ] },
+                ],
+                response_format: { type: 'json_object' },
+            });
+            try { parsedJson = JSON.parse(resp.choices[0].message.content || '{}'); } catch { parsedJson = null; }
+        } else {
+            const text = cv.ocr_text || existingParsed.raw_text || '';
+            if (!text || String(text).length < 20) {
+                return res.status(422).json({ error: 'No image or extractable text available to re-parse', code: 'no_source' });
+            }
+            const content = await createChatCompletion(
+                [
+                    { role: 'system', content: 'You are an expert CV parser. Return valid JSON only.' },
+                    { role: 'user', content: `${CV_REPARSE_PROMPT}\n\nCV TEXT:\n${String(text).slice(0, 15000)}` },
+                ],
+                { model: 'gpt-4o', response_format: { type: 'json_object' }, max_tokens: 1500 }
+            );
+            try { parsedJson = JSON.parse(content || '{}'); } catch { parsedJson = null; }
+        }
+        if (!parsedJson || typeof parsedJson !== 'object') {
+            return res.status(502).json({ error: 'Re-parse produced no data' });
+        }
+
+        const merged = {
+            ...existingParsed,
+            ...parsedJson,
+            __document_category: existingParsed.__document_category
+                || (parsedJson.document_type && parsedJson.document_type !== 'cv' ? parsedJson.document_type : 'cv'),
+        };
+        const upSQL = isMySQL
+            ? "UPDATE cv_files SET parsed_data = ?, ocr_status = 'completed' WHERE id = ?"
+            : "UPDATE cv_files SET parsed_data = $1, ocr_status = 'completed' WHERE id = $2";
+        await query(upSQL, [JSON.stringify(merged), cvId]);
+
+        // Enrich candidate metadata — fill blanks only, never clobber.
+        try {
+            const cSQL = isMySQL ? 'SELECT metadata, skills FROM candidates WHERE id = ? LIMIT 1' : 'SELECT metadata, skills FROM candidates WHERE id = $1 LIMIT 1';
+            const cRes = await query(cSQL, [cv.candidate_id]);
+            if (cRes.rows.length) {
+                const meta = parseCandidateMetadata(cRes.rows[0].metadata);
+                const setIf = (k, v) => { if (v !== undefined && v !== null && v !== '' && (meta[k] === undefined || meta[k] === null || meta[k] === '')) meta[k] = v; };
+                const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined);
+                setIf('age', num(parsedJson.age));
+                setIf('height_cm', num(parsedJson.height_cm));
+                setIf('experience_years', num(parsedJson.total_experience_years));
+                setIf('previous_employer', parsedJson.previous_employer || parsedJson.current_company);
+                setIf('licenses', parsedJson.licenses || (Array.isArray(parsedJson.certifications) ? parsedJson.certifications.join(', ') : undefined));
+                setIf('country', parsedJson.country || parsedJson.nationality);
+                const metaUp = isMySQL ? 'UPDATE candidates SET metadata = ? WHERE id = ?' : 'UPDATE candidates SET metadata = $1::jsonb WHERE id = $2';
+                await query(metaUp, [JSON.stringify(meta), cv.candidate_id]);
+                const skillsArr = [].concat(parsedJson.technical_skills || [], parsedJson.soft_skills || []).filter(Boolean);
+                if (skillsArr.length && !cRes.rows[0].skills) {
+                    const sUp = isMySQL ? 'UPDATE candidates SET skills = ? WHERE id = ?' : 'UPDATE candidates SET skills = $1 WHERE id = $2';
+                    await query(sUp, [skillsArr.slice(0, 20).join(', '), cv.candidate_id]);
+                }
+            }
+        } catch (metaErr) {
+            logger.warn(`Re-parse metadata enrich skipped: ${metaErr.message}`);
+        }
+
+        logger.info(`Re-parsed CV ${cvId} (candidate ${cv.candidate_id})`);
+        return res.json({ success: true, cv_id: cvId, parsed_data: merged });
+    } catch (error) {
+        logger.error(`CV re-parse error for ${cvId}: ${error.message}`);
+        return res.status(500).json({ error: 'Re-parse failed', detail: error.message });
+    }
+});
 
 module.exports = router;

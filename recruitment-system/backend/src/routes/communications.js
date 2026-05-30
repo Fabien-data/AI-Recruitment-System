@@ -464,6 +464,9 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 ca.agent_id,
                 COALESCE(la.application_status, '') AS latest_application_status,
                 COALESCE(la.job_title, '') AS latest_job_title,
+                COALESCE(la.job_category, '') AS latest_job_category,
+                COALESCE(la.job_country, '') AS latest_job_country,
+                COALESCE(la.project_title, '') AS latest_project_title,
                 u.full_name      AS agent_name,
                 lm.content       AS last_message,
                 lm.direction     AS last_direction,
@@ -497,10 +500,14 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 SELECT DISTINCT ON (a.candidate_id)
                     a.candidate_id,
                     a.status AS application_status,
-                    j.title  AS job_title,
+                    j.title    AS job_title,
+                    j.category AS job_category,
+                    j.country  AS job_country,
+                    p.title    AS project_title,
                     COALESCE(a.updated_at, a.applied_at) AS last_application_at
                 FROM applications a
                 LEFT JOIN jobs j ON j.id = a.job_id
+                LEFT JOIN projects p ON p.id = j.project_id
                 ORDER BY a.candidate_id, COALESCE(a.updated_at, a.applied_at) DESC
             ) la ON la.candidate_id = ca.id
             LEFT JOIN users u ON u.id = ca.agent_id

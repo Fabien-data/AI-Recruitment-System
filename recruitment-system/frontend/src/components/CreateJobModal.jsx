@@ -199,6 +199,9 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
     const { required_fields_schema_text, ...rest } = formData
     const dataToSubmit = {
       ...rest,
+      // Normalize to lowercase so typed and previously-selected categories stay
+      // consistent (the old <select> stored lowercase values).
+      category: formData.category.trim().toLowerCase(),
       requirements: cleanedRequirements,
       required_fields_schema: requiredFieldsSchema,
     }
@@ -282,17 +285,20 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Category <span className="text-red-500">*</span>
               </label>
-              <select
+              <input
+                type="text"
+                list="job-category-options"
                 value={formData.category}
                 onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                placeholder="Select or type a category"
                 className="input w-full"
                 required
-              >
-                <option value="">Select category</option>
-                {JOB_CATEGORIES.map(cat => (
-                  <option key={cat} value={cat.toLowerCase()}>{cat}</option>
+              />
+              <datalist id="job-category-options">
+                {JOB_CATEGORIES.filter(cat => cat !== 'Other').map(cat => (
+                  <option key={cat} value={cat} />
                 ))}
-              </select>
+              </datalist>
             </div>
           </div>
 

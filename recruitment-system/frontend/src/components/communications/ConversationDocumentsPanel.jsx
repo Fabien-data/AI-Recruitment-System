@@ -25,7 +25,8 @@ export function ConversationDocumentsPanel({ candidateId, defaultExpanded = true
   const cvs = candidate?.cvs || []
   const cvList = cvs.filter((cv) => getDocumentCategory(cv) === 'cv')
     .sort((a, b) => new Date(b.uploaded_at || 0) - new Date(a.uploaded_at || 0))
-  const extraList = cvs.filter((cv) => getDocumentCategory(cv) === 'additional')
+  // Everything non-CV (passport / certificate / photo / other) is a supporting doc.
+  const extraList = cvs.filter((cv) => getDocumentCategory(cv) !== 'cv')
     .sort((a, b) => new Date(b.uploaded_at || 0) - new Date(a.uploaded_at || 0))
 
   const totalCount = cvList.length + extraList.length

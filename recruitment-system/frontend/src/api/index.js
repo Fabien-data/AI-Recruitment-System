@@ -48,6 +48,10 @@ export const deleteCandidate = (id) =>
 export const resolveCandidateIntervention = (id) =>
   apiClient.post(`/api/candidates/${id}/resolve-intervention`).then(res => res.data)
 
+// Re-run AI extraction on a stored CV/document (Auto-OCR / re-parse fallback).
+export const reparseCv = (cvId) =>
+  apiClient.post(`/api/candidates/cv/${cvId}/reparse`).then(res => res.data)
+
 // Jobs
 export const getJobs = (params) =>
   apiClient.get('/api/jobs', { params }).then(res => res.data)

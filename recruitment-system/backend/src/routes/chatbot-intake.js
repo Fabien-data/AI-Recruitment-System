@@ -74,38 +74,33 @@ function authenticateChatbot(req, res, next) {
 // ── GET /api/chatbot/jobs — Active jobs for chatbot job cache bootstrap ───────
 router.get('/jobs', authenticateChatbot, async (req, res) => {
     try {
-        // The chatbot only "knows about" active jobs that have a live ad
-        // campaign (>=1 active ad_tracking row). Ad-clicked candidates still
-        // reach ANY job directly via /api/public/job-context/:ad_ref — this
-        // list governs only what the bot can discuss with cold candidates and
-        // what it may suggest as an alternative. EXISTS keeps it to one row
-        // per job regardless of how many ad links a job has.
+        // The chatbot caches ALL active jobs so it can always discuss/serve the
+        // roles that exist — ad campaigns must NOT gate visibility (a job with
+        // no ad_tracking row was previously invisible, which made the bot tell
+        // every ad visitor "no active jobs"). `has_active_ad` is returned as
+        // metadata (for attribution/ranking), not as a filter.
         const jobsSQL = isMySQL
             ? `SELECT j.id, j.title, j.category, j.status, j.salary_range,
                       j.requirements, j.positions_available, j.location, j.description,
                       j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
                       p.id as project_id, p.countries, p.benefits, p.salary_info,
-                      p.interview_date, p.start_date, p.title as project_title
+                      p.interview_date, p.start_date, p.title as project_title,
+                      EXISTS (SELECT 1 FROM ad_tracking at
+                               WHERE at.job_id = j.id AND at.is_active = 1) AS has_active_ad
                FROM jobs j
                LEFT JOIN projects p ON j.project_id = p.id
                WHERE j.status = 'active'
-                 AND EXISTS (
-                     SELECT 1 FROM ad_tracking at
-                      WHERE at.job_id = j.id AND at.is_active = 1
-                 )
                ORDER BY j.created_at DESC`
             : `SELECT j.id, j.title, j.category, j.status, j.salary_range,
                       j.requirements, j.positions_available, j.location, j.description,
                       j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
                       p.id as project_id, p.countries, p.benefits, p.salary_info,
-                      p.interview_date, p.start_date, p.title as project_title
+                      p.interview_date, p.start_date, p.title as project_title,
+                      EXISTS (SELECT 1 FROM ad_tracking at
+                               WHERE at.job_id = j.id AND at.is_active = TRUE) AS has_active_ad
                FROM jobs j
                LEFT JOIN projects p ON j.project_id = p.id
                WHERE j.status = 'active'
-                 AND EXISTS (
-                     SELECT 1 FROM ad_tracking at
-                      WHERE at.job_id::uuid = j.id AND at.is_active = TRUE
-                 )
                ORDER BY j.created_at DESC`;
 
         const result = await query(jobsSQL, []);
@@ -136,7 +131,7 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
                 project_title:  job.project_title  || null,
                 is_urgent:      Boolean(job.is_urgent),
                 required_fields_schema: _parseJsonSafe(job.required_fields_schema, {}),
-                has_active_ad:  true,
+                has_active_ad:  Boolean(job.has_active_ad),
                 created_at:     job.created_at || null,
                 updated_at:     job.updated_at || null,
             };
@@ -150,39 +145,64 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
     }
 });
 
+// Tokenize a string into lowercase alphanumeric words for slug/title matching.
+function _slugTokens(s) {
+    return String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+// Resolve a slug/title key (e.g. "security-officer-female-dubai") to the best
+// matching job row by token overlap. The key may carry extra tokens (country),
+// so we score by how much of the JOB TITLE is covered by the key's tokens.
+function _resolveJobBySlug(key, rows) {
+    const keyTokens = new Set(_slugTokens(key));
+    if (keyTokens.size === 0) return null;
+    let best = null;
+    let bestScore = 0;
+    for (const row of rows) {
+        const titleTokens = _slugTokens(row.title);
+        if (titleTokens.length === 0) continue;
+        const matched = titleTokens.filter(t => keyTokens.has(t)).length;
+        const score = matched / titleTokens.length;
+        if (score > bestScore) { bestScore = score; best = row; }
+    }
+    // Require a solid majority of the title's words to appear in the key.
+    return bestScore >= 0.6 ? best : null;
+}
+
+const JOB_INFO_SELECT = `SELECT j.id, j.title, j.category, j.status, j.salary_range,
+                      j.requirements, j.positions_available, j.location, j.description,
+                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
+                      p.id as project_id, p.countries, p.benefits, p.salary_info,
+                      p.interview_date, p.start_date, p.title as project_title
+                 FROM jobs j
+                 LEFT JOIN projects p ON j.project_id = p.id`;
+
 // ── GET /api/chatbot/job-info/:job_id ────────────────────────────────────────
-// Live lookup for a single job by UUID. Unlike /jobs, this is NOT limited to
-// the 2 newest active jobs — the chatbot needs it to resolve historical jobs
-// it learned about via an ad_ref, even if the job is no longer in the
-// bot's visible cache.
+// Live lookup for a single job by UUID *or* slug/title. The chatbot may pass a
+// slugified title (the lookup_job_info tool), so we never blindly cast the key
+// to uuid (that 500'd on every slug). UUIDs hit the row directly; everything
+// else is fuzzy-matched against active jobs by title token overlap.
 router.get('/job-info/:job_id', authenticateChatbot, async (req, res) => {
     const { job_id } = req.params;
-    if (!job_id || job_id.length > 64) {
+    if (!job_id || job_id.length > 120) {
         return res.status(400).json({ error: 'Invalid job_id' });
     }
     try {
-        const sql = isMySQL
-            ? `SELECT j.id, j.title, j.category, j.status, j.salary_range,
-                      j.requirements, j.positions_available, j.location, j.description,
-                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
-                      p.id as project_id, p.countries, p.benefits, p.salary_info,
-                      p.interview_date, p.start_date, p.title as project_title
-                 FROM jobs j
-                 LEFT JOIN projects p ON j.project_id = p.id
-                WHERE j.id = ?`
-            : `SELECT j.id, j.title, j.category, j.status, j.salary_range,
-                      j.requirements, j.positions_available, j.location, j.description,
-                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
-                      p.id as project_id, p.countries, p.benefits, p.salary_info,
-                      p.interview_date, p.start_date, p.title as project_title
-                 FROM jobs j
-                 LEFT JOIN projects p ON j.project_id = p.id
-                WHERE j.id = $1::uuid`;
-        const result = await query(sql, [job_id]);
-        if (result.rows.length === 0) {
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        let job = null;
+        if (UUID_RE.test(job_id)) {
+            const sql = isMySQL
+                ? `${JOB_INFO_SELECT} WHERE j.id = ?`
+                : `${JOB_INFO_SELECT} WHERE j.id = $1::uuid`;
+            const result = await query(sql, [job_id]);
+            job = result.rows[0] || null;
+        } else {
+            const result = await query(`${JOB_INFO_SELECT} WHERE j.status = 'active'`, []);
+            job = _resolveJobBySlug(job_id, result.rows);
+        }
+        if (!job) {
             return res.status(404).json({ error: 'Job not found', job_id });
         }
-        const job = result.rows[0];
         const _parseJsonSafe = (v, fallback) => {
             if (!v) return fallback;
             if (typeof v === 'object') return v;
@@ -434,6 +454,32 @@ function withDocumentCategory(parsedData, category) {
     };
 }
 
+// Classify an uploaded document into cv / passport / certificate / photo using
+// the extractor's document_type hint when present, else the shape of the
+// parsed data (CVs carry work history / skills / experience; passports carry a
+// passport number but no CV shape; certificates carry certifications only).
+function classifyDocument(baseCategory, fileName, parsedData) {
+    const pd = (parsedData && typeof parsedData === 'object' && !Array.isArray(parsedData)) ? parsedData : {};
+    const dt = String(pd.document_type || '').toLowerCase();
+    if (['cv', 'resume'].includes(dt)) return 'cv';
+    if (['passport', 'id', 'nic'].includes(dt)) return 'passport';
+    if (['certificate', 'license', 'licence', 'diploma'].includes(dt)) return 'certificate';
+    if (dt === 'photo') return 'photo';
+
+    const hasCvShape = (Array.isArray(pd.work_history) && pd.work_history.length > 0)
+        || (Array.isArray(pd.technical_skills) && pd.technical_skills.length > 0)
+        || (pd.total_experience_years != null && Number(pd.total_experience_years) > 0)
+        || Boolean(pd.current_job_title)
+        || Boolean(pd.highest_qualification);
+    if (hasCvShape) return 'cv';
+    if (pd.passport_number) return 'passport';
+    if (Array.isArray(pd.certifications) && pd.certifications.length > 0) return 'certificate';
+    const name = String(fileName || '').toLowerCase();
+    if (/passport/.test(name)) return 'passport';
+    if (/(certificate|cert|licen|diploma)/.test(name)) return 'certificate';
+    return baseCategory;
+}
+
 // ── Main Intake Handler ───────────────────────────────────────────────────────
 
 /**
@@ -558,7 +604,11 @@ router.post(
 
         const hasMultipartCV = Boolean(multipartCvFile && multipartCvFile.buffer);
         const additionalDocumentsFromPayload = parseAdditionalDocuments(additional_documents);
-        const requireCvForChatbot = process.env.CHATBOT_REQUIRE_CV !== 'false';
+        // CV is NOT required by default: the chatbot saves partial leads as soon
+        // as a name is known (CV optional, unknown-job → general pool). Requiring
+        // a CV here would 422-reject every name-only / general-pool sync. Opt in
+        // with CHATBOT_REQUIRE_CV='true' only if a CV-gated flow is ever needed.
+        const requireCvForChatbot = process.env.CHATBOT_REQUIRE_CV === 'true';
         const hasAnyCvPayload = Boolean(cv_file_path || cv_base64 || hasMultipartCV);
 
         if (requireCvForChatbot && hasAnyCvPayload === false) {
@@ -891,9 +941,40 @@ router.post(
                     throw new Error(`${category}_storage_unretrievable`);
                 }
 
-                const documentParsedData = withDocumentCategory(inputParsedData, category);
+                const refinedCategory = classifyDocument(category, savedFileName, inputParsedData);
+                const documentParsedData = withDocumentCategory(inputParsedData, refinedCategory);
                 const detectedFileType = inferFileType(savedFileName);
-                const isPrimary = category === 'cv';
+                const isPrimary = refinedCategory === 'cv';
+
+                // Dedup TRUE duplicates only: same candidate + same file name.
+                // Per-turn re-syncs and pending-sync retries re-send the SAME
+                // file (stable name) → update in place. DISTINCT documents (CV,
+                // passport, certificate) have different names → each gets its own
+                // row, so multi-document candidates aren't collapsed.
+                {
+                    const existingCvSQL = isMySQL
+                        ? 'SELECT id FROM cv_files WHERE candidate_id = ? AND file_name = ? ORDER BY uploaded_at DESC LIMIT 1'
+                        : 'SELECT id FROM cv_files WHERE candidate_id = $1 AND file_name = $2 ORDER BY uploaded_at DESC LIMIT 1';
+                    const existingCv = await query(existingCvSQL, [candidateId, savedFileName]);
+                    if (existingCv.rows && existingCv.rows.length > 0) {
+                        const existingId = existingCv.rows[0].id;
+                        if (hasPhysicalPayload) {
+                            // A new file arrived — replace file + parsed data.
+                            const upSQL = isMySQL
+                                ? "UPDATE cv_files SET file_url=?, file_name=?, file_type=?, ocr_status='completed', ocr_text=COALESCE(?, ocr_text), parsed_data=? WHERE id=?"
+                                : "UPDATE cv_files SET file_url=$1, file_name=$2, file_type=$3, ocr_status='completed', ocr_text=COALESCE($4, ocr_text), parsed_data=$5 WHERE id=$6";
+                            await query(upSQL, [savedFileUrl, savedFileName, detectedFileType, inputRawText || null, JSON.stringify(documentParsedData), existingId]);
+                        } else {
+                            // Only fresh parsed text/data — enrich without touching the file.
+                            const upSQL = isMySQL
+                                ? "UPDATE cv_files SET ocr_text=COALESCE(?, ocr_text), parsed_data=? WHERE id=?"
+                                : "UPDATE cv_files SET ocr_text=COALESCE($1, ocr_text), parsed_data=$2 WHERE id=$3";
+                            await query(upSQL, [inputRawText || null, JSON.stringify(documentParsedData), existingId]);
+                        }
+                        logger.info(`Chatbot intake: updated existing primary CV ${existingId} for ${candidateId}`);
+                        return existingId;
+                    }
+                }
 
                 const cvInsertSQL = isMySQL
                     ? `INSERT INTO cv_files
@@ -919,7 +1000,13 @@ router.post(
                 return recordId;
             };
 
-            if (cv_file_path || cv_raw_text || cv_parsed_data || cv_base64 || hasMultipartCV) {
+            // Only create/refresh a CV row when an ACTUAL document is present
+            // (multipart file, base64, a retrievable URL, or extracted raw
+            // text). cv_parsed_data alone is NOT a document — the chatbot ships
+            // it on every turn-sync, and its fields already flow into
+            // candidates.metadata above; creating a row for it spawned phantom
+            // CVs with null file_url on each turn.
+            if (cv_file_path || cv_raw_text || cv_base64 || hasMultipartCV) {
                 try {
                     cvFileId = await insertDocumentRecord({
                         category: 'cv',

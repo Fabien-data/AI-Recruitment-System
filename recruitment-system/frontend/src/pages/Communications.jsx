@@ -24,13 +24,16 @@ import {
   ChevronRight, AlertCircle, Wifi, WifiOff, Loader2,
   Mic, Square, Trash2, Paperclip, Wand2,
   SlidersHorizontal, ChevronDown, X as XIcon,
+  FileText, Download, Eye, Image as ImageIcon,
+  FolderKanban, Tag,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { categoryColor } from '../utils/categoryColor'
 import { format, formatDistanceToNow } from 'date-fns'
 import { Button } from '../components/ui/Button'
 import { Skeleton } from '../components/ui/Skeleton'
 import { Modal } from '../components/ui/Modal'
-import { getCommunications, sendCommunication } from '../api'
+import { getCommunications, sendCommunication, getCandidate } from '../api'
 import { useAuthStore } from '../stores/authStore'
 import { ConversationDocumentsPanel } from '../components/communications/ConversationDocumentsPanel'
 
@@ -158,40 +161,91 @@ const getPrimaryAttachment = (msg) => {
   return null
 }
 
+// Derive a display filename + whether the media is a PDF/image from url or content.
+function mediaMeta(msg, mediaUrl) {
+  const fromContent = String(msg.content || '').replace(/^📄\s*/, '').trim()
+  const urlName = (() => {
+    try { return decodeURIComponent(String(mediaUrl).split('?')[0].split('/').pop() || '') } catch { return '' }
+  })()
+  const name = (fromContent && /\.\w{2,5}$/.test(fromContent)) ? fromContent : (urlName || fromContent || 'document')
+  const lower = `${name} ${mediaUrl}`.toLowerCase()
+  const isPdf = lower.includes('.pdf')
+  const isImage = /\.(jpg|jpeg|png|webp|gif|bmp|tiff)\b/.test(lower)
+  return { name, isPdf, isImage }
+}
+
 function MediaContent({ msg, isOutbound }) {
+  const [viewer, setViewer] = useState(false)
   const mediaUrl = getPrimaryAttachment(msg)
   if (!mediaUrl) return null
 
-  if (msg.message_type === 'image') {
-    return <img src={mediaUrl} alt="attachment" className="max-h-64 w-auto rounded-lg border border-white/20" />
-  }
+  const type = msg.message_type
+  const { name, isPdf, isImage } = mediaMeta(msg, mediaUrl)
 
-  if (msg.message_type === 'audio' || msg.message_type === 'voice') {
-    return <audio controls src={mediaUrl} className="w-64 max-w-full" />
-  }
-
-  if (msg.message_type === 'video') {
-    return <video controls src={mediaUrl} className="max-h-64 w-auto rounded-lg border border-white/20" />
-  }
-
-  if (msg.message_type === 'document') {
+  if (type === 'image' || (type === 'document' && isImage)) {
     return (
-      <a
-        href={mediaUrl}
-        target="_blank"
-        rel="noreferrer"
-        className={clsx(
-          'inline-flex items-center gap-2 underline text-sm',
-          isOutbound ? 'text-white' : 'text-indigo-700'
-        )}
-      >
-        <Paperclip size={14} />
-        Open attachment
-      </a>
+      <>
+        <button type="button" onClick={() => setViewer(true)} className="block group">
+          <img
+            src={mediaUrl}
+            alt={name || 'image'}
+            className="max-h-64 w-auto rounded-lg border border-white/20 group-hover:opacity-90 transition-opacity cursor-zoom-in"
+          />
+        </button>
+        <Modal open={viewer} onClose={() => setViewer(false)} title={name || 'Image'} size="2xl">
+          <img src={mediaUrl} alt={name || 'image'} className="w-full h-auto rounded-lg" />
+          <div className="mt-3 flex justify-end">
+            <a href={mediaUrl} download target="_blank" rel="noreferrer">
+              <Button variant="secondary" size="sm"><Download size={14} className="mr-1" /> Download</Button>
+            </a>
+          </div>
+        </Modal>
+      </>
     )
   }
 
-  return null
+  if (type === 'audio' || type === 'voice') {
+    return <audio controls src={mediaUrl} className="w-64 max-w-full" />
+  }
+
+  if (type === 'video') {
+    return <video controls src={mediaUrl} className="max-h-64 w-auto rounded-lg border border-white/20" />
+  }
+
+  // Documents (PDF / Word / other) — file card with quick-view + download.
+  return (
+    <>
+      <div className={clsx(
+        'inline-flex items-center gap-2.5 rounded-xl px-3 py-2 max-w-[16rem]',
+        isOutbound ? 'bg-white/15' : 'bg-zinc-100 dark:bg-zinc-700/60'
+      )}>
+        <span className={clsx('shrink-0 w-8 h-8 rounded-lg flex items-center justify-center',
+          isOutbound ? 'bg-white/20' : 'bg-white dark:bg-zinc-800')}>
+          <FileText size={16} className={isPdf ? 'text-red-500' : 'text-indigo-500'} />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-xs font-medium truncate">{name}</span>
+          <span className="flex items-center gap-2 mt-0.5">
+            {isPdf && (
+              <button type="button" onClick={() => setViewer(true)}
+                className={clsx('inline-flex items-center gap-1 text-[11px] underline', isOutbound ? 'text-white/90' : 'text-indigo-600 dark:text-indigo-300')}>
+                <Eye size={11} /> View
+              </button>
+            )}
+            <a href={mediaUrl} target="_blank" rel="noreferrer"
+              className={clsx('inline-flex items-center gap-1 text-[11px] underline', isOutbound ? 'text-white/90' : 'text-indigo-600 dark:text-indigo-300')}>
+              <Download size={11} /> Open
+            </a>
+          </span>
+        </span>
+      </div>
+      {isPdf && (
+        <Modal open={viewer} onClose={() => setViewer(false)} title={name || 'Document'} size="3xl">
+          <iframe src={`${mediaUrl}#toolbar=1`} title={name || 'document'} className="w-full rounded-lg border border-zinc-200 dark:border-zinc-700" style={{ height: '75vh' }} />
+        </Modal>
+      )}
+    </>
+  )
 }
 
 // ── Language badge ────────────────────────────────────────────────────────────
@@ -208,6 +262,30 @@ function LangBadge({ lang }) {
   return (
     <span className={clsx('text-[10px] font-bold px-1.5 py-0.5 rounded-full', LANG_COLOR[lang] || 'bg-gray-100 text-gray-600')}>
       {LANG_LABEL[lang] || lang.toUpperCase()}
+    </span>
+  )
+}
+
+// ── Category badge ────────────────────────────────────────────────────────────
+// Colored label for an open-ended category (job role, project, sector, country).
+// Colors are assigned deterministically by categoryColor() so any new job or
+// project added later automatically gets a stable, distinct color — no code edit.
+// Self-hides when there's no value; long text truncates with a hover tooltip.
+
+function CategoryBadge({ value, icon: Icon, title, max = 18 }) {
+  if (!value) return null
+  const text = String(value)
+  const short = text.length > max ? `${text.slice(0, max - 1)}…` : text
+  return (
+    <span
+      title={title ? `${title}: ${text}` : text}
+      className={clsx(
+        'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium max-w-[140px]',
+        categoryColor(text),
+      )}
+    >
+      {Icon && <Icon size={10} className="shrink-0" />}
+      <span className="truncate">{short}</span>
     </span>
   )
 }
@@ -257,7 +335,9 @@ function MsgBubble({ msg }) {
               <MediaContent msg={msg} isOutbound={!isInbound} />
             </div>
           )}
-          {msg.content}
+          {/* For image/document bubbles the filename is shown on the media card,
+              so skip the redundant content label; keep it for voice transcripts. */}
+          {(!hasMedia || !['image', 'document'].includes(msg.message_type)) && msg.content}
         </div>
         <div className={clsx('flex items-center gap-1.5 mt-1 text-[10px] text-zinc-400 dark:text-zinc-500', isInbound ? 'ml-1' : 'mr-1 flex-row-reverse')}>
           <span className="inline-flex items-center gap-1">
@@ -304,6 +384,8 @@ export default function Communications() {
   const [responseStatus, setResponseStatus] = useState(searchParams.get('response_status') || '')
   const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '')
   const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '')
+  const [jobFilter, setJobFilter] = useState('')
+  const [projectFilter, setProjectFilter] = useState('')
   const [transcriptResponseStatus, setTranscriptResponseStatus] = useState('')
   const [transcriptDateFrom, setTranscriptDateFrom] = useState('')
   const [transcriptDateTo, setTranscriptDateTo] = useState('')
@@ -365,6 +447,15 @@ export default function Communications() {
 
   // Selected candidate object from chatList
   const selectedCandidate = chatList.find(c => c.candidate_id === selectedId)
+
+  // Client-side category filters — distinct options derived from the loaded list
+  // so newly added jobs/projects appear automatically (no API/param changes).
+  const jobOptions = [...new Set(chatList.map(c => c.latest_job_title).filter(Boolean))].sort()
+  const projectOptions = [...new Set(chatList.map(c => c.latest_project_title).filter(Boolean))].sort()
+  const visibleChats = chatList.filter(c =>
+    (!jobFilter || c.latest_job_title === jobFilter) &&
+    (!projectFilter || c.latest_project_title === projectFilter)
+  )
 
   useEffect(() => {
     if (!selectedCandidate) {
@@ -464,6 +555,14 @@ export default function Communications() {
     }),
     enabled: !!selectedId,
   })
+
+  // Full candidate record (metadata, skills, age, experience) for the info panel.
+  const { data: candidateDetailRaw } = useQuery({
+    queryKey: ['candidate-detail', selectedId],
+    queryFn: () => getCandidate(selectedId),
+    enabled: !!selectedId,
+  })
+  const candidateDetail = candidateDetailRaw?.candidate || candidateDetailRaw || null
 
   useEffect(() => {
     if (!selectedId) {
@@ -832,6 +931,26 @@ export default function Communications() {
               {connected ? 'Live' : 'Offline'}
             </span>
           </div>
+          {/* At-a-glance counts so agents can size up the queue without scrolling. */}
+          {chatList.length > 0 && (() => {
+            const total = chatList.length
+            const handoff = chatList.filter(c => c.is_human_handoff).length
+            const bot = total - handoff
+            const cv = chatList.filter(c => c.cv_uploaded || c.has_cv || String(c.last_chatbot_state || '').toLowerCase().includes('cv')).length
+            const unread = chatList.filter(c => Number(c.unread_count) > 0).length
+            const Chip = ({ tone, children }) => (
+              <span className={clsx('px-2 py-0.5 rounded-full font-semibold', tone)}>{children}</span>
+            )
+            return (
+              <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[10px]">
+                <Chip tone="bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">{total} chats</Chip>
+                <Chip tone="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">{bot} bot</Chip>
+                {handoff > 0 && <Chip tone="bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300">{handoff} with agent</Chip>}
+                {cv > 0 && <Chip tone="bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300">{cv} CV</Chip>}
+                {unread > 0 && <Chip tone="bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300">{unread} unread</Chip>}
+              </div>
+            )
+          })()}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" size={16} />
             <input
@@ -843,7 +962,7 @@ export default function Communications() {
             />
           </div>
           {(() => {
-            const activeFilterCount = [conversationStage, pipelineStage, responseStatus, handoffState, dateFrom, dateTo].filter(Boolean).length
+            const activeFilterCount = [conversationStage, pipelineStage, responseStatus, handoffState, dateFrom, dateTo, jobFilter, projectFilter].filter(Boolean).length
               + (sortBy && sortBy !== 'latest_desc' ? 1 : 0)
             return (
               <div className="mt-2 flex items-center justify-between gap-2">
@@ -872,6 +991,8 @@ export default function Communications() {
                       setResponseStatus('')
                       setDateFrom('')
                       setDateTo('')
+                      setJobFilter('')
+                      setProjectFilter('')
                     }}
                     className="inline-flex items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
                   >
@@ -919,6 +1040,26 @@ export default function Communications() {
                   <option key={`handoff-${option.value || 'all'}`} value={option.value}>{option.label}</option>
                 ))}
               </select>
+              <select
+                value={jobFilter}
+                onChange={(e) => setJobFilter(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              >
+                <option value="">All roles</option>
+                {jobOptions.map((option) => (
+                  <option key={`role-${option}`} value={option}>{option}</option>
+                ))}
+              </select>
+              <select
+                value={projectFilter}
+                onChange={(e) => setProjectFilter(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+              >
+                <option value="">All projects</option>
+                {projectOptions.map((option) => (
+                  <option key={`project-${option}`} value={option}>{option}</option>
+                ))}
+              </select>
               <input
                 type="date"
                 value={dateFrom}
@@ -955,14 +1096,14 @@ export default function Communications() {
                 </div>
               ))}
             </div>
-          ) : chatList.length === 0 ? (
+          ) : visibleChats.length === 0 ? (
             <div className="p-8 text-center text-zinc-400 dark:text-zinc-500">
               <MessageSquare size={40} className="mx-auto mb-2 text-zinc-200 dark:text-zinc-700" />
-              <p className="text-sm">No conversations yet</p>
+              <p className="text-sm">{chatList.length === 0 ? 'No conversations yet' : 'No conversations match the filters'}</p>
             </div>
           ) : (
             <div className="divide-y divide-slate-50">
-              {chatList.map((c) => (
+              {visibleChats.map((c) => (
                 <div
                   key={c.candidate_id}
                   onClick={() => { setSelectedId(c.candidate_id); setTranscript([]) }}
@@ -1023,7 +1164,7 @@ export default function Communications() {
                       )}
                     </div>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{c.last_message || 'No messages'}</p>
-                    <div className="flex items-center gap-1.5 mt-1">
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
                       {c.is_human_handoff
                         ? <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-medium flex items-center gap-1">
                           <UserCheck size={10} /> {c.agent_name || 'Agent'}
@@ -1040,6 +1181,10 @@ export default function Communications() {
                         {getPipelineStageLabel(c.pipeline_stage)}
                       </span>
                       {c.last_language && <LangBadge lang={c.last_language} />}
+                      <CategoryBadge value={c.latest_job_title}     icon={Briefcase}    title="Role" />
+                      <CategoryBadge value={c.latest_project_title} icon={FolderKanban} title="Project" />
+                      <CategoryBadge value={c.latest_job_category}  icon={Tag}          title="Sector" />
+                      <CategoryBadge value={c.latest_job_country}   icon={MapPin}       title="Country" />
                     </div>
                   </div>
                 </div>
@@ -1061,10 +1206,14 @@ export default function Communications() {
                 </div>
                 <div>
                   <h2 className="font-semibold text-zinc-900 dark:text-zinc-50 text-sm">{getCandidateDisplayName(selectedCandidate)}</h2>
-                  <div className="mt-1">
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(selectedCandidate?.pipeline_stage))}>
                       {getPipelineStageLabel(selectedCandidate?.pipeline_stage)}
                     </span>
+                    <CategoryBadge value={selectedCandidate?.latest_job_title}     icon={Briefcase}    title="Role" max={28} />
+                    <CategoryBadge value={selectedCandidate?.latest_project_title} icon={FolderKanban} title="Project" max={28} />
+                    <CategoryBadge value={selectedCandidate?.latest_job_category}  icon={Tag}          title="Sector" max={28} />
+                    <CategoryBadge value={selectedCandidate?.latest_job_country}   icon={MapPin}       title="Country" max={28} />
                   </div>
                   <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
                     <span className="flex items-center gap-1"><Phone size={11} /> {selectedCandidate?.phone || selectedCandidate?.whatsapp_phone}</span>
@@ -1418,6 +1567,46 @@ export default function Communications() {
                 <span className="text-xs">{formatDistanceToNow(new Date(selectedCandidate.last_message_at), { addSuffix: true })}</span>
               </div>
             )}
+
+            {/* Extracted profile (from chat + CV) */}
+            {candidateDetail && (() => {
+              let meta = candidateDetail.metadata
+              if (typeof meta === 'string') { try { meta = JSON.parse(meta) } catch { meta = {} } }
+              meta = meta || {}
+              const rows = [
+                ['Age', (candidateDetail.age || meta.age) ? `${candidateDetail.age || meta.age} yrs` : null],
+                ['Height', meta.height_cm ? `${meta.height_cm} cm` : null],
+                ['Experience', (candidateDetail.experience_years || meta.experience_years) ? `${candidateDetail.experience_years || meta.experience_years} yrs` : null],
+                ['Country', meta.destination_country || meta.country || null],
+                ['Licenses', meta.licenses || null],
+                ['Prev. Employer', meta.previous_employer || null],
+                ['English', meta.english_proficiency || null],
+              ].filter(r => r[1])
+              const skills = Array.isArray(candidateDetail.skills)
+                ? candidateDetail.skills
+                : String(candidateDetail.skills || '').split(',').map(s => s.trim()).filter(Boolean)
+              if (rows.length === 0 && skills.length === 0) return null
+              return (
+                <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800/60">
+                  <p className="text-[10px] text-zinc-400 dark:text-zinc-500 uppercase tracking-wide mb-1.5">Profile</p>
+                  <div className="space-y-1">
+                    {rows.map(([label, val]) => (
+                      <div key={label} className="flex justify-between gap-2 text-xs">
+                        <span className="text-zinc-400 dark:text-zinc-500 shrink-0">{label}</span>
+                        <span className="text-zinc-700 dark:text-zinc-200 text-right break-words">{val}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {skills.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {skills.slice(0, 12).map((s, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 rounded-full text-[10px] font-medium">{s}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
           </div>
 
           {/* Documents & CVs sent by this candidate */}
