@@ -856,19 +856,6 @@ export default function Projects() {
                 contact_info: { ...formData.contact_info, address: e.target.value }
               })}
             />
-          </div>
-
-          {/* Actions */}
-          <div className="flex justify-end gap-3 pt-6 border-t-2 border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 -mx-6 -mb-6 px-6 py-4 rounded-b-xl sticky bottom-0">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                setModalOpen(false)
-                resetForm()
-              }}
-            >
-              Cancel
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Special Details</label>
               <textarea
@@ -882,6 +869,19 @@ export default function Projects() {
                 })}
               />
             </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-3 pt-6 border-t-2 border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 -mx-6 -mb-6 px-6 py-4 rounded-b-xl sticky bottom-0">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setModalOpen(false)
+                resetForm()
+              }}
+            >
+              Cancel
             </Button>
             <Button type="submit" loading={createMutation.isLoading}>
               Create Project

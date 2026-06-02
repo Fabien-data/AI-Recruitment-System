@@ -42,6 +42,15 @@ async function _enqueueProjectDelete(projectId) {
     }
 }
 
+// Date columns are DATE in Postgres, which rejects '' with "invalid input
+// syntax for type date". The UI sends '' for un-filled optional dates, so map
+// empty/blank strings to null before they reach the query.
+function emptyToNull(value) {
+    if (value === undefined || value === null) return null;
+    if (typeof value === 'string' && value.trim() === '') return null;
+    return value;
+}
+
 function normalizeProjectPayload(body = {}) {
     const countriesInput = body.countries || body.country_of_recruitment || [];
     const countries = Array.isArray(countriesInput) ? countriesInput : [];
@@ -349,6 +358,13 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
             return res.status(400).json({ error: 'Title, client name, at least one industry, and at least one country are required' });
         }
 
+        // The create form leaves optional date fields as '' (empty string).
+        // Postgres DATE columns reject '' ("invalid input syntax for type date"),
+        // which would 500 and prevent the project from being created. Coerce to null.
+        const startDate = emptyToNull(start_date);
+        const interviewDate = emptyToNull(interview_date);
+        const endDate = emptyToNull(end_date);
+
         const userId = req.user.id;
         const industryTypesJson = JSON.stringify(normalized.industry_types);
 
@@ -362,7 +378,7 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
                 [
                     id, title, client_name, normalized.industry_type, industryTypesJson, description,
                     JSON.stringify(normalized.countries), status, priority, total_positions,
-                    start_date, interview_date, end_date,
+                    startDate, interviewDate, endDate,
                     JSON.stringify(benefits || {}),
                     JSON.stringify(normalized.salary_info),
                     JSON.stringify(normalized.contact_info),
@@ -392,7 +408,7 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
                 [
                     title, client_name, normalized.industry_type, industryTypesJson, description,
                     JSON.stringify(normalized.countries), status, priority, total_positions,
-                    start_date, interview_date, end_date,
+                    startDate, interviewDate, endDate,
                     JSON.stringify(benefits || {}),
                     JSON.stringify(normalized.salary_info),
                     JSON.stringify(normalized.contact_info),
@@ -482,6 +498,9 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
                 // Stringify JSON fields (industry_types joins this group post-migration).
                 if (['countries', 'industry_types', 'benefits', 'salary_info', 'contact_info', 'requirements', 'metadata'].includes(key)) {
                     values.push(JSON.stringify(updates[key]));
+                } else if (['start_date', 'interview_date', 'end_date'].includes(key)) {
+                    // '' would break the DATE column on update too — see emptyToNull.
+                    values.push(emptyToNull(updates[key]));
                 } else {
                     values.push(updates[key]);
                 }
