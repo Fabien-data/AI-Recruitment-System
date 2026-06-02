@@ -23,6 +23,27 @@ const logger = require('../utils/logger');
 // and this re-enforces it server-side so a crafted request can't bypass it.
 const SCHEDULER_ROLES = [ROLES.ADMIN, ROLES.PROJECT_HANDLER, ROLES.SOURCING_DEPARTMENT];
 
+// interview_schedules.description is added by migration 023, but on prod the
+// table is owned by `postgres` so the ALTER is rejected ("must be owner").
+// Cache a one-time existence check so scheduling degrades gracefully (inserts
+// without the column) instead of 500ing; the description still goes into the
+// WhatsApp invite regardless (B016). Run scripts/fix-interview-ownership.js to
+// add the column and enable DB persistence.
+let _ivDescColumn = null;
+async function interviewHasDescriptionColumn() {
+    if (_ivDescColumn !== null) return _ivDescColumn;
+    try {
+        const r = await query(adaptQuery(
+            `SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'interview_schedules' AND column_name = 'description' LIMIT 1`
+        ), []);
+        _ivDescColumn = r.rows.length > 0;
+    } catch (_) {
+        _ivDescColumn = false;
+    }
+    return _ivDescColumn;
+}
+
 // ── List / filter interviews ──────────────────────────────────────────────────
 router.get('/', authenticate, async (req, res, next) => {
     try {
@@ -162,16 +183,31 @@ router.post('/', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, n
         const { candidate_id, job_title } = appResult.rows[0];
 
         const id = generateUUID();
-        await query(
-            adaptQuery(`
-                INSERT INTO interview_schedules
-                    (id, application_id, scheduled_datetime, location, interviewer_id,
-                     duration_minutes, status, description, created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7, $8)
-            `),
-            [id, application_id, scheduled_datetime, location || null, interviewer_id || null,
-             duration_minutes, description || null, req.user.id]
-        );
+        if (await interviewHasDescriptionColumn()) {
+            await query(
+                adaptQuery(`
+                    INSERT INTO interview_schedules
+                        (id, application_id, scheduled_datetime, location, interviewer_id,
+                         duration_minutes, status, description, created_by)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7, $8)
+                `),
+                [id, application_id, scheduled_datetime, location || null, interviewer_id || null,
+                 duration_minutes, description || null, req.user.id]
+            );
+        } else {
+            // description column not present (table-ownership block) — persist
+            // the row without it; the note still rides the WhatsApp invite below.
+            await query(
+                adaptQuery(`
+                    INSERT INTO interview_schedules
+                        (id, application_id, scheduled_datetime, location, interviewer_id,
+                         duration_minutes, status, created_by)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
+                `),
+                [id, application_id, scheduled_datetime, location || null, interviewer_id || null,
+                 duration_minutes, req.user.id]
+            );
+        }
 
         // Update application status to interview_scheduled
         await query(

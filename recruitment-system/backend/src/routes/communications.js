@@ -995,8 +995,17 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
                     channelResults[ch].messages = waResult?.messages;
                     channelResults[ch].whatsapp_message_id = waResult?.messages?.[0]?.id || null;
                 } catch (err) {
-                    const waError = err.response?.data?.error?.message || err.message;
-                    logger.warn(`WhatsApp send failed for ${waPhone}: ${waError}`);
+                    const metaError = err.response?.data?.error;
+                    const waError = metaError
+                        ? `${metaError.message}${metaError.code ? ` (Meta code ${metaError.code})` : ''}`
+                        : err.message;
+                    logger.warn(
+                        `WhatsApp send failed for ${waPhone}: ${waError}` +
+                        (metaError?.fbtrace_id ? ` [fbtrace_id=${metaError.fbtrace_id}]` : '')
+                    );
+                    if (metaError?.code === 190) {
+                        logger.error('WhatsApp token invalid/expired (code 190) — rotate WHATSAPP_ACCESS_TOKEN and redeploy.');
+                    }
                     channelResults[ch].simulated = true;
                     channelResults[ch].error = waError;
                 }

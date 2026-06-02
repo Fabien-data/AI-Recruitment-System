@@ -241,6 +241,26 @@ applyMigrations()
                 logger.warn(`chatbot-sync-worker failed to start: ${err.message}`);
             }
 
+            // ── Validate WhatsApp credentials (non-blocking) ───────────────
+            // Catches an expired/invalid token at boot rather than when an
+            // agent first tries to send and hits "Cannot parse access token".
+            try {
+                const { verifyCredentials } = require('./services/whatsapp');
+                verifyCredentials().then((res) => {
+                    if (res.ok) {
+                        logger.info('✅ WhatsApp credentials validated against Meta');
+                    } else {
+                        logger.error(
+                            `⚠️  WhatsApp credentials check failed: ${res.error}` +
+                            (res.code ? ` (Meta code ${res.code})` : '') +
+                            '. Outbound WhatsApp will fail until WHATSAPP_ACCESS_TOKEN is fixed.'
+                        );
+                    }
+                }).catch(() => { /* never block startup on this */ });
+            } catch (err) {
+                logger.warn(`WhatsApp credential check skipped: ${err.message}`);
+            }
+
             // n8n Integration Mode
             if (USE_N8N_FOR_EMAIL) {
                 logger.info('📧 Email processing: HANDLED BY n8n workflows');
