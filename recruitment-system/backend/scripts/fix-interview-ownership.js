@@ -45,9 +45,13 @@ async function main() {
     console.log(`Connected as ${user} to ${database} on ${host}\n`);
 
     try {
+        // Order matters: Cloud SQL's `postgres` is cloudsqlsuperuser (not a true
+        // superuser), so we must ADD the column WHILE postgres still owns the
+        // table, THEN transfer ownership — doing it the other way fails the
+        // ADD with "must be owner" (see cloud-sql-table-ownership notes).
         const statements = [
-            `ALTER TABLE interview_schedules OWNER TO recruitment_user`,
             `ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS description TEXT`,
+            `ALTER TABLE interview_schedules OWNER TO recruitment_user`,
         ];
         for (const sql of statements) {
             try {
