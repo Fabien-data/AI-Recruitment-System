@@ -8,6 +8,8 @@
     "start": "node src/server.js",
     "backfill:cv-urls": "node scripts/backfill-chatbot-cv-urls.js",
     "backfill:cv-urls:apply": "node scripts/backfill-chatbot-cv-urls.js --apply",
+    "backfill:country-codes": "node scripts/backfill-country-codes.js",
+    "backfill:country-codes:apply": "node scripts/backfill-country-codes.js --apply",
     "integration:verify": "node scripts/verify-chatbot-integration.js",
     "integration:verify:strict": "node scripts/verify-chatbot-integration.js --strict",
     "test": "jest",

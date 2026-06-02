@@ -693,6 +693,15 @@ router.post(
             );
             if (heightVal != null) metadataUpdates.height_cm = heightVal;
 
+            // Gender — normalised to male/female so the auto-assign matcher can
+            // use it as a hard filter (B013). Tolerates m/f and word variants.
+            const rawGender = firstDefined(parsed.gender, topLevel.gender);
+            if (rawGender != null) {
+                const g = String(rawGender).trim().toLowerCase();
+                if (['m', 'male', 'man', 'boy'].includes(g)) metadataUpdates.gender = 'male';
+                else if (['f', 'female', 'woman', 'girl'].includes(g)) metadataUpdates.gender = 'female';
+            }
+
             // Mismatches — only ever nested under cv_parsed_data.
             if (parsed.mismatches) metadataUpdates.mismatches = parsed.mismatches;
 

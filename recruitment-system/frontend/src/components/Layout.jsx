@@ -1,15 +1,99 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useAuthStore, useRole } from '../stores/authStore'
+import { getNotifications } from '../api'
 import {
   LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell,
   FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone,
+  AlertTriangle,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { twMerge } from 'tailwind-merge'
 import { ThemeToggle } from './ui/ThemeToggle'
 import { TopProgressBar } from './ui/TopProgressBar'
 import { Logo } from './ui/Logo'
+
+// Header notification bell — opens a dropdown of live-aggregated actionable
+// signals (interventions, recent applications, today's interviews). Polls
+// every 60s; the red dot shows only when there's something to act on.
+function NotificationBell() {
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const { data } = useQuery({
+    queryKey: ['notifications'],
+    queryFn: getNotifications,
+    refetchInterval: 60000,
+    refetchOnWindowFocus: true,
+  })
+  const items = data?.items || []
+  const unread = data?.unread_count || 0
+
+  const iconFor = (type) => {
+    switch (type) {
+      case 'intervention': return <AlertTriangle size={15} className="text-amber-500" />
+      case 'interview': return <CalendarDays size={15} className="text-indigo-500" />
+      case 'certification': return <ShieldCheck size={15} className="text-emerald-500" />
+      case 'flag': return <AlertTriangle size={15} className="text-rose-500" />
+      case 'cv_stuck': return <FileText size={15} className="text-amber-500" />
+      default: return <FileText size={15} className="text-emerald-500" />
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-label="Notifications"
+        onClick={() => setOpen((o) => !o)}
+        className="relative p-2.5 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-600 dark:text-zinc-300 hover:text-primary-600 dark:hover:text-primary-400 rounded-2xl shadow-sm hover:shadow-md transition-all ease-out duration-300"
+      >
+        <Bell size={18} />
+        {unread > 0 && (
+          <span className="absolute top-2 right-2.5 flex h-2.5 w-2.5">
+            <span className="animate-ping-soft absolute inline-flex h-full w-full rounded-full bg-accent-500 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-accent-gradient shadow-glow-red" />
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          {/* Fixed (not absolute) so the panel escapes the content column's
+              `overflow-hidden`, which previously clipped it out of view (B003). */}
+          <div className="fixed top-20 right-4 lg:right-12 w-80 max-h-96 overflow-y-auto rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xl z-50">
+            <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
+              <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Notifications</span>
+              {unread > 0 && <span className="text-xs text-zinc-500 dark:text-zinc-400">{unread} new</span>}
+            </div>
+            {items.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">You're all caught up.</div>
+            ) : (
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {items.map((n, i) => (
+                  <li key={i}>
+                    <button
+                      type="button"
+                      onClick={() => { setOpen(false); if (n.link) navigate(n.link) }}
+                      className="w-full text-left px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 flex gap-3"
+                    >
+                      <span className="mt-0.5 shrink-0">{iconFor(n.type)}</span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">{n.title}</span>
+                        {n.subtitle && <span className="block text-xs text-zinc-500 dark:text-zinc-400 truncate">{n.subtitle}</span>}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 // Each nav item is tagged with its `section` key so the nav builder can filter
 // by section_permissions for custom (non-admin) users.
@@ -245,17 +329,7 @@ export default function Layout() {
 
           <div className="flex items-center gap-3 shrink-0">
             <ThemeToggle />
-            <button
-              type="button"
-              aria-label="Notifications"
-              className="relative p-2.5 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-600 dark:text-zinc-300 hover:text-primary-600 dark:hover:text-primary-400 rounded-2xl shadow-sm hover:shadow-md transition-all ease-out duration-300"
-            >
-              <Bell size={18} />
-              <span className="absolute top-2 right-2.5 flex h-2.5 w-2.5">
-                <span className="animate-ping-soft absolute inline-flex h-full w-full rounded-full bg-accent-500 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-accent-gradient shadow-glow-red" />
-              </span>
-            </button>
+            <NotificationBell />
           </div>
         </header>
 

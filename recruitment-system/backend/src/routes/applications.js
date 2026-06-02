@@ -172,6 +172,12 @@ router.post('/', authenticate, async (req, res, next) => {
 // of what the UI sends. `placed` is terminal in the post-deployment sense
 // so it intentionally has no successors here.
 const VALID_TRANSITIONS = {
+    // Entry states a freshly-sourced candidate sits in before screening.
+    // auto_assigned is written by the auto-assign matcher; omitting it here is
+    // why certifying a matched candidate always 400'd ("Unable to certify" —
+    // B011). reviewing is the manual-intake equivalent.
+    auto_assigned:       ['certified', 'rejected', 'screening'],
+    reviewing:           ['certified', 'rejected', 'screening'],
     applied:             ['certified', 'rejected', 'screening'],
     screening:           ['certified', 'rejected'],
     certified:           ['pre_screened', 'rejected'],

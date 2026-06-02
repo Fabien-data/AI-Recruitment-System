@@ -27,6 +27,7 @@ from app import crud
 from app.utils.meta_client import meta_client
 from app.core.message_router import message_router
 from app.services.voice_service import voice_service
+from app.services.ad_context_service import ad_context_service
 from app.config import settings
 from app.nlp.language_detector import is_greeting
 
@@ -291,6 +292,32 @@ async def _graceful_recovery_message(phone: str, db) -> str:
 
 # ─── Recruitment System Chat Sync ────────────────────────────────────────────
 
+async def _rehost_media(media_bytes: bytes, filename: str, phone: str, mime: str) -> str:
+    """Re-host inbound WhatsApp media (document/image/voice) to GCS so the
+    conversation panel can show/play it. WhatsApp's own media URLs are
+    auth-gated and not browser-accessible. Returns a public URL or ''."""
+    if not media_bytes:
+        return ""
+    try:
+        import base64 as _b64
+        async with httpx.AsyncClient(timeout=10.0) as _mc:
+            _mr = await _mc.post(
+                f"{settings.recruitment_api_url}/api/chatbot/media-upload",
+                headers={"x-chatbot-api-key": settings.chatbot_api_key or ""},
+                json={
+                    "base64": _b64.b64encode(media_bytes).decode("ascii"),
+                    "filename": filename or "file",
+                    "phone": phone,
+                    "mime_type": mime or "application/octet-stream",
+                },
+            )
+            if _mr.status_code == 200:
+                return (_mr.json() or {}).get("url", "") or ""
+    except Exception as exc:    # noqa: BLE001
+        logger.debug(f"media re-host skipped: {exc}")
+    return ""
+
+
 async def _sync_chat_message(
     phone: str,
     direction: str,
@@ -526,10 +553,18 @@ async def process_single_message(message: dict, contacts: list, db):
         #       for this Security Officer position in Dubai") — needs the
         #       orchestrator's body-text matcher to detect the job even when
         #       Meta didn't supply a referral object. The greeting fast-path
-        #       would otherwise hijack the conversation and lose ad context.
+        #       would otherwise hijack the conversation and lose ad context, OR
+        #   (c) the text carries an ad trigger token ("START:<ref>" or a
+        #       friendly message with "[ref:<ref>]") — the orchestrator must
+        #       resolve the exact job from that ref.
         try:
             greet, _ = is_greeting(text_body)
-            if greet and not referral_obj and not _looks_like_ad_intent(text_body):
+            if (
+                greet
+                and not referral_obj
+                and not _looks_like_ad_intent(text_body)
+                and not ad_context_service.is_ad_trigger(text_body)
+            ):
                 candidate = crud.get_or_create_candidate(db, from_number)
                 if candidate.conversation_state in (STATE_INITIAL, STATE_AWAITING_LANGUAGE_SELECTION):
                     sel = await meta_client.send_language_selector(from_number)
@@ -607,6 +642,8 @@ async def process_single_message(message: dict, contacts: list, db):
             if file_content:
                 ack = _cv_processing_ack(_candidate_register(from_number))
                 await meta_client.send_message(from_number, ack)
+                # Re-host so the document is openable in the conversation panel.
+                _media_url_captured = await _rehost_media(file_content, filename, from_number, mime_type)
                 response_text = await _safe_process_message(
                     db=db,
                     phone_number=from_number,
@@ -646,13 +683,16 @@ async def process_single_message(message: dict, contacts: list, db):
         if file_content:
             ack = _cv_processing_ack(_candidate_register(from_number))
             await meta_client.send_message(from_number, ack)
+            # Re-host to GCS (browser-viewable) for the conversation panel; the
+            # WhatsApp media_url is auth-gated and can't be shown directly.
+            _media_url_captured = await _rehost_media(file_content, filename, from_number, mime_type)
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
                 media_content=file_content,
                 media_type="image",
                 media_filename=filename,
-                media_url=media_url,
+                media_url=_media_url_captured or media_url,
                 source_message_type=message_type,
             )
         else:
@@ -761,6 +801,14 @@ async def process_single_message(message: dict, contacts: list, db):
                 message_text=text_body,
                 source_message_type=message_type,
             )
+
+    # ── Reaction / system signals — acknowledge silently, never reply ─────────
+    # A reaction is just an emoji on a previous message; system/ephemeral are
+    # non-conversational. Replying with the capability blurb confused real
+    # candidates (they reacted 👍 and got "I can receive text messages…").
+    elif message_type in ("reaction", "system", "ephemeral"):
+        logger.info(f"Ignoring non-conversational message type '{message_type}' from {from_number}")
+        response_text = None
 
     # ── Unsupported type ──────────────────────────────────────────────────────
     else:

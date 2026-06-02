@@ -16,6 +16,7 @@ import {
     Filter,
     ChevronDown,
     Calendar,
+    Clock,
     Sparkles,
     CheckCircle,
     Layers,
@@ -31,6 +32,8 @@ import { Table } from '../components/ui/Table'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Pagination } from '../components/ui/Pagination'
 import { apiClient, getJobs, createApplication } from '../api'
+import { resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
+import { DocumentPreview } from '../components/documents/DocumentPreview'
 import toast from 'react-hot-toast'
 
 // API function for general pool
@@ -296,6 +299,15 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
         ? JSON.parse(candidate.metadata || '{}')
         : (candidate.metadata || {})
 
+    // Resolved, browser-openable CV link (backend already normalises the raw
+    // storage path to an https GCS URL). Null when the CV is missing OR still
+    // syncing from the chatbot — cv_status disambiguates the two (B001/B002).
+    const cvUrl = (() => {
+        const u = resolveDocumentUrl({ file_url: candidate.cv_url, file_name: candidate.cv_filename })
+        return u && u !== PENDING_URL ? u : null
+    })()
+    const cvProcessing = !cvUrl && candidate.cv_status === 'placeholder_unresolved'
+
     // Auto-assign mutation
     const autoAssignMutation = useMutation({
         mutationFn: (threshold) => autoAssignCandidate(candidate.id, threshold),
@@ -399,28 +411,29 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                         </div>
                     </div>
 
-                    {/* CV */}
+                    {/* CV — inline preview so image CVs actually render instead
+                        of a dead "Preview" button popping a blank tab, with an
+                        explicit "processing" state for chatbot uploads still
+                        syncing (B001/B002). */}
                     <div>
                         <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">CV / Documents</h4>
-                        <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <FileText className="text-purple-500" size={24} />
-                                <div>
-                                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{candidate.name}_CV.pdf</span>
-                                    <p className="text-xs text-zinc-500 dark:text-zinc-400">Uploaded via {candidate.source}</p>
-                                </div>
+                        {cvUrl ? (
+                            <DocumentPreview
+                                url={cvUrl}
+                                isImage={isImageDocument({ file_name: candidate.cv_filename })}
+                                fileName={candidate.cv_filename || `${candidate.name}_CV`}
+                                className="h-80"
+                            />
+                        ) : cvProcessing ? (
+                            <div className="p-4 border border-dashed border-amber-300 dark:border-amber-700/60 rounded-lg bg-amber-50/60 dark:bg-amber-900/10 text-sm text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                                <Clock size={16} className="shrink-0" />
+                                CV is still syncing from the chatbot — try again in a moment.
                             </div>
-                            <div className="flex gap-2">
-                                <Button variant="secondary" size="sm" className="gap-1">
-                                    <Eye size={14} />
-                                    Preview
-                                </Button>
-                                <Button variant="secondary" size="sm" className="gap-1">
-                                    <Download size={14} />
-                                    Download
-                                </Button>
+                        ) : (
+                            <div className="p-4 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 text-sm text-zinc-500 dark:text-zinc-400">
+                                No CV uploaded for this candidate.
                             </div>
-                        </div>
+                        )}
                     </div>
 
                     {/* Notes */}

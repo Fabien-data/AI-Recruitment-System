@@ -16,7 +16,12 @@ from app.models import PendingSync
 logger = logging.getLogger(__name__)
 
 RECRUITMENT_API_URL = os.getenv("RECRUITMENT_API_URL", settings.recruitment_api_url)
-SYNC_ENDPOINT = os.getenv("RECRUITMENT_SYNC_ENDPOINT", "/api/chatbot-sync/intake")
+# Rich intake endpoint: stores the CV to GCS (saveCVFile), persists parsed_data,
+# merges age/height/skills/licenses/previous_employer into candidates.metadata,
+# and handles additional documents + applications + general pool. The old
+# /api/chatbot-sync/intake path stored non-retrievable local CV paths and dropped
+# most details — see plan Phase A.
+SYNC_ENDPOINT = os.getenv("RECRUITMENT_SYNC_ENDPOINT", "/api/chatbot/intake")
 CHATBOT_API_KEY = os.getenv("CHATBOT_API_KEY", settings.chatbot_api_key or "")
 SYNC_ENABLED = os.getenv(
     "RECRUITMENT_SYNC_ENABLED",
@@ -98,13 +103,44 @@ class RecruitmentSyncService:
         except (TypeError, ValueError):
             height_val = None
 
-        cv_parsed: Dict[str, Any] = {}
+        # Gender — the backend matcher uses this as a HARD filter so a
+        # gendered vacancy (e.g. "female") never matches the wrong candidate
+        # (B013). Normalise the various spellings to canonical male/female.
+        gender_raw = (
+            getattr(candidate, "gender", None)
+            or collected.get("gender")
+            or extracted.get("gender")
+        )
+        gender_val = None
+        if isinstance(gender_raw, str):
+            g = gender_raw.strip().lower()
+            if g in ("m", "male", "man", "boy"):
+                gender_val = "male"
+            elif g in ("f", "female", "woman", "girl"):
+                gender_val = "female"
+
+        # Seed from the full CV extraction blob (work_history, certifications,
+        # languages, current_company, qualification, ai_insights) so the CV
+        # Manager shows the complete parse. Chat-collected fields overlay below.
+        cv_full = agent_state.get("cv_parsed_data") or extracted.get("cv_parsed_data")
+        cv_parsed: Dict[str, Any] = dict(cv_full) if isinstance(cv_full, dict) else {}
         if age_val is not None:
             payload["age"] = age_val
             cv_parsed["age"] = age_val
         if height_val is not None:
             payload["height_cm"] = height_val
             cv_parsed["height_cm"] = height_val
+        # Fall back to the full CV-parse blob (ExtractedProfile.to_dict carries a
+        # flat `gender`) if chat/collected fields didn't surface gender.
+        if gender_val is None and isinstance(cv_parsed.get("gender"), str):
+            g2 = cv_parsed["gender"].strip().lower()
+            if g2 in ("m", "male", "man", "boy"):
+                gender_val = "male"
+            elif g2 in ("f", "female", "woman", "girl"):
+                gender_val = "female"
+        if gender_val is not None:
+            payload["gender"] = gender_val
+            cv_parsed["gender"] = gender_val
         if candidate.experience_years is not None:
             cv_parsed["total_experience_years"] = candidate.experience_years
         if skills_list:

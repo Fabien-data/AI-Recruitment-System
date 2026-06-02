@@ -1,21 +1,118 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { getProject, getProjectCandidates, getProjectStats, exportProjectCsv } from '../api'
+import { getProject, getProjectCandidates, getProjectStats, exportProjectCsv, getAdLinks, generateAdLink } from '../api'
 import {
   ArrowLeft, FolderKanban, MapPin, Calendar, Users, Briefcase,
   DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User, Download,
-  HeartPulse, UtensilsCrossed, CheckCircle2, Clock, Award, XCircle, TrendingUp, Building2,
+  HeartPulse, UtensilsCrossed, CheckCircle2, Clock, Award, XCircle, TrendingUp, Building2, Megaphone,
 } from 'lucide-react'
+import toast from 'react-hot-toast'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
 import { Button } from '../components/ui/Button'
 import { CreateJobModal } from '../components/CreateJobModal'
+import { AdLinkCard } from '../components/AdLinkModal'
 import { format } from 'date-fns'
 import { useAuthStore } from '../stores/authStore'
 import { STATUS_LABELS, STATUS_COLORS } from '../constants/lifecycle'
+
+// Project = Meta campaign. This panel lets the team build the whole campaign's
+// ads in one place: one row per job, each with its generate button or its live
+// ad link (message template / destination URL / QR / click+conversion stats).
+function ProjectCampaignPanel({ project, projectId, canManage }) {
+  const queryClient = useQueryClient()
+  const jobs = Array.isArray(project?.jobs) ? project.jobs : []
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['ad-links', { project_id: projectId }],
+    queryFn: () => getAdLinks({ project_id: projectId }),
+    enabled: !!projectId,
+  })
+  const links = Array.isArray(data?.data) ? data.data : []
+  const linksByJob = links.reduce((acc, link) => {
+    (acc[link.job_id] ||= []).push(link)
+    return acc
+  }, {})
+
+  const generate = useMutation({
+    mutationFn: (job) =>
+      generateAdLink({
+        job_id: job.id,
+        project_id: projectId,
+        campaign_name: project?.title || undefined,
+      }),
+    onSuccess: () => {
+      toast.success('Ad link generated — the bot now knows this job')
+      queryClient.invalidateQueries({ queryKey: ['ad-links'] })
+    },
+    onError: (e) => {
+      if (e.response?.status === 409) {
+        toast.error(`That code is already used by "${e.response.data?.existing_campaign || 'another campaign'}"`)
+      } else {
+        toast.error(e.response?.data?.error || 'Failed to generate ad link')
+      }
+    },
+  })
+
+  return (
+    <Card>
+      <div className="flex items-center gap-2 mb-1">
+        <Megaphone size={18} className="text-primary-600" />
+        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Meta Ad Campaign</h2>
+      </div>
+      <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
+        Run one Meta campaign for this project, with one ad per job. Generate each job's link, then paste its
+        message template into the ad — the bot reads the hidden ref to route the candidate to the right role.
+      </p>
+
+      {jobs.length === 0 ? (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 py-4">Add a job to this project to start its campaign.</p>
+      ) : isLoading ? (
+        <div className="space-y-2">
+          {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-lg" />)}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {jobs.map((job) => {
+            const jobLinks = linksByJob[job.id] || []
+            return (
+              <div key={job.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div className="min-w-0">
+                    <Link to={`/jobs/${job.id}`} className="font-medium text-zinc-900 dark:text-zinc-50 hover:text-primary-600 truncate block">
+                      {job.title}
+                    </Link>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {jobLinks.length > 0 ? `${jobLinks.length} ad${jobLinks.length > 1 ? 's' : ''}` : 'No ad link yet'}
+                    </p>
+                  </div>
+                  {canManage && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => generate.mutate(job)}
+                      loading={generate.isLoading && generate.variables?.id === job.id}
+                    >
+                      <Megaphone size={14} /> {jobLinks.length > 0 ? 'New link' : 'Generate link'}
+                    </Button>
+                  )}
+                </div>
+                {jobLinks.length > 0 && (
+                  <div className="space-y-3">
+                    {jobLinks.map((link) => <AdLinkCard key={link.ad_ref} link={link} />)}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Card>
+  )
+}
 
 function ProjectCandidateList({ projectId, jobFilter }) {
   const params = jobFilter ? { job_id: jobFilter, limit: 8 } : { limit: 8 }
@@ -518,6 +615,13 @@ export default function ProjectDetail() {
               </div>
             )}
           </Card>
+
+          {/* Meta Ad Campaign — one ad per job under this project's campaign */}
+          <ProjectCampaignPanel
+            project={project}
+            projectId={id}
+            canManage={user?.role === 'admin' || user?.role === 'sourcing_department'}
+          />
 
           {/* Candidates */}
           <Card>

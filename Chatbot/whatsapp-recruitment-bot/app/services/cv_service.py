@@ -109,10 +109,54 @@ class CVService:
                         deduped.append(s)
                     out["skills"] = deduped[:20]
 
+                # Country: prefer explicit nationality, else infer from text.
                 raw_text = (getattr(extracted, "raw_text", None) or "").lower()
                 country = self._extract_country_from_text(raw_text)
+                if not country and getattr(extracted, "nationality", None):
+                    country = self._extract_country_from_text(str(extracted.nationality).lower()) or None
                 if country:
                     out["country"] = country
+
+                # Demographics + profile fields that previously got dropped —
+                # these now flow into candidate.metadata + CV Manager.
+                age = getattr(extracted, "age", None)
+                if age is not None:
+                    try:
+                        out["age"] = int(float(age))
+                    except Exception:
+                        pass
+                height = getattr(extracted, "height_cm", None)
+                if height is not None:
+                    try:
+                        out["height_cm"] = int(float(height))
+                    except Exception:
+                        pass
+                if getattr(extracted, "email", None):
+                    out["email"] = extracted.email
+                if getattr(extracted, "highest_qualification", None):
+                    out["highest_qualification"] = extracted.highest_qualification
+
+                # Previous employer: current company, else most recent work-history company.
+                prev_emp = getattr(extracted, "current_company", None)
+                if not prev_emp:
+                    wh = getattr(extracted, "work_history", None) or []
+                    if wh and isinstance(wh[0], dict):
+                        prev_emp = wh[0].get("company")
+                if prev_emp:
+                    out["previous_employer"] = str(prev_emp)
+
+                # Licenses: collapse certifications into a readable string.
+                certs = getattr(extracted, "certifications", None) or []
+                certs = [str(c).strip() for c in certs if str(c).strip()]
+                if certs:
+                    out["licenses"] = ", ".join(certs[:10])
+
+                # Full structured blob → stored verbatim in cv_files.parsed_data
+                # so the CV Manager can show the complete AI extraction.
+                try:
+                    out["cv_parsed_data"] = extracted.to_dict()
+                except Exception:
+                    pass
 
             # Pass extraction confidence so orchestrator can gate on low-quality results
             if result.extraction_confidence is not None:

@@ -46,6 +46,16 @@ async function _resyncJobAdVisibility(jobId) {
     }
 }
 
+// ── Helper: first country from a project's `countries` JSON ───────────────────
+// Stored as JSONB (Postgres) or JSON text (MySQL); tolerate both string + array.
+function firstCountry(countries) {
+    let list = countries;
+    if (typeof list === 'string') {
+        try { list = JSON.parse(list); } catch { return null; }
+    }
+    return Array.isArray(list) && list.length > 0 ? list[0] : null;
+}
+
 // ── Helper: generate a short unique ad_ref ────────────────────────────────────
 // Format: "job_" + 8 random hex chars → e.g. "job_3f9a12b4"
 function generateAdRef(jobTitle = '') {
@@ -58,15 +68,33 @@ function generateAdRef(jobTitle = '') {
     return slug ? `${slug}_${randomSuffix}` : `job_${randomSuffix}`;
 }
 
-// ── Helper: build WhatsApp deep links ────────────────────────────────────────
-function buildWhatsAppLink(phoneNumber, adRef) {
-    const encodedMessage = encodeURIComponent(`START:${adRef}`);
-    return `https://wa.me/${phoneNumber.replace(/\+/g, '')}?text=${encodedMessage}`;
+// ── Helper: build the candidate-facing pre-filled message ─────────────────────
+// A friendly, natural WhatsApp message that carries a hidden, deterministic
+// "[ref:<ad_ref>]" token. The chatbot extracts that token to load this exact
+// job's context (see ad_context_service.is_ad_trigger). The token — not the
+// headline or wording — is what identifies the job, so it stays reliable at
+// scale even with look-alike titles.
+function buildMessageTemplate(jobTitle, country, adRef) {
+    const role = (jobTitle || 'this job').trim();
+    const where = country ? ` in ${country}` : '';
+    // Wording mirrors Meta's native CTWA "Pre-filled message" so the pasted
+    // template reads naturally; the trailing [ref:…] token is what the bot
+    // parses to identify the exact job (see ad_context_service.is_ad_trigger).
+    return `Hi! 🙏 I want to apply for this ${role} position${where}. [ref:${adRef}]`;
 }
 
-function buildMetaAdUrl(phoneNumber, adRef) {
+// ── Helper: build WhatsApp deep links ────────────────────────────────────────
+// Both the shareable WhatsApp link and the Meta ad destination URL encode the
+// same friendly message template, so whichever path the candidate arrives by
+// (QR, direct link, or paid CTWA ad) sends identical, parseable text.
+function buildWhatsAppLink(phoneNumber, adRef, jobTitle, country) {
+    const message = buildMessageTemplate(jobTitle, country, adRef);
+    return `https://wa.me/${phoneNumber.replace(/\+/g, '')}?text=${encodeURIComponent(message)}`;
+}
+
+function buildMetaAdUrl(phoneNumber, adRef, jobTitle, country) {
     // Meta Click-to-WhatsApp ads use this format in the ad destination URL
-    return `https://wa.me/${phoneNumber.replace(/\+/g, '')}?text=START%3A${adRef}`;
+    return buildWhatsAppLink(phoneNumber, adRef, jobTitle, country);
 }
 
 // ── POST /api/ad-links/generate ───────────────────────────────────────────────
@@ -84,10 +112,10 @@ router.post(
         try {
             // Verify job exists and belongs to project
             const jobSQL = isMySQL
-                ? `SELECT j.id, j.title, j.status, p.id as p_id, p.title as project_title
+                ? `SELECT j.id, j.title, j.status, p.id as p_id, p.title as project_title, p.countries
                    FROM jobs j JOIN projects p ON j.project_id = p.id
                    WHERE j.id = ? AND j.project_id = ?`
-                : `SELECT j.id, j.title, j.status, p.id as p_id, p.title as project_title
+                : `SELECT j.id, j.title, j.status, p.id as p_id, p.title as project_title, p.countries
                    FROM jobs j JOIN projects p ON j.project_id = p.id
                    WHERE j.id = $1 AND j.project_id = $2`;
 
@@ -149,8 +177,11 @@ router.post(
                 }
             }
 
-            const waLink = buildWhatsAppLink(whatsappPhone, adRef);
-            const metaUrl = buildMetaAdUrl(whatsappPhone, adRef);
+            const jobCountry = firstCountry(job.countries);
+            const messageTemplate = buildMessageTemplate(job.title, jobCountry, adRef);
+            const waLink = buildWhatsAppLink(whatsappPhone, adRef, job.title, jobCountry);
+            const metaUrl = buildMetaAdUrl(whatsappPhone, adRef, job.title, jobCountry);
+            const campaignName = campaign_name || job.project_title || `${job.title} Campaign`;
             const trackingId = generateUUID();
 
             // Insert into ad_tracking
@@ -169,7 +200,7 @@ router.post(
                 adRef,
                 job_id,
                 project_id,
-                campaign_name || `${job.title} Campaign`,
+                campaignName,
                 waLink,
                 req.user.id
             ]);
@@ -186,16 +217,17 @@ router.post(
                 project_id,
                 job_title: job.title,
                 project_title: job.project_title,
-                campaign_name: campaign_name || `${job.title} Campaign`,
+                campaign_name: campaignName,
                 whatsapp_link: waLink,
                 meta_ad_url: metaUrl,
+                message_template: messageTemplate,
                 qr_code_url: `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(waLink)}`,
-                start_message: `START:${adRef}`,
+                start_message: messageTemplate,
                 instructions: {
-                    step1: 'Copy the meta_ad_url and paste it into your Meta Ad "Website URL" field',
-                    step2: 'Share whatsapp_link via QR code or direct link',
-                    step3: 'When users click, WhatsApp opens and automatically sends the START message',
-                    step4: 'The chatbot reads the START message and loads this job context automatically'
+                    step1: 'Create one Meta campaign per project; add one ad per job inside it',
+                    step2: 'In each ad, choose WhatsApp as the destination and paste the message_template into the "Message" field (or use meta_ad_url)',
+                    step3: 'Write any headline/creative you like — the hidden [ref:…] token, not the wording, identifies the job',
+                    step4: 'When a candidate taps the ad, the chatbot reads [ref:…], loads this exact job, and continues the chat'
                 }
             });
         } catch (error) {
@@ -229,7 +261,7 @@ router.get('/', authenticate, async (req, res) => {
         const listSQL = isMySQL
             ? `SELECT at.*,
                       j.title as job_title, j.category as job_category,
-                      p.title as project_title, p.client_name
+                      p.title as project_title, p.client_name, p.countries
                FROM ad_tracking at
                JOIN jobs j     ON at.job_id     = j.id
                JOIN projects p ON at.project_id = p.id
@@ -237,7 +269,7 @@ router.get('/', authenticate, async (req, res) => {
                ORDER BY at.created_at DESC`
             : `SELECT at.*,
                       j.title as job_title, j.category as job_category,
-                      p.title as project_title, p.client_name
+                      p.title as project_title, p.client_name, p.countries
                FROM ad_tracking at
                JOIN jobs j     ON at.job_id     = j.id
                JOIN projects p ON at.project_id = p.id
@@ -248,14 +280,19 @@ router.get('/', authenticate, async (req, res) => {
 
         // Enrich each row with derived fields
         const whatsappPhone = process.env.WHATSAPP_PHONE_NUMBER || '';
-        const rows = result.rows.map(row => ({
-            ...row,
-            conversion_rate: row.clicks > 0
-                ? ((row.conversions / row.clicks) * 100).toFixed(1) + '%'
-                : '0%',
-            qr_code_url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(row.whatsapp_link)}`,
-            meta_ad_url: buildMetaAdUrl(whatsappPhone, row.ad_ref)
-        }));
+        const rows = result.rows.map(row => {
+            const country = firstCountry(row.countries);
+            const messageTemplate = buildMessageTemplate(row.job_title, country, row.ad_ref);
+            return {
+                ...row,
+                conversion_rate: row.clicks > 0
+                    ? ((row.conversions / row.clicks) * 100).toFixed(1) + '%'
+                    : '0%',
+                qr_code_url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(row.whatsapp_link)}`,
+                meta_ad_url: buildMetaAdUrl(whatsappPhone, row.ad_ref, row.job_title, country),
+                message_template: messageTemplate
+            };
+        });
 
         return res.json({ data: rows, total: rows.length });
     } catch (error) {
@@ -293,6 +330,7 @@ router.get('/:ad_ref', authenticate, async (req, res) => {
 
         const row = result.rows[0];
         const whatsappPhone = process.env.WHATSAPP_PHONE_NUMBER || '';
+        const detailCountry = firstCountry(row.countries);
 
         // Fetch candidates who came via this ad
         const candidatesSQL = isMySQL
@@ -315,7 +353,8 @@ router.get('/:ad_ref', authenticate, async (req, res) => {
                 ? ((row.conversions / row.clicks) * 100).toFixed(1) + '%'
                 : '0%',
             qr_code_url: `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(row.whatsapp_link)}`,
-            meta_ad_url: buildMetaAdUrl(whatsappPhone, row.ad_ref),
+            meta_ad_url: buildMetaAdUrl(whatsappPhone, row.ad_ref, row.job_title, detailCountry),
+            message_template: buildMessageTemplate(row.job_title, detailCountry, row.ad_ref),
             recent_candidates: candidatesResult.rows
         });
     } catch (error) {

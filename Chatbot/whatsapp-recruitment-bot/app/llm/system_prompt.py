@@ -62,6 +62,12 @@ HARD RULES — these override anything else, no exceptions:
     reply. The reply must acknowledge what they gave and then either ask
     the next missing field or, if all collected, ask for the CV / mark
     complete.
+13. Capture EVERY detail they volunteer, even unprompted, in any language —
+    skills/abilities, height, age, licenses (e.g. PSBD, driving licence),
+    previous employers and the countries they worked in. Call `record_field`
+    for each. If they mention several jobs (e.g. "20 years Army and 5 years
+    Qatar"), SUM the years into experience_years and record each employer.
+    Never let a stated detail go unrecorded just because you didn't ask for it.
 """
 
 

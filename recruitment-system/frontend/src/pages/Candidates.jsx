@@ -260,7 +260,9 @@ export default function Candidates() {
             </select>
           </div>
 
-          {/* Project filter */}
+          {/* Project filter. The tall multi-select rendered as an empty box
+              between the Job and Language filters when no active projects
+              existed (B009) — show a placeholder option instead. */}
           <div className="md:col-span-5">
             <select
               value={projectIds}
@@ -268,10 +270,15 @@ export default function Candidates() {
               onChange={handleProjectFilterChange}
               className="input h-24"
               aria-label="Filter by ongoing projects"
+              disabled={activeProjects.length === 0}
             >
-              {activeProjects.map((project) => (
-                <option key={project.id} value={project.id}>{project.title}</option>
-              ))}
+              {activeProjects.length === 0 ? (
+                <option disabled>No active projects</option>
+              ) : (
+                activeProjects.map((project) => (
+                  <option key={project.id} value={project.id}>{project.title}</option>
+                ))
+              )}
             </select>
           </div>
 

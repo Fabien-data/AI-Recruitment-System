@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -16,11 +17,19 @@ RECORD_FIELD_SCHEMA: Dict[str, Any] = {
     "function": {
         "name": "record_field",
         "description": (
-            "Record a single piece of candidate information the user just gave you. "
-            "Call this BEFORE composing your reply for any answer that names a "
-            "value (name, age, country, experience years, email, passport number, "
-            "etc.). One call per field — call multiple times if the user volunteered "
-            "several values in one message."
+            "Record a single piece of candidate information the user just gave you, "
+            "in ANY language (English, Sinhala, Tamil, Singlish, Tanglish). Call this "
+            "BEFORE composing your reply for ANY detail they volunteer — not only when "
+            "you asked for it. Fields: name, age, height_cm, country/countries, "
+            "experience_years, skills, previous_employer, licenses, email, "
+            "passport_number, nic, date_of_birth, english_proficiency, job_role. "
+            "One call per field — call multiple times if they gave several values in "
+            "one message. Examples: 'Age 46' → record_field(age,46); 'I had PSBD "
+            "licence abudhabi' → record_field(licenses,'PSBD'); 'I have 20 years Sri "
+            "Lanka Army and 5 years Qatar security' → record_field(experience_years,25) "
+            "AND record_field(previous_employer,'Sri Lanka Army, Qatar security'); "
+            "'I can drive and weld' → record_field(skills,'driving, welding'). When a "
+            "candidate lists multiple jobs, SUM the years for experience_years."
         ),
         "parameters": {
             "type": "object",
@@ -33,7 +42,7 @@ RECORD_FIELD_SCHEMA: Dict[str, Any] = {
                         "experience_years", "passport_number", "nic",
                         "date_of_birth", "english_proficiency", "licenses",
                         "previous_employer", "job_role", "height_cm",
-                        "alternative_phone",
+                        "alternative_phone", "skills",
                     ],
                     "description": "Which field this value belongs to."
                 },
@@ -112,6 +121,20 @@ async def handle_record_field(args: Dict[str, Any], ctx) -> Dict[str, Any]:
         }
 
     canonical = result.value
+
+    # Skills accumulate into a deduped LIST (candidates name several across
+    # turns / in one message). Downstream sync + CV Manager expect a list.
+    if name == "skills":
+        existing = collected.get("skills")
+        existing = existing if isinstance(existing, list) else ([str(existing)] if existing else [])
+        parts = [p.strip() for p in re.split(r"[,;/]|\band\b", str(canonical), flags=re.IGNORECASE) if p.strip()]
+        lower = {e.lower() for e in existing}
+        for p in parts:
+            if p.lower() not in lower:
+                existing.append(p)
+                lower.add(p.lower())
+        canonical = existing[:25]
+
     # If we already have the exact same value, treat as a no-op so the agent
     # doesn't double-count or re-bill validators.
     if collected.get(name) == canonical:

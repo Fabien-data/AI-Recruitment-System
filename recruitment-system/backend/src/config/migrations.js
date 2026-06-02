@@ -60,6 +60,12 @@ async function applyMigrations() {
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS whatsapp_phone        VARCHAR(50)`, 'candidates.whatsapp_phone'],
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS chatbot_ref           VARCHAR(100)`, 'candidates.chatbot_ref'],
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS ad_ref                VARCHAR(100)`, 'candidates.ad_ref'],
+        // photo_url was referenced by the photo-upload route and the
+        // auto-assign job-candidates query but never added by any migration
+        // or schema.sql — its absence made /api/auto-assign/job/:id/candidates
+        // 500 ("column c.photo_url does not exist"), which the frontend
+        // rendered as "Job Not Found" on the View Candidates page.
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS photo_url             TEXT`, 'candidates.photo_url'],
         [`CREATE INDEX IF NOT EXISTS idx_candidates_whatsapp ON candidates(whatsapp_phone)`, 'idx_candidates_whatsapp'],
         [`CREATE INDEX IF NOT EXISTS idx_candidates_ad_ref   ON candidates(ad_ref)`, 'idx_candidates_ad_ref'],
     ];
@@ -625,6 +631,14 @@ async function applyMigrations() {
     await safeAlter(
         `CREATE INDEX IF NOT EXISTS idx_app_prescreened ON applications(prescreening_completed_at) WHERE prescreening_completed_at IS NOT NULL`,
         'idx_app_prescreened',
+    );
+
+    // ── Migration 023: interview description ──────────────────────────────────
+    // Free-text note captured when scheduling an interview (extra details for
+    // the candidate), surfaced in the WhatsApp invite (B016).
+    await safeAlter(
+        `ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS description TEXT`,
+        'interview_schedules.description',
     );
 
     logger.info('✅ Startup migrations complete.');

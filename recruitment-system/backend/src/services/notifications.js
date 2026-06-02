@@ -191,7 +191,7 @@ Your interview has been scheduled!
 
 📍 Position: {job_title}
 📆 Date & Time: {interview_datetime}
-📍 Location: {interview_location}
+📍 Location: {interview_location}{notes_block}
 
 Please arrive 15 minutes early and bring:
 - Original ID/Passport
@@ -212,7 +212,7 @@ Dewan Recruitment Team`
 
 📍 තනතුර: {job_title}
 📆 දිනය සහ වේලාව: {interview_datetime}
-📍 ස්ථානය: {interview_location}
+📍 ස්ථානය: {interview_location}{notes_block}
 
 කරුණාකර මිනිත්තු 15කට පෙර පැමිණ රැගෙන එන්න:
 - මුල් හැඳුනුම්පත / විදේශ ගමන් බලපත්‍රය
@@ -233,7 +233,7 @@ Dewan Recruitment Team`
 
 📍 பதவி: {job_title}
 📆 தேதி & நேரம்: {interview_datetime}
-📍 இடம்: {interview_location}
+📍 இடம்: {interview_location}{notes_block}
 
 15 நிமிடங்கள் முன்னதாக வந்து பின்வருவனவற்றை கொண்டு வரவும்:
 - அசல் அடையாள அட்டை / கடவுச்சீட்டு
@@ -676,7 +676,10 @@ async function sendPreScreeningNotification(candidateId, jobTitle, prescreeningD
 /**
  * Send interview scheduled notification
  */
-async function sendInterviewNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp']) {
+async function sendInterviewNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp'], description = null) {
+    // Pre-format the optional extra-details note here so the template stays a
+    // single placeholder — empty string collapses to nothing (B016).
+    const notesBlock = description ? `\n📝 Additional details: ${description}` : '';
     return sendNotification({
         candidateId,
         type: 'interview_scheduled',
@@ -690,7 +693,8 @@ async function sendInterviewNotification(candidateId, jobTitle, interviewDatetim
                 hour: '2-digit',
                 minute: '2-digit'
             }),
-            interview_location: interviewLocation
+            interview_location: interviewLocation,
+            notes_block: notesBlock
         },
         channels
     });

@@ -241,6 +241,10 @@ export const certifyApplication = (applicationId, data) =>
 export const getNotificationHistory = (candidateId) =>
   apiClient.get(`/api/communications/candidate/${candidateId}/notifications`).then(res => res.data)
 
+// Header notification bell — live-aggregated actionable signals
+export const getNotifications = () =>
+  apiClient.get('/api/notifications').then(res => res.data)
+
 // Bulk Communication
 export const sendBulkCommunication = (data) =>
   apiClient.post('/api/communications/send-bulk', data).then(res => res.data)

@@ -22,6 +22,7 @@ const autoAssignRouter = require('./routes/auto-assign');
 const projectsRouter = require('./routes/projects');
 const interviewsRouter = require('./routes/interviews');
 const analyticsRouter = require('./routes/analytics');
+const notificationsRouter = require('./routes/notifications');
 
 // WhatsApp Ad Integration routes
 const chatbotIntakeRouter = require('./routes/chatbot-intake');
@@ -160,6 +161,7 @@ app.use('/api/auto-assign', autoAssignRouter); // Auto-assign CVs to jobs
 // ── Interview & Analytics routes ──────────────────────────────────────────────
 app.use('/api/interviews', interviewsRouter);
 app.use('/api/analytics', analyticsRouter);
+app.use('/api/notifications', notificationsRouter);
 
 // ── WhatsApp Ad Integration ──────────────────────────────────────────────
 app.use('/api/chatbot/intake', chatbotIntakeRouter); // POST /api/chatbot/intake

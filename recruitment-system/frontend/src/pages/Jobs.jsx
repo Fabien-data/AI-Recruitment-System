@@ -6,7 +6,7 @@ import { motion } from 'framer-motion'
 import {
   Briefcase, FolderKanban, Plus, Sparkles, UploadCloud, RefreshCw, Loader2,
   Search, MoreHorizontal, Pencil, Trash2, Eye, Users, MapPin,
-  Calendar, MapPinned, Clock, Send, X,
+  Calendar, MapPinned, Clock, Send, X, FileText,
 } from 'lucide-react'
 import { getJobs, extractJobFlyers, refreshJobKnowledgeBase, apiClient } from '../api'
 import { Modal } from '../components/ui/Modal'
@@ -478,6 +478,7 @@ export default function Jobs() {
                 <Table.Th icon={FolderKanban}>Project</Table.Th>
                 <Table.Th>Region</Table.Th>
                 <Table.Th>Status</Table.Th>
+                <Table.Th align="right">Pipeline</Table.Th>
                 <Table.Th align="right">Positions</Table.Th>
                 <Table.Th align="right">Actions</Table.Th>
               </Table.Tr>
@@ -538,6 +539,19 @@ export default function Jobs() {
                     <Table.Td>
                       <Badge status={job.status} />
                     </Table.Td>
+                    <Table.Td align="right" className="min-w-[150px]">
+                      <div className="flex items-center justify-end gap-3 text-xs tabular-nums">
+                        <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400" title="Applied">
+                          <Users size={12} /> {job.applied_count ?? 0}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400" title="Pending review">
+                          <Clock size={12} /> {job.pending_count ?? 0}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="CV uploaded">
+                          <FileText size={12} /> {job.cv_uploaded_count ?? 0}
+                        </span>
+                      </div>
+                    </Table.Td>
                     <Table.Td align="right" className="min-w-[140px]">
                       <div className="flex flex-col items-end gap-1">
                         <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{filled} / {available}</span>
@@ -595,6 +609,26 @@ export default function Jobs() {
           onClose={onReviewQueueDone}
         />
       )}
+    </div>
+  )
+}
+
+// Compact pipeline stat tile shown on each job card. Counts come from the
+// jobs list/detail endpoints (applied_count / pending_count / cv_uploaded_count
+// derived in job-queries.js), so no extra per-card request is needed.
+function JobStat({ icon: Icon, label, value, tone }) {
+  const tones = {
+    blue: 'text-blue-600 dark:text-blue-400',
+    amber: 'text-amber-600 dark:text-amber-400',
+    emerald: 'text-emerald-600 dark:text-emerald-400',
+  }
+  return (
+    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/60 py-1.5 px-1 text-center">
+      <div className={`inline-flex items-center gap-1 ${tones[tone] || ''}`}>
+        <Icon size={12} />
+        <span className="text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">{value}</span>
+      </div>
+      <p className="text-[10px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400 leading-tight">{label}</p>
     </div>
   )
 }
@@ -696,6 +730,13 @@ function JobCard({ job, isAdmin, index = 0, onEdit, onDelete, onSchedule }) {
               style={{ width: `${pct}%` }}
             />
           </div>
+        </div>
+
+        {/* Pipeline analytics — applied / pending review / CV uploaded */}
+        <div className="grid grid-cols-3 gap-2">
+          <JobStat icon={Users} label="Applied" value={job.applied_count ?? 0} tone="blue" />
+          <JobStat icon={Clock} label="Pending" value={job.pending_count ?? 0} tone="amber" />
+          <JobStat icon={FileText} label="CV Uploaded" value={job.cv_uploaded_count ?? 0} tone="emerald" />
         </div>
 
         <div className="mt-auto inline-flex items-center justify-center gap-1.5 rounded-xl bg-primary-50 dark:bg-primary-950/40 text-primary-700 dark:text-primary-300 px-3 py-2 text-sm font-medium">

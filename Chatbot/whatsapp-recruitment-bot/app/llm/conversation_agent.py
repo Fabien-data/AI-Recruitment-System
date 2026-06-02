@@ -97,10 +97,12 @@ def _active_jobs_summary() -> List[Dict[str, Any]]:
     candidates and suggest as alternatives.
     """
     cache = get_job_cache() or {}
+    # Show every active job the bot knows about. Ad presence is metadata
+    # (has_active_ad) used for ranking/attribution, NOT a visibility gate —
+    # gating on it made the bot claim "no active jobs" for un-adned roles.
     active = [
         j for j in cache.values()
         if (j.get("status") or "").lower() == "active"
-        and j.get("has_active_ad", True)
     ]
     active.sort(
         key=lambda j: j.get("created_at") or j.get("updated_at") or "",
@@ -382,14 +384,12 @@ async def run_turn(
     override_reason: Optional[str] = None
     if final_text:
         final_text, override_reason = _apply_no_repeat_guard(final_text, state, required)
+        # override_reason (e.g. "silent_pivot:age->email") is kept for
+        # diagnostics/telemetry ONLY. It must NEVER be appended to the
+        # user-facing reply — doing so leaked "(Internal: next field …)" into
+        # live WhatsApp messages.
         if override_reason and override_reason.startswith("silent_pivot:"):
-            # Append the next-field hint inline so the candidate isn't stuck.
-            _, _, transition = override_reason.partition(":")
-            _, _, next_field = transition.partition("->")
-            final_text = (
-                f"{final_text.rstrip(' ?.')}.\n"
-                f"(Internal: next field to ask is {next_field}.)"
-            )
+            logger.info("no-repeat guard: %s (candidate=%s)", override_reason, getattr(candidate, "id", "?"))
 
     # Track the question we just asked (best-effort: field name picked from
     # the next missing slot). If the agent didn't ask anything because it

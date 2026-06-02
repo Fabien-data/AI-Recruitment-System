@@ -91,6 +91,9 @@ router.get('/', authenticate, async (req, res, next) => {
             project_ids,
             job_id,
             intervention_needed,
+            has_cv,
+            date_from,
+            date_to,
             sort_by,
             sort_order,
         } = req.query;
@@ -183,6 +186,28 @@ router.get('/', authenticate, async (req, res, next) => {
             const asBool = String(intervention_needed).toLowerCase() === 'true';
             whereClause += isMySQL ? ' AND c.intervention_needed = ?' : ` AND c.intervention_needed = $${params.length + 1}`;
             params.push(asBool);
+        }
+
+        // Has-CV: a candidate "has a CV" if the cv_uploaded flag is set OR a
+        // cv_files row exists (the flag and the files table can disagree —
+        // 45 flagged vs 33 with files in prod — so check both). No params.
+        if (has_cv !== undefined && has_cv !== '') {
+            const wantsCv = String(has_cv).toLowerCase() === 'true';
+            const cvCondition = '(c.cv_uploaded IS TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = c.id))';
+            whereClause += wantsCv ? ` AND ${cvCondition}` : ` AND NOT ${cvCondition}`;
+        }
+
+        // Date-added range on c.created_at. date_to is made inclusive of the
+        // whole day by comparing against the next day's start.
+        if (date_from) {
+            whereClause += isMySQL ? ' AND c.created_at >= ?' : ` AND c.created_at >= $${params.length + 1}`;
+            params.push(date_from);
+        }
+        if (date_to) {
+            whereClause += isMySQL
+                ? ' AND c.created_at < DATE_ADD(?, INTERVAL 1 DAY)'
+                : ` AND c.created_at < ($${params.length + 1}::date + INTERVAL '1 day')`;
+            params.push(date_to);
         }
 
         // Allowed sort keys → SQL expressions (post-join column refs)

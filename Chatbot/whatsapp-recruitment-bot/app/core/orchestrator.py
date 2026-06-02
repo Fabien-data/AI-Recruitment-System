@@ -559,6 +559,11 @@ class IntakeOrchestrator:
         state["step"] = "cv_received"
         collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
 
+        # Pull the full structured CV blob out before the field merge so it's not
+        # flattened into collected_data; it's forwarded verbatim to the backend
+        # as cv_parsed_data → stored in cv_files.parsed_data for the CV Manager.
+        cv_full = extracted.pop("cv_parsed_data", None) if isinstance(extracted, dict) else None
+
         for key, value in extracted.items():
             if key.startswith("_"):
                 continue  # skip internal sentinel keys
@@ -575,12 +580,25 @@ class IntakeOrchestrator:
 
         state["collected_data"] = collected
 
+        # Persist the full CV extraction blob so recruitment_sync forwards it as
+        # cv_parsed_data (→ cv_files.parsed_data + candidate.metadata enrichment).
+        if cv_full:
+            state["cv_parsed_data"] = cv_full
+            ext_data = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
+            ext_data["cv_parsed_data"] = cv_full
+            candidate.extracted_data = ext_data
+
         # --- 4. Update candidate model columns from CV ---
         if extracted.get("name") and not candidate.name:
             candidate.name = extracted["name"]
         if extracted.get("experience_years") is not None and candidate.experience_years is None:
             try:
                 candidate.experience_years = int(float(extracted["experience_years"]))
+            except Exception:
+                pass
+        if extracted.get("age") is not None and getattr(candidate, "age", None) in (None, 0):
+            try:
+                candidate.age = int(float(extracted["age"]))
             except Exception:
                 pass
 

@@ -7,6 +7,7 @@ import {
   getCandidates,
   getCandidate,
   getJobs,
+  getProjects,
   getApplications,
   createApplication,
   updateApplication,
@@ -54,7 +55,8 @@ import { Tabs } from '../components/ui/Tabs'
 import { EmptyState } from '../components/ui/EmptyState'
 import { FileSearch } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { getDocumentCategory } from '../utils/documents'
+import { getDocumentCategory, resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
+import { DocumentPreview } from '../components/documents/DocumentPreview'
 
 const DEBOUNCE_MS = 300
 
@@ -68,24 +70,14 @@ function parseTags(value) {
   return []
 }
 
-function resolveCvUrl(rawUrl) {
-  if (!rawUrl || typeof rawUrl !== 'string') return null
-  if (rawUrl.startsWith('chatbot://')) return null
-  if (/^https?:\/\//i.test(rawUrl)) return rawUrl
-  const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-  if (!apiBase) return rawUrl
-  return rawUrl.startsWith('/') ? `${apiBase}${rawUrl}` : `${apiBase}/${rawUrl}`
-}
-
 function getCvSourceUrl(cv) {
   return cv?.resolved_file_url || cv?.file_url || ''
 }
 
-// getDocumentCategory now lives in utils/documents.js (imported at top of
-// file) so Communications + CandidateDetail + this page all classify the
-// same way. resolveCvUrl above stays here because CVManager passes a raw
-// URL string (rather than a cv object) and many downstream call sites would
-// need to be touched to migrate.
+// getDocumentCategory, resolveDocumentUrl and isImageDocument all live in
+// utils/documents.js (imported at top) so Communications + CandidateDetail +
+// this page classify and resolve CV URLs the same way — including chatbot://
+// uploads (→ PENDING_URL) and image rendering (B004/B014).
 
 // Remark types for CV evaluation
 const REMARK_TYPES = [
@@ -114,14 +106,43 @@ export default function CVManager() {
   const [selectedCandidate, setSelectedCandidate] = useState(null)
   const [statusFilter, setStatusFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
+  const [jobFilter, setJobFilter] = useState('')
+  const [projectFilter, setProjectFilter] = useState('')
+  const [languageFilter, setLanguageFilter] = useState('')
+  const [hasCvFilter, setHasCvFilter] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [showFilters, setShowFilters] = useState(false)
 
   const queryClient = useQueryClient()
+
+  // Options for the Job / Project selects (active jobs + all projects).
+  const { data: jobsOptions } = useQuery({
+    queryKey: ['jobs', { status: 'active', limit: 200 }],
+    queryFn: () => getJobs({ status: 'active', limit: 200 }),
+  })
+  const { data: projectsOptions } = useQuery({
+    queryKey: ['projects', { limit: 200 }],
+    queryFn: () => getProjects({ limit: 200 }),
+  })
+  const jobChoices = jobsOptions?.data || []
+  const projectChoices = projectsOptions?.data || projectsOptions || []
+
+  const clearAllFilters = () => {
+    setStatusFilter(''); setSourceFilter(''); setJobFilter(''); setProjectFilter('')
+    setLanguageFilter(''); setHasCvFilter(''); setDateFrom(''); setDateTo('')
+  }
 
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput), DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [searchInput])
+
+  // Any filter change should send the user back to page 1 (otherwise a
+  // narrower result set can leave them stranded on an empty later page).
+  useEffect(() => {
+    setPage(1)
+  }, [search, statusFilter, sourceFilter, jobFilter, projectFilter, languageFilter, hasCvFilter, dateFrom, dateTo])
 
   const candidateIdFromQuery = searchParams.get('candidate')
 
@@ -141,9 +162,23 @@ export default function CVManager() {
     setSearchParams(nextParams, { replace: true })
   }
 
+  const candidateQueryParams = {
+    page,
+    search,
+    limit: 20,
+    status: statusFilter || undefined,
+    source: sourceFilter || undefined,
+    job_id: jobFilter || undefined,
+    project_ids: projectFilter || undefined,
+    language: languageFilter || undefined,
+    has_cv: hasCvFilter || undefined,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+  }
+
   const { data: candidatesData, isLoading: isLoadingCandidates, refetch } = useQuery({
-    queryKey: ['candidates', { page, search, status: statusFilter, source: sourceFilter }],
-    queryFn: () => getCandidates({ page, search, limit: 20, status: statusFilter || undefined, source: sourceFilter || undefined })
+    queryKey: ['candidates', candidateQueryParams],
+    queryFn: () => getCandidates(candidateQueryParams)
   })
 
   // Auto-assign all new candidates to matching jobs
@@ -272,12 +307,51 @@ export default function CVManager() {
                 <option value="web">Web</option>
               </select>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Job</label>
+              <select className="input w-full" value={jobFilter} onChange={(e) => setJobFilter(e.target.value)}>
+                <option value="">All Jobs</option>
+                {jobChoices.map((j) => (
+                  <option key={j.id} value={j.id}>{j.title}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Project</label>
+              <select className="input w-full" value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)}>
+                <option value="">All Projects</option>
+                {projectChoices.map((p) => (
+                  <option key={p.id} value={p.id}>{p.title}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Language</label>
+              <select className="input w-full" value={languageFilter} onChange={(e) => setLanguageFilter(e.target.value)}>
+                <option value="">All Languages</option>
+                <option value="en">English</option>
+                <option value="si">Sinhala</option>
+                <option value="ta">Tamil</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">CV</label>
+              <select className="input w-full" value={hasCvFilter} onChange={(e) => setHasCvFilter(e.target.value)}>
+                <option value="">All Candidates</option>
+                <option value="true">CV uploaded</option>
+                <option value="false">No CV</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Added from</label>
+              <input type="date" className="input w-full" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Added to</label>
+              <input type="date" className="input w-full" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            </div>
             <div className="flex items-end">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => { setStatusFilter(''); setSourceFilter(''); }}
-              >
+              <Button variant="secondary" size="sm" onClick={clearAllFilters}>
                 Clear Filters
               </Button>
             </div>
@@ -664,35 +738,18 @@ function OverviewTab({ candidate }) {
         </div>
       </div>
 
-      {/* Primary CV Quick-View — shows the latest uploaded CV if available */}
+      {/* Primary CV Quick-View — shows the latest uploaded CV if available.
+          Uses the shared DocumentPreview so image CVs render as <img> (not a
+          broken PDF iframe), and chatbot uploads still syncing show a clear
+          "processing" state instead of a dead preview (B014). */}
       {(() => {
         const primaryCv = cvDocuments?.[0]
         if (!primaryCv) return null
-        const rawUrl = getCvSourceUrl(primaryCv)
-        const resolvedUrl = resolveCvUrl(rawUrl)
-        if (!resolvedUrl) return null
-        const isImage = /\.(png|jpe?g|webp|gif)$/i.test(rawUrl) || primaryCv.file_type === 'image'
+        // null → nothing to preview (the CV list below shows the messaging);
+        // PENDING_URL is truthy so DocumentPreview can render its "processing".
+        if (!resolveDocumentUrl(primaryCv)) return null
         return (
-          <div className="border border-blue-100 rounded-xl overflow-hidden bg-blue-50">
-            <div className="flex items-center justify-between px-4 py-2 border-b border-blue-100 bg-white dark:bg-zinc-900">
-              <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">CV Preview</span>
-              <a
-                href={resolvedUrl}
-                download={`CV_${candidate.name}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs btn btn-primary py-1 px-3"
-              >
-                <Download size={13} /> Download CV
-              </a>
-            </div>
-            <div className="h-96">
-              {isImage
-                ? <img src={resolvedUrl} alt="CV" className="w-full h-full object-contain" />
-                : <iframe src={`${resolvedUrl}#toolbar=0`} className="w-full h-full" title="CV Preview" />
-              }
-            </div>
-          </div>
+          <DocumentPreview cv={primaryCv} fileName={primaryCv.file_name || `CV_${candidate.name}`} className="h-96" />
         )
       })()}
 
@@ -702,9 +759,11 @@ function OverviewTab({ candidate }) {
         {cvDocuments && cvDocuments.length > 0 ? (
           <div className="space-y-3">
             {cvDocuments.map(cv => {
-              // Resolve a proper HTTP URL; returns null for chatbot:// or missing URLs
+              // Shared resolver: real https URL when ready, PENDING_URL while a
+              // chatbot upload is still syncing, null when there's nothing.
               const rawUrl = getCvSourceUrl(cv)
-              const resolvedUrl = resolveCvUrl(rawUrl)
+              const resolvedUrl = resolveDocumentUrl(cv)
+              const pendingUpload = resolvedUrl === PENDING_URL
               const isChatbotRecord = rawUrl.startsWith('chatbot://')
               const parsedInsights = safeParseJSON(cv.parsed_data)
 
@@ -749,7 +808,7 @@ function OverviewTab({ candidate }) {
                       >
                         <RefreshCw size={14} /> Re-parse
                       </Button>
-                      {resolvedUrl && (
+                      {resolvedUrl && !pendingUpload && (
                         <>
                           <a href={resolvedUrl} target="_blank" rel="noopener noreferrer">
                             <Button variant="secondary" size="sm" className="gap-1">
@@ -762,6 +821,11 @@ function OverviewTab({ candidate }) {
                             </Button>
                           </a>
                         </>
+                      )}
+                      {pendingUpload && (
+                        <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                          <Clock size={13} /> Processing…
+                        </span>
                       )}
                     </div>
                   </div>
@@ -815,7 +879,8 @@ function OverviewTab({ candidate }) {
           <div className="space-y-3">
             {additionalDocuments.map(doc => {
               const rawUrl = getCvSourceUrl(doc)
-              const resolvedUrl = resolveCvUrl(rawUrl)
+              const resolvedUrl = resolveDocumentUrl(doc)
+              const pendingUpload = resolvedUrl === PENDING_URL
               const parsedInsights = safeParseJSON(doc.parsed_data)
 
               return (
@@ -860,7 +925,7 @@ function OverviewTab({ candidate }) {
                       >
                         <RefreshCw size={14} /> Re-parse
                       </Button>
-                      {resolvedUrl && (
+                      {resolvedUrl && !pendingUpload && (
                         <>
                           <a href={resolvedUrl} target="_blank" rel="noopener noreferrer">
                             <Button variant="secondary" size="sm" className="gap-1">
@@ -873,6 +938,11 @@ function OverviewTab({ candidate }) {
                             </Button>
                           </a>
                         </>
+                      )}
+                      {pendingUpload && (
+                        <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                          <Clock size={13} /> Processing…
+                        </span>
                       )}
                     </div>
                   </div>

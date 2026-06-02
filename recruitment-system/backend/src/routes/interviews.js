@@ -14,9 +14,14 @@ const express = require('express');
 const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, authorize, ROLES } = require('../middleware/auth');
 const notifications = require('../services/notifications');
 const logger = require('../utils/logger');
+
+// Roles permitted to schedule / run interviews. Marketing agents source leads
+// but must NOT schedule or notify interviews (B010); the UI hides the action
+// and this re-enforces it server-side so a crafted request can't bypass it.
+const SCHEDULER_ROLES = [ROLES.ADMIN, ROLES.PROJECT_HANDLER, ROLES.SOURCING_DEPARTMENT];
 
 // ── List / filter interviews ──────────────────────────────────────────────────
 router.get('/', authenticate, async (req, res, next) => {
@@ -126,7 +131,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 });
 
 // ── Schedule new interview ────────────────────────────────────────────────────
-router.post('/', authenticate, async (req, res, next) => {
+router.post('/', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const {
             application_id,
@@ -134,6 +139,7 @@ router.post('/', authenticate, async (req, res, next) => {
             location,
             interviewer_id,
             duration_minutes = 30,
+            description,
             notify_channels = ['whatsapp']
         } = req.body;
 
@@ -160,11 +166,11 @@ router.post('/', authenticate, async (req, res, next) => {
             adaptQuery(`
                 INSERT INTO interview_schedules
                     (id, application_id, scheduled_datetime, location, interviewer_id,
-                     duration_minutes, status, created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
+                     duration_minutes, status, description, created_by)
+                VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7, $8)
             `),
             [id, application_id, scheduled_datetime, location || null, interviewer_id || null,
-             duration_minutes, req.user.id]
+             duration_minutes, description || null, req.user.id]
         );
 
         // Update application status to interview_scheduled
@@ -179,7 +185,7 @@ router.post('/', authenticate, async (req, res, next) => {
         let notification = { success: [], failed: [] };
         try {
             notification = await notifications.sendInterviewNotification(
-                candidate_id, job_title, scheduled_datetime, location || 'TBD', channels
+                candidate_id, job_title, scheduled_datetime, location || 'TBD', channels, description || null
             );
             if (notification.success.some(s => s.channel === 'whatsapp')) {
                 await query(
@@ -246,7 +252,7 @@ router.delete('/:id', authenticate, async (req, res, next) => {
 });
 
 // ── Manually trigger reminder ─────────────────────────────────────────────────
-router.post('/:id/remind', authenticate, async (req, res, next) => {
+router.post('/:id/remind', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const ivResult = await query(
             adaptQuery(`
@@ -291,7 +297,7 @@ router.post('/:id/remind', authenticate, async (req, res, next) => {
 // ── Bulk notify — re-send the interview WhatsApp to multiple scheduled
 // candidates at once. Used by the Interview Management page when a project
 // handler picks several rows and clicks "Notify selected".
-router.post('/bulk-notify', authenticate, async (req, res, next) => {
+router.post('/bulk-notify', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const { interview_ids } = req.body || {};
         if (!Array.isArray(interview_ids) || interview_ids.length === 0) {
@@ -355,7 +361,7 @@ router.post('/bulk-notify', authenticate, async (req, res, next) => {
 // location, flip each application's status to interview_scheduled, and
 // dispatch the invitation WhatsApp per candidate. One round-trip from the
 // UI instead of N.
-router.post('/bulk-schedule', authenticate, async (req, res, next) => {
+router.post('/bulk-schedule', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const {
             application_ids,

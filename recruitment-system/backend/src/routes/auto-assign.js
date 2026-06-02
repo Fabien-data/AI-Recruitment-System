@@ -7,6 +7,7 @@ const router = express.Router();
 const { pool, withTransaction } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
 const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
+const { resolveCvAccessUrl } = require('../utils/cv-url');
 const logger = require('../utils/logger');
 
 /**
@@ -48,6 +49,47 @@ function calculateMatchScore(candidate, job) {
     let totalScore = 0;
     let maxScore = 0;
 
+    // ── B012: hard CV gate ──────────────────────────────────────────────
+    // A candidate with no uploaded CV has no real basis for a match score.
+    // Previously such candidates scored 100% because the experience block
+    // below awarded full credit for "0 years >= 0 required". Gate them to 0
+    // up front. cv_uploaded (migration 010) is authoritative; fall back to
+    // "has any parsed signal" for legacy rows written before that column.
+    const hasParsedSignal = candidateSkills.length > 0
+        || ['experience_years', 'age', 'height_cm'].some(k => {
+            const v = candidateMetadata[k];
+            return v !== undefined && v !== null && v !== '';
+        });
+    if (candidate.cv_uploaded !== true && !hasParsedSignal) {
+        return {
+            score: 0,
+            factors: [{ factor: 'cv', score: 0, detail: 'No CV / unparsed profile — cannot match' }],
+            is_qualified: false,
+            is_excellent: false,
+            no_cv: true,
+        };
+    }
+
+    // ── B013: hard gender filter ────────────────────────────────────────
+    // If the vacancy specifies a gender and the candidate's known gender
+    // differs, they must never match (e.g. a male-tagged candidate must not
+    // surface under a "female" vacancy). Unknown candidate gender is allowed
+    // through but flagged below for manual verification.
+    const reqGender = String(jobRequirements.gender || '').trim().toLowerCase();
+    const candGender = String(candidateMetadata.gender || '').trim().toLowerCase();
+    if (reqGender && candGender && reqGender !== candGender) {
+        return {
+            score: 0,
+            factors: [{ factor: 'gender', score: 0, detail: `Requires ${reqGender}, candidate is ${candGender}` }],
+            is_qualified: false,
+            is_excellent: false,
+            gender_mismatch: true,
+        };
+    }
+    if (reqGender && !candGender) {
+        scoreFactors.push({ factor: 'gender', score: null, detail: 'Gender unknown — verify manually' });
+    }
+
     // 1. Skill matching (40% weight)
     if (requiredSkills.length > 0) {
         maxScore += 40;
@@ -84,19 +126,33 @@ function calculateMatchScore(candidate, job) {
         });
     }
 
-    // 2. Experience matching (20% weight)
+    // 2. Experience matching (20% weight) — only when the job actually
+    //    requires experience. Previously this block always ran and awarded a
+    //    free 20 points for "0 years >= 0 required", which (combined with a
+    //    requirement-less job) produced phantom 100% matches (B012). We also
+    //    distinguish "unknown" experience from a genuine zero.
     const reqMinExp = jobRequirements.min_experience_years || 0;
-    const candidateExp = candidateMetadata.experience_years || 0;
-    maxScore += 20;
+    const rawExp = candidateMetadata.experience_years;
+    const hasExp = rawExp !== undefined && rawExp !== null && rawExp !== '';
+    const candidateExp = hasExp ? (Number(rawExp) || 0) : 0;
 
-    if (candidateExp >= reqMinExp) {
-        totalScore += 20;
-        scoreFactors.push({ factor: 'experience', score: 20, detail: `${candidateExp} years (required: ${reqMinExp})` });
-    } else if (candidateExp >= reqMinExp - 1) {
-        totalScore += 10;
-        scoreFactors.push({ factor: 'experience', score: 10, detail: `${candidateExp} years (slightly below ${reqMinExp})` });
-    } else {
-        scoreFactors.push({ factor: 'experience', score: 0, detail: `${candidateExp} years (required: ${reqMinExp})` });
+    if (reqMinExp > 0) {
+        maxScore += 20;
+        if (!hasExp) {
+            scoreFactors.push({ factor: 'experience', score: 0, detail: `experience unknown (required: ${reqMinExp})` });
+        } else if (candidateExp >= reqMinExp) {
+            totalScore += 20;
+            scoreFactors.push({ factor: 'experience', score: 20, detail: `${candidateExp} years (required: ${reqMinExp})` });
+        } else if (candidateExp >= reqMinExp - 1) {
+            totalScore += 10;
+            scoreFactors.push({ factor: 'experience', score: 10, detail: `${candidateExp} years (slightly below ${reqMinExp})` });
+        } else {
+            scoreFactors.push({ factor: 'experience', score: 0, detail: `${candidateExp} years (required: ${reqMinExp})` });
+        }
+    } else if (hasExp) {
+        // Job has no experience requirement; record the candidate's experience
+        // for transparency without inflating the score.
+        scoreFactors.push({ factor: 'experience', score: 0, detail: `${candidateExp} years (no requirement)` });
     }
 
     // 3. Height matching (15% weight) - if applicable
@@ -152,8 +208,21 @@ function calculateMatchScore(candidate, job) {
         });
     }
 
+    // If the job defines no scorable criteria (no required skills, experience,
+    // height, age or languages), there's nothing to match on — don't report a
+    // misleading score. (B012 guard for requirement-less jobs.)
+    if (maxScore === 0) {
+        return {
+            score: 0,
+            factors: [...scoreFactors, { factor: 'insufficient_criteria', score: 0, detail: 'Job defines no scorable requirements' }],
+            is_qualified: false,
+            is_excellent: false,
+            insufficient_criteria: true,
+        };
+    }
+
     // Calculate final percentage
-    const finalScore = maxScore > 0 ? (totalScore / maxScore) * 100 : 0;
+    const finalScore = (totalScore / maxScore) * 100;
 
     return {
         score: Math.round(finalScore),
@@ -402,6 +471,7 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                 c.metadata,
                 c.notes as candidate_notes,
                 c.preferred_language,
+                c.cv_uploaded,
                 cv.file_url as cv_url,
                 cv.file_name as cv_filename
             FROM applications a
@@ -453,7 +523,16 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                     metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : (row.metadata || {}),
                     notes: row.candidate_notes,
                     preferred_language: row.preferred_language,
-                    cv_url: row.cv_url,
+                    cv_uploaded: row.cv_uploaded,
+                    // Resolve raw cv_files.file_url to a browser-openable URL
+                    // (http stays as-is; gcs/relative/placeholder paths get
+                    // normalised). Without this the frontend Preview/Download
+                    // opened an unusable raw storage path for non-http values.
+                    cv_url: resolveCvAccessUrl({
+                        file_url: row.cv_url,
+                        file_name: row.cv_filename,
+                        candidate_id: row.candidate_id,
+                    }).url,
                     cv_filename: row.cv_filename
                 }
             };
@@ -495,10 +574,10 @@ router.get('/pool', authenticate, async (req, res, next) => {
         const offset = (page - 1) * limit;
 
         const result = await pool.query(
-            `SELECT c.*, cv.file_url as cv_url
+            `SELECT c.*, cv.file_url as cv_raw_url, cv.file_name as cv_filename
              FROM candidates c
              LEFT JOIN LATERAL (
-                SELECT file_url
+                SELECT file_url, file_name
                 FROM cv_files
                 WHERE candidate_id = c.id
                 ORDER BY is_primary DESC NULLS LAST, uploaded_at DESC
@@ -514,8 +593,27 @@ router.get('/pool', authenticate, async (req, res, next) => {
             `SELECT COUNT(*) FROM candidates WHERE status = 'future_pool'`
         );
 
+        // Expose a browser-openable cv_url + cv_filename so the pool modal can
+        // actually preview/download the CV (previously the modal showed a fake
+        // filename with dead buttons).
+        const poolRows = result.rows.map((row) => {
+            const resolved = resolveCvAccessUrl({
+                file_url: row.cv_raw_url,
+                file_name: row.cv_filename,
+                candidate_id: row.id,
+            });
+            return {
+                ...row,
+                cv_url: resolved.url,
+                // Surface the resolver status so the pool modal can tell a CV
+                // that's still syncing from the chatbot ('placeholder_unresolved')
+                // apart from a genuine "no CV" — instead of a dead button (B001/B002).
+                cv_status: resolved.status,
+            };
+        });
+
         res.json({
-            data: result.rows,
+            data: poolRows,
             pagination: {
                 page: parseInt(page),
                 limit: parseInt(limit),
@@ -587,3 +685,5 @@ router.get('/candidate/:id/alternatives', authenticate, async (req, res, next) =
 });
 
 module.exports = router;
+// Exposed for unit testing the pure scoring logic (B012/B013) without a DB.
+module.exports.calculateMatchScore = calculateMatchScore;

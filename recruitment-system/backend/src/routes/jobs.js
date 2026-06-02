@@ -5,7 +5,7 @@ const { pool } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const { syncJobAsync, syncJobDeleteAsync, syncProjectAsync } = require('./chatbot-sync');
 const { processJobFlyer, extractJobFlyer } = require('../services/auto-ingest');
-const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
+const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT, JOB_COUNTS_JOIN, JOB_COUNTS_SELECT } = require('../utils/job-queries');
 const { resolveCountry } = require('../utils/countries');
 const logger = require('../utils/logger');
 
@@ -208,8 +208,12 @@ router.get('/', authenticate, async (req, res, next) => {
             params.push(...statuses);
         }
         if (category) {
-            params.push(category);
-            where.push(`j.category = $${params.length}`);
+            // Substring, case-insensitive match: stored categories are mixed-case
+            // (e.g. 'Security Officer') and recruiters type partial text ("secur"),
+            // so an exact `=` comparison silently returned nothing (B006). ILIKE
+            // with wildcards matches any job whose category contains the query.
+            params.push(`%${String(category).trim()}%`);
+            where.push(`j.category ILIKE $${params.length}`);
         }
         if (project_id) {
             params.push(project_id);
@@ -253,11 +257,12 @@ router.get('/', authenticate, async (req, res, next) => {
         params.push(limit, offset);
 
         const sql = `
-            SELECT j.*, ${POSITIONS_FILLED_SELECT},
+            SELECT j.*, ${POSITIONS_FILLED_SELECT}, ${JOB_COUNTS_SELECT},
                    p.title AS project_title, p.client_name AS project_client
             FROM jobs j
             LEFT JOIN projects p ON j.project_id = p.id
             ${POSITIONS_FILLED_JOIN}
+            ${JOB_COUNTS_JOIN}
             WHERE ${where.join(' AND ')}
             ORDER BY ${orderBy}
             LIMIT $${params.length - 1} OFFSET $${params.length}
@@ -275,11 +280,12 @@ router.get('/:id', authenticate, async (req, res, next) => {
         const { id } = req.params;
 
         const result = await pool.query(
-            `SELECT j.*, ${POSITIONS_FILLED_SELECT},
+            `SELECT j.*, ${POSITIONS_FILLED_SELECT}, ${JOB_COUNTS_SELECT},
                     p.title AS project_title, p.client_name AS project_client
              FROM jobs j
              LEFT JOIN projects p ON j.project_id = p.id
              ${POSITIONS_FILLED_JOIN}
+             ${JOB_COUNTS_JOIN}
              WHERE j.id = $1`,
             [id]
         );

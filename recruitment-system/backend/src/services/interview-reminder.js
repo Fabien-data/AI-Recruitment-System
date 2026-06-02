@@ -37,7 +37,9 @@ async function sendPendingReminders() {
 
         for (const iv of result.rows) {
             try {
-                await notifications.sendInterviewNotification(
+                // Use the dedicated reminder template (a friendly nudge) rather
+                // than re-sending the original "scheduled" message (E4).
+                await notifications.sendInterviewReminderNotification(
                     iv.candidate_id,
                     iv.job_title,
                     iv.scheduled_datetime,

@@ -6,7 +6,7 @@ import {
 } from '../api'
 import {
   Users, Briefcase, FileText, FolderKanban, CalendarDays, LayoutDashboard,
-  MapPin, Clock, Plus, Zap, ArrowUpRight, ArrowDownRight, ChevronRight
+  MapPin, Clock, Zap, ArrowUpRight, ArrowDownRight, ChevronRight, Download
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -155,6 +155,21 @@ export default function Dashboard() {
     status: stage.status
   }))
 
+  // B008 — export the pipeline-conversion funnel (stage + count) to CSV.
+  const exportPipelineCsv = () => {
+    if (!pipelineData.length) return
+    const csv = ['Stage,Candidates', ...pipelineData.map(s => `${JSON.stringify(s.name)},${s.value}`)].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'pipeline_conversion.csv'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <motion.div 
       className="space-y-6"
@@ -169,15 +184,10 @@ export default function Dashboard() {
           title="Recruitment Hub"
           subtitle="Your AI-powered overview of all active hiring pipelines."
           actions={
-            <>
-              <Button variant="secondary" onClick={handleAutoAssign} loading={isAssigning}>
-                {!isAssigning && <Zap size={16} className="text-amber-500" />}
-                Auto-Match Candidates
-              </Button>
-              <Button onClick={() => navigate('/jobs/new')}>
-                <Plus size={16} /> New Job
-              </Button>
-            </>
+            <Button variant="secondary" onClick={handleAutoAssign} loading={isAssigning}>
+              {!isAssigning && <Zap size={16} className="text-amber-500" />}
+              Auto-Match Candidates
+            </Button>
           }
         />
       </motion.div>
@@ -236,7 +246,10 @@ export default function Dashboard() {
               <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">Pipeline Conversion</h2>
               <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Candidate drop-off across stages</p>
             </div>
-            <Button variant="ghost" size="sm">Report <ChevronRight size={14} /></Button>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="sm" onClick={exportPipelineCsv} title="Export pipeline as CSV" className="gap-1"><Download size={14} /> Export</Button>
+              <Button variant="ghost" size="sm" onClick={() => navigate('/analytics')}>Report <ChevronRight size={14} /></Button>
+            </div>
           </div>
           <div className="z-10 min-h-[280px] flex-1">
             <ResponsiveContainer width="100%" height="100%">
