@@ -256,7 +256,24 @@ class MetaWhatsAppClient:
 
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else "unknown"
-            logger.error(f"Failed to download media {media_id}: HTTP {status}")
+            # Surface the Meta error body — an expired/invalid access token returns
+            # code 190 ("Cannot parse access token"). Without this the CV silently
+            # fails to download and never appears in the dashboard (bugs B001–B003).
+            meta_detail = ""
+            try:
+                err = (e.response.json() or {}).get("error", {})
+                if err:
+                    meta_detail = (
+                        f" code={err.get('code')} message=\"{err.get('message')}\""
+                        f" fbtrace_id={err.get('fbtrace_id')}"
+                    )
+                    if err.get("code") == 190:
+                        meta_detail += (
+                            " — META_ACCESS_TOKEN is invalid/expired; rotate it and redeploy."
+                        )
+            except Exception:
+                pass
+            logger.error(f"Failed to download media {media_id}: HTTP {status}{meta_detail}")
             return None
         except httpx.HTTPError as e:
             logger.error(f"Failed to download media {media_id}: {e}")

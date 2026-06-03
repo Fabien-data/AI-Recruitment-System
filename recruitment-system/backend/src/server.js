@@ -23,6 +23,8 @@ const projectsRouter = require('./routes/projects');
 const interviewsRouter = require('./routes/interviews');
 const analyticsRouter = require('./routes/analytics');
 const notificationsRouter = require('./routes/notifications');
+const candidateTasksRouter = require('./routes/candidate-tasks');
+const engagementRouter = require('./routes/engagement');
 
 // WhatsApp Ad Integration routes
 const chatbotIntakeRouter = require('./routes/chatbot-intake');
@@ -144,6 +146,23 @@ app.post('/api/internal/process-queue', async (req, res) => {
     }
 });
 
+// Daily recruitment digest — Cloud Scheduler hits this once each morning.
+app.post('/api/internal/daily-digest', async (req, res) => {
+    const internalKey = process.env.INTERNAL_API_KEY;
+    const provided = req.headers['x-internal-key'] || req.query.key;
+    if (internalKey && provided !== internalKey) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    try {
+        const { runDailyDigest } = require('./services/daily-digest');
+        const digest = await runDailyDigest();
+        res.json({ ok: true, digest });
+    } catch (err) {
+        logger.error('daily-digest endpoint error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Audit middleware — fires after auth middleware sets req.user
 app.use(auditMiddleware);
 
@@ -162,6 +181,8 @@ app.use('/api/auto-assign', autoAssignRouter); // Auto-assign CVs to jobs
 app.use('/api/interviews', interviewsRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/candidate-tasks', candidateTasksRouter);
+app.use('/api/engagement', engagementRouter);
 
 // ── WhatsApp Ad Integration ──────────────────────────────────────────────
 app.use('/api/chatbot/intake', chatbotIntakeRouter); // POST /api/chatbot/intake

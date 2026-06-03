@@ -16,6 +16,12 @@ const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { authenticate, authorize, ROLES } = require('../middleware/auth');
 const notifications = require('../services/notifications');
+const { syncCandidateStage } = require('../services/candidate-stage');
+const {
+    allocateInterviewSlots,
+    DEFAULT_PER_DAY_LIMIT,
+    DEFAULT_SLOT_MINUTES,
+} = require('../services/interview-scheduler');
 const logger = require('../utils/logger');
 
 // Roles permitted to schedule / run interviews. Marketing agents source leads
@@ -127,6 +133,26 @@ router.get('/upcoming', authenticate, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// ── Interviewer directory (scheduler-scoped, not admin-only) ───────────────────
+// Registered BEFORE '/:id' so the literal "interviewers" path isn't captured by
+// the :id param route. Lets project handlers populate the interviewer dropdown
+// without granting them admin /users access.
+router.get('/interviewers', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
+    try {
+        const result = await query(
+            adaptQuery(`
+                SELECT id, full_name, role
+                FROM users
+                WHERE is_active = TRUE
+                  AND role IN ('admin', 'project_handler', 'sourcing_department')
+                ORDER BY full_name ASC
+            `),
+            []
+        );
+        res.json(result.rows);
+    } catch (err) { next(err); }
+});
+
 // ── Get single interview ──────────────────────────────────────────────────────
 router.get('/:id', authenticate, async (req, res, next) => {
     try {
@@ -214,6 +240,8 @@ router.post('/', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, n
             adaptQuery("UPDATE applications SET status = 'interview_scheduled', interview_datetime = $1, interview_location = $2, updated_at = NOW() WHERE id = $3"),
             [scheduled_datetime, location || null, application_id]
         );
+        // Candidate stage → Interview Scheduled.
+        syncCandidateStage(candidate_id).catch(() => {});
 
         // Send candidate notification synchronously so the response carries
         // real per-channel delivery results (no more silent fire-and-forget).
@@ -248,6 +276,20 @@ router.put('/:id', authenticate, async (req, res, next) => {
             scheduled_datetime, interviewer_id, duration_minutes
         } = req.body;
 
+        // Detect a genuine reschedule (datetime actually changed) so we only
+        // reset reminder markers + notify the candidate when it really moved.
+        let datetimeChanged = false;
+        if (scheduled_datetime) {
+            try {
+                const before = await query(
+                    adaptQuery('SELECT scheduled_datetime FROM interview_schedules WHERE id = $1'),
+                    [id]
+                );
+                const oldDt = before.rows[0] && before.rows[0].scheduled_datetime;
+                datetimeChanged = !oldDt || new Date(oldDt).getTime() !== new Date(scheduled_datetime).getTime();
+            } catch (_) { datetimeChanged = true; }
+        }
+
         const setClauses = [];
         const values = [];
         const p = () => `$${values.length + 1}`;
@@ -260,6 +302,10 @@ router.put('/:id', authenticate, async (req, res, next) => {
         if (interviewer_id)     { setClauses.push(`interviewer_id = ${p()}`);     values.push(interviewer_id); }
         if (duration_minutes)   { setClauses.push(`duration_minutes = ${p()}`);   values.push(duration_minutes); }
         if (status === 'completed') { setClauses.push('completed_at = NOW()'); }
+        // Reschedule: clear the one-shot reminder marker so reminders re-fire for
+        // the new datetime (reminder_sent_at always exists; cadence columns are
+        // reset best-effort below in case the prod table lacks them).
+        if (datetimeChanged) { setClauses.push('reminder_sent_at = NULL'); }
 
         if (setClauses.length === 0) return res.status(400).json({ error: 'No fields to update' });
 
@@ -269,8 +315,47 @@ router.put('/:id', authenticate, async (req, res, next) => {
             values
         );
 
+        // Reschedule: reset the recurring-cadence markers so the daily + day-of
+        // reminders run again for the new date. Best-effort — the migration-025
+        // columns may be absent on a postgres-owned prod table.
+        if (datetimeChanged) {
+            try {
+                await query(
+                    adaptQuery(`UPDATE interview_schedules
+                                   SET last_reminder_date = NULL,
+                                       reminder_count = 0,
+                                       dayof_reminder_sent_at = NULL
+                                 WHERE id = $1`),
+                    [id]
+                );
+            } catch (_) { /* cadence columns not present (ownership) — reminder_sent_at reset above still resumes reminders */ }
+        }
+
         const updated = await query(adaptQuery('SELECT * FROM interview_schedules WHERE id = $1'), [id]);
         if (updated.rows.length === 0) return res.status(404).json({ error: 'Interview not found' });
+
+        // Tell the candidate their interview moved (fire-and-forget so the
+        // response isn't blocked by outbound WhatsApp).
+        if (datetimeChanged) {
+            try {
+                const info = await query(adaptQuery(`
+                    SELECT c.id AS candidate_id, j.title AS job_title
+                    FROM interview_schedules iv
+                    JOIN applications a ON iv.application_id = a.id
+                    JOIN candidates c ON a.candidate_id = c.id
+                    JOIN jobs j ON a.job_id = j.id
+                    WHERE iv.id = $1
+                `), [id]);
+                if (info.rows.length) {
+                    const row = updated.rows[0];
+                    notifications.sendInterviewRescheduledNotification(
+                        info.rows[0].candidate_id, info.rows[0].job_title,
+                        row.scheduled_datetime, row.location || 'TBD'
+                    ).catch((e) => logger.warn(`reschedule notify failed for interview ${id}: ${e.message}`));
+                }
+            } catch (e) { logger.warn(`reschedule notify lookup failed for ${id}: ${e.message}`); }
+        }
+
         res.json(updated.rows[0]);
     } catch (err) { next(err); }
 });
@@ -279,10 +364,27 @@ router.put('/:id', authenticate, async (req, res, next) => {
 router.delete('/:id', authenticate, async (req, res, next) => {
     try {
         const result = await query(
-            adaptQuery("UPDATE interview_schedules SET status = 'cancelled' WHERE id = $1 RETURNING id"),
+            adaptQuery("UPDATE interview_schedules SET status = 'cancelled' WHERE id = $1 RETURNING id, application_id"),
             [req.params.id]
         );
         if (result.rows.length === 0) return res.status(404).json({ error: 'Interview not found' });
+
+        // Tell the candidate their interview was cancelled (fire-and-forget).
+        try {
+            const info = await query(adaptQuery(`
+                SELECT c.id AS candidate_id, j.title AS job_title
+                FROM applications a
+                JOIN candidates c ON a.candidate_id = c.id
+                JOIN jobs j ON a.job_id = j.id
+                WHERE a.id = $1
+            `), [result.rows[0].application_id]);
+            if (info.rows.length) {
+                notifications.sendInterviewCancelledNotification(
+                    info.rows[0].candidate_id, info.rows[0].job_title
+                ).catch((e) => logger.warn(`cancel notify failed for interview ${req.params.id}: ${e.message}`));
+            }
+        } catch (e) { logger.warn(`cancel notify lookup failed for ${req.params.id}: ${e.message}`); }
+
         res.json({ success: true, id: req.params.id });
     } catch (err) { next(err); }
 });
@@ -344,10 +446,14 @@ router.post('/bulk-notify', authenticate, authorize(...SCHEDULER_ROLES), async (
         }
 
         // Pull the rows we need to send notifications. Skip any that no
-        // longer exist instead of failing the whole batch.
+        // longer exist instead of failing the whole batch. Include the stored
+        // description (when the column exists) so the re-sent invite carries
+        // the same instructions as the original.
+        const hasDescCol = await interviewHasDescriptionColumn();
         const result = await query(
             adaptQuery(`
                 SELECT iv.id, iv.scheduled_datetime, iv.location,
+                       ${hasDescCol ? 'iv.description,' : ''}
                        a.candidate_id, j.title AS job_title
                 FROM interview_schedules iv
                 JOIN applications a ON iv.application_id = a.id
@@ -366,7 +472,8 @@ router.post('/bulk-notify', authenticate, authorize(...SCHEDULER_ROLES), async (
                     row.job_title,
                     row.scheduled_datetime,
                     row.location || 'TBD',
-                    ['whatsapp']
+                    ['whatsapp'],
+                    row.description || null
                 );
                 if (notif.success.length > 0) {
                     successes.push({ interview_id: row.id, channels: notif.success.map(s => s.channel) });
@@ -405,17 +512,36 @@ router.post('/bulk-schedule', authenticate, authorize(...SCHEDULER_ROLES), async
             location,
             duration_minutes = 30,
             interviewer_id,
+            interviewer_ids,
+            description,
             notify_channels = ['whatsapp'],
+            mode = 'fixed',
+            start_date,
+            per_day_limit,
+            slot_minutes,
+            dry_run = false,
         } = req.body || {};
 
         if (!Array.isArray(application_ids) || application_ids.length === 0) {
             return res.status(400).json({ error: 'application_ids must be a non-empty array' });
         }
-        if (!scheduled_datetime) {
-            return res.status(400).json({ error: 'scheduled_datetime is required' });
-        }
         if (application_ids.length > 100) {
             return res.status(400).json({ error: 'Cannot schedule more than 100 interviews at once' });
+        }
+
+        const isSmart = String(mode).toLowerCase() === 'smart';
+        if (!isSmart && !scheduled_datetime) {
+            return res.status(400).json({ error: 'scheduled_datetime is required (or use mode="smart")' });
+        }
+
+        // Interviewer lane(s): smart mode is interviewer-scoped (the per-day cap
+        // is per interviewer), so it requires at least one.
+        const interviewerLanes = Array.isArray(interviewer_ids) && interviewer_ids.length
+            ? interviewer_ids.filter(Boolean)
+            : (interviewer_id ? [interviewer_id] : []);
+        if (isSmart) {
+            if (!start_date) return res.status(400).json({ error: 'start_date (YYYY-MM-DD) is required for smart mode' });
+            if (interviewerLanes.length === 0) return res.status(400).json({ error: 'At least one interviewer is required for smart mode' });
         }
 
         // Fetch the apps we'll touch, joined to candidate+job for notification.
@@ -430,24 +556,117 @@ router.post('/bulk-schedule', authenticate, authorize(...SCHEDULER_ROLES), async
             [application_ids]
         );
 
+        // Preserve the caller's order so allocation is deterministic.
+        const orderIndex = new Map(application_ids.map((id, i) => [id, i]));
+        const appRows = appsResult.rows.slice().sort(
+            (a, b) => (orderIndex.get(a.id) ?? 0) - (orderIndex.get(b.id) ?? 0)
+        );
+
+        // Build a per-application slot plan: id -> { datetime, interviewer_id }.
+        const slotMins = Math.min(Math.max(parseInt(slot_minutes, 10) || DEFAULT_SLOT_MINUTES, 5), 240);
+        const perDay = Math.min(Math.max(parseInt(per_day_limit, 10) || DEFAULT_PER_DAY_LIMIT, 1), 50);
+        const plan = new Map();
+        let allocation = null;
+
+        if (isSmart) {
+            // Seed existing per-interviewer/day load so re-runs don't overbook.
+            const seedRes = await query(
+                adaptQuery(`
+                    SELECT interviewer_id, CAST(scheduled_datetime AS DATE) AS d, COUNT(*) AS n
+                    FROM interview_schedules
+                    WHERE interviewer_id = ANY($1::uuid[])
+                      AND status IN ('scheduled', 'confirmed')
+                      AND scheduled_datetime >= $2
+                    GROUP BY interviewer_id, CAST(scheduled_datetime AS DATE)
+                `),
+                [interviewerLanes, start_date]
+            );
+            const existingByInterviewerDay = {};
+            for (const r of seedRes.rows) {
+                const dKey = (r.d instanceof Date) ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
+                if (!existingByInterviewerDay[r.interviewer_id]) existingByInterviewerDay[r.interviewer_id] = {};
+                existingByInterviewerDay[r.interviewer_id][dKey] = Number(r.n) || 0;
+            }
+
+            allocation = allocateInterviewSlots({
+                applications: appRows.map((a) => a.id),
+                interviewerIds: interviewerLanes,
+                startDate: start_date,
+                perDayLimit: perDay,
+                slotMinutes: slotMins,
+                existingByInterviewerDay,
+            });
+            for (const a of allocation.assignments) {
+                plan.set(a.application_id, { datetime: a.scheduled_datetime, interviewer_id: a.interviewer_id });
+            }
+        } else {
+            for (const a of appRows) {
+                plan.set(a.id, { datetime: scheduled_datetime, interviewer_id: interviewer_id || null });
+            }
+        }
+
+        // Smart preview (dry run): return the day-by-day plan without writing.
+        if (isSmart && (dry_run === true || dry_run === 'true' || dry_run === 1)) {
+            const nameByApp = new Map(appRows.map((a) => [a.id, { candidate_name: a.name, job_title: a.job_title }]));
+            const enrich = (it) => ({
+                ...it,
+                candidate_name: nameByApp.get(it.application_id)?.candidate_name || null,
+                job_title: nameByApp.get(it.application_id)?.job_title || null,
+            });
+            const dates = (allocation.assignments || []).map((a) => a.scheduled_datetime.slice(0, 10)).sort();
+            return res.json({
+                mode: 'smart',
+                dry_run: true,
+                total: appRows.length,
+                effective_slots_per_day: allocation.effective_slots_per_day,
+                physical_slots_per_day: allocation.physical_slots_per_day,
+                span: dates.length ? { first: dates[0], last: dates[dates.length - 1] } : null,
+                assignments: allocation.assignments.map(enrich),
+                byDay: (allocation.byDay || []).map((b) => ({ ...b, items: b.items.map(enrich) })),
+            });
+        }
+
         const created = [];
         const skipped = [];
         const notificationResults = [];
         const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
+        // Resolve once for the whole batch; the note still rides the WhatsApp
+        // invite even when the column is absent (B016).
+        const hasDescCol = await interviewHasDescriptionColumn();
 
-        for (const app of appsResult.rows) {
+        for (const app of appRows) {
+            const slot = plan.get(app.id);
+            if (!slot || !slot.datetime) {
+                skipped.push({ application_id: app.id, error: 'No slot allocated' });
+                continue;
+            }
+            const apptDatetime = slot.datetime;
+            const apptInterviewer = slot.interviewer_id || interviewer_id || null;
             try {
                 const id = generateUUID();
-                await query(
-                    adaptQuery(`
-                        INSERT INTO interview_schedules
-                            (id, application_id, scheduled_datetime, location, interviewer_id,
-                             duration_minutes, status, created_by)
-                        VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
-                    `),
-                    [id, app.id, scheduled_datetime, location || null, interviewer_id || null,
-                     duration_minutes, req.user.id]
-                );
+                if (hasDescCol) {
+                    await query(
+                        adaptQuery(`
+                            INSERT INTO interview_schedules
+                                (id, application_id, scheduled_datetime, location, interviewer_id,
+                                 duration_minutes, status, description, created_by)
+                            VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7, $8)
+                        `),
+                        [id, app.id, apptDatetime, location || null, apptInterviewer,
+                         duration_minutes, description || null, req.user.id]
+                    );
+                } else {
+                    await query(
+                        adaptQuery(`
+                            INSERT INTO interview_schedules
+                                (id, application_id, scheduled_datetime, location, interviewer_id,
+                                 duration_minutes, status, created_by)
+                            VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
+                        `),
+                        [id, app.id, apptDatetime, location || null, apptInterviewer,
+                         duration_minutes, req.user.id]
+                    );
+                }
                 await query(
                     adaptQuery(`
                         UPDATE applications
@@ -457,13 +676,15 @@ router.post('/bulk-schedule', authenticate, authorize(...SCHEDULER_ROLES), async
                             updated_at = NOW()
                         WHERE id = $3
                     `),
-                    [scheduled_datetime, location || null, app.id]
+                    [apptDatetime, location || null, app.id]
                 );
+                // Candidate stage → Interview Scheduled.
+                syncCandidateStage(app.candidate_id).catch(() => {});
 
                 let notification = { success: [], failed: [] };
                 try {
                     notification = await notifications.sendInterviewNotification(
-                        app.candidate_id, app.job_title, scheduled_datetime, location || 'TBD', channels
+                        app.candidate_id, app.job_title, apptDatetime, location || 'TBD', channels, description || null
                     );
                     if (notification.success.some(s => s.channel === 'whatsapp')) {
                         await query(
@@ -476,7 +697,13 @@ router.post('/bulk-schedule', authenticate, authorize(...SCHEDULER_ROLES), async
                     notification.failed.push({ channel: 'all', error: notifErr.message });
                 }
 
-                created.push({ interview_id: id, application_id: app.id, candidate_name: app.name });
+                created.push({
+                    interview_id: id,
+                    application_id: app.id,
+                    candidate_name: app.name,
+                    scheduled_datetime: apptDatetime,
+                    interviewer_id: apptInterviewer,
+                });
                 notificationResults.push({ application_id: app.id, notification });
             } catch (err) {
                 logger.warn(`Bulk-schedule: failed for application ${app.id}: ${err.message}`);
@@ -485,11 +712,15 @@ router.post('/bulk-schedule', authenticate, authorize(...SCHEDULER_ROLES), async
         }
 
         res.status(201).json({
+            mode: isSmart ? 'smart' : 'fixed',
             total_requested: application_ids.length,
             total_created: created.length,
             created,
             skipped,
             notifications: notificationResults,
+            ...(isSmart && allocation
+                ? { byDay: allocation.byDay, effective_slots_per_day: allocation.effective_slots_per_day }
+                : {}),
         });
     } catch (err) { next(err); }
 });

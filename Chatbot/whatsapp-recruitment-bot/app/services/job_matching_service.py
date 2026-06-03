@@ -7,6 +7,36 @@ from typing import Any, Dict, List, Optional
 from app.services.vacancy_service import vacancy_service
 
 
+# City / variant → canonical country so a candidate naming a CITY ("Dubai")
+# matches a job whose country is the COUNTRY ("United Arab Emirates"), and
+# "UAE"/"U.A.E." normalise to the same value. Keep in sync with the AI brain's
+# CITY↔COUNTRY hard rule and vacancy_service's alias map.
+_COUNTRY_ALIASES = {
+    "uae": "united arab emirates",
+    "u.a.e": "united arab emirates",
+    "u.a.e.": "united arab emirates",
+    "emirates": "united arab emirates",
+    "dubai": "united arab emirates",
+    "abu dhabi": "united arab emirates",
+    "sharjah": "united arab emirates",
+    "ajman": "united arab emirates",
+    "ras al khaimah": "united arab emirates",
+    "doha": "qatar",
+    "riyadh": "saudi arabia",
+    "jeddah": "saudi arabia",
+    "dammam": "saudi arabia",
+    "ksa": "saudi arabia",
+    "kuwait city": "kuwait",
+    "manama": "bahrain",
+    "muscat": "oman",
+}
+
+
+def _canon_country(value) -> str:
+    v = str(value or "").strip().lower()
+    return _COUNTRY_ALIASES.get(v, v)
+
+
 class JobMatchingService:
     """Ranks jobs using weighted relevance scoring."""
 
@@ -88,8 +118,14 @@ class JobMatchingService:
     def _country_score(self, job: Dict[str, Any], country: Optional[str]) -> float:
         if not country:
             return 0.5
-        countries = [str(c).strip().lower() for c in (job.get("countries") or [])]
-        return 1.0 if country.strip().lower() in countries else 0.0
+        want = _canon_country(country)
+        # Canonicalise the job's countries AND its location (location is a CITY,
+        # e.g. "Dubai"), so "Dubai" stated by the candidate matches a UAE job.
+        places = {_canon_country(c) for c in (job.get("countries") or [])}
+        loc = job.get("location")
+        if loc:
+            places.add(_canon_country(loc))
+        return 1.0 if want in places else 0.0
 
 
 job_matching_service = JobMatchingService()

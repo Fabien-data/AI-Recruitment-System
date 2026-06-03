@@ -15,7 +15,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const { query, generateUUID } = require('../config/database');
 const { saveCVFile, uploadToGCS } = require('../utils/gcs-upload');
-const { isMySQL } = require('../utils/query-adapter');
+const { isMySQL, adaptQuery } = require('../utils/query-adapter');
 const rateLimit = require('express-rate-limit');
 const logger = require('../utils/logger');
 const { recruiterAlert } = require('../services/recruiter-alerts');
@@ -1376,6 +1376,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         chatbot_state = '',
         pipeline_stage,
         whatsapp_message_id,
+        extra_meta,
     } = req.body;
 
     if (!phone || !direction || !content) {
@@ -1453,6 +1454,9 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         // Insert into communications
         const commId = generateUUID();
         const senderType = direction === 'inbound' ? 'candidate' : 'bot';
+        // Merge any extra per-type metadata (location lat/lng, reaction emoji,
+        // sticker info) so the conversation panel can render the full message.
+        const safeExtraMeta = extra_meta && typeof extra_meta === 'object' ? extra_meta : {};
         const metadataJson = JSON.stringify({
             sender_type: senderType,
             chatbot_state: chatbot_state || null,
@@ -1460,6 +1464,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
             // media_url lives in metadata so voice/image/document messages are
             // playable/openable in the conversation panel without a schema change.
             media_url: media_url || null,
+            ...safeExtraMeta,
         });
 
         const insertWithMessageIdSQL = isMySQL
@@ -1561,7 +1566,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     message_type,
                     content: safeContent.slice(0, 4000),
                     media_url: media_url || null,
-                    metadata: { media_url: media_url || null },
+                    metadata: { media_url: media_url || null, ...safeExtraMeta },
                     sender_type: senderType,
                     chatbot_state: chatbot_state || null,
                     detected_language: language || null,
@@ -1577,6 +1582,8 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     timestamp: new Date().toISOString(),
                     message_type,
                     direction,
+                    media_url: media_url || null,
+                    metadata: { media_url: media_url || null, ...safeExtraMeta },
                 });
                 // Also notify the global chat list that this candidate has new activity
                 io.emit('chat_activity', {
@@ -1599,6 +1606,63 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         const errorDetail = error?.message || (typeof error === 'string' ? error : JSON.stringify(error));
         logger.error(`sync-message error: ${errorDetail}`);
         return res.status(500).json({ error: 'Failed to store message', detail: errorDetail });
+    }
+});
+
+// ── Interview response (candidate tapped Confirm / Reschedule / Can't make it) ─
+// POST /api/chatbot/interview-response  { phone, action: confirm|reschedule|cant_make }
+// Confirm marks the interview confirmed; reschedule/cant_make keep the slot,
+// alert the team, and create an agent callback task (candidate_tasks).
+router.post('/interview-response', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone, action } = req.body || {};
+        if (!phone || !['confirm', 'reschedule', 'cant_make'].includes(action)) {
+            return res.status(400).json({ error: 'phone and a valid action (confirm|reschedule|cant_make) are required' });
+        }
+
+        const r = await query(adaptQuery(`
+            SELECT c.id AS candidate_id, c.name, c.agent_id,
+                   iv.id AS interview_id, iv.application_id, iv.scheduled_datetime,
+                   j.title AS job_title
+            FROM candidates c
+            JOIN applications a ON a.candidate_id = c.id
+            JOIN interview_schedules iv ON iv.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE (c.phone = $1 OR c.whatsapp_phone = $1)
+              AND iv.status IN ('scheduled', 'confirmed')
+            ORDER BY iv.scheduled_datetime ASC
+            LIMIT 1
+        `), [phone]);
+        if (r.rows.length === 0) return res.json({ ok: false, reason: 'no_upcoming_interview' });
+        const iv = r.rows[0];
+
+        if (action === 'confirm') {
+            await query(adaptQuery("UPDATE interview_schedules SET status = 'confirmed' WHERE id = $1"), [iv.interview_id]);
+            return res.json({ ok: true, result: 'confirmed', interview_id: iv.interview_id });
+        }
+
+        const taskType = action === 'reschedule' ? 'reschedule_interview' : 'interview_cant_make';
+        const note = action === 'reschedule'
+            ? `Candidate requested to RESCHEDULE their ${iv.job_title} interview (${iv.scheduled_datetime}).`
+            : `Candidate said they CANNOT make their ${iv.job_title} interview (${iv.scheduled_datetime}).`;
+        try {
+            await query(adaptQuery(`
+                INSERT INTO candidate_tasks (id, candidate_id, application_id, due_at, note, task_type, assigned_to, status)
+                VALUES ($1, $2, $3, NOW(), $4, $5, $6, 'pending')
+            `), [generateUUID(), iv.candidate_id, iv.application_id, note, taskType, iv.agent_id || null]);
+        } catch (taskErr) {
+            logger.warn(`interview-response: task create failed — ${taskErr.message}`);
+        }
+        recruiterAlert('human_handoff', { candidatePhone: phone, lastMessage: note }).catch(() => {});
+
+        return res.json({
+            ok: true,
+            result: action === 'reschedule' ? 'reschedule_requested' : 'noted',
+            interview_id: iv.interview_id,
+        });
+    } catch (err) {
+        logger.error(`interview-response error: ${err.message}`);
+        res.status(500).json({ error: err.message });
     }
 });
 

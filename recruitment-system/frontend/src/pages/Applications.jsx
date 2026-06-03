@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { getApplications, getJobs, getProjects, apiClient } from '../api'
+import { getApplications, getJobs, getProjects, apiClient, getInterviewers, previewInterviewAllocation, bulkScheduleInterviews } from '../api'
 import {
   CalendarDays, FileText, FolderKanban, Briefcase, ListFilter, Plus,
   MoreHorizontal, Eye, Pencil, ArrowRightLeft, Trash2, User,
   ChevronDown, ChevronRight, Send, MapPinned, X, Clock,
+  Search, ArrowDownWideNarrow, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react'
 import { Modal } from '../components/ui/Modal'
 import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
@@ -25,7 +26,8 @@ import { TransferApplicationModal } from '../components/applications/TransferApp
 import { useAuthStore } from '../stores/authStore'
 import { useViewMode, ViewToggle } from '../components/ui/ViewToggle'
 
-const DEFAULT_LIMIT = 20
+// How many collapsed project rows to show per page of the project list.
+const PROJECTS_PER_PAGE = 15
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All Statuses' },
@@ -63,6 +65,9 @@ export default function Applications() {
   const [status, setStatus] = useState(searchParams.get('status') || '')
   const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '')
   const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '')
+  // Candidate name / phone search (debounced → backend ?search=).
+  const [searchInput, setSearchInput] = useState(searchParams.get('search') || '')
+  const [search, setSearch] = useState(searchParams.get('search') || '')
   const [page, setPage] = useState(Math.max(parseInt(searchParams.get('page') || '1', 10), 1))
   // Card vs Table view — persisted in localStorage by useViewMode. The legacy
   // ?view=expanded URL param still flips to Card mode so old bookmarks work.
@@ -102,15 +107,34 @@ export default function Applications() {
     return next
   })
 
+  // Project-list controls. All projects live on one paginated list of
+  // collapsed rows; a free-text search narrows by project name/client, a
+  // sort dropdown reorders them, and `expandedKeys` tracks which projects
+  // are open (collapsed by default since there can be many projects).
+  const [projectSearch, setProjectSearch] = useState('')
+  const [sortMode, setSortMode] = useState('recent') // recent | most | name
+  const [expandedKeys, setExpandedKeys] = useState(() => new Set())
+
+  const toggleExpanded = (key) => setExpandedKeys((prev) => {
+    const next = new Set(prev)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return next
+  })
+
+  // Fetch ALL applications matching the filters in one go (limit: 0 → the
+  // backend returns the full, unpaginated set). Pagination is then applied
+  // per-project on the client: one project per page with all of its
+  // applications, so each project's count is its true total.
   const queryParams = useMemo(() => ({
-    page,
-    limit: DEFAULT_LIMIT,
+    limit: 0,
     project_id: projectId || undefined,
     job_id: jobId || undefined,
     status: status || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
-  }), [dateFrom, dateTo, jobId, page, projectId, status])
+    search: search || undefined,
+  }), [dateFrom, dateTo, jobId, projectId, status, search])
 
   const { data: applications, isLoading } = useQuery({
     queryKey: ['applications', queryParams],
@@ -135,8 +159,6 @@ export default function Applications() {
     : Array.isArray(applications)
       ? applications
       : []
-  const pagination = applications?.pagination || null
-
   // Group applications by project so each project appears as its own
   // section. Applications whose job has no project (legacy data) fall into
   // a single "No Project" bucket at the bottom. Order: projects with the
@@ -168,6 +190,73 @@ export default function Applications() {
     })
   }, [list])
 
+  // Apply the project-name search and the chosen sort order to the grouped
+  // projects. Search matches project title or client (case-insensitive);
+  // the "No Project" bucket always stays pinned to the bottom.
+  const visibleGroups = useMemo(() => {
+    const q = projectSearch.trim().toLowerCase()
+    const filtered = q
+      ? groupedByProject.filter((g) =>
+          g.project_title?.toLowerCase().includes(q) ||
+          g.project_client?.toLowerCase().includes(q))
+      : groupedByProject
+    const sorted = [...filtered].sort((a, b) => {
+      if (a.key === '__no_project__') return 1
+      if (b.key === '__no_project__') return -1
+      if (sortMode === 'most') return b.applications.length - a.applications.length
+      if (sortMode === 'name') return (a.project_title || '').localeCompare(b.project_title || '')
+      return b.latest_applied_at - a.latest_applied_at // 'recent'
+    })
+    return sorted
+  }, [groupedByProject, projectSearch, sortMode])
+
+  // The whole project list lives on one page, paginated as compact collapsed
+  // rows (PROJECTS_PER_PAGE per page). Expanding a row reveals all of that
+  // project's applications inline.
+  const totalProjects = visibleGroups.length
+  const totalApplications = list.length
+  const totalPages = Math.max(Math.ceil(totalProjects / PROJECTS_PER_PAGE), 1)
+  const safePage = Math.min(Math.max(page, 1), totalPages)
+  const pageGroups = visibleGroups.slice(
+    (safePage - 1) * PROJECTS_PER_PAGE,
+    safePage * PROJECTS_PER_PAGE,
+  )
+
+  const expandAllOnPage = () => setExpandedKeys((prev) => {
+    const next = new Set(prev)
+    for (const g of pageGroups) next.add(g.key)
+    return next
+  })
+  const collapseAll = () => setExpandedKeys(new Set())
+
+  // Keep `page` (and the URL) in range when search/filters shrink the list.
+  useEffect(() => {
+    if (page !== safePage) {
+      setPage(safePage)
+      syncSearchParams({ nextPage: safePage })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safePage])
+
+  // A new search resets to the first page so results aren't hidden off-page.
+  useEffect(() => {
+    setPage(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectSearch, sortMode])
+
+  // Debounce the candidate search box → backend ?search=.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 350)
+    return () => clearTimeout(t)
+  }, [searchInput])
+
+  // Keep the URL in sync with the debounced candidate search.
+  useEffect(() => {
+    setPage(1)
+    syncSearchParams({ nextPage: 1 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search])
+
   const syncSearchParams = ({ nextPage = 1 } = {}) => {
     const next = new URLSearchParams()
     if (projectId) next.set('project_id', projectId)
@@ -175,6 +264,7 @@ export default function Applications() {
     if (status) next.set('status', status)
     if (dateFrom) next.set('date_from', dateFrom)
     if (dateTo) next.set('date_to', dateTo)
+    if (search) next.set('search', search)
     if (nextPage > 1) next.set('page', String(nextPage))
     setSearchParams(next, { replace: true })
   }
@@ -190,6 +280,10 @@ export default function Applications() {
     setStatus('')
     setDateFrom('')
     setDateTo('')
+    setSearchInput('')
+    setSearch('')
+    setProjectSearch('')
+    setSortMode('recent')
     setPage(1)
     setSearchParams(new URLSearchParams(), { replace: true })
   }
@@ -221,6 +315,18 @@ export default function Applications() {
         <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200 mb-4">
           <ListFilter size={18} aria-hidden />
           <h2 className="text-base font-semibold">Filters</h2>
+        </div>
+
+        <div className="relative mb-3">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" aria-hidden />
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search candidate by name or phone…"
+            className="input w-full pl-9"
+            aria-label="Search candidate by name or phone"
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
@@ -311,29 +417,108 @@ export default function Applications() {
         </Card>
       ) : (
         <div className="space-y-4 pb-24">
-          {groupedByProject.map((group) => (
-            <ProjectSection
-              key={group.key}
-              group={group}
-              isTable={isTable}
-              isAdmin={isAdmin}
-              statusAccent={statusAccent}
-              selectedIds={selectedIds}
-              onToggleSelect={toggleSelected}
-              onSelectAllInGroup={() => selectAllInGroup(group.applications.map(a => a.id))}
-              onUnselectAllInGroup={() => unselectAllInGroup(group.applications.map(a => a.id))}
-              onEdit={setEditTarget}
-              onTransfer={setTransferTarget}
-              onDelete={setDeleteTarget}
-            />
-          ))}
-          {pagination && (
+          {/* Project-list toolbar: search by name, sort, expand/collapse all,
+              and a summary of how many projects / applications are in view. */}
+          <Card className="p-3 sm:p-4">
+            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+              <div className="relative flex-1 min-w-0">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" aria-hidden />
+                <input
+                  type="text"
+                  value={projectSearch}
+                  onChange={(e) => setProjectSearch(e.target.value)}
+                  placeholder="Search projects by name or client…"
+                  className="input w-full pl-9 pr-9"
+                  aria-label="Search projects by name"
+                />
+                {projectSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setProjectSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                    aria-label="Clear project search"
+                  >
+                    <X size={15} />
+                  </button>
+                )}
+              </div>
+
+              <div className="relative">
+                <ArrowDownWideNarrow size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" aria-hidden />
+                <select
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value)}
+                  className="input w-full lg:w-56 pl-9"
+                  aria-label="Sort projects"
+                >
+                  <option value="recent">Recent activity</option>
+                  <option value="most">Most applications</option>
+                  <option value="name">Name (A–Z)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={expandAllOnPage} className="gap-1">
+                  <ChevronsUpDown size={15} /> Expand all
+                </Button>
+                <Button variant="secondary" size="sm" onClick={collapseAll} className="gap-1">
+                  <ChevronsDownUp size={15} /> Collapse all
+                </Button>
+              </div>
+            </div>
+
+            <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+              <span className="font-semibold text-zinc-700 dark:text-zinc-300">{totalProjects}</span>
+              {' '}project{totalProjects === 1 ? '' : 's'}
+              {' · '}
+              <span className="font-semibold text-zinc-700 dark:text-zinc-300">{totalApplications}</span>
+              {' '}application{totalApplications === 1 ? '' : 's'}
+              {projectSearch && <> matching “{projectSearch}”</>}
+            </p>
+          </Card>
+
+          {totalProjects === 0 ? (
+            <Card className="overflow-hidden p-0">
+              <EmptyState
+                icon={Search}
+                tone="zinc"
+                title="No matching projects"
+                description={`No project matches “${projectSearch}”. Try a different name or clear the search.`}
+                action={
+                  <Button variant="secondary" onClick={() => setProjectSearch('')}>
+                    <X size={16} /> Clear search
+                  </Button>
+                }
+              />
+            </Card>
+          ) : (
+            pageGroups.map((group) => (
+              <ProjectSection
+                key={group.key}
+                group={group}
+                expanded={expandedKeys.has(group.key)}
+                onToggleExpand={() => toggleExpanded(group.key)}
+                isTable={isTable}
+                isAdmin={isAdmin}
+                statusAccent={statusAccent}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelected}
+                onSelectAllInGroup={() => selectAllInGroup(group.applications.map(a => a.id))}
+                onUnselectAllInGroup={() => unselectAllInGroup(group.applications.map(a => a.id))}
+                onEdit={setEditTarget}
+                onTransfer={setTransferTarget}
+                onDelete={setDeleteTarget}
+              />
+            ))
+          )}
+
+          {totalPages > 1 && (
             <Card className="p-0">
               <Pagination
-                page={pagination.page}
-                totalPages={pagination.totalPages}
-                total={pagination.total}
-                pageSize={pagination.limit || DEFAULT_LIMIT}
+                page={safePage}
+                totalPages={totalPages}
+                total={totalProjects}
+                pageSize={PROJECTS_PER_PAGE}
                 onChange={handlePageChange}
               />
             </Card>
@@ -388,24 +573,73 @@ export default function Applications() {
 // across all selected candidates; each gets a WhatsApp invitation and the
 // application status flips to interview_scheduled.
 function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClose, onSuccess }) {
+  const [mode, setMode] = useState('fixed') // 'fixed' | 'smart'
+  // Fixed mode
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
+  // Smart mode (per-interviewer/day cap with auto-shift)
+  const [startDate, setStartDate] = useState('')
+  const [interviewerId, setInterviewerId] = useState('')
+  const [perDayLimit, setPerDayLimit] = useState(8)
+  const [slotMinutes, setSlotMinutes] = useState(30)
+  const [preview, setPreview] = useState(null)
+  // Shared
   const [location, setLocation] = useState('')
   const [duration, setDuration] = useState(30)
+  const [description, setDescription] = useState('')
   const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
+
+  const today = new Date().toISOString().slice(0, 10)
+  const channels = () => (notifyWhatsApp ? ['whatsapp'] : ['whatsapp'])
+
+  const { data: interviewersData } = useQuery({
+    queryKey: ['interviewers'],
+    queryFn: getInterviewers,
+  })
+  const interviewerList = Array.isArray(interviewersData) ? interviewersData : []
+
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      if (!startDate) throw new Error('Start date is required')
+      if (!interviewerId) throw new Error('Select an interviewer')
+      return previewInterviewAllocation({
+        application_ids: applicationIds,
+        start_date: startDate,
+        interviewer_id: interviewerId,
+        per_day_limit: Number(perDayLimit) || 8,
+        slot_minutes: Number(slotMinutes) || 30,
+      })
+    },
+    onSuccess: (res) => setPreview(res),
+    onError: (err) => showErrorToast(err, 'Preview failed'),
+  })
 
   const mutation = useMutation({
     mutationFn: async () => {
+      if (mode === 'smart') {
+        if (!startDate) throw new Error('Start date is required')
+        if (!interviewerId) throw new Error('Select an interviewer')
+        return bulkScheduleInterviews({
+          application_ids: applicationIds,
+          mode: 'smart',
+          start_date: startDate,
+          interviewer_id: interviewerId,
+          per_day_limit: Number(perDayLimit) || 8,
+          slot_minutes: Number(slotMinutes) || 30,
+          location: location || null,
+          description: description.trim() || null,
+          notify_channels: channels(),
+        })
+      }
       if (!date || !time) throw new Error('Date and time are required')
-      const channels = []
-      if (notifyWhatsApp) channels.push('whatsapp')
-      return apiClient.post('/api/interviews/bulk-schedule', {
+      return bulkScheduleInterviews({
         application_ids: applicationIds,
         scheduled_datetime: `${date}T${time}`,
         location: location || null,
         duration_minutes: Number(duration) || 30,
-        notify_channels: channels.length > 0 ? channels : ['whatsapp'],
-      }).then(r => r.data)
+        description: description.trim() || null,
+        notify_channels: channels(),
+      })
     },
     onSuccess: (result) => {
       const created = result?.total_created || 0
@@ -447,27 +681,86 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              min={new Date().toISOString().slice(0, 10)}
-              className="input w-full"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Time</label>
-            <input
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              className="input w-full"
-            />
-          </div>
+        {/* Mode toggle: one shared slot (Fixed) vs per-interviewer/day auto-shift (Smart). */}
+        <div className="flex gap-1 rounded-xl bg-zinc-100 dark:bg-zinc-800 p-1">
+          <button
+            type="button"
+            onClick={() => setMode('fixed')}
+            className={`flex-1 text-xs font-medium rounded-lg py-1.5 ${mode === 'fixed' ? 'bg-white dark:bg-zinc-900 shadow' : 'text-zinc-500'}`}
+          >
+            Fixed date/time
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('smart')}
+            className={`flex-1 text-xs font-medium rounded-lg py-1.5 ${mode === 'smart' ? 'bg-white dark:bg-zinc-900 shadow' : 'text-zinc-500'}`}
+          >
+            Smart (per-day limit)
+          </button>
         </div>
+
+        {mode === 'fixed' && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Date</label>
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} min={today} className="input w-full" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Time</label>
+              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="input w-full" />
+            </div>
+          </div>
+        )}
+
+        {mode === 'smart' && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Start date</label>
+                <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setPreview(null) }} min={today} className="input w-full" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1"><User size={12} /> Interviewer</label>
+                <select value={interviewerId} onChange={(e) => { setInterviewerId(e.target.value); setPreview(null) }} className="input w-full">
+                  <option value="">Select…</option>
+                  {interviewerList.map((u) => (<option key={u.id} value={u.id}>{u.full_name}</option>))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Interviews / day</label>
+                <input type="number" min="1" max="50" value={perDayLimit} onChange={(e) => { setPerDayLimit(e.target.value); setPreview(null) }} className="input w-full" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Slot length (min)</label>
+                <input type="number" min="5" max="240" value={slotMinutes} onChange={(e) => { setSlotMinutes(e.target.value); setPreview(null) }} className="input w-full" />
+              </div>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending} className="gap-1">
+              <CalendarDays size={14} /> {previewMutation.isPending ? 'Calculating…' : 'Preview allocation'}
+            </Button>
+            {preview && (
+              <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3 max-h-56 overflow-y-auto text-xs space-y-2">
+                <p className="font-medium text-zinc-700 dark:text-zinc-300">
+                  {preview.total} interview{preview.total === 1 ? '' : 's'} · {preview.effective_slots_per_day}/day
+                  {preview.span ? ` · ${preview.span.first} → ${preview.span.last}` : ''}
+                </p>
+                {(preview.byDay || []).map((d) => (
+                  <div key={`${d.date}-${d.interviewer_id}`}>
+                    <p className="font-semibold text-zinc-600 dark:text-zinc-400">{d.date} — {d.count} interview{d.count === 1 ? '' : 's'}</p>
+                    <div className="pl-2">
+                      {d.items.map((it) => (
+                        <div key={it.application_id} className="flex justify-between gap-2 text-zinc-500 dark:text-zinc-400">
+                          <span className="truncate">{it.candidate_name || 'Candidate'}</span>
+                          <span>{String(it.scheduled_datetime).slice(11)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div>
           <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
@@ -482,18 +775,36 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
           />
         </div>
 
+        {mode === 'fixed' && (
+          <div>
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
+              <Clock size={12} /> Duration (minutes)
+            </label>
+            <input
+              type="number"
+              min="10"
+              max="240"
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              className="input w-full"
+            />
+          </div>
+        )}
+
         <div>
-          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
-            <Clock size={12} /> Duration (minutes)
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+            Description / Instructions (optional)
           </label>
-          <input
-            type="number"
-            min="10"
-            max="240"
-            value={duration}
-            onChange={(e) => setDuration(e.target.value)}
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="Dress code, documents to bring, where to report, who to ask for…"
             className="input w-full"
           />
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Sent to each candidate, translated into their chosen language.
+          </p>
         </div>
 
         <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">
@@ -507,7 +818,9 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
         </label>
 
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Each candidate's status will be set to <strong>Scheduled</strong> and they'll receive the same date/time/location.
+          {mode === 'smart'
+            ? <>Candidates are spread across days at the chosen per-interviewer limit (overflow auto-shifts to the next working day). Each gets their own time and status <strong>Scheduled</strong>.</>
+            : <>Each candidate's status will be set to <strong>Scheduled</strong> and they'll receive the same date/time/location.</>}
         </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
@@ -534,11 +847,10 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
 // would otherwise get clipped against the section boundary (the bug from
 // image 02 in the user's report).
 function ProjectSection({
-  group, isTable, isAdmin, statusAccent, selectedIds,
+  group, expanded, onToggleExpand, isTable, isAdmin, statusAccent, selectedIds,
   onToggleSelect, onSelectAllInGroup, onUnselectAllInGroup,
   onEdit, onTransfer, onDelete,
 }) {
-  const [expanded, setExpanded] = useState(true)
   const isUnassigned = group.key === '__no_project__'
 
   const ids = group.applications.map((a) => a.id)
@@ -559,7 +871,7 @@ function ProjectSection({
         />
         <button
           type="button"
-          onClick={() => setExpanded((v) => !v)}
+          onClick={onToggleExpand}
           className="flex-1 flex items-center justify-between gap-3 min-w-0 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/40 -mx-2 px-2 py-1 rounded-lg transition-colors text-left"
           aria-expanded={expanded}
         >

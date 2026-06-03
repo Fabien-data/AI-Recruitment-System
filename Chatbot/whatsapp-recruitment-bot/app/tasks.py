@@ -113,3 +113,22 @@ def process_webhook_task(self, value: Dict[str, Any]):
             e,
         )
         raise
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.send_stuck_followup_task",
+    soft_time_limit=60,
+    time_limit=90,
+)
+def send_stuck_followup_task(self, candidate_id: int):
+    """Send one proactive follow-up nudge to a stuck candidate. Dispatched by the
+    Cloud Scheduler-triggered sweep (followup_service.run_followup_sweep) so the
+    heavy WhatsApp/translation work runs on the worker, not the web request."""
+    from app.services.followup_service import send_followup_for_candidate
+    try:
+        sent = asyncio.run(send_followup_for_candidate(candidate_id))
+        logger.info("send_stuck_followup_task candidate_id=%s sent=%s", candidate_id, sent)
+    except Exception as exc:
+        logger.exception("send_stuck_followup_task failed for candidate_id=%s: %s", candidate_id, exc)
+        raise

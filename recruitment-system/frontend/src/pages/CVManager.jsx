@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -14,8 +14,12 @@ import {
   transferApplication,
   updateCandidate,
   batchAutoAssign,
-  reparseCv
+  reparseCv,
+  screenCandidate,
+  uploadCandidateDocument,
 } from '../api'
+import { getStatusLabel, CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS } from '../constants/lifecycle'
+import { EditCandidateModal } from '../components/EditCandidateModal'
 import {
   Search,
   FileText,
@@ -44,6 +48,7 @@ import {
   Smartphone,
   Sparkles,
   Plus,
+  Pencil,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -286,9 +291,8 @@ export default function CVManager() {
                 <option value="">All Statuses</option>
                 <option value="new">New</option>
                 <option value="screening">Screening</option>
-                <option value="interview">Interview</option>
-                <option value="hired">Hired</option>
-                <option value="rejected">Rejected</option>
+                <option value="certified">Certified</option>
+                <option value="interview_scheduled">Interview Scheduled</option>
                 <option value="future_pool">Future Pool</option>
               </select>
             </div>
@@ -360,11 +364,12 @@ export default function CVManager() {
       </div>
 
       {/* Stats Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
         <StatCard label="Total CVs" value={pagination?.total || 0} color="blue" />
         <StatCard label="New" value={candidatesList.filter(c => c.status === 'new').length} color="green" />
         <StatCard label="Screening" value={candidatesList.filter(c => c.status === 'screening').length} color="amber" />
-        <StatCard label="Interview" value={candidatesList.filter(c => c.status === 'interview').length} color="purple" />
+        <StatCard label="Certified" value={candidatesList.filter(c => c.status === 'certified').length} color="emerald" />
+        <StatCard label="Interview Scheduled" value={candidatesList.filter(c => c.status === 'interview_scheduled').length} color="purple" />
         <StatCard label="Future Pool" value={candidatesList.filter(c => c.status === 'future_pool').length} color="gray" />
       </div>
 
@@ -485,6 +490,7 @@ function StatCard({ label, value, color }) {
     blue: 'bg-blue-50 text-blue-700 border-blue-200',
     green: 'bg-green-50 text-green-700 border-green-200',
     amber: 'bg-amber-50 text-amber-700 border-amber-200',
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     purple: 'bg-purple-50 text-purple-700 border-purple-200',
     gray: 'bg-zinc-50 dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800'
   }
@@ -578,7 +584,38 @@ function CVReviewModal({ candidate, onClose }) {
 function OverviewTab({ candidate }) {
   const [expandedCVs, setExpandedCVs] = useState({})
   const [reparsingId, setReparsingId] = useState(null)
+  const [docType, setDocType] = useState('cv')
+  const [editOpen, setEditOpen] = useState(false)
+  const docFileRef = useRef(null)
   const queryClient = useQueryClient()
+
+  // Quick status change from the overview header (manual override; the
+  // canonical stage is also auto-synced from applications server-side).
+  const statusMutation = useMutation({
+    mutationFn: (status) => updateCandidate(candidate.id, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      toast.success('Status updated')
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Failed to update status'),
+  })
+
+  const uploadDocMutation = useMutation({
+    mutationFn: ({ file, doc_type }) => uploadCandidateDocument(candidate.id, file, doc_type),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      toast.success('Document uploaded')
+      if (docFileRef.current) docFileRef.current.value = ''
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Upload failed'),
+  })
+
+  const onPickDoc = (e) => {
+    const file = e.target.files?.[0]
+    if (file) uploadDocMutation.mutate({ file, doc_type: docType })
+  }
 
   const toggleCV = (id) => {
     setExpandedCVs(prev => ({ ...prev, [id]: !prev[id] }))
@@ -646,9 +683,30 @@ function OverviewTab({ candidate }) {
               )}
             </div>
           </div>
-          <Badge status={candidate.status} />
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <Badge status={candidate.status} />
+            {/* Quick status change */}
+            <select
+              value={CANDIDATE_STAGES.includes(candidate.status) ? candidate.status : ''}
+              onChange={(e) => { if (e.target.value) statusMutation.mutate(e.target.value) }}
+              disabled={statusMutation.isPending}
+              title="Change candidate status"
+              className="input text-xs py-1 w-40"
+            >
+              <option value="" disabled>Set status…</option>
+              {CANDIDATE_STAGES.map((s) => (
+                <option key={s} value={s}>{CANDIDATE_STAGE_LABELS[s]}</option>
+              ))}
+              <option value="future_pool">Future Pool</option>
+            </select>
+            <Button size="sm" variant="secondary" className="gap-1" onClick={() => setEditOpen(true)}>
+              <Pencil size={14} /> Edit details
+            </Button>
+          </div>
         </div>
       </div>
+
+      <EditCandidateModal candidate={candidate} open={editOpen} onClose={() => setEditOpen(false)} />
 
       {/* Details Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -736,6 +794,34 @@ function OverviewTab({ candidate }) {
             <span className="text-zinc-500 dark:text-zinc-400 text-sm">No skills/tags added yet</span>
           )}
         </div>
+      </div>
+
+      {/* Add document — admin-side CV/passport/certificate/photo upload. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-3">
+        <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Add document:</span>
+        <select className="input w-auto" value={docType} onChange={(e) => setDocType(e.target.value)}>
+          <option value="cv">CV / Resume</option>
+          <option value="passport">Passport</option>
+          <option value="certificate">Certificate</option>
+          <option value="photo">Photo</option>
+          <option value="other">Other</option>
+        </select>
+        <input
+          ref={docFileRef}
+          type="file"
+          className="hidden"
+          accept=".pdf,.doc,.docx,image/*"
+          onChange={onPickDoc}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          className="gap-1"
+          loading={uploadDocMutation.isPending}
+          onClick={() => docFileRef.current?.click()}
+        >
+          <Plus size={14} /> Upload
+        </Button>
       </div>
 
       {/* Primary CV Quick-View — shows the latest uploaded CV if available.
@@ -1265,9 +1351,14 @@ Examples:
 
 function ApplicationsTab({ applications, candidate, jobs }) {
   const queryClient = useQueryClient()
-  const [certifyId, setCertifyId] = useState(null)
+  const [screeningAppId, setScreeningAppId] = useState(null)
   const [transferId, setTransferId] = useState(null)
   const [assignJobId, setAssignJobId] = useState('')
+
+  // A CV on file is the hard gate for moving New → Screening (matches the
+  // backend has_cv check: cv_uploaded flag OR a CV-category document).
+  const hasCv = candidate?.cv_uploaded === true
+    || (candidate?.cvs || []).some((cv) => getDocumentCategory(cv) === 'cv')
 
   // Pull the WhatsApp-stated job interest from candidate metadata. The
   // chatbot writes this to candidates.metadata.job_interest_stated in
@@ -1322,16 +1413,24 @@ function ApplicationsTab({ applications, candidate, jobs }) {
     onError: (err) => toast.error(err?.response?.data?.error || 'Failed to assign'),
   })
 
-  const certifyMutation = useMutation({
-    mutationFn: ({ id, payload }) => updateApplication(id, payload),
+  // New → Screening is a candidate-stage transition (not an application status
+  // change): it sends the "application complete" WhatsApp and drops the
+  // candidate into the job to await certification. Certification itself is now
+  // an agent action in Applications/Projects.
+  const screeningMutation = useMutation({
+    mutationFn: (payload) => screenCandidate(candidate.id, payload),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['applications'] })
-      setCertifyId(null)
-      showNotificationToast(data?.notification, 'Candidate certified')
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      setScreeningAppId(null)
+      showNotificationToast(data?.notification, 'Moved to Screening')
     },
     onError: (error) => {
-      toast.error('Failed to certify: ' + error.message)
-    }
+      const code = error?.response?.data?.code
+      const msg = error?.response?.data?.error || error.message
+      toast.error(code === 'screening_gate' ? msg : ('Failed to move to Screening: ' + msg))
+    },
   })
 
   return (
@@ -1427,43 +1526,58 @@ function ApplicationsTab({ applications, candidate, jobs }) {
             )}
           </div>
 
-          <div className="flex gap-2 border-t border-zinc-100 dark:border-zinc-800/60 pt-3">
-            {['applied', 'new', 'reviewing'].includes(app.status) ? (
-              <>
-                <Button
-                  size="sm"
-                  className="gap-1"
-                  onClick={() => setCertifyId(app.id)}
-                >
-                  <CheckCircle size={16} /> Certify
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="gap-1"
-                  onClick={() => setTransferId(app.id)}
-                >
-                  <ArrowRight size={16} /> Transfer
-                </Button>
-              </>
-            ) : (
-              <span className="text-sm text-zinc-500 dark:text-zinc-400 italic flex items-center gap-1">
-                {app.status === 'certified' && <CheckCircle2 size={14} className="text-green-500" />}
-                {app.status === 'certified'
-                  ? `Certified on ${new Date(app.certified_at).toLocaleDateString()}`
-                  : `Status: ${app.status}`}
-              </span>
-            )}
-          </div>
+          {(() => {
+            const isEntryState = ['applied', 'auto_assigned', 'new', 'reviewing'].includes(app.status)
+            const isCertifiedPlus = ['certified', 'pre_screened', 'interview_scheduled', 'selected', 'placed'].includes(app.status)
+            return (
+              <div className="flex gap-2 items-center border-t border-zinc-100 dark:border-zinc-800/60 pt-3">
+                {/* New → Screening: the only stage action in CV Manager. Certify
+                    (Screening → Certified) is done by agents in Applications. */}
+                {candidate.status === 'new' && isEntryState && (
+                  <Button
+                    size="sm"
+                    className="gap-1"
+                    disabled={!hasCv}
+                    title={hasCv
+                      ? 'Move to Screening and notify the candidate their application is complete'
+                      : 'Upload a CV/resume before moving the candidate to Screening'}
+                    onClick={() => setScreeningAppId(app.id)}
+                  >
+                    <CheckCircle size={16} /> Screening
+                  </Button>
+                )}
+                {candidate.status !== 'new' && (
+                  <span className="text-sm text-zinc-500 dark:text-zinc-400 italic flex items-center gap-1">
+                    {isCertifiedPlus && <CheckCircle2 size={14} className="text-green-500" />}
+                    {app.status === 'certified'
+                      ? `Certified${app.certified_at ? ` on ${new Date(app.certified_at).toLocaleDateString()}` : ''}`
+                      : isEntryState
+                        ? 'In Screening — awaiting certification'
+                        : `Status: ${getStatusLabel(app.status)}`}
+                  </span>
+                )}
+                {isEntryState && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="gap-1"
+                    onClick={() => setTransferId(app.id)}
+                  >
+                    <ArrowRight size={16} /> Transfer
+                  </Button>
+                )}
+              </div>
+            )
+          })()}
         </div>
       ))}
 
-      {certifyId && (
-        <CertifyModal
-          appId={certifyId}
-          onClose={() => setCertifyId(null)}
-          onConfirm={(payload) => certifyMutation.mutate({ id: certifyId, payload })}
-          loading={certifyMutation.isPending}
+      {screeningAppId && (
+        <ScreeningModal
+          jobTitle={applications.find((a) => a.id === screeningAppId)?.job_title || ''}
+          onClose={() => setScreeningAppId(null)}
+          onConfirm={(payload) => screeningMutation.mutate(payload)}
+          loading={screeningMutation.isPending}
         />
       )}
 
@@ -1477,187 +1591,63 @@ function ApplicationsTab({ applications, candidate, jobs }) {
   )
 }
 
-function CertifyModal({ appId, onClose, onConfirm, loading }) {
-  const [notes, setNotes] = useState('')
+// Lightweight modal for the New → Screening transition. It only confirms the
+// move + collects an optional internal note and a "notify candidate" toggle —
+// no interview scheduling (that belongs to certify/interview, done by agents).
+function ScreeningModal({ jobTitle, onClose, onConfirm, loading }) {
+  const [note, setNote] = useState('')
   const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
-  const [notifyEmail, setNotifyEmail] = useState(false)
-  const [showPreview, setShowPreview] = useState(false)
-  const [interviewDate, setInterviewDate] = useState('')
-  const [interviewTime, setInterviewTime] = useState('')
-  const [interviewLocation, setInterviewLocation] = useState('')
-
-  const notifyChannels = [
-    notifyWhatsApp ? 'whatsapp' : null,
-    notifyEmail ? 'email' : null
-  ].filter(Boolean)
 
   const handleSubmit = () => {
-    if (!interviewDate || !interviewTime) {
-      toast.error('Please select interview date and time before certifying')
-      return
-    }
-
-    const localDateTime = new Date(`${interviewDate}T${interviewTime}`)
-    if (Number.isNaN(localDateTime.getTime())) {
-      toast.error('Invalid interview date/time')
-      return
-    }
-
     onConfirm({
-      status: 'certified',
-      certification_notes: notes,
-      prescreening_datetime: localDateTime.toISOString(),
-      prescreening_location: interviewLocation || null,
-      notify_channels: notifyChannels
+      note: note || undefined,
+      notify_channels: notifyWhatsApp ? ['whatsapp'] : [],
     })
   }
 
   return (
-    <Modal open={true} onClose={onClose} title="Certify Candidate" size="md">
+    <Modal open={true} onClose={onClose} title="Move to Screening" size="sm">
       <div className="space-y-4">
-        {/* Success Message */}
-        <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg border border-green-200">
-          <CheckCircle className="text-green-500 mt-0.5 flex-shrink-0" size={24} />
-          <div>
-            <h4 className="font-semibold text-green-800">Certify & Notify Candidate</h4>
-            <p className="text-sm text-green-700 mt-1">
-              This will mark the candidate as <strong>certified</strong> and automatically send them a congratulatory notification.
-            </p>
-          </div>
+        <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-amber-50 to-emerald-50 dark:from-amber-950/30 dark:to-emerald-950/30 rounded-lg border border-amber-200 dark:border-amber-900/40">
+          <CheckCircle className="text-emerald-500 mt-0.5 flex-shrink-0" size={22} />
+          <p className="text-sm text-zinc-700 dark:text-zinc-300">
+            This confirms the candidate's details + CV are complete and moves them to{' '}
+            <strong>Screening</strong>{jobTitle ? <> under <strong>{jobTitle}</strong></> : null}. They'll wait
+            here until an agent certifies them.
+          </p>
         </div>
 
-        {/* Notification Channels */}
-        <div>
-          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-            <Bell size={14} className="inline mr-1" /> Notification Channels
-          </label>
-          <div className="flex gap-3">
-            <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyWhatsApp ? 'border-green-500 bg-green-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
-              }`}>
-              <input
-                type="checkbox"
-                checked={notifyWhatsApp}
-                onChange={(e) => setNotifyWhatsApp(e.target.checked)}
-                className="sr-only"
-              />
-              <Smartphone size={18} className={notifyWhatsApp ? 'text-green-600' : 'text-zinc-400 dark:text-zinc-500'} />
-              <span className={`text-sm font-medium ${notifyWhatsApp ? 'text-green-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
-                WhatsApp
-              </span>
-              {notifyWhatsApp && <CheckCircle2 size={16} className="text-green-500 ml-auto" />}
-            </label>
-
-            <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyEmail ? 'border-blue-500 bg-blue-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
-              }`}>
-              <input
-                type="checkbox"
-                checked={notifyEmail}
-                onChange={(e) => setNotifyEmail(e.target.checked)}
-                className="sr-only"
-              />
-              <Send size={18} className={notifyEmail ? 'text-blue-600' : 'text-zinc-400 dark:text-zinc-500'} />
-              <span className={`text-sm font-medium ${notifyEmail ? 'text-blue-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
-                Email
-              </span>
-              {notifyEmail && <CheckCircle2 size={16} className="text-blue-500 ml-auto" />}
-            </label>
-          </div>
-        </div>
-
-        {/* Certification Remarks */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-              <Clock size={14} className="inline mr-1" /> Interview Date
-            </label>
-            <input
-              type="date"
-              className="input w-full"
-              value={interviewDate}
-              onChange={(e) => setInterviewDate(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-              <Clock size={14} className="inline mr-1" /> Interview Time
-            </label>
-            <input
-              type="time"
-              className="input w-full"
-              value={interviewTime}
-              onChange={(e) => setInterviewTime(e.target.value)}
-              required
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-            <MapPin size={14} className="inline mr-1" /> Interview Location
-          </label>
+        <label className={clsx(
+          'flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all w-fit',
+          notifyWhatsApp ? 'border-green-500 bg-green-50 dark:bg-green-950/30' : 'border-zinc-200 dark:border-zinc-800',
+        )}>
           <input
-            type="text"
-            className="input w-full"
-            placeholder="Office / venue / online link"
-            value={interviewLocation}
-            onChange={(e) => setInterviewLocation(e.target.value)}
+            type="checkbox"
+            checked={notifyWhatsApp}
+            onChange={(e) => setNotifyWhatsApp(e.target.checked)}
           />
-        </div>
+          <Smartphone size={18} className={notifyWhatsApp ? 'text-green-600' : 'text-zinc-400 dark:text-zinc-500'} />
+          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Send "application complete" WhatsApp
+          </span>
+        </label>
 
         <div>
           <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-            <MessageSquare size={14} className="inline mr-1" /> Certification Remarks (Internal)
+            <MessageSquare size={14} className="inline mr-1" /> Internal note (optional)
           </label>
           <textarea
             className="input w-full h-20"
-            placeholder="Enter internal notes (e.g., 'Documents verified, height confirmed')"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g. 'Documents verified, ready for the project handler'"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
           />
         </div>
 
-        {/* Message Preview */}
-        <button
-          type="button"
-          onClick={() => setShowPreview(!showPreview)}
-          className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-        >
-          <Eye size={14} /> {showPreview ? 'Hide' : 'Preview'} notification message
-        </button>
-
-        {showPreview && (
-          <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-200 dark:border-zinc-800">
-            <div className="flex items-center gap-2 mb-2">
-              <MessageSquare size={14} className="text-zinc-500 dark:text-zinc-400" />
-              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase">Message Preview</span>
-            </div>
-            <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line bg-white dark:bg-zinc-900 p-3 rounded border border-zinc-100 dark:border-zinc-800/60">
-              🎉 Dear [Candidate Name],
-              {'\n\n'}
-              Congratulations! You have successfully passed our pre-screening process for the position.
-              {'\n\n'}
-              📋 Next Steps:
-              {'\n'}1. Our team will contact you shortly to schedule an interview
-              {'\n'}2. Please keep your documents ready
-              {'\n'}3. Make sure your phone is reachable
-              {'\n\n'}
-              Best regards,
-              {'\n'}Dewan Recruitment Team
-            </div>
-          </div>
-        )}
-
-        {/* Action Buttons */}
         <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button
-            onClick={handleSubmit}
-            loading={loading}
-            className="gap-2"
-            disabled={!notifyWhatsApp && !notifyEmail}
-          >
-            <Send size={16} /> Certify & Send Notification
+          <Button onClick={handleSubmit} loading={loading} className="gap-2">
+            <Send size={16} /> Move to Screening
           </Button>
         </div>
       </div>

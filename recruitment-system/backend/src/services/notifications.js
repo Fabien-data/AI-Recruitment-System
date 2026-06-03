@@ -11,6 +11,104 @@ const logger = require('../utils/logger');
 
 // Notification templates for different scenarios
 const NOTIFICATION_TEMPLATES = {
+    // Sent when a recruiter moves a candidate New → Screening (details + CV
+    // complete). Confirms the application was received and is under review.
+    application_complete: {
+        en: {
+            subject: '✅ Application Received — {job_title}',
+            message: `✅ Dear {name},
+
+Thank you! We have successfully received your application and details for the position of {job_title}.
+
+📋 What happens next:
+1. Our team is now reviewing your profile (screening stage)
+2. If shortlisted, you will be contacted for the next step
+3. Please keep your phone reachable
+
+Thank you for choosing Dewan Recruitment.
+
+Best regards,
+Dewan Recruitment Team`
+        },
+        si: {
+            subject: '✅ අයදුම්පත ලැබුණි — {job_title}',
+            message: `✅ ආදරණීය {name},
+
+ස්තූතියි! {job_title} තනතුර සඳහා ඔබගේ අයදුම්පත සහ විස්තර අපට සාර්ථකව ලැබී ඇත.
+
+📋 ඊළඟට සිදුවන දේ:
+1. අපගේ කණ්ඩායම දැන් ඔබගේ පැතිකඩ සමාලෝචනය කරයි (පරීක්ෂණ අදියර)
+2. තෝරාගත හොත්, ඊළඟ පියවර සඳහා ඔබව සම්බන්ධ කරගනු ඇත
+3. කරුණාකර ඔබේ දුරකථනය ළඟා විය හැකි ලෙස තබා ගන්න
+
+Dewan Recruitment තෝරා ගැනීම ගැන ස්තූතියි.
+
+සුබ පැතුම්,
+Dewan Recruitment Team`
+        },
+        ta: {
+            subject: '✅ விண்ணப்பம் பெறப்பட்டது — {job_title}',
+            message: `✅ அன்புள்ள {name},
+
+நன்றி! {job_title} பதவிக்கான உங்கள் விண்ணப்பத்தையும் விவரங்களையும் நாங்கள் வெற்றிகரமாக பெற்றுள்ளோம்.
+
+📋 அடுத்து என்ன நடக்கும்:
+1. எங்கள் குழு இப்போது உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்கிறது (திரையிடல் நிலை)
+2. தேர்வு செய்யப்பட்டால், அடுத்த படிக்கு உங்களை தொடர்பு கொள்வோம்
+3. உங்கள் தொலைபேசியை அழைப்பில் வைத்திருங்கள்
+
+Dewan Recruitment-ஐ தேர்ந்தெடுத்ததற்கு நன்றி.
+
+வாழ்த்துக்கள்,
+Dewan Recruitment Team`
+        }
+    },
+    // Sent when a candidate is (auto-)assigned/selected to a job. "You've been
+    // selected for {job_title}" — awaiting certification by an agent.
+    job_assignment: {
+        en: {
+            subject: '🎯 You have been selected for {job_title}',
+            message: `🎯 Dear {name},
+
+Good news! You have been selected for the role of {job_title} and added to our shortlist.
+
+📋 What happens next:
+1. Our team will review and certify your profile
+2. Once certified, we will schedule your interview
+3. Keep your documents ready and your phone reachable
+
+Best regards,
+Dewan Recruitment Team`
+        },
+        si: {
+            subject: '🎯 ඔබ {job_title} සඳහා තෝරාගෙන ඇත',
+            message: `🎯 ආදරණීය {name},
+
+සුභ ආරංචියක්! ඔබ {job_title} තනතුර සඳහා තෝරාගෙන අපගේ කෙටි ලැයිස්තුවට එක් කර ඇත.
+
+📋 ඊළඟට සිදුවන දේ:
+1. අපගේ කණ්ඩායම ඔබගේ පැතිකඩ සමාලෝචනය කර සහතික කරයි
+2. සහතික වූ පසු, ඔබගේ සම්මුඛ පරීක්ෂණය සැලසුම් කරනු ඇත
+3. ලේඛන සූදානම්ව සහ දුරකථනය ළඟා විය හැකි ලෙස තබා ගන්න
+
+සුබ පැතුම්,
+Dewan Recruitment Team`
+        },
+        ta: {
+            subject: '🎯 {job_title} பதவிக்கு நீங்கள் தேர்வாகியுள்ளீர்கள்',
+            message: `🎯 அன்புள்ள {name},
+
+நல்ல செய்தி! {job_title} பதவிக்கு நீங்கள் தேர்வு செய்யப்பட்டு எங்கள் சுருக்கப்பட்ட பட்டியலில் சேர்க்கப்பட்டுள்ளீர்கள்.
+
+📋 அடுத்து என்ன நடக்கும்:
+1. எங்கள் குழு உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்து சான்றளிக்கும்
+2. சான்றளிக்கப்பட்டதும், உங்கள் நேர்காணலை திட்டமிடுவோம்
+3. உங்கள் ஆவணங்களை தயாராகவும் தொலைபேசியை அழைப்பிலும் வைத்திருங்கள்
+
+வாழ்த்துக்கள்,
+Dewan Recruitment Team`
+        }
+    },
     certified: {
         en: {
             subject: 'Congratulations! You have passed pre-screening',
@@ -246,6 +344,197 @@ Dewan Recruitment Team`
 Dewan Recruitment Team`
         }
     },
+    interview_reminder: {
+        en: {
+            subject: 'Reminder: Interview for {job_title}',
+            template_name: 'interview_reminder_en',
+            message: `⏰ Dear {name},
+
+A friendly reminder about your upcoming interview:
+
+📍 Position: {job_title}
+📆 Date & Time: {interview_datetime}
+📍 Location: {interview_location}
+
+Please be prepared, arrive 15 minutes early, and bring your original documents.
+
+If you need to reschedule, just reply to this message.
+
+Best regards,
+Dewan Recruitment Team`
+        },
+        si: {
+            subject: 'මතක් කිරීම: {job_title} සම්මුඛ පරීක්ෂණය',
+            template_name: 'interview_reminder_si',
+            message: `⏰ ආදරණීය {name},
+
+ඔබේ ඉදිරි සම්මුඛ පරීක්ෂණය පිළිබඳ මතක් කිරීමක්:
+
+📍 තනතුර: {job_title}
+📆 දිනය සහ වේලාව: {interview_datetime}
+📍 ස්ථානය: {interview_location}
+
+කරුණාකර සූදානම්ව, මිනිත්තු 15කට පෙර පැමිණ, මුල් ලේඛන රැගෙන එන්න.
+
+නැවත කාලසටහනට ගැනීමට අවශ්‍ය නම් මෙම පණිවිඩයට පිළිතුරු දෙන්න.
+
+සුබ පැතුම්,
+Dewan Recruitment Team`
+        },
+        ta: {
+            subject: 'நினைவூட்டல்: {job_title} நேர்காணல்',
+            template_name: 'interview_reminder_ta',
+            message: `⏰ அன்புள்ள {name},
+
+உங்கள் வரவிருக்கும் நேர்காணல் குறித்த நினைவூட்டல்:
+
+📍 பதவி: {job_title}
+📆 தேதி & நேரம்: {interview_datetime}
+📍 இடம்: {interview_location}
+
+தயவுசெய்து தயாராக இருந்து, 15 நிமிடங்கள் முன்னதாக வந்து, அசல் ஆவணங்களைக் கொண்டு வரவும்.
+
+மறுதிட்டமிட வேண்டுமென்றால், இந்த செய்திக்கு பதிலளிக்கவும்.
+
+வாழ்த்துக்கள்,
+Dewan Recruitment Team`
+        }
+    },
+    interview_day_reminder: {
+        en: {
+            subject: 'Today: Interview for {job_title}',
+            template_name: 'interview_dayof_en',
+            message: `📅 Dear {name},
+
+Your interview is TODAY! 🎯
+
+📍 Position: {job_title}
+🕒 Time: {interview_datetime}
+📍 Location: {interview_location}
+
+Please leave in good time, arrive 15 minutes early, and bring your original ID/passport and certificates. Best of luck! 🍀
+
+Best regards,
+Dewan Recruitment Team`
+        },
+        si: {
+            subject: 'අද: {job_title} සම්මුඛ පරීක්ෂණය',
+            template_name: 'interview_dayof_si',
+            message: `📅 ආදරණීය {name},
+
+ඔබේ සම්මුඛ පරීක්ෂණය *අද* දිනයි! 🎯
+
+📍 තනතුර: {job_title}
+🕒 වේලාව: {interview_datetime}
+📍 ස්ථානය: {interview_location}
+
+කරුණාකර කල්තියා පිටත්ව, මිනිත්තු 15කට පෙර පැමිණ, මුල් හැඳුනුම්පත/විදේශ ගමන් බලපත්‍රය සහ සහතික රැගෙන එන්න. සුභ පැතුම්! 🍀
+
+සුබ පැතුම්,
+Dewan Recruitment Team`
+        },
+        ta: {
+            subject: 'இன்று: {job_title} நேர்காணல்',
+            template_name: 'interview_dayof_ta',
+            message: `📅 அன்புள்ள {name},
+
+உங்கள் நேர்காணல் *இன்று*! 🎯
+
+📍 பதவி: {job_title}
+🕒 நேரம்: {interview_datetime}
+📍 இடம்: {interview_location}
+
+தயவுசெய்து சரியான நேரத்தில் புறப்பட்டு, 15 நிமிடங்கள் முன்னதாக வந்து, அசல் அடையாள அட்டை/கடவுச்சீட்டு மற்றும் சான்றிதழ்களைக் கொண்டு வரவும். வாழ்த்துக்கள்! 🍀
+
+வாழ்த்துக்கள்,
+Dewan Recruitment Team`
+        }
+    },
+    interview_rescheduled: {
+        en: {
+            subject: 'Interview Rescheduled - {job_title}',
+            template_name: 'interview_rescheduled_en',
+            message: `🔄 Dear {name},
+
+Your interview for *{job_title}* has been *rescheduled*.
+
+📆 New date & time: {interview_datetime}
+📍 Location: {interview_location}
+
+Please make a note of the new time. We look forward to seeing you!
+
+Best regards,
+Dewan Recruitment Team`
+        },
+        si: {
+            subject: 'සම්මුඛ පරීක්ෂණය නැවත නියම කළා - {job_title}',
+            template_name: 'interview_rescheduled_si',
+            message: `🔄 ආදරණීය {name},
+
+*{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *නැවත නියම* කර ඇත.
+
+📆 නව දිනය සහ වේලාව: {interview_datetime}
+📍 ස්ථානය: {interview_location}
+
+කරුණාකර නව වේලාව සටහන් කරගන්න. ඔබව හමුවීමට බලාපොරොත්තු වෙනවා!
+
+සුබ පැතුම්,
+Dewan Recruitment Team`
+        },
+        ta: {
+            subject: 'நேர்காணல் மறுதிட்டமிடப்பட்டது - {job_title}',
+            template_name: 'interview_rescheduled_ta',
+            message: `🔄 அன்புள்ள {name},
+
+*{job_title}* பதவிக்கான உங்கள் நேர்காணல் *மறுதிட்டமிடப்பட்டுள்ளது*.
+
+📆 புதிய தேதி & நேரம்: {interview_datetime}
+📍 இடம்: {interview_location}
+
+தயவுசெய்து புதிய நேரத்தைக் குறித்துக்கொள்ளுங்கள். உங்களைச் சந்திக்க ஆவலுடன் இருக்கிறோம்!
+
+வாழ்த்துக்கள்,
+Dewan Recruitment Team`
+        }
+    },
+    interview_cancelled: {
+        en: {
+            subject: 'Interview Cancelled - {job_title}',
+            template_name: 'interview_cancelled_en',
+            message: `Dear {name},
+
+Unfortunately, your interview for *{job_title}* has been *cancelled*. Our team will be in touch about the next steps.
+
+We apologise for any inconvenience.
+
+Best regards,
+Dewan Recruitment Team`
+        },
+        si: {
+            subject: 'සම්මුඛ පරීක්ෂණය අවලංගුයි - {job_title}',
+            template_name: 'interview_cancelled_si',
+            message: `ආදරණීය {name},
+
+අවාසනාවන්ත ලෙස, *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *අවලංගු* කර ඇත. ඊළඟ පියවර ගැන අපේ කණ්ඩායම සම්බන්ධ වෙයි.
+
+ඇතිවූ අපහසුතාවයට සමාව අයදිමු.
+
+සුබ පැතුම්,
+Dewan Recruitment Team`
+        },
+        ta: {
+            subject: 'நேர்காணல் ரத்து - {job_title}',
+            template_name: 'interview_cancelled_ta',
+            message: `அன்புள்ள {name},
+
+துரதிர்ஷ்டவசமாக, *{job_title}* பதவிக்கான உங்கள் நேர்காணல் *ரத்து* செய்யப்பட்டுள்ளது. அடுத்த படிகள் குறித்து எங்கள் குழு தொடர்பு கொள்ளும்.
+
+ஏற்பட்ட சிரமத்திற்கு வருந்துகிறோம்.
+
+வாழ்த்துக்கள்,
+Dewan Recruitment Team`
+        }
+    },
     selected: {
         en: {
             subject: '🎉 Job Offer - {job_title}',
@@ -404,6 +693,44 @@ Dewan Recruitment நிறுவனத்தில் பணிபுரிய 
 வாழ்த்துக்கள்,
 Dewan Recruitment Team`
         }
+    },
+    job_now_available: {
+        en: {
+            subject: 'Good news — a {job_title} role just opened!',
+            template_name: 'job_now_available_en',
+            message: `🎉 Hi {name},
+
+Great news! You earlier asked us about a *{job_title}* role. We now have an opening that matches! 🙌
+
+Would you like to apply? Just reply *YES* and we'll continue your application right away.
+
+Best regards,
+Dewan Recruitment Team`
+        },
+        si: {
+            subject: 'සුබ ආරංචියක් — {job_title} පුරප්පාඩුවක්!',
+            template_name: 'job_now_available_si',
+            message: `🎉 ආයුබෝවන් {name},
+
+සුබ ආරංචියක්! ඔබ කලින් *{job_title}* රැකියාවක් ගැන විමසුවා. දැන් ඒකට ගැලපෙන පුරප්පාඩුවක් තිබෙනවා! 🙌
+
+අයදුම් කරන්න කැමතිද? *YES* කියලා reply කරන්න, අපි ඔබේ අයදුම්පත ඉදිරියට ගෙනියමු.
+
+සුබ පැතුම්,
+Dewan Recruitment Team`
+        },
+        ta: {
+            subject: 'நல்ல செய்தி — {job_title} வேலை!',
+            template_name: 'job_now_available_ta',
+            message: `🎉 வணக்கம் {name},
+
+நல்ல செய்தி! நீங்கள் முன்பு *{job_title}* வேலை பற்றி கேட்டீர்கள். இப்போது அதற்கு பொருந்தும் வேலை ஒன்று உள்ளது! 🙌
+
+விண்ணப்பிக்க விரும்புகிறீர்களா? *YES* என்று பதிலளியுங்கள், உங்கள் விண்ணப்பத்தை தொடர்வோம்.
+
+வாழ்த்துக்கள்,
+Dewan Recruitment Team`
+        }
     }
 };
 
@@ -416,6 +743,8 @@ function buildTemplateComponents(type, variables) {
     // All templates use a simple body with named parameters passed as positional {{1}}, {{2}}, etc.
     // Adjust to match your actual approved template parameter order.
     const paramMap = {
+        application_complete: [variables.name, variables.job_title],
+        job_assignment: [variables.name, variables.job_title],
         certified: [variables.name, variables.job_title],
         prescreening_certified: [variables.name, variables.job_title, variables.prescreening_datetime, variables.prescreening_location],
         interview_scheduled: [variables.name, variables.job_title, variables.interview_datetime, variables.interview_location],
@@ -495,6 +824,7 @@ async function sendNotification(options) {
                                 jobTitle: data.job_title,
                                 interviewDate: data.interview_datetime,
                                 interviewLocation: data.interview_location,
+                                interviewNotes: data.interview_notes,
                                 alternativeJobs: data.alternative_jobs,
                                 prescreeningDatetime: data.prescreening_datetime,
                                 prescreeningLocation: data.prescreening_location,
@@ -594,6 +924,32 @@ async function sendNotification(options) {
 }
 
 /**
+ * Send "application complete" notification — fired when a candidate moves
+ * New → Screening (details + CV verified). Confirms receipt + screening stage.
+ */
+async function sendApplicationCompleteNotification(candidateId, jobTitle, channels = ['whatsapp']) {
+    return sendNotification({
+        candidateId,
+        type: 'application_complete',
+        data: { job_title: jobTitle },
+        channels,
+    });
+}
+
+/**
+ * Send "you've been selected for {job}" notification — fired when a candidate
+ * is (auto-)assigned to a job, before certification.
+ */
+async function sendJobAssignmentNotification(candidateId, jobTitle, channels = ['whatsapp']) {
+    return sendNotification({
+        candidateId,
+        type: 'job_assignment',
+        data: { job_title: jobTitle },
+        channels,
+    });
+}
+
+/**
  * Send certification notification (basic - no pre-screening details)
  */
 async function sendCertificationNotification(candidateId, jobTitle, certificationNotes = '', channels = ['whatsapp']) {
@@ -618,6 +974,30 @@ async function sendInterviewReminderNotification(candidateId, jobTitle, intervie
     return sendNotification({
         candidateId,
         type: 'interview_reminder',
+        data: {
+            job_title: jobTitle,
+            interview_datetime: new Date(interviewDatetime).toLocaleString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            }),
+            interview_location: interviewLocation
+        },
+        channels
+    });
+}
+
+/**
+ * Send the morning-of interview reminder — a distinct, more urgent nudge sent
+ * on the interview date itself (separate from the daily final-3-days reminders).
+ */
+async function sendInterviewDayOfNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp']) {
+    return sendNotification({
+        candidateId,
+        type: 'interview_day_reminder',
         data: {
             job_title: jobTitle,
             interview_datetime: new Date(interviewDatetime).toLocaleString('en-US', {
@@ -694,7 +1074,13 @@ async function sendInterviewNotification(candidateId, jobTitle, interviewDatetim
                 minute: '2-digit'
             }),
             interview_location: interviewLocation,
-            notes_block: notesBlock
+            // notes_block: pre-formatted, used by the email/SMS templates here.
+            notes_block: notesBlock,
+            // interview_notes: the raw description, forwarded to the chatbot so
+            // it can translate it into the candidate's language before sending
+            // the WhatsApp invite (the WhatsApp message is rendered chatbot-side,
+            // not from notes_block).
+            interview_notes: description || null
         },
         channels
     });
@@ -936,17 +1322,66 @@ async function processNotificationQueue() {
     }
 }
 
+/**
+ * Send a "a {job} role just opened" re-engagement notification to a candidate
+ * who earlier wanted a role we had no opening for (job re-engagement waitlist).
+ */
+async function sendJobAvailableNotification(candidateId, jobTitle, channels = ['whatsapp']) {
+    return sendNotification({
+        candidateId,
+        type: 'job_now_available',
+        data: { job_title: jobTitle },
+        channels,
+    });
+}
+
+/**
+ * Notify a candidate their interview was moved to a new date/time.
+ */
+async function sendInterviewRescheduledNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp']) {
+    return sendNotification({
+        candidateId,
+        type: 'interview_rescheduled',
+        data: {
+            job_title: jobTitle,
+            interview_datetime: new Date(interviewDatetime).toLocaleString('en-US', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
+            }),
+            interview_location: interviewLocation,
+        },
+        channels,
+    });
+}
+
+/**
+ * Notify a candidate their interview was cancelled.
+ */
+async function sendInterviewCancelledNotification(candidateId, jobTitle, channels = ['whatsapp']) {
+    return sendNotification({
+        candidateId,
+        type: 'interview_cancelled',
+        data: { job_title: jobTitle },
+        channels,
+    });
+}
+
 module.exports = {
     sendNotification,
+    sendApplicationCompleteNotification,
+    sendJobAssignmentNotification,
     sendCertificationNotification,
     sendPreScreenedPassedNotification,
     sendPreScreeningNotification,
     sendInterviewNotification,
     sendInterviewReminderNotification,
+    sendInterviewDayOfNotification,
     sendSelectionNotification,
     sendRejectionNotification,
     sendGeneralPoolNotification,
     sendTransferNotification,
+    sendJobAvailableNotification,
+    sendInterviewRescheduledNotification,
+    sendInterviewCancelledNotification,
     processNotificationQueue,
     NOTIFICATION_TEMPLATES
 };

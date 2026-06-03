@@ -1,12 +1,13 @@
 ﻿import { useParams, Link } from 'react-router-dom'
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getCandidate, uploadCandidatePhoto } from '../api'
-import { ArrowLeft, User, Mail, Phone, FileText, Briefcase, MessageSquare, ClipboardList, CheckSquare, Square, Download, Camera, FolderKanban, Globe } from 'lucide-react'
+import { ArrowLeft, User, Mail, Phone, FileText, Briefcase, MessageSquare, ClipboardList, CheckSquare, Square, Download, Camera, FolderKanban, Globe, Pencil } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
+import { EditCandidateModal } from '../components/EditCandidateModal'
 import { useRole } from '../stores/authStore'
 import { format } from 'date-fns'
 import { getDocumentCategory, resolveDocumentUrl, PENDING_URL } from '../utils/documents'
@@ -45,6 +46,7 @@ export default function CandidateDetail() {
   const qc = useQueryClient()
   const { canEdit } = useRole()
   const photoInputRef = useRef(null)
+  const [editOpen, setEditOpen] = useState(false)
 
   const { data: candidate, isLoading, error } = useQuery({
     queryKey: ['candidate', id],
@@ -105,8 +107,6 @@ export default function CandidateDetail() {
   const applicationForm = metadata.application_form || {}
   const primaryApplication = getPrimaryApplication(applications)
   const candidateAge = candidate.age || metadata.age || applicationForm.age || null
-  const latestCv = cvs[0] || null
-  const latestCvUrl = latestCv ? resolveDocumentUrl(latestCv) : null
   const languageLabel = getCandidateLanguageLabel(candidate, metadata)
 
   return (
@@ -194,6 +194,15 @@ export default function CandidateDetail() {
         </div>
 
         <div className="flex flex-wrap gap-3 xl:justify-end">
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => setEditOpen(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
+            >
+              <Pencil size={16} aria-hidden /> Edit Profile
+            </button>
+          )}
           <Link
             to={`/communications?candidate=${candidate.id}`}
             className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700"
@@ -206,22 +215,16 @@ export default function CandidateDetail() {
           >
             <FileText size={16} aria-hidden /> Open CV Manager
           </Link>
-          {latestCvUrl === PENDING_URL ? (
-            <span className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700">
-              CV processing...
-            </span>
-          ) : latestCvUrl ? (
-            <a
-              href={latestCvUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
-            >
-              <Download size={16} aria-hidden /> View Latest CV
-            </a>
-          ) : null}
         </div>
       </div>
+
+      {canEdit && (
+        <EditCandidateModal
+          candidate={candidate}
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+        />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
@@ -561,63 +564,6 @@ export default function CandidateDetail() {
               </div>
             ) : (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">No job or project assignment yet.</p>
-            )}
-          </Card>
-
-          <Card>
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-              <FileText size={20} aria-hidden /> Latest CV
-            </h2>
-            {latestCv ? (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50 break-words">{latestCv.file_name || 'CV Document'}</p>
-                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                    {latestCv.uploaded_at ? `Uploaded ${format(new Date(latestCv.uploaded_at), 'MMM d, yyyy')}` : 'Uploaded'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {latestCvUrl ? (
-                    <>
-                      <a
-                        href={latestCvUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100"
-                      >
-                        View CV
-                      </a>
-                      <a
-                        href={latestCvUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        download={latestCv.file_name || 'cv'}
-                        className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-gray-200"
-                      >
-                        <Download size={14} aria-hidden /> Download CV
-                      </a>
-                    </>
-                  ) : (
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">This CV record does not have a downloadable file link yet.</p>
-                  )}
-                </div>
-                <Link
-                  to={`/cv-manager?candidate=${candidate.id}`}
-                  className="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
-                >
-                  Open this candidate in CV Manager
-                </Link>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">No CV uploaded yet.</p>
-                <Link
-                  to={`/cv-manager?candidate=${candidate.id}`}
-                  className="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
-                >
-                  Open this candidate in CV Manager
-                </Link>
-              </div>
             )}
           </Card>
 

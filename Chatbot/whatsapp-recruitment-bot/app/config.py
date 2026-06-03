@@ -92,6 +92,30 @@ class Settings(BaseSettings):
     enable_cv_priority_interrupt: bool = True
     handoff_confusion_threshold: int = 3
 
+    # ── Proactive follow-up nudges (stuck-candidate re-engagement) ───────────
+    # Dark-launched: keep False until the Meta WhatsApp templates are approved,
+    # then flip to True. Out-of-24h-window nudges REQUIRE an approved template
+    # (free-form is silently dropped by Meta after 24h of candidate silence).
+    enable_followup_nudges: bool = False
+    # Approved Meta template names (register these in WhatsApp Business Manager).
+    followup_template_missing_info: str = "dewan_followup_missing_info"
+    # Quiet hours in Asia/Colombo — never send proactive nudges in this window.
+    followup_quiet_start_hour: int = 21   # 21:00
+    followup_quiet_end_hour: int = 8      # 08:00
+    # Smart send-time: prefer each candidate's typical active hour (from their
+    # last inbound message) instead of blasting everyone the moment they're due.
+    followup_smart_send_time: bool = True
+
+    # Approved Meta templates for proactive STATUS messages sent OUTSIDE the 24h
+    # window (interview reminders, job re-engagement). In-window sends still use
+    # rich free-form text. Leave EMPTY until the template is approved by Meta —
+    # empty means "always free-form" (today's behavior, no regression). Set the
+    # env vars (TEMPLATE_INTERVIEW_REMINDER=…) once approved to light up
+    # out-of-window delivery.
+    template_interview_reminder: str = ""
+    template_interview_day_reminder: str = ""
+    template_job_now_available: str = ""
+
     # AI-driven intake feature flag. When True, every webhook turn routes
     # through app/llm/conversation_agent.run_turn (the new GPT-5.5 brain).
     # When False, the legacy ad_intake_flow state machine + run_ai_supervisor

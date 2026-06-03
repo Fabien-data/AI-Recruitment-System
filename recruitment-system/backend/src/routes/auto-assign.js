@@ -8,6 +8,8 @@ const { pool, withTransaction } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
 const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
 const { resolveCvAccessUrl } = require('../utils/cv-url');
+const { syncCandidateStage } = require('../services/candidate-stage');
+const notifications = require('../services/notifications');
 const logger = require('../utils/logger');
 
 /**
@@ -279,13 +281,17 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
             const matchResult = calculateMatchScore(candidate, job);
 
             if (matchResult.score >= threshold) {
-                // Create application
+                // Create application. ON CONFLICT guards against a race/retry
+                // creating a duplicate (candidate_id, job_id) pair — the unique
+                // index already exists, so we just no-op and skip on conflict.
                 const appResult = await pool.query(
                     `INSERT INTO applications (candidate_id, job_id, status, match_score, screening_details)
                      VALUES ($1, $2, 'auto_assigned', $3, $4)
+                     ON CONFLICT (candidate_id, job_id) DO NOTHING
                      RETURNING *`,
                     [candidateId, job.id, matchResult.score / 100, JSON.stringify(matchResult)]
                 );
+                if (appResult.rows.length === 0) continue; // already assigned
 
                 assignments.push({
                     job_id: job.id,
@@ -326,12 +332,30 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
             logger.info(`Candidate ${candidateId} lifted from future_pool → screening (${assignments.length} jobs assigned)`);
         }
 
+        // Keep candidate.status canonical and notify the candidate once for the
+        // best-matching job ("you've been selected"). One message — not one per
+        // job — to avoid spamming when several jobs match.
+        let assignmentNotification = null;
+        if (assignments.length > 0) {
+            syncCandidateStage(candidateId).catch(() => {});
+            const best = assignments.reduce((a, b) => (b.match_score > a.match_score ? b : a));
+            try {
+                assignmentNotification = await notifications.sendJobAssignmentNotification(
+                    candidateId, best.job_title, ['whatsapp']
+                );
+            } catch (notifErr) {
+                logger.warn(`Auto-assign notification failed for ${candidateId}: ${notifErr.message}`);
+                assignmentNotification = { success: [], failed: [{ channel: 'all', error: notifErr.message }] };
+            }
+        }
+
         res.json({
             candidate_id: candidateId,
             candidate_name: candidate.name,
             assignments,
             rejected_jobs: rejectedJobs.slice(0, 5), // Top 5 rejected
             moved_to_pool: assignments.length === 0,
+            assignment_notification: assignmentNotification,
             message: assignments.length > 0
                 ? `Assigned to ${assignments.length} jobs`
                 : 'No matching jobs found - moved to future pool'
@@ -381,6 +405,7 @@ router.post('/batch', authenticate, async (req, res, next) => {
             const existingJobIds = existingAppsResult.rows.map(a => a.job_id);
 
             let assignedCount = 0;
+            let bestJob = null; // { title, score } of the highest-scoring assignment
 
             for (const job of jobsResult.rows) {
                 if (existingJobIds.includes(job.id)) continue;
@@ -388,12 +413,18 @@ router.post('/batch', authenticate, async (req, res, next) => {
                 const matchResult = calculateMatchScore(candidate, job);
 
                 if (matchResult.score >= threshold) {
-                    await pool.query(
+                    const ins = await pool.query(
                         `INSERT INTO applications (candidate_id, job_id, status, match_score, screening_details)
-                         VALUES ($1, $2, 'auto_assigned', $3, $4)`,
+                         VALUES ($1, $2, 'auto_assigned', $3, $4)
+                         ON CONFLICT (candidate_id, job_id) DO NOTHING`,
                         [candidate.id, job.id, matchResult.score / 100, JSON.stringify(matchResult)]
                     );
-                    assignedCount++;
+                    if (ins.rowCount > 0) {
+                        assignedCount++;
+                        if (!bestJob || matchResult.score > bestJob.score) {
+                            bestJob = { title: job.title, score: matchResult.score };
+                        }
+                    }
                 }
             }
 
@@ -409,6 +440,15 @@ router.post('/batch', authenticate, async (req, res, next) => {
                     [candidate.id]
                 );
                 results.assigned++;
+                syncCandidateStage(candidate.id).catch(() => {});
+                // Notify once for the best-matching job.
+                if (bestJob) {
+                    try {
+                        await notifications.sendJobAssignmentNotification(candidate.id, bestJob.title, ['whatsapp']);
+                    } catch (notifErr) {
+                        logger.warn(`Batch auto-assign notify failed for ${candidate.id}: ${notifErr.message}`);
+                    }
+                }
             }
 
             results.processed++;

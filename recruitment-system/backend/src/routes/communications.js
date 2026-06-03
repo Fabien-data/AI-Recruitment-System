@@ -451,6 +451,7 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 ca.email,
                 ca.preferred_language,
                 ca.notes,
+                ca.tags,
                 ca.status        AS candidate_status,
                 ca.conversation_stage,
                 ca.cv_uploaded,

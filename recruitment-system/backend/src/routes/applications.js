@@ -6,6 +6,7 @@ const { authenticate } = require('../middleware/auth');
 const { calculateMatchScore } = require('../config/openai');
 const notifications = require('../services/notifications');
 const { syncJobAsync } = require('./chatbot-sync');
+const { syncCandidateStage } = require('../services/candidate-stage');
 const logger = require('../utils/logger');
 
 /**
@@ -21,6 +22,7 @@ router.get('/', authenticate, async (req, res, next) => {
             project_id,
             date_from,
             date_to,
+            search,
             page,
             limit,
         } = req.query;
@@ -55,6 +57,27 @@ router.get('/', authenticate, async (req, res, next) => {
                 : ` AND CAST(a.applied_at AS DATE) <= CAST($${params.length + 1} AS DATE)`;
             params.push(date_to);
         }
+        // Candidate name / phone / email search. Digit-normalized so a phone
+        // typed with/without country code, spaces or '+' still matches the
+        // stored number (mirrors candidates.js search).
+        if (search) {
+            const digits = String(search).replace(/\D/g, '');
+            if (isMySQL) {
+                if (digits) {
+                    whereClause += " AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR REPLACE(REPLACE(REPLACE(c.phone, ' ', ''), '-', ''), '+', '') LIKE ?)";
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${digits}%`);
+                } else {
+                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)';
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+                }
+            } else if (digits) {
+                whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR regexp_replace(c.phone, '\\D', '', 'g') ILIKE $${params.length + 2})`;
+                params.push(`%${search}%`, `%${digits}%`);
+            } else {
+                whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1})`;
+                params.push(`%${search}%`);
+            }
+        }
 
         const safePage = Math.max(parseInt(page, 10) || 1, 1);
         const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 0, 0), 100);
@@ -85,6 +108,7 @@ router.get('/', authenticate, async (req, res, next) => {
         const countSql = `SELECT COUNT(*) AS total
                           FROM applications a
                           JOIN jobs j ON a.job_id = j.id
+                          ${search ? 'JOIN candidates c ON a.candidate_id = c.id' : ''}
                           ${whereClause}`;
         const countResult = await query(countSql, params);
         const total = parseInt(countResult.rows?.[0]?.total, 10) || 0;
@@ -134,11 +158,40 @@ router.post('/', authenticate, async (req, res, next) => {
             } catch (e) { logger.warn('Match score failed:', e.message); }
         }
 
+        // Idempotent insert: a (candidate_id, job_id) pair is unique. Under a
+        // race/retry, return the existing application instead of erroring (no
+        // more duplicate applications). adaptQuery cannot translate ON CONFLICT,
+        // so branch explicitly per dialect.
         const appId = generateUUID();
-        await query(
-            adaptQuery("INSERT INTO applications (id, candidate_id, job_id, match_score, status) VALUES ($1, $2, $3, $4, 'applied')"),
-            [appId, candidate_id, job_id, matchScore]
-        );
+        let application;
+        let created = false;
+        if (isMySQL) {
+            await query(
+                "INSERT INTO applications (id, candidate_id, job_id, match_score, status) VALUES (?, ?, ?, ?, 'applied') ON DUPLICATE KEY UPDATE match_score = VALUES(match_score)",
+                [appId, candidate_id, job_id, matchScore]
+            );
+            const existing = await query(
+                'SELECT * FROM applications WHERE candidate_id = ? AND job_id = ? LIMIT 1',
+                [candidate_id, job_id]
+            );
+            application = existing.rows[0];
+            created = application && application.id === appId;
+        } else {
+            const ins = await query(
+                "INSERT INTO applications (id, candidate_id, job_id, match_score, status) VALUES ($1, $2, $3, $4, 'applied') ON CONFLICT (candidate_id, job_id) DO NOTHING RETURNING *",
+                [appId, candidate_id, job_id, matchScore]
+            );
+            if (ins.rows.length > 0) {
+                application = ins.rows[0];
+                created = true;
+            } else {
+                const existing = await query(
+                    'SELECT * FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1',
+                    [candidate_id, job_id]
+                );
+                application = existing.rows[0];
+            }
+        }
 
         // If this candidate was sitting in future_pool (General Pool view),
         // a manual assignment means they belong in active screening now.
@@ -154,8 +207,11 @@ router.post('/', authenticate, async (req, res, next) => {
             }
         }
 
-        const inserted = await query(adaptQuery('SELECT * FROM applications WHERE id = $1'), [appId]);
-        res.status(201).json(inserted.rows[0]);
+        // New application → candidate moves into screening (or stays 'new' if no
+        // CV on file yet). Derived centrally so candidate.status stays in sync.
+        syncCandidateStage(candidate_id).catch(() => {});
+
+        res.status(created ? 201 : 200).json(application);
     } catch (error) {
         if (error.message && error.message.toLowerCase().includes('duplicate')) {
             return res.status(400).json({ error: 'Application already exists' });
@@ -261,6 +317,9 @@ router.put('/:id', authenticate, async (req, res, next) => {
         const appResult = await query(adaptQuery('SELECT * FROM applications WHERE id = $1'), [id]);
         if (appResult.rows.length === 0) return res.status(404).json({ error: 'Application not found' });
         const application = appResult.rows[0];
+
+        // Re-derive the candidate's canonical stage from this status change.
+        if (status) syncCandidateStage(application.candidate_id).catch(() => {});
 
         if (status === 'certified' && effDt) {
             const existingInterview = await query(
@@ -453,6 +512,19 @@ router.post('/:id/transfer', authenticate, async (req, res, next) => {
         const targetJobResult = await query(adaptQuery('SELECT id, title FROM jobs WHERE id = $1'), [target_job_id]);
         if (targetJobResult.rows.length === 0) return res.status(404).json({ error: 'Target job not found' });
 
+        // Guard against creating a duplicate (candidate_id, job_id) pair — the
+        // candidate may already have an application for the target job.
+        const dupCheck = await query(
+            adaptQuery('SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1'),
+            [originalApp.candidate_id, target_job_id]
+        );
+        if (dupCheck.rows.length > 0) {
+            return res.status(409).json({
+                error: 'Candidate already has an application for the target job',
+                application_id: dupCheck.rows[0].id,
+            });
+        }
+
         const newAppId = generateUUID();
 
         await withTransaction(async (conn) => {
@@ -472,6 +544,9 @@ router.post('/:id/transfer', authenticate, async (req, res, next) => {
         });
 
         const newApp = await query(adaptQuery('SELECT * FROM applications WHERE id = $1'), [newAppId]);
+
+        // The new (reviewing) application resets the candidate's furthest stage.
+        syncCandidateStage(originalApp.candidate_id).catch(() => {});
 
         // Notify candidate that their application has been moved
         const channels = Array.isArray(req.body.notify_channels) ? req.body.notify_channels : ['whatsapp'];
@@ -596,6 +671,9 @@ router.post('/batch-certify', authenticate, async (req, res, next) => {
                     [appId]
                 );
                 const app = appResult.rows[0];
+
+                // Certified → candidate stage advances to Certified.
+                if (app?.candidate_id) syncCandidateStage(app.candidate_id).catch(() => {});
 
                 let perCandidateNotification = { success: [], failed: [] };
                 try {

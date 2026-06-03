@@ -10,14 +10,20 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 const TYPE_TO_STATUS = {
+    application_complete: 'application_complete',
+    job_assignment: 'job_assignment',
     certified: 'certified',
     prescreening_certified: 'prescreening_certified',
     interview_scheduled: 'interview_scheduled',
     interview_reminder: 'interview_reminder',
+    interview_day_reminder: 'interview_day_reminder',
+    interview_rescheduled: 'interview_rescheduled',
+    interview_cancelled: 'interview_cancelled',
     selected: 'hired',
     rejected: 'rejected_with_alternatives',
     general_pool: 'general_pool',
     transfer: 'transferred',
+    job_now_available: 'job_now_available',
 };
 
 function mapType(type) {
@@ -35,6 +41,7 @@ async function pushCandidateStatus({
     jobTitle,
     interviewDate,
     interviewLocation,
+    interviewNotes,
     alternativeJobs,
     prescreeningDatetime,
     prescreeningLocation,
@@ -60,6 +67,7 @@ async function pushCandidateStatus({
         job_title: jobTitle || newJobTitle || '',
         interview_date: interviewDate || null,
         interview_location: interviewLocation || null,
+        interview_notes: interviewNotes || null,
         alternative_jobs: alternativeJobs || null,
         prescreening_datetime: prescreeningDatetime || null,
         prescreening_location: prescreeningLocation || null,

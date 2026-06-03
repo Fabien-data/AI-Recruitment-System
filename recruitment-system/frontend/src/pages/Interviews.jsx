@@ -397,6 +397,7 @@ export default function Interviews() {
                 <Table.Th icon={User}>Candidate</Table.Th>
                 <Table.Th icon={Briefcase}>Job</Table.Th>
                 <Table.Th icon={FolderKanban}>Project</Table.Th>
+                <Table.Th icon={User}>Interviewer</Table.Th>
                 <Table.Th icon={Clock}>Date &amp; Time</Table.Th>
                 <Table.Th icon={MapPin}>Location</Table.Th>
                 <Table.Th>Status</Table.Th>
@@ -446,6 +447,13 @@ export default function Interviews() {
                           <span className="truncate max-w-[140px]">{iv.project_title}</span>
                         </Link>
                       ) : <span className="text-zinc-400 text-sm">—</span>}
+                    </Table.Td>
+                    <Table.Td>
+                      <span className="inline-flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300 text-sm">
+                        {iv.interviewer_name
+                          ? (<><User size={13} className="text-zinc-400 dark:text-zinc-500" /><span className="truncate max-w-[120px]">{iv.interviewer_name}</span></>)
+                          : <span className="text-zinc-400">—</span>}
+                      </span>
                     </Table.Td>
                     <Table.Td className="whitespace-nowrap">
                       <div className="inline-flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300 text-sm">

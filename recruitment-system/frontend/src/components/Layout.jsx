@@ -6,7 +6,7 @@ import { getNotifications } from '../api'
 import {
   LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell,
   FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone,
-  AlertTriangle,
+  AlertTriangle, Activity,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { twMerge } from 'tailwind-merge'
@@ -107,6 +107,7 @@ const BASE_NAV = [
 ]
 
 const FULL_NAV_EXTRAS = [
+  { to: '/engagement', label: 'Engagement', icon: Activity, section: 'engagement' },
   { to: '/cv-manager', label: 'CV Manager', icon: FileSearch, section: 'cv_manager' },
   { to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' },
   { to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' },

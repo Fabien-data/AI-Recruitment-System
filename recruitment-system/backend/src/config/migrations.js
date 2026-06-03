@@ -641,6 +641,114 @@ async function applyMigrations() {
         'interview_schedules.description',
     );
 
+    // ── Migration 024: de-duplicate applications + enforce uniqueness ─────────
+    // Legacy rows may hold duplicate (candidate_id, job_id) pairs created by
+    // races/retries before the API-layer upsert landed. Keep the single
+    // furthest-along application per pair, delete the rest. Idempotent: a clean
+    // table deletes 0. On prod the table may be postgres-owned, so the DELETE
+    // can be rejected ("must be owner") — safeAlter logs WARN and continues;
+    // run scripts/dedupe-applications.js with the owner role as a fallback.
+    await safeAlter(
+        `DELETE FROM applications a
+          USING (
+            SELECT id, ROW_NUMBER() OVER (
+              PARTITION BY candidate_id, job_id
+              ORDER BY CASE status
+                WHEN 'placed'              THEN 8
+                WHEN 'selected'            THEN 7
+                WHEN 'interview_scheduled' THEN 6
+                WHEN 'interviewed'         THEN 6
+                WHEN 'pre_screened'        THEN 5
+                WHEN 'certified'           THEN 4
+                WHEN 'screening'           THEN 3
+                WHEN 'reviewing'           THEN 2
+                WHEN 'auto_assigned'       THEN 2
+                WHEN 'applied'             THEN 2
+                ELSE 1
+              END DESC, applied_at ASC
+            ) AS rn
+            FROM applications
+          ) d
+          WHERE a.id = d.id AND d.rn > 1`,
+        'dedupe applications (keep furthest-along per candidate+job)',
+    );
+
+    // Defensive: guarantee the unique index exists so new duplicates are
+    // blocked at the DB level (it already ships in schema.sql:186).
+    await safeAlter(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_unique ON applications(candidate_id, job_id)`,
+        'idx_applications_unique',
+    );
+
+    // Speeds up the smart-scheduler per-interviewer/day load seed query.
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_iv_interviewer_datetime ON interview_schedules(interviewer_id, scheduled_datetime)`,
+        'idx_iv_interviewer_datetime',
+    );
+
+    // Candidate-stage filtering (CV Manager / candidate list) is now hot.
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status)`,
+        'idx_candidates_status',
+    );
+
+    // ── Migration 025: recurring interview-reminder cadence ───────────────────
+    // The original reminder used a single reminder_sent_at marker (one-shot,
+    // 24h before). The recurring cadence sends a nudge on each of the final 3
+    // days before the interview + a distinct morning-of message, so it needs
+    // per-day tracking. last_reminder_date = the date (Asia/Colombo) of the most
+    // recent daily reminder (≤ one per day); dayof_reminder_sent_at marks the
+    // separate interview-day reminder. NOTE: on prod interview_schedules may be
+    // postgres-owned, so these ALTERs can be rejected ("must be owner") — that is
+    // logged WARN and the reminder sweep degrades to the legacy one-shot path
+    // (see interview-reminder.js). Run scripts/fix-interview-ownership.js to
+    // enable the full cadence.
+    const interviewReminderCols = [
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS last_reminder_date     DATE`,        'interview_schedules.last_reminder_date'],
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS reminder_count         SMALLINT DEFAULT 0`, 'interview_schedules.reminder_count'],
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS dayof_reminder_sent_at TIMESTAMPTZ`, 'interview_schedules.dayof_reminder_sent_at'],
+    ];
+    for (const [sql, label] of interviewReminderCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 026: job re-engagement waiting list ─────────────────────────
+    // When a candidate wanted a role we had no opening for (they land in
+    // general_pool with metadata.job_interest_stated), we proactively message
+    // them when a matching job is later activated. interest_notified_at de-dupes
+    // so a candidate is invited at most once per pool entry.
+    await safeAlter(
+        `ALTER TABLE general_pool ADD COLUMN IF NOT EXISTS interest_notified_at TIMESTAMPTZ`,
+        'general_pool.interest_notified_at',
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_general_pool_unnotified ON general_pool(interest_notified_at) WHERE interest_notified_at IS NULL`,
+        'idx_general_pool_unnotified',
+    );
+
+    // ── Migration 027: candidate_tasks (agent callback/follow-up tasks) ───────
+    // Mirrors lead_follow_ups but for recruitment candidates: an agent schedules
+    // "call back {candidate} on {due_at}". Surfaced in a due-tasks queue.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS candidate_tasks (
+            id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id   UUID         NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+            application_id UUID         REFERENCES applications(id) ON DELETE SET NULL,
+            due_at         TIMESTAMPTZ  NOT NULL,
+            note           TEXT,
+            task_type      VARCHAR(40)  NOT NULL DEFAULT 'callback',
+            status         VARCHAR(20)  NOT NULL DEFAULT 'pending',
+            outcome        TEXT,
+            assigned_to    UUID         REFERENCES users(id) ON DELETE SET NULL,
+            created_by     UUID         REFERENCES users(id) ON DELETE SET NULL,
+            completed_at   TIMESTAMPTZ,
+            created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'candidate_tasks table');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_due_pending ON candidate_tasks(due_at) WHERE status = 'pending'`, 'idx_candidate_tasks_due_pending');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_candidate ON candidate_tasks(candidate_id)`, 'idx_candidate_tasks_candidate');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_assignee ON candidate_tasks(assigned_to) WHERE status = 'pending'`, 'idx_candidate_tasks_assignee');
+
     logger.info('✅ Startup migrations complete.');
 }
 

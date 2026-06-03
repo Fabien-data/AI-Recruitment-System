@@ -8,6 +8,8 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 const { resolveCvAccessUrl } = require('../utils/cv-url');
 const { openai, createChatCompletion } = require('../config/openai');
+const notifications = require('../services/notifications');
+const { syncCandidateStage } = require('../services/candidate-stage');
 
 function parseCandidateMetadata(metadata) {
     if (!metadata) return {};
@@ -483,9 +485,12 @@ router.put('/:id', authenticate, async (req, res, next) => {
         const updates = req.body;
 
         const allowedFields = ['name', 'phone', 'email', 'source', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
+        // Profile fields stored inside the metadata JSON (like age) rather than
+        // as flat columns — avoids schema churn on the production-only DB.
+        const META_KEYS = ['age', 'height_cm', 'nationality', 'country', 'licenses', 'previous_employer', 'english_level', 'english_proficiency'];
         const setClause = [];
         const values = [];
-        const hasAgeInPayload = Object.prototype.hasOwnProperty.call(updates, 'age');
+        const metaKeysInPayload = META_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(updates, k));
 
         Object.keys(updates).forEach(key => {
             if (allowedFields.includes(key)) {
@@ -505,7 +510,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
             }
         });
 
-        if (hasAgeInPayload) {
+        if (metaKeysInPayload.length > 0) {
             const placeholder = isMySQL ? '?' : '$1';
             const existingCandidateResult = await query(
                 `SELECT metadata FROM candidates WHERE id = ${placeholder}`,
@@ -517,15 +522,30 @@ router.put('/:id', authenticate, async (req, res, next) => {
             }
 
             const metadata = parseCandidateMetadata(existingCandidateResult.rows[0]?.metadata);
-            const ageInput = normalizeAgeInput(updates.age);
-            if (ageInput.invalid) {
-                return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
-            }
 
-            if (ageInput.age === null) {
-                delete metadata.age;
-            } else {
-                metadata.age = ageInput.age;
+            for (const key of metaKeysInPayload) {
+                const raw = updates[key];
+                if (key === 'age') {
+                    const ageInput = normalizeAgeInput(raw);
+                    if (ageInput.invalid) {
+                        return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
+                    }
+                    if (ageInput.age === null) delete metadata.age; else metadata.age = ageInput.age;
+                } else if (key === 'height_cm') {
+                    if (raw === null || String(raw).trim() === '') {
+                        delete metadata.height_cm;
+                    } else {
+                        const h = Number.parseInt(String(raw), 10);
+                        if (!Number.isFinite(h) || h <= 0 || h > 300) {
+                            return res.status(400).json({ error: 'Height (cm) must be a number between 1 and 300' });
+                        }
+                        metadata.height_cm = h;
+                    }
+                } else {
+                    // nationality, english_level — free text; empty clears it.
+                    const val = raw === null ? '' : String(raw).trim();
+                    if (!val) delete metadata[key]; else metadata[key] = val;
+                }
             }
 
             if (isMySQL) {
@@ -601,6 +621,97 @@ router.post('/:id/resolve-intervention', authenticate, async (req, res, next) =>
         const fetchSql = `SELECT * FROM candidates WHERE id = ${placeholder}`;
         const candidateResult = await query(fetchSql, [id]);
         return res.json({ success: true, candidate: candidateResult.rows[0] });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Advance a candidate from New → Screening.
+ *
+ * Hard gate (locked decision): a CV/resume must be on file AND the candidate
+ * must be attached to a job (an applications row). On success, the candidate
+ * moves to status='screening' and the "application complete" WhatsApp is sent.
+ * Certification (Screening → Certified) is a separate, agent-driven action that
+ * lives in Applications/Projects.
+ */
+router.post('/:id/screening', authenticate, async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { note, notify_channels = ['whatsapp'] } = req.body || {};
+
+        const gateResult = await query(
+            adaptQuery(`
+                SELECT c.id, c.name, c.phone, c.status, c.notes,
+                       (c.cv_uploaded IS TRUE
+                        OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = c.id)) AS has_cv,
+                       EXISTS (SELECT 1 FROM applications a WHERE a.candidate_id = c.id) AS has_application
+                FROM candidates c
+                WHERE c.id = $1
+            `),
+            [id]
+        );
+        if (gateResult.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        const row = gateResult.rows[0];
+        const truthy = (v) => v === true || v === 1 || v === '1' || v === 't' || v === 'true';
+        const hasCv = truthy(row.has_cv);
+        const hasApp = truthy(row.has_application);
+
+        if (!hasCv || !hasApp) {
+            return res.status(422).json({
+                error: !hasCv
+                    ? 'Upload a CV/resume before moving the candidate to Screening.'
+                    : 'Assign the candidate to a job before moving them to Screening.',
+                code: 'screening_gate',
+                has_cv: hasCv,
+                has_application: hasApp,
+            });
+        }
+
+        // Move to screening; keep conversation_stage unified.
+        await query(
+            adaptQuery("UPDATE candidates SET status = 'screening', conversation_stage = 'screening', updated_at = NOW() WHERE id = $1"),
+            [id]
+        );
+
+        // Optional internal note — append to candidate notes for an audit trail.
+        if (note && String(note).trim()) {
+            const prev = row.notes ? `${row.notes}\n` : '';
+            await query(
+                adaptQuery('UPDATE candidates SET notes = $1 WHERE id = $2'),
+                [`${prev}[Screening] ${String(note).trim()}`, id]
+            );
+        }
+
+        // Resolve the job title from the latest application for the message.
+        let jobTitle = 'your applied position';
+        try {
+            const appRes = await query(
+                adaptQuery(`
+                    SELECT j.title FROM applications a
+                    JOIN jobs j ON a.job_id = j.id
+                    WHERE a.candidate_id = $1
+                    ORDER BY a.applied_at DESC LIMIT 1
+                `),
+                [id]
+            );
+            if (appRes.rows.length > 0 && appRes.rows[0].title) jobTitle = appRes.rows[0].title;
+        } catch (e) {
+            logger.warn(`Screening: job title lookup failed for ${id}: ${e.message}`);
+        }
+
+        const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
+        let notification = { success: [], failed: [] };
+        try {
+            notification = await notifications.sendApplicationCompleteNotification(id, jobTitle, channels);
+        } catch (notifErr) {
+            logger.error(`Screening notification failed for ${id}: ${notifErr.message}`);
+            notification.failed.push({ channel: 'all', error: notifErr.message });
+        }
+
+        const updated = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [id]);
+        res.json({ ...normalizeCandidateRecord(updated.rows[0]), notification });
     } catch (error) {
         next(error);
     }
@@ -715,6 +826,99 @@ router.post(
             }
 
             res.json({ photo_url: result.rows[0].photo_url });
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+// ── Document upload (CV / passport / certificate / photo / other) ───────────────
+// Admin-side upload so recruiters can add a new CV or supporting documents
+// directly from the CV Manager. Mirrors the photo multer config. A 'cv' upload
+// also flips candidates.cv_uploaded so the Screening gate + auto-assign work.
+const DOC_TYPES = ['cv', 'passport', 'certificate', 'photo', 'id', 'additional', 'other'];
+
+const documentUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            const uploadDir = process.env.UPLOAD_DIR
+                ? path.join(process.env.UPLOAD_DIR, 'documents')
+                : path.join(__dirname, '../../uploads/documents');
+            require('fs').mkdirSync(uploadDir, { recursive: true });
+            cb(null, uploadDir);
+        },
+        filename: (req, file, cb) => {
+            const ext = path.extname(file.originalname) || '';
+            cb(null, `candidate_${req.params.id}_${Date.now()}${ext}`);
+        },
+    }),
+    limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
+});
+
+/**
+ * POST /api/candidates/:id/documents
+ * Upload a CV or supporting document for a candidate. Form fields:
+ *   file     — the document (multipart)
+ *   doc_type — one of DOC_TYPES (defaults to 'cv')
+ */
+router.post(
+    '/:id/documents',
+    authenticate,
+    authorize('admin', 'sourcing_department', 'project_handler'),
+    documentUpload.single('file'),
+    async (req, res, next) => {
+        try {
+            const { id } = req.params;
+            if (!req.file) {
+                return res.status(400).json({ error: 'No file uploaded' });
+            }
+
+            const docType = DOC_TYPES.includes(String(req.body.doc_type || '').toLowerCase())
+                ? String(req.body.doc_type).toLowerCase()
+                : 'cv';
+
+            const candCheck = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [id]);
+            if (candCheck.rows.length === 0) {
+                return res.status(404).json({ error: 'Candidate not found' });
+            }
+
+            const fileUrl = `/uploads/documents/${req.file.filename}`;
+            const ext = (path.extname(req.file.originalname) || '').replace('.', '').toLowerCase() || null;
+            const isCv = docType === 'cv';
+            // Non-CV docs are tagged via parsed_data.__document_category so the
+            // GET enrichment labels them (passport / certificate / photo / …).
+            const parsedData = isCv ? null : JSON.stringify({ __document_category: docType });
+            const cvId = generateUUID();
+
+            // A freshly uploaded CV becomes the primary; demote prior ones.
+            if (isCv) {
+                await query(adaptQuery('UPDATE cv_files SET is_primary = FALSE WHERE candidate_id = $1'), [id]);
+            }
+
+            await query(
+                adaptQuery(`
+                    INSERT INTO cv_files
+                        (id, candidate_id, file_url, file_name, file_type, ocr_status, parsed_data, is_primary, uploaded_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                `),
+                [cvId, id, fileUrl, req.file.originalname, ext, isCv ? 'pending' : 'completed', parsedData, isCv]
+            );
+
+            // Mark the candidate as having a CV so the Screening gate + matcher pass.
+            if (isCv) {
+                await query(
+                    adaptQuery("UPDATE candidates SET cv_uploaded = TRUE, cv_status = 'completed', updated_at = NOW() WHERE id = $1"),
+                    [id]
+                );
+            }
+
+            res.status(201).json({
+                success: true,
+                cv_id: cvId,
+                document_category: docType,
+                file_url: fileUrl,
+                file_name: req.file.originalname,
+            });
         } catch (error) {
             next(error);
         }

@@ -16,12 +16,13 @@ const SOURCE_OPTIONS = [
   { value: 'manual',     label: 'Manual' },
 ]
 
+// The four canonical candidate stages. candidate.status auto-syncs from the
+// furthest application server-side; this dropdown is a manual override.
 const STATUS_OPTIONS = [
-  { value: 'new',        label: 'New' },
-  { value: 'screening',  label: 'Screening' },
-  { value: 'interview',  label: 'Interview' },
-  { value: 'hired',      label: 'Hired' },
-  { value: 'rejected',   label: 'Rejected' },
+  { value: 'new',                 label: 'New' },
+  { value: 'screening',           label: 'Screening' },
+  { value: 'certified',           label: 'Certified' },
+  { value: 'interview_scheduled', label: 'Interview Scheduled' },
 ]
 
 const LANGUAGE_OPTIONS = [
@@ -30,15 +31,58 @@ const LANGUAGE_OPTIONS = [
   { value: 'ta', label: 'Tamil' },
 ]
 
+const ENGLISH_OPTIONS = [
+  { value: '', label: '—' },
+  { value: 'none', label: 'None' },
+  { value: 'basic', label: 'Basic' },
+  { value: 'intermediate', label: 'Intermediate' },
+  { value: 'fluent', label: 'Fluent' },
+  { value: 'native', label: 'Native' },
+]
+
 const EMPTY_FORM = {
   name: '',
   phone: '',
   email: '',
   age: '',
+  height_cm: '',
+  experience_years: '',
+  country: '',
+  english_proficiency: '',
+  licenses: '',
+  previous_employer: '',
+  highest_qualification: '',
+  skills: '',
+  tags: '',
   source: 'manual',
   status: 'new',
   preferred_language: 'en',
   notes: '',
+}
+
+// Tags/skills may arrive as a JS array (Postgres text[]), a JSON string, or a
+// comma-separated string. Normalise to a comma-separated string for editing.
+function toCommaList(value) {
+  if (!value) return ''
+  if (Array.isArray(value)) return value.filter(Boolean).join(', ')
+  if (typeof value === 'string') {
+    const s = value.trim()
+    if (s.startsWith('[')) {
+      try { const a = JSON.parse(s); return Array.isArray(a) ? a.filter(Boolean).join(', ') : s } catch { return s }
+    }
+    return s
+  }
+  return ''
+}
+
+function splitCommaList(value) {
+  return String(value || '').split(',').map((t) => t.trim()).filter(Boolean)
+}
+
+function parseMeta(value) {
+  if (!value) return {}
+  if (typeof value === 'object') return value
+  try { return JSON.parse(value) } catch { return {} }
 }
 
 export function EditCandidateModal({ candidate, open, onClose }) {
@@ -48,11 +92,21 @@ export function EditCandidateModal({ candidate, open, onClose }) {
   // Reset the form whenever a new candidate is opened
   useEffect(() => {
     if (open && candidate) {
+      const meta = parseMeta(candidate.metadata)
       setForm({
         name: candidate.name || '',
         phone: candidate.phone || '',
         email: candidate.email || '',
-        age: candidate.age ?? '',
+        age: candidate.age ?? meta.age ?? '',
+        height_cm: candidate.height_cm ?? meta.height_cm ?? '',
+        experience_years: candidate.experience_years ?? meta.experience_years ?? '',
+        country: meta.country ?? meta.destination_country ?? candidate.preferred_country ?? '',
+        english_proficiency: meta.english_proficiency ?? meta.english_level ?? '',
+        licenses: meta.licenses ?? '',
+        previous_employer: meta.previous_employer ?? '',
+        highest_qualification: candidate.highest_qualification ?? meta.highest_qualification ?? '',
+        skills: toCommaList(candidate.skills),
+        tags: toCommaList(candidate.tags),
         source: candidate.source || 'manual',
         status: candidate.status || 'new',
         preferred_language: candidate.preferred_language || 'en',
@@ -87,6 +141,18 @@ export function EditCandidateModal({ candidate, open, onClose }) {
       preferred_language: form.preferred_language,
       notes: form.notes?.trim() || null,
       age: form.age === '' ? null : Number.parseInt(form.age, 10),
+      // height_cm / country / licenses / previous_employer / english_proficiency
+      // are routed into metadata server-side (like age); experience_years,
+      // highest_qualification, skills are columns; tags is a text[] array.
+      height_cm: form.height_cm === '' ? null : Number.parseInt(form.height_cm, 10),
+      experience_years: form.experience_years === '' ? null : Number.parseInt(form.experience_years, 10),
+      country: form.country?.trim() || null,
+      english_proficiency: form.english_proficiency || null,
+      licenses: form.licenses?.trim() || null,
+      previous_employer: form.previous_employer?.trim() || null,
+      highest_qualification: form.highest_qualification?.trim() || null,
+      skills: form.skills?.trim() || null,
+      tags: splitCommaList(form.tags),
     }
     updateMutation.mutate(payload)
   }
@@ -125,6 +191,60 @@ export function EditCandidateModal({ candidate, open, onClose }) {
             onChange={(e) => setForm((f) => ({ ...f, age: e.target.value }))}
             placeholder="—"
           />
+          <Input
+            label="Height (cm)"
+            type="number"
+            min="1"
+            max="300"
+            value={form.height_cm}
+            onChange={(e) => setForm((f) => ({ ...f, height_cm: e.target.value }))}
+            placeholder="—"
+          />
+          <Input
+            label="Experience (years)"
+            type="number"
+            min="0"
+            max="60"
+            value={form.experience_years}
+            onChange={(e) => setForm((f) => ({ ...f, experience_years: e.target.value }))}
+            placeholder="—"
+          />
+          <Input
+            label="Country"
+            value={form.country}
+            onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))}
+            placeholder="e.g. Qatar, UAE"
+          />
+          <div>
+            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">English level</label>
+            <select
+              className="input"
+              value={form.english_proficiency}
+              onChange={(e) => setForm((f) => ({ ...f, english_proficiency: e.target.value }))}
+            >
+              {ENGLISH_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+          <Input
+            label="Licenses"
+            value={form.licenses}
+            onChange={(e) => setForm((f) => ({ ...f, licenses: e.target.value }))}
+            placeholder="e.g. Heavy vehicle, Forklift"
+          />
+          <Input
+            label="Previous employer"
+            value={form.previous_employer}
+            onChange={(e) => setForm((f) => ({ ...f, previous_employer: e.target.value }))}
+            placeholder="e.g. ABC Construction"
+          />
+          <Input
+            label="Highest qualification"
+            value={form.highest_qualification}
+            onChange={(e) => setForm((f) => ({ ...f, highest_qualification: e.target.value }))}
+            placeholder="e.g. O/L, Diploma"
+          />
           <div>
             <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">Source</label>
             <select
@@ -161,6 +281,23 @@ export function EditCandidateModal({ candidate, open, onClose }) {
               ))}
             </select>
           </div>
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">Skills</label>
+          <Input
+            value={form.skills}
+            onChange={(e) => setForm((f) => ({ ...f, skills: e.target.value }))}
+            placeholder="Comma-separated, e.g. welding, driving, customer service"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">Tags / Labels</label>
+          <Input
+            value={form.tags}
+            onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
+            placeholder="Comma-separated, e.g. Priority, Arabic speaker, Follow-up"
+          />
+          <p className="mt-1 ml-1 text-xs text-zinc-500 dark:text-zinc-400">Manual labels — also shown on the conversation panel.</p>
         </div>
         <div>
           <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">Notes</label>

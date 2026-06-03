@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { useAuthStore } from '../stores/authStore'
+import { useAuthStore, ROLES } from '../stores/authStore'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Logo } from '../components/ui/Logo'
@@ -19,9 +19,10 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
     try {
-      await login(email, password)
+      const user = await login(email, password)
       notify.success({ title: 'Welcome back', message: 'Login successful.' })
-      navigate('/')
+      // Admins land on the Admin Dashboard; everyone else on the Overview (B018).
+      navigate(user?.role === ROLES.ADMIN ? '/admin' : '/', { replace: true })
     } catch (error) {
       notify.error(error.response?.data?.error || 'Login failed')
     } finally {

@@ -52,6 +52,21 @@ export const resolveCandidateIntervention = (id) =>
 export const reparseCv = (cvId) =>
   apiClient.post(`/api/candidates/cv/${cvId}/reparse`).then(res => res.data)
 
+// Advance a candidate New → Screening (hard-gated on CV + a job). Sends the
+// "application complete" WhatsApp. data: { note?, notify_channels? }
+export const screenCandidate = (id, data = {}) =>
+  apiClient.post(`/api/candidates/${id}/screening`, data).then(res => res.data)
+
+// Upload a CV or supporting document for a candidate.
+export const uploadCandidateDocument = (id, file, docType = 'cv') => {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('doc_type', docType)
+  return apiClient.post(`/api/candidates/${id}/documents`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(res => res.data)
+}
+
 // Jobs
 export const getJobs = (params) =>
   apiClient.get('/api/jobs', { params }).then(res => res.data)
@@ -275,6 +290,19 @@ export const deleteInterview = (id) =>
 export const sendInterviewReminder = (id, data) =>
   apiClient.post(`/api/interviews/${id}/remind`, data).then(res => res.data)
 
+// Schedulers (project handlers / sourcing / admin) eligible to be interviewers.
+export const getInterviewers = () =>
+  apiClient.get('/api/interviews/interviewers').then(res => res.data)
+
+// Bulk schedule. body for fixed mode: { application_ids, scheduled_datetime, location, ... }
+// for smart mode: { application_ids, mode:'smart', start_date, interviewer_id(s), per_day_limit, slot_minutes }
+export const bulkScheduleInterviews = (data) =>
+  apiClient.post('/api/interviews/bulk-schedule', data).then(res => res.data)
+
+// Smart-schedule preview — returns the day-by-day allocation without writing.
+export const previewInterviewAllocation = (data) =>
+  apiClient.post('/api/interviews/bulk-schedule', { ...data, mode: 'smart', dry_run: true }).then(res => res.data)
+
 // Analytics
 export const getAnalyticsOverview = (params) =>
   apiClient.get('/api/analytics/overview', { params }).then(res => res.data)
@@ -440,4 +468,39 @@ export const exportMarketingLeadsCsv = async (range = '30d') => {
   })
   downloadBlobResponse(response, `marketing_leads_${range}.csv`)
 }
+
+// ── Engagement / re-engagement (stuck candidates, analytics, digest) ──────────
+export const getStuckCandidates = (params) =>
+  apiClient.get('/api/engagement/stuck', { params }).then(res => res.data)
+
+export const getEngagementAnalytics = (params) =>
+  apiClient.get('/api/engagement/analytics', { params }).then(res => res.data)
+
+export const getDailyDigest = () =>
+  apiClient.get('/api/engagement/daily-digest').then(res => res.data)
+
+export const getCandidateTimeline = (id) =>
+  apiClient.get(`/api/engagement/candidates/${id}/timeline`).then(res => res.data)
+
+export const getCandidateNextAction = (id) =>
+  apiClient.get(`/api/engagement/candidates/${id}/next-action`).then(res => res.data)
+
+export const bulkNudgeCandidates = (candidateIds) =>
+  apiClient.post('/api/engagement/bulk-nudge', { candidate_ids: candidateIds }).then(res => res.data)
+
+// ── Candidate callback tasks ──────────────────────────────────────────────────
+export const getCandidateTasks = (params) =>
+  apiClient.get('/api/candidate-tasks', { params }).then(res => res.data)
+
+export const getDueCandidateTasks = (params) =>
+  apiClient.get('/api/candidate-tasks/due', { params }).then(res => res.data)
+
+export const createCandidateTask = (data) =>
+  apiClient.post('/api/candidate-tasks', data).then(res => res.data)
+
+export const updateCandidateTask = (id, data) =>
+  apiClient.patch(`/api/candidate-tasks/${id}`, data).then(res => res.data)
+
+export const deleteCandidateTask = (id) =>
+  apiClient.delete(`/api/candidate-tasks/${id}`).then(res => res.data)
 

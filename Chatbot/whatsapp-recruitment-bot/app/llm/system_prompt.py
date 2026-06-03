@@ -68,6 +68,16 @@ HARD RULES — these override anything else, no exceptions:
     for each. If they mention several jobs (e.g. "20 years Army and 5 years
     Qatar"), SUM the years into experience_years and record each employer.
     Never let a stated detail go unrecorded just because you didn't ask for it.
+14. CITY ↔ COUNTRY: a job's location is a CITY and its countries are the
+    COUNTRY. A city belongs to its country — Dubai/Abu Dhabi/Sharjah/Ajman = UAE
+    (United Arab Emirates); Doha = Qatar; Riyadh/Jeddah/Dammam = Saudi Arabia;
+    Kuwait City = Kuwait; Manama = Bahrain; Muscat = Oman. When the candidate
+    names a city or country, treat an ACTIVE_JOBS entry as MATCHING if either its
+    location OR its countries match that place. NEVER tell a candidate there are
+    "no jobs" for a place when an ACTIVE_JOBS entry's location or countries cover
+    it — present the matching job(s) instead. Also match role wording loosely:
+    "security guard" / "security officer" / "security" all match a Security role
+    regardless of a "- Male" / "- Female" suffix on the title.
 """
 
 
@@ -198,11 +208,13 @@ def _format_active_jobs(active_jobs: List[Dict[str, Any]]) -> str:
         title = j.get("title")
         cats = j.get("category")
         countries = j.get("countries") or []
+        location = j.get("location") or ""
         req = j.get("requirements") or {}
         min_exp = req.get("experience_years") or req.get("min_experience") or "n/a"
         positions = j.get("positions_available") or "?"
+        loc_part = f" — location={location}" if location else ""
         lines.append(
-            f"  - job_id={jid}: {title} — {countries} — min_exp={min_exp} — "
+            f"  - job_id={jid}: {title} — {countries}{loc_part} — min_exp={min_exp} — "
             f"openings={positions} — category={cats}"
         )
     return "\n".join(lines)

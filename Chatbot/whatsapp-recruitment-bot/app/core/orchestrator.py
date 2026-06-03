@@ -623,14 +623,24 @@ class IntakeOrchestrator:
                 state["cv_file_url"] = media_url
 
         # --- 4b. Immediate sync — don't wait for user confirmation ---
-        # Only mark cv_synced=True on actual success so deferred syncs retry.
+        # Only mark cv_synced=True when the CV file was actually persisted AND
+        # the push succeeded. If the local persist failed (saved_cv_path is None),
+        # the backend gets no multipart and creates no cv_files row — so the CV
+        # would be invisible in the dashboard. Leave cv_synced False in that case
+        # so deferred syncs retry instead of silently dropping the document
+        # (bugs B001–B003).
         if not state.get("cv_synced"):
             try:
                 synced = await recruitment_sync.push(candidate, db, cv_path=saved_cv_path)
-                if synced:
+                if synced and saved_cv_path:
                     state["cv_synced"] = True
                     self._save_agent_state(candidate, state)
                     db.commit()
+                elif synced and not saved_cv_path:
+                    logger.warning(
+                        "CV candidate data synced but file was not persisted/uploaded "
+                        "(saved_cv_path is None) — leaving cv_synced False to retry."
+                    )
             except Exception as exc:
                 logger.warning("Immediate CV sync failed: %s", exc)
 

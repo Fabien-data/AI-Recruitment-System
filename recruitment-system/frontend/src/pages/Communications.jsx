@@ -16,7 +16,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { io } from 'socket.io-client'
 import {
   MessageSquare, Search, Send, Phone, Mail, Bot, User,
@@ -182,7 +182,7 @@ function MediaContent({ msg, isOutbound }) {
   const type = msg.message_type
   const { name, isPdf, isImage } = mediaMeta(msg, mediaUrl)
 
-  if (type === 'image' || (type === 'document' && isImage)) {
+  if (type === 'image' || type === 'sticker' || (type === 'document' && isImage)) {
     return (
       <>
         <button type="button" onClick={() => setViewer(true)} className="block group">
@@ -248,6 +248,78 @@ function MediaContent({ msg, isOutbound }) {
   )
 }
 
+// Parse the message metadata JSON (location coords, reaction emoji, etc.).
+function parseMsgMeta(msg) {
+  let meta = msg.metadata
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta) } catch { meta = null }
+  }
+  return meta || {}
+}
+
+// Renders the body of a message for ALL types so the transcript is complete:
+// text, media (image/voice/document/video/sticker), interactive replies,
+// location pins, reactions, and a graceful fallback for unknown / missing-media.
+const MEDIA_TYPES = ['image', 'document', 'audio', 'voice', 'video', 'sticker']
+
+function MessageBody({ msg, isOutbound }) {
+  const type = msg.message_type
+  const meta = parseMsgMeta(msg)
+  const mediaUrl = getPrimaryAttachment(msg)
+
+  // Interactive button/list reply → show the chosen option as a chip.
+  if (type === 'interactive') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-lg border border-current/40 px-2 py-1 text-xs font-medium opacity-90">
+        <ChevronRight size={12} /> {msg.content || 'Selected an option'}
+      </span>
+    )
+  }
+
+  // Location pin → map link.
+  if (type === 'location') {
+    const lat = meta.latitude
+    const lng = meta.longitude
+    const url = meta.maps_url || ((lat != null && lng != null) ? `https://www.google.com/maps?q=${lat},${lng}` : null)
+    const label = meta.name || String(msg.content || '').replace(/^📍\s*Location:\s*/, '') || 'Shared location'
+    return (
+      <span className="flex flex-col gap-1">
+        <span className="inline-flex items-center gap-1"><MapPin size={13} /> {label}</span>
+        {url && <a href={url} target="_blank" rel="noreferrer" className="text-[11px] underline opacity-90">Open in Maps</a>}
+      </span>
+    )
+  }
+
+  // Reaction → emoji line.
+  if (type === 'reaction') {
+    const emoji = meta.emoji || String(msg.content || '👍').replace(/\s*\(reaction\)$/, '')
+    return <span className="text-xl leading-none">{emoji}</span>
+  }
+
+  // Media with a resolved URL → rich media (image/voice/video/document/sticker).
+  if (MEDIA_TYPES.includes(type)) {
+    if (mediaUrl) {
+      const showCaption = (type === 'audio' || type === 'voice') && msg.content
+      return (
+        <>
+          <MediaContent msg={msg} isOutbound={isOutbound} />
+          {showCaption && <div className="mt-1 text-sm whitespace-pre-wrap break-words">{msg.content}</div>}
+        </>
+      )
+    }
+    // Media type but no URL (re-host failed / not synced) → graceful fallback.
+    return (
+      <span className="inline-flex items-center gap-1 text-xs italic opacity-80">
+        <AlertCircle size={12} /> {msg.content || `${type} (media unavailable)`}
+      </span>
+    )
+  }
+
+  // Text / unknown.
+  if (msg.content) return <span>{msg.content}</span>
+  return <span className="italic opacity-70">{type && type !== 'text' ? `[${type} message]` : ''}</span>
+}
+
 // ── Language badge ────────────────────────────────────────────────────────────
 
 const LANG_LABEL = { en: 'EN', si: 'SI', ta: 'TA', singlish: 'SL', tanglish: 'TL' }
@@ -290,13 +362,67 @@ function CategoryBadge({ value, icon: Icon, title, max = 18 }) {
   )
 }
 
+// ── Candidate labels (manual tags) ─────────────────────────────────────────────
+// Parse candidates.tags which may arrive as a Postgres text[] (JS array),
+// a JSON string, or a comma-separated string depending on dialect/source.
+function parseTagList(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value.filter(Boolean)
+  if (typeof value === 'string') {
+    const s = value.trim()
+    if (s.startsWith('[')) {
+      try { const a = JSON.parse(s); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { /* fall through */ }
+    }
+    return s.split(',').map((t) => t.trim()).filter(Boolean)
+  }
+  return []
+}
+
+function LabelsEditor({ tags, onAdd, onRemove, saving }) {
+  const [input, setInput] = useState('')
+  const submit = () => {
+    const v = input.trim()
+    if (v) { onAdd(v); setInput('') }
+  }
+  return (
+    <div className="p-4 border-b border-zinc-100 dark:border-zinc-800/60">
+      <p className="text-[10px] text-zinc-400 dark:text-zinc-500 uppercase tracking-wide mb-2 flex items-center gap-1">
+        <Tag size={11} /> Labels
+      </p>
+      <div className="flex flex-wrap gap-1 mb-2">
+        {tags.length === 0 && <span className="text-xs text-zinc-400 dark:text-zinc-500 italic">No labels yet</span>}
+        {tags.map((t) => (
+          <span key={t} className={clsx('inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium', categoryColor(t))}>
+            {t}
+            <button type="button" onClick={() => onRemove(t)} className="hover:opacity-70" aria-label={`Remove ${t}`}>
+              <XIcon size={9} />
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit() } }}
+          placeholder="Add label…"
+          className="flex-1 text-xs px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800"
+        />
+        <button type="button" onClick={submit} disabled={saving}
+          className="text-xs px-2 py-1 rounded-lg bg-zinc-900 text-white disabled:opacity-50">
+          Add
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Sender avatar ─────────────────────────────────────────────────────────────
 
 function MsgBubble({ msg }) {
   const isInbound = msg.direction === 'inbound'
   const isSystem = msg.sender_type === 'system'
   const isAgent = msg.sender_type === 'agent'
-  const hasMedia = Boolean(getPrimaryAttachment(msg))
 
   if (isSystem) {
     return (
@@ -330,14 +456,9 @@ function MsgBubble({ msg }) {
               ? 'bg-gradient-to-br from-indigo-500 to-indigo-600 text-white rounded-tr-none'
               : 'bg-gradient-to-br from-primary-500 to-primary-600 text-white rounded-tr-none'
         )}>
-          {hasMedia && (
-            <div className={msg.content ? 'mb-2' : ''}>
-              <MediaContent msg={msg} isOutbound={!isInbound} />
-            </div>
-          )}
-          {/* For image/document bubbles the filename is shown on the media card,
-              so skip the redundant content label; keep it for voice transcripts. */}
-          {(!hasMedia || !['image', 'document'].includes(msg.message_type)) && msg.content}
+          {/* Unified renderer: text, media, interactive, location, reaction,
+              sticker, and a graceful fallback for unknown / missing-media. */}
+          <MessageBody msg={msg} isOutbound={!isInbound} />
         </div>
         <div className={clsx('flex items-center gap-1.5 mt-1 text-[10px] text-zinc-400 dark:text-zinc-500', isInbound ? 'ml-1' : 'mr-1 flex-row-reverse')}>
           <span className="inline-flex items-center gap-1">
@@ -386,6 +507,7 @@ export default function Communications() {
   const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '')
   const [jobFilter, setJobFilter] = useState('')
   const [projectFilter, setProjectFilter] = useState('')
+  const [tagFilter, setTagFilter] = useState('')
   const [transcriptResponseStatus, setTranscriptResponseStatus] = useState('')
   const [transcriptDateFrom, setTranscriptDateFrom] = useState('')
   const [transcriptDateTo, setTranscriptDateTo] = useState('')
@@ -452,9 +574,11 @@ export default function Communications() {
   // so newly added jobs/projects appear automatically (no API/param changes).
   const jobOptions = [...new Set(chatList.map(c => c.latest_job_title).filter(Boolean))].sort()
   const projectOptions = [...new Set(chatList.map(c => c.latest_project_title).filter(Boolean))].sort()
+  const tagOptions = [...new Set(chatList.flatMap(c => parseTagList(c.tags)))].sort()
   const visibleChats = chatList.filter(c =>
     (!jobFilter || c.latest_job_title === jobFilter) &&
-    (!projectFilter || c.latest_project_title === projectFilter)
+    (!projectFilter || c.latest_project_title === projectFilter) &&
+    (!tagFilter || parseTagList(c.tags).includes(tagFilter))
   )
 
   useEffect(() => {
@@ -633,6 +757,10 @@ export default function Communications() {
         sender_type: newMessage.sender || (newMessage.direction === 'inbound' ? 'candidate' : 'agent'),
         sent_at: newMessage.timestamp || new Date().toISOString(),
         attachments: newMessage.attachments || [],
+        // Carry media + metadata so images/voice/location render live without a
+        // refetch (new_message also carries these; whichever survives dedup keeps them).
+        media_url: newMessage.media_url || null,
+        metadata: newMessage.metadata || null,
       }
       setTranscript(prev => {
         if (prev.some(m => m.id === mapped.id)) return prev
@@ -765,6 +893,19 @@ export default function Communications() {
     },
     onError: () => {
       setIdentityError('Failed to save identity. Please try again.')
+    },
+  })
+
+  // Manual candidate labels (tags). Optimistically patch the chat-list row so
+  // the left-list chips update instantly, then refetch for consistency.
+  const tagsMut = useMutation({
+    mutationFn: ({ candidateId, tags }) => updateCandidateIdentity(candidateId, { tags }),
+    onSuccess: (_, vars) => {
+      setChatList(prev => prev.map(c =>
+        c.candidate_id === vars.candidateId ? { ...c, tags: vars.tags } : c
+      ))
+      queryClient.invalidateQueries({ queryKey: ['candidate-detail', vars.candidateId] })
+      queryClient.invalidateQueries({ queryKey: ['candidate', vars.candidateId] })
     },
   })
 
@@ -1060,6 +1201,18 @@ export default function Communications() {
                   <option key={`project-${option}`} value={option}>{option}</option>
                 ))}
               </select>
+              {tagOptions.length > 0 && (
+                <select
+                  value={tagFilter}
+                  onChange={(e) => setTagFilter(e.target.value)}
+                  className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+                >
+                  <option value="">All labels</option>
+                  {tagOptions.map((option) => (
+                    <option key={`tag-${option}`} value={option}>{option}</option>
+                  ))}
+                </select>
+              )}
               <input
                 type="date"
                 value={dateFrom}
@@ -1185,6 +1338,10 @@ export default function Communications() {
                       <CategoryBadge value={c.latest_project_title} icon={FolderKanban} title="Project" />
                       <CategoryBadge value={c.latest_job_category}  icon={Tag}          title="Sector" />
                       <CategoryBadge value={c.latest_job_country}   icon={MapPin}       title="Country" />
+                      {/* Manual labels (capped to keep the row tidy). */}
+                      {parseTagList(c.tags).slice(0, 3).map((t) => (
+                        <CategoryBadge key={`tag-${t}`} value={t} icon={Tag} title="Label" />
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -1516,8 +1673,32 @@ export default function Communications() {
                 Edit contact
               </button>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">{selectedCandidate.phone || selectedCandidate.whatsapp_phone}</p>
+              {/* Quick jumps to this candidate's CV Manager + full profile. */}
+              <div className="flex items-center gap-3 mt-2">
+                <Link to={`/cv-manager?candidate=${selectedId}`} className="inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-700">
+                  <FileText size={12} /> CV Manager
+                </Link>
+                <Link to={`/candidates/${selectedId}`} className="inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-700">
+                  <User size={12} /> Profile
+                </Link>
+              </div>
             </div>
           </div>
+
+          {/* Manual labels (tags) for this candidate. */}
+          <LabelsEditor
+            tags={parseTagList(candidateDetail?.tags ?? selectedCandidate.tags)}
+            saving={tagsMut.isPending}
+            onAdd={(t) => {
+              const cur = parseTagList(candidateDetail?.tags ?? selectedCandidate.tags)
+              if (cur.includes(t)) return
+              tagsMut.mutate({ candidateId: selectedId, tags: [...cur, t] })
+            }}
+            onRemove={(t) => {
+              const cur = parseTagList(candidateDetail?.tags ?? selectedCandidate.tags)
+              tagsMut.mutate({ candidateId: selectedId, tags: cur.filter((x) => x !== t) })
+            }}
+          />
 
           <div className="p-4 space-y-3 text-sm">
             {/* Status */}

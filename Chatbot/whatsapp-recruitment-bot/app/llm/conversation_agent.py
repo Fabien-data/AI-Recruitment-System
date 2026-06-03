@@ -115,6 +115,9 @@ def _active_jobs_summary() -> List[Dict[str, Any]]:
             "title": j.get("title"),
             "category": j.get("category"),
             "countries": j.get("countries") or [],
+            # location is the CITY (e.g. "Dubai"); candidates often name the city,
+            # not the country. Surfacing it lets the brain match "Dubai" → this job.
+            "location": j.get("location"),
             "requirements": j.get("requirements") or {},
             "positions_available": j.get("positions_available"),
         })

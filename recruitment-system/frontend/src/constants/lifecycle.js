@@ -18,6 +18,7 @@ export const APPLICATION_STATUSES = [
 ]
 
 export const STATUS_LABELS = {
+  new: 'New',
   applied: 'Applied',
   certified: 'Certified',
   pre_screened: 'Pre Screened',
@@ -33,6 +34,7 @@ export const STATUS_LABELS = {
 
 // Tailwind classes for status badges. Pair with the existing `badge` base.
 export const STATUS_COLORS = {
+  new: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/50',
   applied: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/50',
   certified: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50',
   pre_screened: 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/40 dark:text-teal-300 dark:border-teal-800/50',
@@ -80,6 +82,53 @@ export const STATUS_FILTER_OPTIONS = [
   { value: 'interview_scheduled', label: 'Scheduled' },
   { value: 'selected', label: 'Selected' },
   { value: 'rejected', label: 'Rejected' },
+]
+
+// ── Candidate lifecycle stages (candidate.status) ────────────────────────────
+// The single 4-stage progression shown on the candidate everywhere. Backend
+// derives candidate.status from the furthest-along application; the frontend
+// renders these labels. `pre_screened` folds under "Certified" via
+// foldToCandidateStage so agents see one clean progression.
+export const CANDIDATE_STAGES = ['new', 'screening', 'certified', 'interview_scheduled']
+
+export const CANDIDATE_STAGE_LABELS = {
+  new: 'New',
+  screening: 'Screening',
+  certified: 'Certified',
+  interview_scheduled: 'Interview Scheduled',
+}
+
+const APP_STATUS_TO_CANDIDATE_STAGE = {
+  applied: 'screening',
+  auto_assigned: 'screening',
+  reviewing: 'screening',
+  screening: 'screening',
+  certified: 'certified',
+  pre_screened: 'certified',
+  interview_scheduled: 'interview_scheduled',
+  interviewed: 'interview_scheduled',
+  selected: 'interview_scheduled',
+  placed: 'interview_scheduled',
+  // rejected / transferred / merged → null (not part of the forward pipeline)
+}
+
+// Fold a per-application status down to the candidate's canonical stage.
+export function foldToCandidateStage(appStatus) {
+  return APP_STATUS_TO_CANDIDATE_STAGE[appStatus] || null
+}
+
+// Prefer the candidate-stage label, fall back to the application-status label.
+export function getStageLabel(status) {
+  return CANDIDATE_STAGE_LABELS[status] || STATUS_LABELS[status] || status
+}
+
+// Candidate-stage filter options for CV Manager / candidate lists.
+export const CANDIDATE_STAGE_FILTER_OPTIONS = [
+  { value: '', label: 'All stages' },
+  { value: 'new', label: 'New' },
+  { value: 'screening', label: 'Screening' },
+  { value: 'certified', label: 'Certified' },
+  { value: 'interview_scheduled', label: 'Interview Scheduled' },
 ]
 
 // ── Industries (Project create/edit) ────────────────────────────────────────

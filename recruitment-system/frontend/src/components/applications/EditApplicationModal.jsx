@@ -10,6 +10,7 @@ const STATUS_OPTIONS = [
   { value: 'applied',             label: 'Applied' },
   { value: 'screening',           label: 'Screening' },
   { value: 'certified',           label: 'Certified' },
+  { value: 'pre_screened',        label: 'Pre Screened' },
   { value: 'interview_scheduled', label: 'Interview Scheduled' },
   { value: 'interviewed',         label: 'Interviewed' },
   { value: 'selected',            label: 'Selected' },

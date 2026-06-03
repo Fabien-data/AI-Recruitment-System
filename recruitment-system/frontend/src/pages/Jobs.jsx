@@ -757,6 +757,7 @@ function JobScheduleInterviewModal({ job, onClose }) {
   const [time, setTime] = useState('')
   const [location, setLocation] = useState('')
   const [duration, setDuration] = useState(30)
+  const [description, setDescription] = useState('')
   const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [hasInitializedSelection, setHasInitializedSelection] = useState(false)
@@ -806,6 +807,7 @@ function JobScheduleInterviewModal({ job, onClose }) {
         scheduled_datetime: `${date}T${time}`,
         location: location || null,
         duration_minutes: Number(duration) || 30,
+        description: description.trim() || null,
         notify_channels: channels.length > 0 ? channels : ['whatsapp'],
       }).then((r) => r.data)
     },
@@ -952,6 +954,22 @@ function JobScheduleInterviewModal({ job, onClose }) {
             onChange={(e) => setDuration(e.target.value)}
             className="input w-full"
           />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+            Description / Instructions (optional)
+          </label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="Dress code, documents to bring, where to report, who to ask for…"
+            className="input w-full"
+          />
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Sent to each candidate, translated into their chosen language.
+          </p>
         </div>
 
         <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">

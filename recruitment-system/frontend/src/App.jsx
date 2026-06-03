@@ -23,6 +23,7 @@ import Applications from './pages/Applications'
 import CVManager from './pages/CVManager'
 import Communications from './pages/Communications'
 import Interviews from './pages/Interviews'
+import Engagement from './pages/Engagement'
 import Analytics from './pages/Analytics'
 import KnowledgeBase from './pages/KnowledgeBase'
 import MarketingHub from './pages/MarketingHub'
@@ -107,6 +108,7 @@ function App() {
         <Route path="cv-manager" element={<RouteBoundary name="CVManager"><CVManager /></RouteBoundary>} />
         <Route path="communications" element={<RouteBoundary name="Communications"><Communications /></RouteBoundary>} />
         <Route path="interviews" element={<RouteBoundary name="Interviews"><Interviews /></RouteBoundary>} />
+        <Route path="engagement" element={<RouteBoundary name="Engagement"><Engagement /></RouteBoundary>} />
         <Route path="analytics" element={<RouteBoundary name="Analytics"><Analytics /></RouteBoundary>} />
         <Route path="knowledge-base" element={<RouteBoundary name="KnowledgeBase"><KnowledgeBase /></RouteBoundary>} />
         <Route path="marketing-hub" element={

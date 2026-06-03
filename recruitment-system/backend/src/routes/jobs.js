@@ -7,6 +7,7 @@ const { syncJobAsync, syncJobDeleteAsync, syncProjectAsync } = require('./chatbo
 const { processJobFlyer, extractJobFlyer } = require('../services/auto-ingest');
 const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT, JOB_COUNTS_JOIN, JOB_COUNTS_SELECT } = require('../utils/job-queries');
 const { resolveCountry } = require('../utils/countries');
+const { notifyWaitlistForJob } = require('../services/job-waitlist');
 const logger = require('../utils/logger');
 
 const MAX_FLYERS_PER_BATCH = 20;
@@ -411,6 +412,12 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
         } catch (syncErr) {
             logger.warn(`Project resync failed for ${project_id}: ${syncErr.message}`);
         }
+        // Re-engage waiting-list candidates who wanted this role (fire-and-forget
+        // so the create response isn't blocked by outbound messaging).
+        if (String(newJob.status).toLowerCase() === 'active') {
+            notifyWaitlistForJob(newJob).catch((e) =>
+                logger.warn(`job-waitlist notify failed for new job ${newJob.id}: ${e.message}`));
+        }
         res.status(201).json(newJob);
     } catch (error) {
         next(error);
@@ -429,12 +436,14 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
         const { id } = req.params;
         const updates = req.body;
 
-        // Look up old project_id before update so we can detect a move.
-        const beforeRes = await pool.query('SELECT project_id FROM jobs WHERE id = $1', [id]);
+        // Look up old project_id + status before update so we can detect a move
+        // and a transition into 'active' (for the re-engagement waitlist).
+        const beforeRes = await pool.query('SELECT project_id, status FROM jobs WHERE id = $1', [id]);
         if (beforeRes.rows.length === 0) {
             return res.status(404).json({ error: 'Job not found' });
         }
         const oldProjectId = beforeRes.rows[0].project_id;
+        const oldStatus = String(beforeRes.rows[0].status || '').toLowerCase();
 
         const allowedFields = [
             'title', 'category', 'description', 'requirements',
@@ -515,6 +524,13 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
             await syncJobAsync(updated.id);
         } catch (syncErr) {
             logger.warn(`Job updated but chatbot sync failed for job ${updated.id}: ${syncErr.message}`);
+        }
+
+        // Job just became active (e.g. future/inactive → active): re-engage
+        // waiting-list candidates who wanted this role. Fire-and-forget.
+        if (String(updated.status).toLowerCase() === 'active' && oldStatus !== 'active') {
+            notifyWaitlistForJob(updated).catch((e) =>
+                logger.warn(`job-waitlist notify failed for job ${updated.id}: ${e.message}`));
         }
 
         // If the job moved between projects, re-sync both. Otherwise just one.
