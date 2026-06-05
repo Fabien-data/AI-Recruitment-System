@@ -100,7 +100,7 @@ LAST_AD_INTENT_SQL = text(
     WHERE candidate_id = :cid AND message_type = 'USER'
       AND ( message_text ILIKE '%apply%' OR message_text ILIKE '%position%'
          OR message_text ILIKE '%security%' OR message_text ILIKE '%interested%' )
-    ORDER BY timestamp DESC LIMIT 1
+    ORDER BY timestamp ASC LIMIT 1
     """
 )
 
