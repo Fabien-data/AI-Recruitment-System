@@ -83,10 +83,18 @@ def _required_fields_for(state: Dict[str, Any]) -> List[str]:
     return ["name", "experience_years"]
 
 
-# Cap on how many advertised jobs we list in the system prompt. Bounds token
-# spend if many campaigns run at once; the cross-suggestion ranker still
-# considers the full cache, so a deeper match isn't lost by this display cap.
-_ACTIVE_JOBS_PROMPT_CAP = 10
+# Cap on how many active jobs we list in the system prompt. Bounds token spend
+# if a very large number of jobs is ever open at once. Kept comfortably above
+# the realistic active-job count so EVERY open role is visible to the brain.
+#
+# History: this was 10, sorted newest-first. With 14 active jobs the two
+# (older) "Security Officer - Dubai" roles fell to ranks 13-14 and were
+# truncated out of ACTIVE_JOBS, so the bot truthfully (but wrongly) told ad
+# clickers "we don't have a Security Officer position" while still offering the
+# newer Cook role. Raising the cap restores full visibility; if the agency ever
+# runs more than this many simultaneously, switch to a candidate-relevance
+# selector (include roles matching the stated city/role first, then newest).
+_ACTIVE_JOBS_PROMPT_CAP = 50
 
 
 def _active_jobs_summary() -> List[Dict[str, Any]]:

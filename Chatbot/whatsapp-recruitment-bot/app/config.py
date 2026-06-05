@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     template_interview_reminder: str = ""
     template_interview_day_reminder: str = ""
     template_job_now_available: str = ""
+    # Apology + onboarding-restart template for candidates wrongly told a role
+    # was unavailable, re-engaged OUTSIDE the 24h window. In-window remediation
+    # uses free-form text (see scripts/remediate_ad_declines.py); this is only
+    # needed for the out-of-window pass. Leave EMPTY until approved by Meta.
+    apology_restart_template: str = ""
 
     # AI-driven intake feature flag. When True, every webhook turn routes
     # through app/llm/conversation_agent.run_turn (the new GPT-5.5 brain).

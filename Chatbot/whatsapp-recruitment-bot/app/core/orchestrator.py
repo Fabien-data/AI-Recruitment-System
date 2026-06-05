@@ -26,7 +26,11 @@ from app.services.cv_service import cv_service
 from app.services.language_service import language_service
 from app.services.handoff_service import handoff_service
 from app.services.intent_service import looks_like_faq_question
-from app.services.job_matching_service import job_matching_service
+from app.services.job_matching_service import (
+    _COUNTRY_ALIASES,
+    _canon_country,
+    job_matching_service,
+)
 from app.services.recruitment_sync import recruitment_sync
 from app.services.vacancy_service import vacancy_service
 from app.nlp.language_detector import detect_language_switch_request
@@ -171,6 +175,25 @@ class IntakeOrchestrator:
                         body_match.best.title, body_match.best.score,
                     )
                     return self._route_to_ad_flow_with_context(db, candidate, state, context)
+
+        # Ad arrival that did NOT confidently resolve to a live job (no token, no
+        # referral match, no confident body match). NEVER dead-end the candidate
+        # in the generic AI decline path — run the branded multilingual
+        # onboarding anyway and capture them into the talent pool. Gated to the
+        # first turn (ad_processed) and to messages that clearly came from an ad
+        # (intent text or a Meta referral object).
+        if (
+            not state.get("ad_processed")
+            and (
+                self._looks_like_ad_intent(message_text)
+                or meta_referral_service.is_referral(referral_data)
+            )
+        ):
+            logger.info(
+                "Ad-intent with no confident job match — routing to branded "
+                "no-match onboarding (phone=%s)", phone_number,
+            )
+            return await self._route_ad_intent_no_match(db, candidate, state, message_text)
 
         # Detect whether this message is an explicit language-switch request so
         # the lock can be updated; otherwise the existing lock is preserved.
@@ -688,6 +711,15 @@ class IntakeOrchestrator:
         # state machine for this conversation.
         if ad_intake_flow.is_active(state) and not ad_intake_flow.is_complete(state):
             completion = ad_intake_flow.completion_message(state, locked_language)
+            # No-match ad arrivals carry a SYNTHETIC ad context (no backend job),
+            # so nothing else would sync them. Capture into the general/talent
+            # pool here so the lead is never lost — keep the branded completion
+            # message as the user-facing reply.
+            if (state.get("ad_context") or {}).get("synthetic"):
+                try:
+                    await self._route_general_pool_signup(db, candidate, state)
+                except Exception as exc:    # noqa: BLE001
+                    logger.warning("Synthetic ad-flow pool capture failed: %s", exc)
             self._save_agent_state(candidate, state)
             db.commit()
             return completion
@@ -1095,6 +1127,109 @@ class IntakeOrchestrator:
                 return self._route_to_ad_flow_with_context(db, candidate, state, context)
 
         return self._build_referral_disambiguation_list(state, match)
+
+    def _extract_ad_prefill_entities(self, text: str) -> tuple[Optional[str], Optional[str]]:
+        """Best-effort parse of an ad pre-fill message into (job_role, country).
+
+        Used when a candidate clearly arrived from an ad but no live job could be
+        confidently matched, so we can still personalise the branded onboarding
+        and tag the talent-pool lead. Both parts are optional — the flow proceeds
+        with sensible defaults when parsing fails. Reuses the shared city↔country
+        alias map so "Dubai" → "United Arab Emirates" (kept in sync with the
+        brain's CITY↔COUNTRY hard rule).
+        """
+        if not text:
+            return None, None
+        low = text.strip().lower()
+
+        # Country / city → canonical country. Longest alias first so multi-word
+        # cities ("abu dhabi") win over partials.
+        country: Optional[str] = None
+        for alias in sorted(_COUNTRY_ALIASES.keys(), key=len, reverse=True):
+            if alias in low:
+                country = _COUNTRY_ALIASES[alias].title()
+                break
+        if not country:
+            for c in ("united arab emirates", "saudi arabia", "qatar", "kuwait",
+                      "oman", "bahrain", "greece"):
+                if c in low:
+                    country = _canon_country(c).title()
+                    break
+
+        # Role: the phrase after "apply for / interested in / applying for", or
+        # the phrase immediately before "position / job / role / vacancy".
+        role: Optional[str] = None
+        m = re.search(
+            r"\b(?:apply for|applying for|interested in|application for)\s+"
+            r"(?:this |the |a |an )?(.+?)\s*"
+            r"(?:position|job|role|vacanc|opening|\bin\b|[.,!?]|$)",
+            low,
+        )
+        if not m:
+            m = re.search(r"\b(.+?)\s+(?:position|job|role|vacancy)\b", low)
+        if m:
+            role = m.group(1).strip(" -")
+            role = re.sub(r"\s*[-–]\s*(?:male|female)\s*$", "", role).strip()
+            role = re.sub(r"^(?:this|the|a|an)\s+", "", role).strip()
+            if not role or len(role) > 60:
+                role = None
+        if role:
+            role = " ".join(w if w.isupper() else w.capitalize() for w in role.split())
+        return role, country
+
+    async def _route_ad_intent_no_match(
+        self,
+        db: Session,
+        candidate,
+        state: Dict[str, Any],
+        message_text: str,
+    ) -> Any:
+        """Ad arrival with no confidently-matched live job. Never dead-end: run
+        the branded multilingual onboarding anyway, seed the requested
+        role/country, and capture the lead into the talent pool at completion.
+
+        Mirrors ``_route_to_ad_flow_with_context`` but with a SYNTHETIC context
+        (no backend job_id), so the deterministic ``ad_intake_flow`` personalises
+        the welcome + runs field collection while the brain still treats it as a
+        cold-path conversation for FAQ grounding (``job_id`` is None)."""
+        state["ad_processed"] = True
+        job_role, country = self._extract_ad_prefill_entities(message_text)
+
+        collected = state.setdefault("collected_data", {})
+        asked_questions = state.setdefault("asked_questions", [])
+        if job_role and not collected.get("job_role"):
+            collected["job_role"] = job_role
+            if "job_role" not in asked_questions:
+                asked_questions.append("job_role")
+        if country and not collected.get("country"):
+            collected["country"] = country
+            collected.setdefault("countries", [country])
+            if "countries" not in asked_questions:
+                asked_questions.append("countries")
+
+        state["ad_context"] = {
+            "job_id": None,
+            "job_title": job_role or "",
+            "countries": [country] if country else [],
+            "synthetic": True,
+            "source": "ad_intent_no_match",
+        }
+        state["step"] = "ad_landed"
+
+        locked = state.get("locked_language")
+        if locked:
+            reply = ad_intake_flow.welcome_and_first_prompt(
+                state, locked,
+                {"job_title": job_role or "", "country": country or ""},
+            )
+        else:
+            reply = ad_intake_flow.language_selector_payload(
+                state, job_title=job_role or "", country=country or "",
+            )
+
+        self._save_agent_state(candidate, state)
+        db.commit()
+        return reply
 
     def _route_to_ad_flow_with_context(
         self,
