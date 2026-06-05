@@ -6,7 +6,7 @@ import { getProject, getProjectCandidates, getProjectStats, exportProjectCsv, ge
 import {
   ArrowLeft, FolderKanban, MapPin, Calendar, Users, Briefcase,
   DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User, Download,
-  HeartPulse, UtensilsCrossed, CheckCircle2, Clock, Award, XCircle, TrendingUp, Building2, Megaphone,
+  HeartPulse, UtensilsCrossed, CheckCircle2, Clock, Award, XCircle, TrendingUp, Building2, Megaphone, Pencil,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Badge } from '../components/ui/Badge'
@@ -14,6 +14,7 @@ import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
 import { Button } from '../components/ui/Button'
 import { CreateJobModal } from '../components/CreateJobModal'
+import { EditProjectModal } from '../components/EditProjectModal'
 import { AdLinkCard } from '../components/AdLinkModal'
 import { format } from 'date-fns'
 import { useAuthStore } from '../stores/authStore'
@@ -303,6 +304,9 @@ export default function ProjectDetail() {
   const { user } = useAuthStore()
   const [candidatesJobFilter, setCandidatesJobFilter] = useState('')
   const [isJobModalOpen, setIsJobModalOpen] = useState(false)
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  // Mirrors the backend PUT /api/projects/:id authorization.
+  const canManageProject = ['admin', 'sourcing_department', 'project_handler'].includes(user?.role)
 
   const { data: project, isLoading, error } = useQuery({
     queryKey: ['project', id],
@@ -412,6 +416,16 @@ export default function ProjectDetail() {
           <div className="flex sm:items-end items-start gap-2">
             <ProgressRing percent={completionRate} size={120} strokeWidth={10} />
             <div className="flex flex-col gap-2">
+              {canManageProject && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="inline-flex items-center gap-1 bg-white/15 text-white hover:bg-white/25 border-white/20"
+                  onClick={() => setIsEditOpen(true)}
+                >
+                  <Pencil size={15} /> Edit
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 size="sm"
@@ -752,6 +766,12 @@ export default function ProjectDetail() {
         projectId={id}
         isOpen={isJobModalOpen}
         onClose={() => setIsJobModalOpen(false)}
+      />
+
+      <EditProjectModal
+        isOpen={isEditOpen}
+        project={project}
+        onClose={() => setIsEditOpen(false)}
       />
     </div>
   )

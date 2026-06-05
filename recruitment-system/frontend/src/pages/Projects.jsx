@@ -4,8 +4,9 @@ import { Link } from 'react-router-dom'
 import { getProjects, createProject, deleteProject } from '../api'
 import {
   FolderKanban, Plus, Trash2, Users, Briefcase, Building2, Globe2, Tag,
-  Calendar, BarChart3, Activity, PauseCircle, CheckCircle2, Eye, X,
+  Calendar, BarChart3, Activity, PauseCircle, CheckCircle2, Eye, X, Pencil,
 } from 'lucide-react'
+import { EditProjectModal } from '../components/EditProjectModal'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
@@ -33,6 +34,7 @@ export default function Projects() {
   const [priorityFilter, setPriorityFilter] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [editingProject, setEditingProject] = useState(null)
   const [countrySearch, setCountrySearch] = useState('')
 
   // Form state for new project
@@ -229,6 +231,8 @@ export default function Projects() {
   const projectsList = data?.data || []
   const canCreateProject = user?.role === 'admin' || user?.role === 'supervisor'
   const canDeleteProject = user?.role === 'admin'
+  // Mirrors the backend PUT /api/projects/:id authorization.
+  const canEditProject = ['admin', 'sourcing_department', 'project_handler'].includes(user?.role)
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
@@ -471,6 +475,16 @@ export default function Projects() {
                           <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
                             <Briefcase size={11} /> {project.job_count}
                           </span>
+                        )}
+                        {canEditProject && (
+                          <button
+                            type="button"
+                            onClick={() => setEditingProject(project)}
+                            className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-950/40 transition-colors"
+                            title="Edit project"
+                          >
+                            <Pencil size={14} />
+                          </button>
                         )}
                         {canDeleteProject && (
                           <button
@@ -889,6 +903,13 @@ export default function Projects() {
           </div>
         </form>
       </Modal>
+
+      {/* Edit Project Modal */}
+      <EditProjectModal
+        isOpen={!!editingProject}
+        project={editingProject}
+        onClose={() => setEditingProject(null)}
+      />
     </div>
   )
 }
