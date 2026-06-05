@@ -294,13 +294,13 @@ Cultural & linguistic rules for Sri Lankan users:
         },
         'singlish': {
             'registration_cost': (
-                "📋 *Registration Gattu saha Process*\n"
+                "📋 *Registration Gasthu saha Process*\n"
                 "Registration fee: LKR 5,000 (eka paarak vitharai).\n"
                 "Athulath: visa processing, medical test, gaman lekkam saha contract review.\n"
                 "📞 0117324324 call karanna registration start karanna."
             ),
             'how_to_apply': (
-                "📝 *Apply karanna kohomada?*\n"
+                "📝 *Apply karanne kohomada?*\n"
                 "1️⃣ CV eka denna (hari karapu! ✅)\n"
                 "2️⃣ Office ekata enna nam 0117324324 call karanna.\n"
                 "3️⃣ Medical saha visa eka api ekka karamu.\n"
