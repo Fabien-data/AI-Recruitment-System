@@ -21,14 +21,32 @@ const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { normalizePhone } = require('../utils/phone');
 const logger = require('../utils/logger');
 const { uploadToGCS } = require('../utils/gcs-upload');
+const { setCandidateStage, emitStageChanged } = require('../services/candidate-stage');
 
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 20 * 1024 * 1024 },
 });
+
+// Agent call outcomes / lead statuses (app-validated; no DB CHECK constraint).
+const DISPOSITIONS = ['new', 'attempted', 'contacted', 'interested', 'callback', 'not_interested', 'qualified', 'unreachable'];
+const CALL_OUTCOMES = ['answered', 'no_answer', 'busy', 'callback', 'wrong_number', 'note', 'not_interested'];
+// Candidate statuses a call outcome may set: the forward pipeline ("Done → advance":
+// New→Screening / Screening→Certified / Certified→Interview Scheduled) plus the
+// decline outcome (Not interested → future_pool, UPGRADES.md #1: there is no
+// candidate-level 'rejected'). Forward stages cascade through setCandidateStage();
+// a decline rejects the active application(s) and moves the candidate to future_pool
+// (CV-gated to New if no CV). 'rejected' is still accepted as a legacy input alias
+// for the decline so older clients don't break.
+const FORWARD_STAGE_TARGETS = ['screening', 'certified', 'interview_scheduled'];
+const CALL_STATUS_TARGETS = [...FORWARD_STAGE_TARGETS, 'future_pool', 'rejected'];
+const isDeclineStatus = (s) => s === 'future_pool' || s === 'rejected';
+// Follow-up task types an agent action may open (no_answer powers the Engagement catch-up list).
+const FOLLOWUP_TASK_TYPES = ['callback', 'no_answer'];
 
 const ALLOWED_MEDIA_MIME_PREFIXES = ['image/', 'audio/', 'video/'];
 const ALLOWED_DOC_MIME_TYPES = new Set([
@@ -218,7 +236,7 @@ function authenticateChatbot(req, res, next) {
 
 // ── GET /api/communications/candidate/:id ─────────────────────────────────────
 // Returns the candidate's chronological transcript.
-router.get('/candidate/:candidate_id', authenticate, async (req, res, next) => {
+router.get('/candidate/:candidate_id', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const { candidate_id } = req.params;
         const { channel, limit = 5000, date_from, date_to, response_status } = req.query;
@@ -263,7 +281,7 @@ router.get('/candidate/:candidate_id', authenticate, async (req, res, next) => {
 
 // ── GET /api/communications/history/:phone ───────────────────────────────────
 // Compatibility endpoint for phone-based transcript loading.
-router.get('/history/:phone', authenticate, async (req, res, next) => {
+router.get('/history/:phone', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const rawPhone = String(req.params.phone || '').trim();
         if (!rawPhone) {
@@ -319,7 +337,7 @@ router.get('/history/:phone', authenticate, async (req, res, next) => {
 });
 
 // ── GET /api/communications/candidate/:id/notifications ──────────────────────
-router.get('/candidate/:candidate_id/notifications', authenticate, async (req, res, next) => {
+router.get('/candidate/:candidate_id/notifications', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const { candidate_id } = req.params;
         const result = await query(
@@ -343,7 +361,7 @@ router.get('/candidate/:candidate_id/notifications', authenticate, async (req, r
 // ── GET /api/communications/candidate/:id/context ────────────────────────────
 // Returns the latest active application (job title + short description) and
 // nearest interview for the candidate. Used by the portal to prefill messages.
-router.get('/candidate/:candidate_id/context', authenticate, async (req, res, next) => {
+router.get('/candidate/:candidate_id/context', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const { candidate_id } = req.params;
         const context = await getCandidateMessageContext(candidate_id);
@@ -356,14 +374,15 @@ router.get('/candidate/:candidate_id/context', authenticate, async (req, res, ne
 // ── GET /api/communications/active-chats ──────────────────────────────────────
 // Returns one row per candidate with WhatsApp conversation history,
 // sorted by most recent message. Used to populate the chat list panel.
-router.get('/active-chats', authenticate, async (req, res, next) => {
+router.get('/active-chats', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const {
             search = '',
             limit = 5000,
             date_from,
             date_to,
-            conversation_stage,
+            status,
+            project_id,
             response_status,
             pipeline_stage,
             handoff_state,
@@ -373,14 +392,22 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
         const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 5000, 1), 5000);
         const params = [];
         const filters = [];
+        // Effective project/job = the candidate's latest application's project/job,
+        // falling back to the CTWA ad they arrived on (ad_tracking) so brand-new
+        // leads with no application yet still resolve to the project they asked
+        // about. Used in BOTH the SELECT and the WHERE — Postgres can't reference
+        // a SELECT alias in WHERE, so these are raw expressions.
+        const effProjectIdExpr    = `COALESCE(la.project_id, adt.project_id)`;
+        const effProjectTitleExpr = `COALESCE(NULLIF(la.project_title, ''), adt.project_title)`;
+        const effJobTitleExpr      = `COALESCE(NULLIF(la.job_title, ''), adt.job_title)`;
         const pipelineStageExpr = `
             CASE
                 WHEN COALESCE(ca.is_human_handoff, FALSE) = TRUE THEN 'human_takeover_active'
                 WHEN COALESCE(ca.requires_human, FALSE) = TRUE THEN 'pending_human_review'
                 WHEN LOWER(COALESCE(ca.cv_status, '')) = 'parsed' THEN 'cv_parsed'
                 WHEN COALESCE(ca.cv_uploaded, FALSE) = TRUE THEN 'cv_uploaded'
-                WHEN LOWER(COALESCE(la.application_status, '')) IN ('shortlisted', 'selected', 'hired', 'placed', 'rejected')
-                     OR LOWER(COALESCE(ca.status, '')) IN ('hired', 'rejected') THEN 'shortlisted_or_rejected'
+                WHEN LOWER(COALESCE(la.application_status, '')) IN ('hired', 'rejected')
+                     OR LOWER(COALESCE(ca.status, '')) IN ('hired', 'merged') THEN 'shortlisted_or_rejected'
                 ELSE 'bot_engaging'
             END
         `;
@@ -398,9 +425,26 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
             }
         }
 
-        if (conversation_stage) {
-            const stagePlaceholder = addParam(conversation_stage);
-            filters.push(`ca.conversation_stage = ${stagePlaceholder}`);
+        // conversation_stage is retired as a separate filter vocabulary (#1) — it is
+        // now just a mirror of candidates.status. Status filtering goes through the
+        // canonical status buckets below. (`conversation_stage` query param ignored.)
+
+        // Canonical status bucket (New → Screening → Certified → Interview
+        // Scheduled, + Future Pool). Mutually exclusive — driven by ca.status,
+        // kept in sync by candidate-stage.js. NULL status counts as 'new'.
+        const CANDIDATE_STATUS_BUCKETS = new Set(['new', 'screening', 'certified', 'interview_scheduled', 'future_pool']);
+        if (status && CANDIDATE_STATUS_BUCKETS.has(String(status).toLowerCase())) {
+            filters.push(`LOWER(COALESCE(ca.status, 'new')) = ${addParam(String(status).toLowerCase())}`);
+        }
+
+        // Project scope, matched on the EFFECTIVE project (latest app OR ad).
+        // 'unassigned' = no application and no ad-resolved project.
+        if (project_id) {
+            if (String(project_id).toLowerCase() === 'unassigned') {
+                filters.push(`${effProjectIdExpr} IS NULL`);
+            } else {
+                filters.push(`${effProjectIdExpr} = ${addParam(project_id)}`);
+            }
         }
 
         if (pipeline_stage) {
@@ -412,6 +456,24 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
             filters.push(`ca.is_human_handoff = TRUE`);
         } else if (handoff_state === 'bot') {
             filters.push(`COALESCE(ca.is_human_handoff, FALSE) = FALSE`);
+        }
+
+        // Triage filters (smart views): disposition / on-call / contacted / claim.
+        if (req.query.disposition) {
+            filters.push(`ca.disposition = ${addParam(req.query.disposition)}`);
+        }
+        if (req.query.call_status === 'on_call') {
+            filters.push(`ca.call_status = 'on_call'`);
+        }
+        if (req.query.contacted === 'yes') {
+            filters.push(`ca.last_contacted_at IS NOT NULL`);
+        } else if (req.query.contacted === 'no') {
+            filters.push(`ca.last_contacted_at IS NULL`);
+        }
+        if (req.query.claimed === 'me') {
+            filters.push(`ca.claimed_by = ${addParam(req.user.id)}`);
+        } else if (req.query.claimed === 'unassigned') {
+            filters.push(`ca.claimed_by IS NULL`);
         }
 
         if (date_from) {
@@ -463,11 +525,24 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 ca.escalation_reason,
                 ca.is_human_handoff,
                 ca.agent_id,
+                ca.call_status,
+                ca.call_agent_id,
+                ca.call_started_at,
+                cu.full_name     AS call_agent_name,
+                ca.disposition,
+                ca.disposition_at,
+                ca.last_contacted_at,
+                ca.claimed_by,
+                clu.full_name    AS claimer_name,
                 COALESCE(la.application_status, '') AS latest_application_status,
                 COALESCE(la.job_title, '') AS latest_job_title,
                 COALESCE(la.job_category, '') AS latest_job_category,
                 COALESCE(la.job_country, '') AS latest_job_country,
                 COALESCE(la.project_title, '') AS latest_project_title,
+                la.project_id    AS latest_project_id,
+                ${effProjectIdExpr}    AS effective_project_id,
+                COALESCE(${effProjectTitleExpr}, '') AS effective_project_title,
+                COALESCE(${effJobTitleExpr}, '')     AS effective_job_title,
                 u.full_name      AS agent_name,
                 lm.content       AS last_message,
                 lm.direction     AS last_direction,
@@ -504,6 +579,7 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                     j.title    AS job_title,
                     j.category AS job_category,
                     j.country  AS job_country,
+                    j.project_id AS project_id,
                     p.title    AS project_title,
                     COALESCE(a.updated_at, a.applied_at) AS last_application_at
                 FROM applications a
@@ -511,7 +587,15 @@ router.get('/active-chats', authenticate, async (req, res, next) => {
                 LEFT JOIN projects p ON p.id = j.project_id
                 ORDER BY a.candidate_id, COALESCE(a.updated_at, a.applied_at) DESC
             ) la ON la.candidate_id = ca.id
+            LEFT JOIN (
+                SELECT t.ad_ref, t.project_id, p.title AS project_title, j.title AS job_title
+                FROM ad_tracking t
+                LEFT JOIN projects p ON p.id = t.project_id
+                LEFT JOIN jobs j ON j.id = t.job_id
+            ) adt ON adt.ad_ref = ca.ad_ref
             LEFT JOIN users u ON u.id = ca.agent_id
+            LEFT JOIN users cu ON cu.id = ca.call_agent_id
+            LEFT JOIN users clu ON clu.id = ca.claimed_by
             ${whereClause}
             ORDER BY COALESCE(lm.sent_at, ca.created_at) ${latestOrder}
             LIMIT ${safeLimit}
@@ -693,7 +777,7 @@ router.post('/status-sync', authenticateChatbot, async (req, res, next) => {
 });
 
 // ── GET /api/communications/delivery-audit ──────────────────────────────────
-router.get('/delivery-audit', authenticate, async (req, res, next) => {
+router.get('/delivery-audit', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const {
             date_from,
@@ -760,7 +844,7 @@ router.get('/delivery-audit', authenticate, async (req, res, next) => {
 
 // ── POST /api/communications/candidate/:id/takeover ───────────────────────────
 // Mark candidate as under human control. Bot will stop responding.
-router.post('/candidate/:candidate_id/takeover', authenticate, async (req, res, next) => {
+router.post('/candidate/:candidate_id/takeover', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
     try {
         const { candidate_id } = req.params;
         const agentId = req.user.id;
@@ -793,7 +877,7 @@ router.post('/candidate/:candidate_id/takeover', authenticate, async (req, res, 
             channel: 'whatsapp',
             direction: 'outbound',
             messageType: 'text',
-            content: `🙋 Agent ${req.user.name || req.user.email} has taken over the conversation.`,
+            content: `🙋 Agent ${req.user.full_name || req.user.email} has taken over the conversation.`,
             sentBy: req.user.id,
             senderType: 'system',
             senderName: 'System',
@@ -810,7 +894,7 @@ router.post('/candidate/:candidate_id/takeover', authenticate, async (req, res, 
                 io.to(`candidate:${candidate_id}`).emit('handoff_start', {
                     candidate_id,
                     agent_id: agentId,
-                    agent_name: req.user.name || req.user.email,
+                    agent_name: req.user.full_name || req.user.email,
                     ts: new Date().toISOString(),
                 });
                 io.emit('chat_activity', {
@@ -833,7 +917,7 @@ router.post('/candidate/:candidate_id/takeover', authenticate, async (req, res, 
 
 // ── POST /api/communications/candidate/:id/release ────────────────────────────
 // Release candidate back to bot control.
-router.post('/candidate/:candidate_id/release', authenticate, async (req, res, next) => {
+router.post('/candidate/:candidate_id/release', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
     try {
         const { candidate_id } = req.params;
 
@@ -887,6 +971,419 @@ router.post('/candidate/:candidate_id/release', authenticate, async (req, res, n
     }
 });
 
+// ── In-call presence (multi-agent calling console) ────────────────────────────
+// Manual "I'm on a call" toggle for agents using an external dialer (no API).
+// Soft presence + warning: starting a call on a candidate another agent is
+// already calling returns 409 (the frontend warns and can retry with ?force=1).
+// State lives on candidates.call_status/call_agent_id/call_started_at and is
+// cleared on socket disconnect (websocket.js) + a TTL sweep (server.js).
+
+function emitCallStatusChanged(payload) {
+    try {
+        const { getIO } = require('../utils/websocket');
+        const io = getIO();
+        if (io) io.emit('call_status_changed', { ...payload, ts: new Date().toISOString() });
+    } catch (wsErr) {
+        logger.debug(`call_status_changed WS emit skipped: ${wsErr.message}`);
+    }
+}
+
+// ── POST /api/communications/candidate/:id/call-start ─────────────────────────
+router.post('/candidate/:candidate_id/call-start', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { candidate_id } = req.params;
+        const force = String(req.query.force || '') === '1' || req.body?.force === true;
+        const agentId = req.user.id;
+        const agentName = req.user.full_name || req.user.email;
+
+        const candResult = await query(
+            adaptQuery(`SELECT ca.id, ca.name, ca.call_status, ca.call_agent_id, ca.call_started_at,
+                               u.full_name AS call_agent_name
+                        FROM candidates ca
+                        LEFT JOIN users u ON u.id = ca.call_agent_id
+                        WHERE ca.id = $1`),
+            [candidate_id]
+        );
+        if (candResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Candidate not found' });
+        }
+        const row = candResult.rows[0];
+
+        // Already on a call by someone else → soft conflict unless forced.
+        if (!force && row.call_status === 'on_call' && row.call_agent_id && row.call_agent_id !== agentId) {
+            return res.status(409).json({
+                error: 'Candidate is already on a call with another agent',
+                call_agent_id: row.call_agent_id,
+                call_agent_name: row.call_agent_name,
+                call_started_at: row.call_started_at,
+            });
+        }
+
+        await query(
+            adaptQuery(`UPDATE candidates SET call_status = 'on_call', call_agent_id = $1,
+                        call_started_at = NOW(), updated_at = NOW() WHERE id = $2`),
+            [agentId, candidate_id]
+        );
+
+        emitCallStatusChanged({
+            candidate_id,
+            on_call: true,
+            call_agent_id: agentId,
+            call_agent_name: agentName,
+            call_started_at: new Date().toISOString(),
+        });
+
+        logger.info(`Agent ${agentId} started a call with candidate ${candidate_id}${force ? ' (forced)' : ''}`);
+        return res.json({ success: true, candidate_id, call_agent_id: agentId, call_agent_name: agentName });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── POST /api/communications/candidate/:id/call-end ───────────────────────────
+router.post('/candidate/:candidate_id/call-end', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { candidate_id } = req.params;
+        const isAdmin = req.user.role === 'admin';
+
+        const candResult = await query(
+            adaptQuery('SELECT id, call_agent_id, call_status FROM candidates WHERE id = $1'),
+            [candidate_id]
+        );
+        if (candResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Candidate not found' });
+        }
+        const row = candResult.rows[0];
+        // Only the agent on the call (or an admin) may end it.
+        if (row.call_status === 'on_call' && row.call_agent_id && row.call_agent_id !== req.user.id && !isAdmin) {
+            return res.status(403).json({ error: 'Only the agent on the call can end it' });
+        }
+
+        await query(
+            adaptQuery(`UPDATE candidates SET call_status = NULL, call_agent_id = NULL,
+                        call_started_at = NULL, updated_at = NOW() WHERE id = $1`),
+            [candidate_id]
+        );
+
+        emitCallStatusChanged({ candidate_id, on_call: false });
+
+        logger.info(`Call ended for candidate ${candidate_id} by ${req.user.id}`);
+        return res.json({ success: true, candidate_id });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── POST /api/communications/calls/heartbeat ──────────────────────────────────
+// Frontend pings every ~60s while any local call toggle is ON so the TTL sweep
+// (server.js) never reaps a still-active call.
+router.post('/calls/heartbeat', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const ids = Array.isArray(req.body?.candidate_ids) ? req.body.candidate_ids.filter(Boolean) : [];
+        if (ids.length === 0) return res.json({ success: true, refreshed: 0 });
+
+        const placeholders = ids.map((_, i) => `$${i + 2}`).join(', ');
+        const result = await query(
+            adaptQuery(`UPDATE candidates SET call_started_at = NOW()
+                        WHERE call_status = 'on_call' AND call_agent_id = $1
+                          AND id IN (${placeholders})`),
+            [req.user.id, ...ids]
+        );
+        return res.json({ success: true, refreshed: result.rowCount || 0 });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── PATCH /api/communications/candidate/:id/disposition ───────────────────────
+// Set the agent's call outcome / lead status. Also marks the candidate as
+// agent-contacted (last_contacted_at) so the "Uncontacted" smart view shrinks.
+router.patch('/candidate/:candidate_id/disposition', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { candidate_id } = req.params;
+        const disposition = String(req.body?.disposition || '').trim().toLowerCase();
+        if (!DISPOSITIONS.includes(disposition)) {
+            return res.status(400).json({ error: 'Invalid disposition', allowed: DISPOSITIONS });
+        }
+        const upd = await query(
+            adaptQuery(`UPDATE candidates
+                        SET disposition = $1, disposition_at = NOW(), disposition_by = $2,
+                            last_contacted_at = NOW(), contacted_by = $2, updated_at = NOW()
+                        WHERE id = $3`),
+            [disposition, req.user.id, candidate_id]
+        );
+        if (upd.rowCount === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('disposition_changed', { candidate_id, disposition, ts: new Date().toISOString() });
+        } catch (wsErr) {
+            logger.debug(`disposition WS emit skipped: ${wsErr.message}`);
+        }
+
+        return res.json({ success: true, candidate_id, disposition });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── POST /api/communications/candidate/:id/claim ──────────────────────────────
+// Claim a chat to yourself in the shared pool so other agents see it's taken.
+router.post('/candidate/:candidate_id/claim', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { candidate_id } = req.params;
+        const claimerName = req.user.full_name || req.user.email;
+        const upd = await query(
+            adaptQuery(`UPDATE candidates SET claimed_by = $1, claimed_at = NOW(), updated_at = NOW() WHERE id = $2`),
+            [req.user.id, candidate_id]
+        );
+        if (upd.rowCount === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('claim_changed', { candidate_id, claimed_by: req.user.id, claimer_name: claimerName, ts: new Date().toISOString() });
+        } catch (wsErr) {
+            logger.debug(`claim WS emit skipped: ${wsErr.message}`);
+        }
+
+        return res.json({ success: true, candidate_id, claimed_by: req.user.id, claimer_name: claimerName });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── POST /api/communications/candidate/:id/unclaim ────────────────────────────
+router.post('/candidate/:candidate_id/unclaim', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { candidate_id } = req.params;
+        const cur = await query(adaptQuery('SELECT claimed_by FROM candidates WHERE id = $1'), [candidate_id]);
+        if (cur.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        // Only the agent who claimed it (or an admin) may release the claim.
+        if (cur.rows[0].claimed_by && cur.rows[0].claimed_by !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Only the agent who claimed this candidate can release it' });
+        }
+        await query(
+            adaptQuery(`UPDATE candidates SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW() WHERE id = $1`),
+            [candidate_id]
+        );
+
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('claim_changed', { candidate_id, claimed_by: null, claimer_name: null, ts: new Date().toISOString() });
+        } catch (wsErr) {
+            logger.debug(`unclaim WS emit skipped: ${wsErr.message}`);
+        }
+
+        return res.json({ success: true, candidate_id });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── GET /api/communications/candidate/:id/call-logs ───────────────────────────
+// The candidate's call/remark engagement history, newest first, with agent name.
+router.get('/candidate/:candidate_id/call-logs', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+    try {
+        const { candidate_id } = req.params;
+        const result = await query(
+            adaptQuery(`SELECT cl.id, cl.candidate_id, cl.agent_id, cl.outcome, cl.disposition,
+                               cl.remark, cl.reason, cl.duration_seconds, cl.called_at,
+                               cl.job_id, j.title AS job_title, p.title AS project_title,
+                               u.full_name AS agent_name
+                        FROM call_logs cl
+                        LEFT JOIN users u ON u.id = cl.agent_id
+                        LEFT JOIN jobs j ON j.id = cl.job_id
+                        LEFT JOIN projects p ON p.id = j.project_id
+                        WHERE cl.candidate_id = $1
+                        ORDER BY cl.called_at DESC
+                        LIMIT 200`),
+            [candidate_id]
+        );
+        return res.json(result.rows);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── POST /api/communications/candidate/:id/call-logs ──────────────────────────
+// Record a call outcome/remark and drive the "Done → advance" agent workflow:
+//   - set_candidate_status: a forward stage (screening/certified/interview_scheduled)
+//     cascades through setCandidateStage() so candidate.status + applications stay in
+//     sync; a decline ('future_pool', or legacy alias 'rejected' = Not interested)
+//     rejects the active application(s) and moves the candidate to future_pool
+//     (CV-gated to New). New→Screening requires a job_id (logged) and passes the CV gate.
+//   - create_followup: true (Follow-up / No answer) opens a candidate_tasks due-work
+//     item; task_type 'no_answer' powers the per-agent Engagement catch-up list.
+//   - reason: structured Not-interested reason, stored on the call log.
+router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { candidate_id } = req.params;
+        const outcome = req.body?.outcome ? String(req.body.outcome).trim().toLowerCase() : null;
+        const remark = req.body?.remark ? String(req.body.remark).trim() : null;
+        const disposition = req.body?.disposition ? String(req.body.disposition).trim().toLowerCase() : null;
+        const setStatus = req.body?.set_candidate_status ? String(req.body.set_candidate_status).trim().toLowerCase() : null;
+        const reason = req.body?.reason ? String(req.body.reason).trim().slice(0, 48) : null;
+        const jobId = req.body?.job_id ? String(req.body.job_id).trim() : null;
+        const createFollowup = req.body?.create_followup === true;
+        const followupNote = req.body?.followup_note ? String(req.body.followup_note).trim() : null;
+        const taskType = FOLLOWUP_TASK_TYPES.includes(String(req.body?.task_type || '').toLowerCase())
+            ? String(req.body.task_type).toLowerCase()
+            : 'callback';
+        const durRaw = req.body?.duration_seconds;
+        const durationSeconds = Number.isFinite(Number(durRaw)) && durRaw !== null && durRaw !== '' ? parseInt(durRaw, 10) : null;
+
+        if (!outcome && !remark && !disposition) {
+            return res.status(400).json({ error: 'Provide at least an outcome, remark, or disposition' });
+        }
+        if (outcome && !CALL_OUTCOMES.includes(outcome)) {
+            return res.status(400).json({ error: 'Invalid outcome', allowed: CALL_OUTCOMES });
+        }
+        if (disposition && !DISPOSITIONS.includes(disposition)) {
+            return res.status(400).json({ error: 'Invalid disposition', allowed: DISPOSITIONS });
+        }
+        if (setStatus && !CALL_STATUS_TARGETS.includes(setStatus)) {
+            return res.status(400).json({ error: 'Invalid candidate status', allowed: CALL_STATUS_TARGETS });
+        }
+        if (setStatus === 'screening' && !jobId) {
+            return res.status(400).json({ error: 'A job must be selected to move a candidate to Screening', code: 'job_required' });
+        }
+
+        const cand = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [candidate_id]);
+        if (cand.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        // New→Screening: attach the candidate to the chosen job (idempotent, mirrors
+        // applications.js) so the assignment is recorded even if the CV gate blocks.
+        let applicationId = null;
+        if (setStatus === 'screening' && jobId) {
+            const jobRes = await query(adaptQuery('SELECT id FROM jobs WHERE id = $1'), [jobId]);
+            if (jobRes.rows.length === 0) return res.status(400).json({ error: 'Invalid job_id' });
+            const newAppId = generateUUID();
+            if (isMySQL) {
+                await query(
+                    "INSERT INTO applications (id, candidate_id, job_id, status) VALUES (?, ?, ?, 'screening') ON DUPLICATE KEY UPDATE job_id = VALUES(job_id)",
+                    [newAppId, candidate_id, jobId]
+                );
+            } else {
+                await query(
+                    "INSERT INTO applications (id, candidate_id, job_id, status) VALUES ($1, $2, $3, 'screening') ON CONFLICT (candidate_id, job_id) DO NOTHING",
+                    [newAppId, candidate_id, jobId]
+                );
+            }
+            const appRes = await query(
+                adaptQuery('SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1'),
+                [candidate_id, jobId]
+            );
+            applicationId = appRes.rows[0]?.id || null;
+        }
+
+        const id = generateUUID();
+        await query(
+            adaptQuery(`INSERT INTO call_logs (id, candidate_id, agent_id, outcome, disposition, remark, duration_seconds, job_id, application_id, reason)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`),
+            [id, candidate_id, req.user.id, outcome, disposition, remark, durationSeconds, jobId, applicationId, reason]
+        );
+
+        // Logging a call counts as agent contact; carry disposition through. The
+        // candidate status itself is NOT written here — forward stages cascade via
+        // setCandidateStage() and a decline is handled (apps rejected + future_pool)
+        // in the block below.
+        const setParts = ['last_contacted_at = NOW()', 'contacted_by = $1', 'updated_at = NOW()'];
+        const setVals = [req.user.id];
+        if (disposition) {
+            setParts.push(`disposition = $${setVals.length + 1}`, 'disposition_at = NOW()', `disposition_by = $1`);
+            setVals.push(disposition);
+        }
+        setVals.push(candidate_id);
+        await query(
+            adaptQuery(`UPDATE candidates SET ${setParts.join(', ')} WHERE id = $${setVals.length}`),
+            setVals
+        );
+
+        // CV gate for New→Screening: a CV must be on file. Keep the call log +
+        // assignment; block the stage advance with the 422 the UI already handles.
+        if (setStatus === 'screening') {
+            const gate = await query(
+                adaptQuery(`SELECT (c.cv_uploaded IS TRUE
+                                    OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = c.id)) AS has_cv
+                            FROM candidates c WHERE c.id = $1`),
+                [candidate_id]
+            );
+            const v = gate.rows[0]?.has_cv;
+            const hasCv = v === true || v === 1 || v === '1' || v === 't' || v === 'true';
+            if (!hasCv) {
+                return res.status(422).json({
+                    error: 'Upload a CV/resume before moving the candidate to Screening.',
+                    code: 'screening_gate', has_cv: false, has_application: !!applicationId, call_log_id: id,
+                });
+            }
+        }
+
+        // Forward stage → cascade through applications + re-derive status (emits
+        // candidate_stage_changed). Decline (Not interested) → reject the active
+        // application(s) and move the candidate to future_pool (CV-gated to New if
+        // no CV); setCandidateStage emits the change.
+        let appliedStatus = null;
+        if (setStatus && FORWARD_STAGE_TARGETS.includes(setStatus)) {
+            await setCandidateStage(candidate_id, setStatus);
+            appliedStatus = setStatus;
+        } else if (isDeclineStatus(setStatus)) {
+            await query(
+                adaptQuery(`UPDATE applications SET status = 'rejected', rejection_reason = COALESCE($2, rejection_reason), updated_at = NOW()
+                            WHERE candidate_id = $1 AND status NOT IN ('rejected','hired')`),
+                [candidate_id, reason]
+            );
+            await setCandidateStage(candidate_id, 'future_pool');
+            appliedStatus = 'future_pool';
+        }
+
+        // Advance → resolve pending follow-ups; decline → cancel them.
+        if (appliedStatus && appliedStatus !== 'future_pool') {
+            await query(adaptQuery(`UPDATE candidate_tasks SET status = 'done', completed_at = NOW()
+                                    WHERE candidate_id = $1 AND status = 'pending'`), [candidate_id]);
+        } else if (appliedStatus === 'future_pool') {
+            await query(adaptQuery(`UPDATE candidate_tasks SET status = 'cancelled'
+                                    WHERE candidate_id = $1 AND status = 'pending'`), [candidate_id]);
+        }
+
+        // Follow-up / No answer → open a due-work task (shows in Engagement; a
+        // 'no_answer' task also surfaces in the per-agent catch-up list).
+        let followupTaskId = null;
+        if (createFollowup) {
+            followupTaskId = generateUUID();
+            await query(
+                adaptQuery(`INSERT INTO candidate_tasks
+                                (id, candidate_id, due_at, note, task_type, status, assigned_to, created_by)
+                            VALUES ($1, $2, NOW(), $3, $4, 'pending', $5, $5)`),
+                [followupTaskId, candidate_id, followupNote || 'Needs follow-up', taskType, req.user.id]
+            );
+        }
+
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io && disposition) io.emit('disposition_changed', { candidate_id, disposition, ts: new Date().toISOString() });
+        } catch (wsErr) {
+            logger.debug(`call-log WS emit skipped: ${wsErr.message}`);
+        }
+
+        return res.status(201).json({
+            success: true,
+            candidate_status: appliedStatus || undefined,
+            followup_task_id: followupTaskId || undefined,
+            call_log: {
+                id, candidate_id, agent_id: req.user.id, agent_name: req.user.full_name || req.user.email,
+                outcome, disposition, remark, reason, job_id: jobId, application_id: applicationId,
+                duration_seconds: durationSeconds, called_at: new Date().toISOString(),
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // ── POST /api/communications/send ─────────────────────────────────────────────
 // Agent manually sends a message to a candidate on one or more channels.
 // Accepts `channel` (single: 'whatsapp'|'email'|'sms') OR
@@ -894,7 +1391,7 @@ router.post('/candidate/:candidate_id/release', authenticate, async (req, res, n
 // WhatsApp: supports text + media (image/audio/video/document via GCS)
 // Email:    supports text body + the same uploaded file as an attachment
 // SMS:      text only
-router.post('/send', authenticate, upload.single('media'), async (req, res, next) => {
+router.post('/send', authenticate, requireSection('communications', 'edit'), upload.single('media'), async (req, res, next) => {
     try {
         const {
             candidate_id,
@@ -1178,7 +1675,7 @@ router.post('/send', authenticate, upload.single('media'), async (req, res, next
 });
 
 // ── POST /api/communications/send-bulk ────────────────────────────────────────
-router.post('/send-bulk', authenticate, async (req, res, next) => {
+router.post('/send-bulk', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
     try {
         const { candidate_ids, channel, message } = req.body;
         if (!candidate_ids || !Array.isArray(candidate_ids) || candidate_ids.length === 0) {

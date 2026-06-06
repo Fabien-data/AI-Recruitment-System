@@ -2,8 +2,8 @@
  * Shared SQL fragments for the jobs read path.
  *
  * `positions_filled` is no longer a stored value we trust — it is derived from
- * applications with status in ('selected','placed'). Every read of jobs must
- * include this LATERAL join so the count reflects reality.
+ * applications with the canonical placement status 'hired' (UPGRADES.md #1).
+ * Every read of jobs must include this LATERAL join so the count reflects reality.
  *
  * The stored `positions_filled` column on jobs is kept for one release as a
  * denormalized cache but is no longer written by the application layer.
@@ -13,7 +13,7 @@ const POSITIONS_FILLED_JOIN = `
     LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS positions_filled
         FROM applications a
-        WHERE a.job_id = j.id AND a.status IN ('selected','placed')
+        WHERE a.job_id = j.id AND a.status = 'hired'
     ) pf ON TRUE
 `;
 
@@ -38,7 +38,7 @@ const JOB_COUNTS_JOIN = `
         SELECT
             COUNT(*)::int AS applied_count,
             COUNT(*) FILTER (
-                WHERE a.status IN ('applied','auto_assigned','screening','reviewing')
+                WHERE a.status = 'screening'
             )::int AS pending_count,
             COUNT(*) FILTER (
                 WHERE c.cv_uploaded IS TRUE

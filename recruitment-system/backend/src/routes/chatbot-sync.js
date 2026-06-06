@@ -461,7 +461,7 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                     await query(
                         adaptQuery(`
                             INSERT INTO applications (id, candidate_id, job_id, status, metadata)
-                            VALUES ($1, $2, $3, 'applied', $4)
+                            VALUES ($1, $2, $3, 'screening', $4)
                         `),
                         [
                             applicationId,

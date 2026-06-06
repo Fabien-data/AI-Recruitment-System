@@ -58,7 +58,7 @@ router.get('/', authenticate, async (req, res, next) => {
         const pendingCert = await pool.query(
             `SELECT COUNT(*)::int AS n, MAX(updated_at) AS latest
                FROM applications
-              WHERE status IN ('auto_assigned','applied','reviewing','screening')`
+              WHERE status = 'screening'`
         );
 
         // 5) Matches the auto-assign scorer flagged for manual verification

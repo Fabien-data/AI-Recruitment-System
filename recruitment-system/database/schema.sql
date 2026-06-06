@@ -166,7 +166,7 @@ CREATE TABLE applications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     candidate_id UUID NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
     job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-    status TEXT DEFAULT 'applied', -- 'applied', 'screening', 'certified', 'interview_scheduled', 'interviewed', 'selected', 'rejected', 'placed'
+    status TEXT DEFAULT 'screening', -- canonical 5: 'screening', 'certified', 'interview_scheduled', 'hired', 'rejected'
     match_score DECIMAL(3,2), -- 0.00 to 1.00
     applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     certified_at TIMESTAMP,

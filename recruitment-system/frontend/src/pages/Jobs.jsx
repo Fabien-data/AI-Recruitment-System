@@ -28,6 +28,7 @@ import { CountrySelect } from '../components/jobs/CountrySelect'
 import { CountryFlag } from '../components/jobs/CountryFlag'
 import { useAuthStore } from '../stores/authStore'
 import { useViewMode, ViewToggle } from '../components/ui/ViewToggle'
+import { normalizeStatus } from '../constants/lifecycle'
 import toast from 'react-hot-toast'
 
 const MAX_FLYERS_PER_BATCH = 20
@@ -769,19 +770,20 @@ function JobScheduleInterviewModal({ job, onClose }) {
   })
 
   // Pre-select the candidates a handler is most likely to schedule next:
-  // anyone who has cleared pre-screening or been certified. Falls back to
-  // every active (non-rejected, non-selected) candidate if nothing matches,
-  // so the modal isn't blank on a fresh job. Only runs once per modal open.
+  // anyone certified or already at the interview-scheduled stage. Falls back to
+  // every active (non-terminal: not hired, not rejected) candidate if nothing
+  // matches, so the modal isn't blank on a fresh job. Only runs once per modal
+  // open. normalizeStatus folds legacy rows onto the canonical vocabulary.
   useEffect(() => {
     if (hasInitializedSelection || isLoading || !data?.candidates) return
-    const PREFERRED = new Set(['pre_screened', 'certified'])
-    const TERMINAL = new Set(['selected', 'placed', 'rejected', 'transferred'])
+    const PREFERRED = new Set(['certified', 'interview_scheduled'])
+    const TERMINAL = new Set(['hired', 'rejected'])
     let prefill = (data.candidates || [])
-      .filter((c) => PREFERRED.has(c.application_status))
+      .filter((c) => PREFERRED.has(normalizeStatus(c.application_status)))
       .map((c) => c.application_id)
     if (prefill.length === 0) {
       prefill = (data.candidates || [])
-        .filter((c) => !TERMINAL.has(c.application_status))
+        .filter((c) => !TERMINAL.has(normalizeStatus(c.application_status)))
         .map((c) => c.application_id)
     }
     setSelectedIds(new Set(prefill))

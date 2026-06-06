@@ -14,6 +14,7 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const logger = require('../utils/logger');
 
 const ANALYTICS_ROLES = ['admin', 'sourcing_department'];
@@ -28,7 +29,7 @@ function rangeToDays(range) {
 // ── GET /overview ──────────────────────────────────────────────────────────
 // KPI cards. Returns counts for the requested range and the previous range
 // of the same length so the UI can render % deltas.
-router.get('/overview', authenticate, authorize(...ANALYTICS_ROLES), async (req, res, next) => {
+router.get('/overview', authenticate, requireSection('analytics', 'view'), authorize(...ANALYTICS_ROLES), async (req, res, next) => {
     try {
         const days = rangeToDays(req.query.range);
 
@@ -97,7 +98,7 @@ router.get('/overview', authenticate, authorize(...ANALYTICS_ROLES), async (req,
 
 // ── GET /funnel ────────────────────────────────────────────────────────────
 // Snapshot funnel across the requested range (or all-time if range omitted).
-router.get('/funnel', authenticate, authorize(...ANALYTICS_ROLES), async (req, res, next) => {
+router.get('/funnel', authenticate, requireSection('analytics', 'view'), authorize(...ANALYTICS_ROLES), async (req, res, next) => {
     try {
         const days = rangeToDays(req.query.range);
         const result = await query(
@@ -117,7 +118,7 @@ router.get('/funnel', authenticate, authorize(...ANALYTICS_ROLES), async (req, r
 });
 
 // ── GET /by-source ─────────────────────────────────────────────────────────
-router.get('/by-source', authenticate, authorize(...ANALYTICS_ROLES), async (req, res, next) => {
+router.get('/by-source', authenticate, requireSection('analytics', 'view'), authorize(...ANALYTICS_ROLES), async (req, res, next) => {
     try {
         const days = rangeToDays(req.query.range);
         const result = await query(
@@ -145,7 +146,7 @@ router.get('/by-source', authenticate, authorize(...ANALYTICS_ROLES), async (req
 });
 
 // ── GET /by-agent ──────────────────────────────────────────────────────────
-router.get('/by-agent', authenticate, authorize(...ANALYTICS_ROLES), async (req, res, next) => {
+router.get('/by-agent', authenticate, requireSection('analytics', 'view'), authorize(...ANALYTICS_ROLES), async (req, res, next) => {
     try {
         const days = rangeToDays(req.query.range);
         const result = await query(
@@ -192,7 +193,7 @@ router.get('/by-agent', authenticate, authorize(...ANALYTICS_ROLES), async (req,
 });
 
 // ── GET /timeseries?metric=… ───────────────────────────────────────────────
-router.get('/timeseries', authenticate, authorize(...ANALYTICS_ROLES), async (req, res, next) => {
+router.get('/timeseries', authenticate, requireSection('analytics', 'view'), authorize(...ANALYTICS_ROLES), async (req, res, next) => {
     try {
         const days = rangeToDays(req.query.range);
         const result = await query(
@@ -224,7 +225,7 @@ router.get('/timeseries', authenticate, authorize(...ANALYTICS_ROLES), async (re
 // ── GET /cohort ────────────────────────────────────────────────────────────
 // Weekly cohort retention: for each week of created_at, what % of leads
 // reached each downstream stage. Surfaces slow-converting cohorts.
-router.get('/cohort', authenticate, authorize(...ANALYTICS_ROLES), async (req, res, next) => {
+router.get('/cohort', authenticate, requireSection('analytics', 'view'), authorize(...ANALYTICS_ROLES), async (req, res, next) => {
     try {
         const days = rangeToDays(req.query.range);
         const result = await query(
@@ -248,7 +249,7 @@ router.get('/cohort', authenticate, authorize(...ANALYTICS_ROLES), async (req, r
 
 // ── GET /time-to-stage ────────────────────────────────────────────────────
 // Distribution of hours from new → converted. Histogram bucket counts.
-router.get('/time-to-stage', authenticate, authorize(...ANALYTICS_ROLES), async (req, res, next) => {
+router.get('/time-to-stage', authenticate, requireSection('analytics', 'view'), authorize(...ANALYTICS_ROLES), async (req, res, next) => {
     try {
         const days = rangeToDays(req.query.range);
         const result = await query(
@@ -287,7 +288,7 @@ router.get('/time-to-stage', authenticate, authorize(...ANALYTICS_ROLES), async 
 });
 
 // ── GET /export.csv ───────────────────────────────────────────────────────
-router.get('/export.csv', authenticate, authorize(...ANALYTICS_ROLES), async (req, res, next) => {
+router.get('/export.csv', authenticate, requireSection('analytics', 'view'), authorize(...ANALYTICS_ROLES), async (req, res, next) => {
     try {
         const days = rangeToDays(req.query.range);
         const result = await query(

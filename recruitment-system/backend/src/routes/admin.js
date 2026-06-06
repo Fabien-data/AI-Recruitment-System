@@ -48,11 +48,11 @@ router.get('/stats', ...ADMIN_ONLY, async (req, res, next) => {
             pool.query("SELECT COUNT(*) AS total FROM projects WHERE status IN ('planning','active')"),
             pool.query(
                 `SELECT COUNT(*) AS total FROM applications
-                 WHERE status IN ('selected','placed')
+                 WHERE status = 'hired'
                    AND applied_at >= NOW() - INTERVAL '30 days'`
             ),
             pool.query(
-                "SELECT COUNT(*) AS total FROM candidates WHERE intervention_needed = true"
+                "SELECT COUNT(*) AS total FROM candidates WHERE requires_human IS TRUE OR is_human_handoff IS TRUE"
             ),
             pool.query(
                 `SELECT

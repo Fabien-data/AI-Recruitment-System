@@ -4,6 +4,7 @@ import { Modal } from './ui/Modal'
 import { Input } from './ui/Input'
 import { Button } from './ui/Button'
 import { updateCandidate } from '../api'
+import { CANDIDATE_MANUAL_STATUS_OPTIONS } from '../constants/lifecycle'
 import toast from 'react-hot-toast'
 
 const SOURCE_OPTIONS = [
@@ -14,15 +15,6 @@ const SOURCE_OPTIONS = [
   { value: 'phone',      label: 'Phone' },
   { value: 'walkin',     label: 'Walk-in' },
   { value: 'manual',     label: 'Manual' },
-]
-
-// The four canonical candidate stages. candidate.status auto-syncs from the
-// furthest application server-side; this dropdown is a manual override.
-const STATUS_OPTIONS = [
-  { value: 'new',                 label: 'New' },
-  { value: 'screening',           label: 'Screening' },
-  { value: 'certified',           label: 'Certified' },
-  { value: 'interview_scheduled', label: 'Interview Scheduled' },
 ]
 
 const LANGUAGE_OPTIONS = [
@@ -264,7 +256,7 @@ export function EditCandidateModal({ candidate, open, onClose }) {
               value={form.status}
               onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
             >
-              {STATUS_OPTIONS.map((opt) => (
+              {CANDIDATE_MANUAL_STATUS_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>

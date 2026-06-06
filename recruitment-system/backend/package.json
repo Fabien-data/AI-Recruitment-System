@@ -12,6 +12,8 @@
     "backfill:country-codes:apply": "node scripts/backfill-country-codes.js --apply",
     "integration:verify": "node scripts/verify-chatbot-integration.js",
     "integration:verify:strict": "node scripts/verify-chatbot-integration.js --strict",
+    "seed:agents": "node scripts/seed-agents.js",
+    "seed:agents:apply": "node scripts/seed-agents.js --apply",
     "test": "jest",
     "migrate": "node src/database/migrate.js",
     "migrate:mysql": "echo 'Import database/schema-mysql.sql via phpMyAdmin'"

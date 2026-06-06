@@ -3,6 +3,7 @@ const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { syncJobAsync } = require('./chatbot-sync');
 const chatbotOutbox = require('../services/chatbot-outbox');
 const { buildProjectPayload } = require('../services/chatbot-payloads');
@@ -100,7 +101,7 @@ function normalizeProjectPayload(body = {}) {
 /**
  * Get all projects with filters
  */
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const {
             page = 1,
@@ -251,7 +252,7 @@ router.get('/', authenticate, async (req, res, next) => {
 /**
  * Get project by ID with detailed information
  */
-router.get('/:id', authenticate, async (req, res, next) => {
+router.get('/:id', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
@@ -302,7 +303,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
         const statsQuery = isMySQL
             ? `SELECT 
                    COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_scheduled,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
@@ -311,7 +312,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
                WHERE j.project_id = ?`
             : `SELECT 
                    COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_scheduled,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
@@ -335,7 +336,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 /**
  * Create new project
  */
-router.post('/', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+router.post('/', authenticate, requireSection('projects', 'create'), authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const {
             title,
@@ -435,7 +436,7 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
 /**
  * Update project
  */
-router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('projects', 'edit'), authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = { ...req.body };
@@ -562,7 +563,7 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
 /**
  * Delete project
  */
-router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('projects', 'delete'), authorize('admin'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
@@ -610,14 +611,14 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) =
 /**
  * Get jobs for a project
  */
-router.get('/:id/jobs', authenticate, async (req, res, next) => {
+router.get('/:id/jobs', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
         const jobsQuery = isMySQL
-            ? `SELECT j.*, 
+            ? `SELECT j.*,
                    COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
@@ -626,7 +627,7 @@ router.get('/:id/jobs', authenticate, async (req, res, next) => {
                ORDER BY j.created_at DESC`
             : `SELECT j.*, 
                    COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
@@ -644,7 +645,7 @@ router.get('/:id/jobs', authenticate, async (req, res, next) => {
 /**
  * Get candidates for a project (across all jobs)
  */
-router.get('/:id/candidates', authenticate, async (req, res, next) => {
+router.get('/:id/candidates', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status, job_id } = req.query;
@@ -690,7 +691,7 @@ router.get('/:id/candidates', authenticate, async (req, res, next) => {
 /**
  * Assign team members to project
  */
-router.post('/:id/assign-team', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
+router.post('/:id/assign-team', authenticate, requireSection('projects', 'edit'), authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { user_id, role } = req.body;
@@ -750,7 +751,7 @@ router.post('/:id/assign-team', authenticate, authorize('admin', 'sourcing_depar
 /**
  * Remove team member from project
  */
-router.delete('/:id/team/:userId', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
+router.delete('/:id/team/:userId', authenticate, requireSection('projects', 'edit'), authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id, userId } = req.params;
 
@@ -781,7 +782,7 @@ router.delete('/:id/team/:userId', authenticate, authorize('admin', 'sourcing_de
  * scheduled / selected / rejected) so the Project Detail progress panel
  * can render real-time numbers without per-status round-trips.
  */
-router.get('/:id/stats', authenticate, async (req, res, next) => {
+router.get('/:id/stats', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
@@ -791,15 +792,15 @@ router.get('/:id/stats', authenticate, async (req, res, next) => {
                    COALESCE(SUM(j.positions_available), 0) as total_positions,
                    COALESCE(SUM(j.positions_filled), 0) as filled_positions,
                    COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'applied' THEN a.id END) as applied_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as applied_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as screening_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as certified_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'pre_screened' THEN a.id END) as pre_screened_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as pre_screened_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interviewed' THEN a.id END) as interviewed_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interviewed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'placed' THEN a.id END) as placed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.id END) as placed_count,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
@@ -809,15 +810,15 @@ router.get('/:id/stats', authenticate, async (req, res, next) => {
                    COALESCE(SUM(j.positions_available), 0) as total_positions,
                    COALESCE(SUM(j.positions_filled), 0) as filled_positions,
                    COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'applied' THEN a.id END) as applied_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as applied_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as screening_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as certified_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'pre_screened' THEN a.id END) as pre_screened_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as pre_screened_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interviewed' THEN a.id END) as interviewed_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interviewed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'placed' THEN a.id END) as placed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.id END) as placed_count,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
@@ -854,7 +855,7 @@ router.get('/:id/stats', authenticate, async (req, res, next) => {
 /**
  * Export project candidates/applications as CSV
  */
-router.get('/:id/export/csv', authenticate, async (req, res, next) => {
+router.get('/:id/export/csv', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status, job_id, date_from, date_to } = req.query;
@@ -993,7 +994,7 @@ router.get('/:id/export/csv', authenticate, async (req, res, next) => {
 /**
  * Get all jobs for a specific project
  */
-router.get('/:id/jobs', authenticate, async (req, res, next) => {
+router.get('/:id/jobs', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status } = req.query;
@@ -1053,7 +1054,9 @@ router.get('/:id/jobs', authenticate, async (req, res, next) => {
 /**
  * Create a new job for a specific project
  */
-router.post('/:id/jobs', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+// Creating a job under a project is a JOBS create (matrix: jobs are view-only for
+// project_handler), so gate on jobs.create — not projects.edit — to match POST /api/jobs.
+router.post('/:id/jobs', authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id: project_id } = req.params;
         const {
@@ -1146,7 +1149,7 @@ router.post('/:id/jobs', authenticate, authorize('admin', 'sourcing_department',
 /**
  * Get all candidates assigned to jobs in this project
  */
-router.get('/:id/candidates', authenticate, async (req, res, next) => {
+router.get('/:id/candidates', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status } = req.query;

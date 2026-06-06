@@ -95,60 +95,127 @@ function App() {
           <Layout />
         </PrivateRoute>
       }>
-        <Route index element={<Dashboard />} />
-        <Route path="candidates" element={<RouteBoundary name="Candidates"><Candidates /></RouteBoundary>} />
-        <Route path="candidates/:id" element={<RouteBoundary name="CandidateDetail"><CandidateDetail /></RouteBoundary>} />
-        <Route path="jobs" element={<RouteBoundary name="Jobs"><Jobs /></RouteBoundary>} />
-        <Route path="jobs/:id" element={<RouteBoundary name="JobDetail"><JobDetail /></RouteBoundary>} />
-        <Route path="jobs/:jobId/candidates" element={<RouteBoundary name="JobCandidates"><JobCandidates /></RouteBoundary>} />
-        <Route path="projects" element={<RouteBoundary name="Projects"><Projects /></RouteBoundary>} />
-        <Route path="projects/:id" element={<RouteBoundary name="ProjectDetail"><ProjectDetail /></RouteBoundary>} />
-        <Route path="general-pool" element={<RouteBoundary name="GeneralPool"><GeneralPool /></RouteBoundary>} />
-        <Route path="applications" element={<RouteBoundary name="Applications"><Applications /></RouteBoundary>} />
-        <Route path="cv-manager" element={<RouteBoundary name="CVManager"><CVManager /></RouteBoundary>} />
-        <Route path="communications" element={<RouteBoundary name="Communications"><Communications /></RouteBoundary>} />
-        <Route path="interviews" element={<RouteBoundary name="Interviews"><Interviews /></RouteBoundary>} />
-        <Route path="engagement" element={<RouteBoundary name="Engagement"><Engagement /></RouteBoundary>} />
-        <Route path="analytics" element={<RouteBoundary name="Analytics"><Analytics /></RouteBoundary>} />
-        <Route path="knowledge-base" element={<RouteBoundary name="KnowledgeBase"><KnowledgeBase /></RouteBoundary>} />
+        {/* Every route is guarded by its section + action (UPGRADES.md #2).
+            Unauthorized direct-URL access redirects to the dashboard with a
+            "no access" toast (RoleGuard default deny). Dashboard is universal. */}
+        <Route index element={
+          <RoleGuard requireSection="dashboard" action="view">
+            <RouteBoundary name="Dashboard"><Dashboard /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="candidates" element={
+          <RoleGuard requireSection="candidates" action="view">
+            <RouteBoundary name="Candidates"><Candidates /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="candidates/:id" element={
+          <RoleGuard requireSection="candidates" action="view">
+            <RouteBoundary name="CandidateDetail"><CandidateDetail /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="jobs" element={
+          <RoleGuard requireSection="jobs" action="view">
+            <RouteBoundary name="Jobs"><Jobs /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="jobs/:id" element={
+          <RoleGuard requireSection="jobs" action="view">
+            <RouteBoundary name="JobDetail"><JobDetail /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="jobs/:jobId/candidates" element={
+          <RoleGuard requireSection="candidates" action="view">
+            <RouteBoundary name="JobCandidates"><JobCandidates /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="projects" element={
+          <RoleGuard requireSection="projects" action="view">
+            <RouteBoundary name="Projects"><Projects /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="projects/:id" element={
+          <RoleGuard requireSection="projects" action="view">
+            <RouteBoundary name="ProjectDetail"><ProjectDetail /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="general-pool" element={
+          <RoleGuard requireSection="general_pool" action="view">
+            <RouteBoundary name="GeneralPool"><GeneralPool /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="applications" element={
+          <RoleGuard requireSection="applications" action="view">
+            <RouteBoundary name="Applications"><Applications /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="cv-manager" element={
+          <RoleGuard requireSection="cv_manager" action="view">
+            <RouteBoundary name="CVManager"><CVManager /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="communications" element={
+          <RoleGuard requireSection="communications" action="view">
+            <RouteBoundary name="Communications"><Communications /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="interviews" element={
+          <RoleGuard requireSection="interviews" action="view">
+            <RouteBoundary name="Interviews"><Interviews /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="engagement" element={
+          <RoleGuard requireSection="communications" action="view">
+            <RouteBoundary name="Engagement"><Engagement /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="analytics" element={
+          <RoleGuard requireSection="analytics" action="view">
+            <RouteBoundary name="Analytics"><Analytics /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="knowledge-base" element={
+          <RoleGuard requireSection="knowledge_base" action="view">
+            <RouteBoundary name="KnowledgeBase"><KnowledgeBase /></RouteBoundary>
+          </RoleGuard>
+        } />
         <Route path="marketing-hub" element={
-          <RoleGuard allowedRoles={['admin', 'sourcing_department', 'marketing_agent']} fallback={<Navigate to="/" replace />}>
-            <MarketingHub />
+          <RoleGuard requireSection="marketing_hub" action="view">
+            <RouteBoundary name="MarketingHub"><MarketingHub /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="marketing-hub/new" element={
-          <RoleGuard allowedRoles={['admin', 'sourcing_department', 'marketing_agent']} fallback={<Navigate to="/" replace />}>
-            <LeadIntake />
+          <RoleGuard requireSection="marketing_hub" action="create">
+            <RouteBoundary name="LeadIntake"><LeadIntake /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="marketing-hub/analytics" element={
           <RoleGuard allowedRoles={['admin', 'sourcing_department']} fallback={<Navigate to="/marketing-hub" replace />}>
-            <MarketingAnalytics />
+            <RouteBoundary name="MarketingAnalytics"><MarketingAnalytics /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="marketing-hub/:id" element={
-          <RoleGuard allowedRoles={['admin', 'sourcing_department', 'marketing_agent']} fallback={<Navigate to="/" replace />}>
-            <LeadDetail />
+          <RoleGuard requireSection="marketing_hub" action="view">
+            <RouteBoundary name="LeadDetail"><LeadDetail /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="admin" element={
-          <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
-            <AdminDashboard />
+          <RoleGuard allowedRoles={['admin']}>
+            <RouteBoundary name="AdminDashboard"><AdminDashboard /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="admin/activity" element={
-          <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
-            <ActivityMonitor />
+          <RoleGuard allowedRoles={['admin']}>
+            <RouteBoundary name="ActivityMonitor"><ActivityMonitor /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="admin/users/:id" element={
-          <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
-            <UserDetail />
+          <RoleGuard allowedRoles={['admin']}>
+            <RouteBoundary name="UserDetail"><UserDetail /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="admin/users/:id/report" element={
-          <RoleGuard allowedRoles={['admin']} fallback={<Navigate to="/" replace />}>
-            <UserKpiReport />
+          <RoleGuard allowedRoles={['admin']}>
+            <RouteBoundary name="UserKpiReport"><UserKpiReport /></RouteBoundary>
           </RoleGuard>
         } />
       </Route>

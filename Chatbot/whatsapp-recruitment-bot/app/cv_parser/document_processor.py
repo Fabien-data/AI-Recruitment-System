@@ -44,6 +44,11 @@ class ProcessingResult:
     extraction_confidence: float = 0.0
     error_message: Optional[str] = None
     warnings: list = None
+    # For image uploads: what kind of document the vision pre-flight saw —
+    # 'cv' (parse it fully) | 'id' | 'passport' | 'certificate' | 'photo'
+    # (store as a supporting document, no field extraction). Selfies / non-docs
+    # are rejected before a result is built. Non-image docs default to 'cv'.
+    document_category: str = "cv"
     
     def __post_init__(self):
         if self.warnings is None:
@@ -157,11 +162,30 @@ class DocumentProcessor:
                 # Use the downloaded bytes (base64 data URL) for vision — the
                 # WhatsApp media URL is auth-gated and OpenAI cannot fetch it, so
                 # relying on image_url silently failed. Bytes always work.
-                if not self._is_cv_image(file_content, image_url):
-                    logger.warning("Image rejected by pre-flight check — not a CV")
+                #
+                # Classify the image rather than a binary CV/not-CV gate: real CVs
+                # get full extraction, while ID/passport/certificate/CV-photos are
+                # still stored as supporting documents (never silently dropped).
+                # Only genuine non-documents (selfies, random photos) are rejected.
+                category = self._classify_document_image(file_content, image_url)
+                if category in ("selfie", "other"):
+                    logger.warning("Image rejected by pre-flight check — not a document (%s)", category)
                     return ProcessingResult(
                         success=False,
                         error_message="not_cv_image",
+                        document_category=category,
+                    )
+                if category != "cv":
+                    # Document-like but not a full CV — store it, skip field extraction.
+                    logger.info("Image classified as '%s' — storing as a supporting document", category)
+                    return ProcessingResult(
+                        success=True,
+                        extracted_data=None,
+                        raw_text=None,
+                        text_source="vision_document",
+                        text_confidence=0.9,
+                        extraction_confidence=1.0,
+                        document_category=category,
                     )
                 vision_extracted = self._extract_structured_from_image(file_content, image_url)
                 if vision_extracted:
@@ -178,6 +202,7 @@ class DocumentProcessor:
                         text_confidence=0.92,
                         extraction_confidence=vision_extracted.overall_confidence,
                         warnings=warnings,
+                        document_category="cv",
                     )
 
             # Step 1: Extract raw text based on file type
@@ -253,16 +278,27 @@ class DocumentProcessor:
             return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": detail}}
         return {"type": "image_url", "image_url": {"url": image_url, "detail": detail}}
 
-    def _is_cv_image(self, image_bytes: Optional[bytes], image_url: Optional[str] = None) -> bool:
+    # Categories the vision pre-flight may return. Anything document-like is
+    # stored; only selfie/other are dropped. Unknown answers fail safe to 'cv'
+    # so a real CV is never lost.
+    _DOC_CATEGORIES = {"cv", "id", "passport", "certificate", "photo", "selfie", "other"}
+
+    def _classify_document_image(self, image_bytes: Optional[bytes], image_url: Optional[str] = None) -> str:
         """
-        Pre-flight check: ask GPT-4o Vision whether the image looks like a CV/resume.
-        Returns True if it is (or if the check cannot be performed — fail-safe).
-        Returns False for selfies, group photos, or unrelated images.
+        Pre-flight: ask GPT-4o Vision what kind of document the image is.
+
+        Returns one of: 'cv' (CV/resume → full extraction), 'id' | 'passport' |
+        'certificate' | 'photo' (a profile/passport-size photo of a person that is
+        still a document the recruiter wants → store as a supporting document), or
+        'selfie' | 'other' (casual photo / unrelated → reject, not stored).
+
+        Fail-safe: if the check can't run or errors, returns 'cv' so a genuine CV
+        is never dropped (decision: never lose a real CV).
         """
         if not self.intelligent_extractor or not getattr(self.intelligent_extractor, "openai_client", None):
-            return True  # can't verify — allow through
+            return "cv"  # can't verify — treat as CV
         if not image_bytes and not image_url:
-            return True
+            return "cv"
         try:
             response = self.intelligent_extractor.openai_client.chat.completions.create(
                 model="gpt-4o",
@@ -273,9 +309,15 @@ class DocumentProcessor:
                             {
                                 "type": "text",
                                 "text": (
-                                    "Does this image contain a CV, resume, ID card, passport, certificate, "
-                                    "or any document showing personal or employment details? "
-                                    "Reply with ONLY the word YES or NO."
+                                    "Classify this image for a recruitment system. Reply with ONLY ONE word:\n"
+                                    "cv — a CV/resume or a document listing work experience/skills/education\n"
+                                    "id — a national ID / NIC / driving licence\n"
+                                    "passport — a passport page / bio-data page\n"
+                                    "certificate — a certificate, diploma, or qualification document\n"
+                                    "photo — a passport-size / portrait photo of a person (headshot)\n"
+                                    "selfie — a casual self-photo or snapshot\n"
+                                    "other — anything else (memes, screenshots, scenery, products)\n"
+                                    "Prefer 'cv' if the image clearly shows a CV/resume."
                                 ),
                             },
                             self._image_content_part(image_bytes, image_url, detail="low"),
@@ -284,11 +326,14 @@ class DocumentProcessor:
                 ],
                 max_tokens=5,
             )
-            answer = (response.choices[0].message.content or "").strip().upper()
-            return answer.startswith("YES")
+            answer = (response.choices[0].message.content or "").strip().lower()
+            for cat in self._DOC_CATEGORIES:
+                if answer.startswith(cat):
+                    return cat
+            return "cv"  # unrecognised answer — fail safe to CV
         except Exception as exc:
-            logger.warning("CV image pre-flight check failed: %s — proceeding as CV", exc)
-            return True  # fail-safe: allow through if check errors
+            logger.warning("Document image pre-flight check failed: %s — proceeding as CV", exc)
+            return "cv"  # fail-safe: never drop a real CV
 
     def _extract_structured_from_image(self, image_bytes: Optional[bytes], image_url: Optional[str] = None) -> Optional[ExtractedCVData]:
         """

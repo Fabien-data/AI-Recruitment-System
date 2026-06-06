@@ -1,0 +1,90 @@
+// Unit tests for setCandidateStage() — the shared cascade used by both the CV
+// Manager `PUT /:id/stage` endpoint and the calling console "Done → advance".
+// All DB access is mocked; we assert the SQL/params the service issues.
+
+jest.mock('../src/config/database', () => ({ query: jest.fn() }));
+jest.mock('../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() }));
+// Websocket is lazy-required inside emitStageChanged and wrapped in try/catch;
+// stub it so the emit is a no-op rather than touching a real io instance.
+jest.mock('../src/utils/websocket', () => ({ getIO: () => null }));
+
+const { query } = require('../src/config/database');
+const { setCandidateStage } = require('../src/services/candidate-stage');
+
+describe('setCandidateStage', () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    test('certified cascades to applications then re-derives candidate.status', async () => {
+        query
+            .mockResolvedValueOnce({ rowCount: 1 })                                          // UPDATE applications
+            .mockResolvedValueOnce({ rows: [{ current_status: 'screening', has_cv: true }] }) // sync: candidate select
+            .mockResolvedValueOnce({ rows: [{ status: 'certified' }] })                       // sync: applications select
+            .mockResolvedValueOnce({ rowCount: 1 });                                          // sync: UPDATE candidates
+
+        const res = await setCandidateStage('cand-1', 'certified');
+        expect(res.updatedApplications).toBe(1);
+
+        const [firstSql, firstParams] = query.mock.calls[0];
+        expect(firstSql).toContain('UPDATE applications');
+        expect(firstParams[0]).toBe('certified');
+
+        const lastCall = query.mock.calls[query.mock.calls.length - 1];
+        expect(lastCall[0]).toContain('UPDATE candidates');
+        expect(lastCall[1][0]).toBe('certified');
+    });
+
+    test('new is a direct candidate.status write (no application cascade)', async () => {
+        query.mockResolvedValueOnce({ rowCount: 1 }); // direct UPDATE candidates
+
+        const res = await setCandidateStage('cand-2', 'new');
+        expect(res.updatedApplications).toBe(0);
+        expect(query).toHaveBeenCalledTimes(1);
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).toContain('UPDATE candidates');
+        expect(params[0]).toBe('new');
+    });
+
+    test('a protected status (future_pool) is never overwritten by the re-derive', async () => {
+        query
+            .mockResolvedValueOnce({ rowCount: 1 })                                              // UPDATE applications
+            .mockResolvedValueOnce({ rows: [{ current_status: 'future_pool', has_cv: true }] }); // sync: protected → returns early
+
+        const res = await setCandidateStage('cand-3', 'certified');
+        expect(res.updatedApplications).toBe(1);
+        // Only the apps update + the protected-status select ran — candidates untouched.
+        expect(query).toHaveBeenCalledTimes(2);
+    });
+
+    test('a CV-less candidate cannot be derived past New (CV gate)', async () => {
+        query
+            .mockResolvedValueOnce({ rowCount: 1 })                                            // UPDATE applications → screening
+            .mockResolvedValueOnce({ rows: [{ current_status: 'new', has_cv: false }] })       // sync: candidate select, no CV
+            .mockResolvedValueOnce({ rows: [{ status: 'screening' }] });                       // sync: applications select
+        // deriveCandidateStage('screening', false) → 'new' === current → sync returns
+        // BEFORE issuing an UPDATE candidates, so there is no 4th query.
+
+        await setCandidateStage('cand-4', 'screening');
+        expect(query).toHaveBeenCalledTimes(3);
+        // No candidates UPDATE was issued (the gate held the candidate at New).
+        const issuedCandidatesUpdate = query.mock.calls.some(
+            ([sql]) => /UPDATE candidates/.test(sql)
+        );
+        expect(issuedCandidatesUpdate).toBe(false);
+    });
+
+    test('the CV gate also blocks CERTIFIED for a CV-less candidate (not just screening)', async () => {
+        // Regression for the review finding: deriveCandidateStage previously gated
+        // only 'screening', so a CV-less candidate with a certified application
+        // could be re-promoted to certified. Now ALL forward stages gate to New.
+        query
+            .mockResolvedValueOnce({ rowCount: 1 })                                            // UPDATE applications → certified
+            .mockResolvedValueOnce({ rows: [{ current_status: 'new', has_cv: false }] })       // sync: candidate select, no CV
+            .mockResolvedValueOnce({ rows: [{ status: 'certified' }] });                       // sync: applications select
+        // deriveCandidateStage('certified', false) → 'new' === current → no UPDATE.
+
+        await setCandidateStage('cand-5', 'certified');
+        expect(query).toHaveBeenCalledTimes(3);
+        const issuedCandidatesUpdate = query.mock.calls.some(([sql]) => /UPDATE candidates/.test(sql));
+        expect(issuedCandidatesUpdate).toBe(false);
+    });
+});

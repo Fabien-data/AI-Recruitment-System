@@ -32,6 +32,7 @@ import { Table } from '../components/ui/Table'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Pagination } from '../components/ui/Pagination'
 import { apiClient, getJobs, createApplication } from '../api'
+import { useSectionAccess } from '../stores/authStore'
 import { resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
 import { DocumentPreview } from '../components/documents/DocumentPreview'
 import toast from 'react-hot-toast'
@@ -507,6 +508,10 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
     const [selectedJobId, setSelectedJobId] = useState('')
     const [assignmentThreshold, setAssignmentThreshold] = useState(50)
     const queryClient = useQueryClient()
+    // Auto-assign hits /api/auto-assign which now requires applications.create;
+    // hide the whole auto-assign block for roles (e.g. project_handler) that
+    // would otherwise get a 403. Manual assign below is unaffected.
+    const canAutoAssign = useSectionAccess('applications', 'create')
 
     const { data: jobsData } = useQuery({
         queryKey: ['jobs', { status: 'active' }],
@@ -531,6 +536,7 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
     return (
         <div className="space-y-6">
             {/* Auto-Assign Option */}
+            {canAutoAssign && (
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5">
                 <div className="flex items-start gap-3">
                     <Sparkles className="text-blue-500 mt-0.5" size={24} />
@@ -565,6 +571,7 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
                     </div>
                 </div>
             </div>
+            )}
 
             {/* Manual Assignment */}
             <div>

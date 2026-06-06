@@ -25,35 +25,11 @@ import { DeleteApplicationConfirm } from '../components/applications/DeleteAppli
 import { TransferApplicationModal } from '../components/applications/TransferApplicationModal'
 import { useAuthStore } from '../stores/authStore'
 import { useViewMode, ViewToggle } from '../components/ui/ViewToggle'
+import { CVReviewModal } from './CVManager'
+import { STATUS_FILTER_OPTIONS, normalizeStatus } from '../constants/lifecycle'
 
 // How many collapsed project rows to show per page of the project list.
 const PROJECTS_PER_PAGE = 15
-
-const STATUS_OPTIONS = [
-  { value: '', label: 'All Statuses' },
-  { value: 'applied', label: 'Applied' },
-  { value: 'certified', label: 'Certified' },
-  { value: 'pre_screened', label: 'Pre Screened' },
-  { value: 'interview_scheduled', label: 'Scheduled' },
-  { value: 'selected', label: 'Selected' },
-  { value: 'rejected', label: 'Rejected' },
-  { value: 'placed', label: 'Placed' },
-]
-
-const statusAccent = {
-  applied: 'blue',
-  screening: 'amber',
-  certified: 'emerald',
-  pre_screened: 'teal',
-  interview_scheduled: 'indigo',
-  interviewed: 'purple',
-  selected: 'emerald',
-  rejected: 'rose',
-  placed: 'emerald',
-  transferred: 'indigo',
-  auto_assigned: 'indigo',
-  reviewing: 'amber',
-}
 
 export default function Applications() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -80,6 +56,8 @@ export default function Applications() {
   // Modal state
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
+  // CV Manager opened in-place over the Applications list (no navigation).
+  const [cvCandidate, setCvCandidate] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [transferTarget, setTransferTarget] = useState(null)
 
@@ -360,7 +338,7 @@ export default function Applications() {
             className="input w-full"
             aria-label="Filter by application status"
           >
-            {STATUS_OPTIONS.map((option) => (
+            {STATUS_FILTER_OPTIONS.map((option) => (
               <option key={option.value || 'all'} value={option.value}>{option.label}</option>
             ))}
           </select>
@@ -500,7 +478,6 @@ export default function Applications() {
                 onToggleExpand={() => toggleExpanded(group.key)}
                 isTable={isTable}
                 isAdmin={isAdmin}
-                statusAccent={statusAccent}
                 selectedIds={selectedIds}
                 onToggleSelect={toggleSelected}
                 onSelectAllInGroup={() => selectAllInGroup(group.applications.map(a => a.id))}
@@ -508,6 +485,7 @@ export default function Applications() {
                 onEdit={setEditTarget}
                 onTransfer={setTransferTarget}
                 onDelete={setDeleteTarget}
+                onOpenCv={(app) => setCvCandidate({ id: app.candidate_id, name: app.candidate_name })}
               />
             ))
           )}
@@ -564,6 +542,12 @@ export default function Applications() {
       <EditApplicationModal open={!!editTarget} application={editTarget} onClose={() => setEditTarget(null)} />
       <TransferApplicationModal open={!!transferTarget} application={transferTarget} onClose={() => setTransferTarget(null)} />
       <DeleteApplicationConfirm open={!!deleteTarget} application={deleteTarget} onClose={() => setDeleteTarget(null)} />
+
+      {/* CV Manager in-place — opening/closing keeps the agent on the
+          Applications list exactly where they were. */}
+      {cvCandidate && (
+        <CVReviewModal candidate={cvCandidate} onClose={() => setCvCandidate(null)} />
+      )}
     </div>
   )
 }
@@ -847,9 +831,9 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
 // would otherwise get clipped against the section boundary (the bug from
 // image 02 in the user's report).
 function ProjectSection({
-  group, expanded, onToggleExpand, isTable, isAdmin, statusAccent, selectedIds,
+  group, expanded, onToggleExpand, isTable, isAdmin, selectedIds,
   onToggleSelect, onSelectAllInGroup, onUnselectAllInGroup,
-  onEdit, onTransfer, onDelete,
+  onEdit, onTransfer, onDelete, onOpenCv,
 }) {
   const isUnassigned = group.key === '__no_project__'
 
@@ -940,8 +924,8 @@ function ProjectSection({
             </Table.Head>
             <Table.Body>
               {group.applications.map((app) => {
-                const accent = statusAccent[app.status] || 'zinc'
                 const isSelected = selectedIds.has(app.id)
+                const accent = ({ screening: 'amber', certified: 'emerald', interview_scheduled: 'indigo', hired: 'emerald', rejected: 'rose', new: 'blue', future_pool: 'zinc', merged: 'zinc' })[normalizeStatus(app.status)] || 'zinc'
                 return (
                   <Table.Tr key={app.id} accent={accent}>
                     <Table.Td>
@@ -954,14 +938,16 @@ function ProjectSection({
                       />
                     </Table.Td>
                     <Table.Td className="font-semibold text-zinc-900 dark:text-zinc-50 min-w-[200px]">
-                      <Link to={`/candidates/${app.candidate_id}`} className="group inline-flex items-center gap-3">
+                      {/* Opens the candidate's CV Manager in-place over Applications
+                          so the agent stays on the list (no navigation away). */}
+                      <button type="button" onClick={() => onOpenCv(app)} className="group inline-flex items-center gap-3 text-left" title="Open CV Manager">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900">
                           {app.candidate_name?.charAt(0)?.toUpperCase() || '?'}
                         </div>
                         <span className="text-sm group-hover:text-primary-600 dark:group-hover:text-primary-400 truncate">
                           {app.candidate_name || 'Candidate'}
                         </span>
-                      </Link>
+                      </button>
                     </Table.Td>
                     <Table.Td>
                       <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
@@ -980,6 +966,7 @@ function ProjectSection({
                         onEdit={() => onEdit(app)}
                         onTransfer={() => onTransfer(app)}
                         onDelete={() => onDelete(app)}
+                        onOpenCv={() => onOpenCv(app)}
                       />
                     </Table.Td>
                   </Table.Tr>
@@ -990,18 +977,9 @@ function ProjectSection({
         ) : (
           <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {group.applications.map((app) => {
-              const accent = statusAccent[app.status] || 'zinc'
               const isSelected = selectedIds.has(app.id)
-              const stripeClass = {
-                blue: 'before:bg-blue-500',
-                amber: 'before:bg-amber-500',
-                emerald: 'before:bg-emerald-500',
-                purple: 'before:bg-purple-500',
-                rose: 'before:bg-rose-500',
-                indigo: 'before:bg-indigo-500',
-                teal: 'before:bg-teal-500',
-                zinc: 'before:bg-zinc-400',
-              }[accent]
+              const accent = ({ screening: 'amber', certified: 'emerald', interview_scheduled: 'indigo', hired: 'emerald', rejected: 'rose', new: 'blue', future_pool: 'zinc', merged: 'zinc' })[normalizeStatus(app.status)] || 'zinc'
+              const stripeClass = ({ amber: 'before:bg-amber-500', emerald: 'before:bg-emerald-500', indigo: 'before:bg-indigo-500', rose: 'before:bg-rose-500', blue: 'before:bg-blue-500', zinc: 'before:bg-zinc-400' })[accent]
               return (
                 <div
                   key={app.id}
@@ -1015,16 +993,19 @@ function ProjectSection({
                       checked={isSelected}
                       onChange={() => onToggleSelect(app.id)}
                     />
-                    <Link
-                      to={`/candidates/${app.candidate_id}`}
+                    <button
+                      type="button"
+                      onClick={() => onOpenCv(app)}
                       className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900"
+                      title="Open CV Manager"
                     >
                       {app.candidate_name?.charAt(0)?.toUpperCase() || '?'}
-                    </Link>
+                    </button>
                     <div className="min-w-0 flex-1">
-                      <Link to={`/candidates/${app.candidate_id}`} className="text-base font-semibold text-zinc-900 dark:text-zinc-50 hover:text-primary-700 dark:hover:text-primary-300 truncate block">
+                      {/* Opens CV Manager in-place (stays on Applications). */}
+                      <button type="button" onClick={() => onOpenCv(app)} className="text-base font-semibold text-zinc-900 dark:text-zinc-50 hover:text-primary-700 dark:hover:text-primary-300 truncate block text-left w-full" title="Open CV Manager">
                         {app.candidate_name || 'Candidate'}
-                      </Link>
+                      </button>
                       <p className="text-xs text-zinc-500 dark:text-zinc-500 truncate mt-0.5">
                         {app.candidate_phone || ''}
                       </p>
@@ -1047,6 +1028,7 @@ function ProjectSection({
                       onEdit={() => onEdit(app)}
                       onTransfer={() => onTransfer(app)}
                       onDelete={() => onDelete(app)}
+                      onOpenCv={() => onOpenCv(app)}
                     />
                   </div>
                 </div>
@@ -1059,7 +1041,7 @@ function ProjectSection({
   )
 }
 
-function RowActions({ app, isAdmin, onEdit, onTransfer, onDelete }) {
+function RowActions({ app, isAdmin, onEdit, onTransfer, onDelete, onOpenCv }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -1083,6 +1065,7 @@ function RowActions({ app, isAdmin, onEdit, onTransfer, onDelete }) {
       </button>
       {open && (
         <div className="absolute right-0 z-20 mt-1 w-48 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg py-1">
+          <MenuButton icon={FileText} label="Open CV" onClick={() => { setOpen(false); onOpenCv() }} />
           <MenuLink to={`/candidates/${app.candidate_id}`} icon={Eye} label="View Candidate" />
           <MenuButton icon={Pencil} label="Edit Status" onClick={() => { setOpen(false); onEdit() }} />
           <MenuButton icon={ArrowRightLeft} label="Transfer" onClick={() => { setOpen(false); onTransfer() }} />

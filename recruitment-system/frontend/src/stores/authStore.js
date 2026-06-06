@@ -122,6 +122,8 @@ export function useSectionAccess(sectionKey, action = 'view') {
   const role = useAuthStore((s) => s.user?.role)
   const perms = useAuthStore((s) => s.sectionPermissions) || []
   if (role === ROLES.ADMIN) return true
+  // Dashboard is universal for any authenticated user (mirrors backend floor).
+  if (sectionKey === 'dashboard' && action === 'view') return true
   const row = perms.find((p) => p.section_key === sectionKey)
   if (!row) return false
   return !!row[`can_${action}`]

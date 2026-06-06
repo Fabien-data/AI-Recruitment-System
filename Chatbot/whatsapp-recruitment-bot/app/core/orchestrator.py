@@ -564,6 +564,43 @@ class IntakeOrchestrator:
             }
             return _not_cv_msgs.get(locked_language, _not_cv_msgs["en"])
 
+        # --- 1b. Non-CV document (ID / passport / certificate / photo) ---
+        # Store it as a supporting document and acknowledge, but DON'T treat it as
+        # a CV: no cv_uploaded flag (so it can't satisfy the New→Screening CV gate)
+        # and no application-complete flow. The recruiter still sees it in CV
+        # Manager + the conversation via cv_files.parsed_data.__document_category.
+        doc_category = extracted.pop("_document_category", "cv") if isinstance(extracted, dict) else "cv"
+        if doc_category != "cv":
+            cv_blob = dict(extracted.get("cv_parsed_data") or {}) if isinstance(extracted, dict) else {}
+            cv_blob["__document_category"] = doc_category
+            state["cv_parsed_data"] = cv_blob
+            ext_data = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
+            ext_data["cv_parsed_data"] = cv_blob
+            candidate.extracted_data = ext_data
+            self._save_agent_state(candidate, state)
+            db.commit()
+
+            saved_doc_path = _persist_media_bytes(media_content, media_type, media_filename, candidate.id)
+            if saved_doc_path:
+                try:
+                    candidate.resume_file_path = saved_doc_path
+                except Exception:    # noqa: BLE001 — column may not exist on legacy schema
+                    pass
+                try:
+                    await recruitment_sync.push(candidate, db, cv_path=saved_doc_path)
+                except Exception as exc:
+                    logger.warning("Supporting-document sync failed: %s", exc)
+
+            locked_language = state.get("locked_language") or "en"
+            _doc_ack = {
+                "en": "Thanks, I've saved your document. If you haven't shared your CV/resume yet, please send it so we can continue.",
+                "si": "ස්තූතියි, ඔබගේ ලේඛනය සුරැකුවා. ඔබ තවම CV එක එවා නැත්නම්, කරුණාකර එය එවන්න.",
+                "ta": "நன்றி, உங்கள் ஆவணத்தை சேமித்தேன். நீங்கள் இன்னும் CV அனுப்பவில்லை என்றால், தயவுசெய்து அனுப்பவும்.",
+                "singlish": "Sthuthi, oyage document eka save una. CV eka thamath naehe nam, karunakara eka evanna.",
+                "tanglish": "Nandri, unga document save aachu. CV innum anuppala na, please anuppunga.",
+            }
+            return _doc_ack.get(locked_language, _doc_ack["en"])
+
         # --- 2. Gate on extraction confidence — ignore low-quality extractions ---
         _CONFIDENCE_MIN = 0.55
         extraction_confidence = extracted.pop("_extraction_confidence", 1.0) or 1.0

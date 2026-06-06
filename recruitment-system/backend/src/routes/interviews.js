@@ -15,6 +15,7 @@ const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { authenticate, authorize, ROLES } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const notifications = require('../services/notifications');
 const { syncCandidateStage } = require('../services/candidate-stage');
 const {
@@ -51,7 +52,7 @@ async function interviewHasDescriptionColumn() {
 }
 
 // ── List / filter interviews ──────────────────────────────────────────────────
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
     try {
         const { job_id, project_id, status, date_from, date_to, limit = 50, offset = 0 } = req.query;
 
@@ -109,7 +110,7 @@ router.get('/', authenticate, async (req, res, next) => {
 });
 
 // ── Upcoming interviews (next 7 days) — dashboard widget ─────────────────────
-router.get('/upcoming', authenticate, async (req, res, next) => {
+router.get('/upcoming', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery(`
@@ -137,7 +138,7 @@ router.get('/upcoming', authenticate, async (req, res, next) => {
 // Registered BEFORE '/:id' so the literal "interviewers" path isn't captured by
 // the :id param route. Lets project handlers populate the interviewer dropdown
 // without granting them admin /users access.
-router.get('/interviewers', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
+router.get('/interviewers', authenticate, requireSection('interviews', 'view'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery(`
@@ -154,7 +155,7 @@ router.get('/interviewers', authenticate, authorize(...SCHEDULER_ROLES), async (
 });
 
 // ── Get single interview ──────────────────────────────────────────────────────
-router.get('/:id', authenticate, async (req, res, next) => {
+router.get('/:id', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery(`
@@ -178,7 +179,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 });
 
 // ── Schedule new interview ────────────────────────────────────────────────────
-router.post('/', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
+router.post('/', authenticate, requireSection('interviews', 'create'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const {
             application_id,
@@ -268,7 +269,7 @@ router.post('/', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, n
 });
 
 // ── Update interview (status / feedback / rating) ─────────────────────────────
-router.put('/:id', authenticate, async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('interviews', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const {
@@ -361,7 +362,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
 });
 
 // ── Cancel / delete interview ─────────────────────────────────────────────────
-router.delete('/:id', authenticate, async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('interviews', 'delete'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery("UPDATE interview_schedules SET status = 'cancelled' WHERE id = $1 RETURNING id, application_id"),
@@ -390,7 +391,7 @@ router.delete('/:id', authenticate, async (req, res, next) => {
 });
 
 // ── Manually trigger reminder ─────────────────────────────────────────────────
-router.post('/:id/remind', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
+router.post('/:id/remind', authenticate, requireSection('interviews', 'edit'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const ivResult = await query(
             adaptQuery(`
@@ -435,7 +436,7 @@ router.post('/:id/remind', authenticate, authorize(...SCHEDULER_ROLES), async (r
 // ── Bulk notify — re-send the interview WhatsApp to multiple scheduled
 // candidates at once. Used by the Interview Management page when a project
 // handler picks several rows and clicks "Notify selected".
-router.post('/bulk-notify', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
+router.post('/bulk-notify', authenticate, requireSection('interviews', 'edit'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const { interview_ids } = req.body || {};
         if (!Array.isArray(interview_ids) || interview_ids.length === 0) {
@@ -504,7 +505,7 @@ router.post('/bulk-notify', authenticate, authorize(...SCHEDULER_ROLES), async (
 // location, flip each application's status to interview_scheduled, and
 // dispatch the invitation WhatsApp per candidate. One round-trip from the
 // UI instead of N.
-router.post('/bulk-schedule', authenticate, authorize(...SCHEDULER_ROLES), async (req, res, next) => {
+router.post('/bulk-schedule', authenticate, requireSection('interviews', 'edit'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const {
             application_ids,

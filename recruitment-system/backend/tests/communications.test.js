@@ -8,10 +8,16 @@ jest.mock('../src/config/database', () => ({
 
 jest.mock('../src/middleware/auth', () => ({
     authenticate: (req, res, next) => {
-        req.user = { id: 'agent-1', name: 'Agent Alice', email: 'alice@example.com' };
+        req.user = { id: 'agent-1', name: 'Agent Alice', email: 'alice@example.com', role: 'admin' };
         next();
     },
     authorize: () => (req, res, next) => next(),
+}));
+
+// Access-control middleware is exercised in its own unit (sections logic); here
+// it's a pass-through so these route tests stay focused on communications logic.
+jest.mock('../src/middleware/sections', () => ({
+    requireSection: () => (req, res, next) => next(),
 }));
 
 jest.mock('../src/utils/gcs-upload', () => ({
@@ -84,6 +90,36 @@ describe('Communications routes', () => {
         expect(sql).toContain('ORDER BY COALESCE(lm.sent_at, ca.created_at) ASC');
         expect(sql).toContain('lm.read_at IS NULL');
         expect(params).toEqual(expect.arrayContaining(['%9476%', 'cv_uploaded', '2026-04-01', '2026-04-07']));
+    });
+
+    test('active-chats filters by status bucket and effective project (latest app OR ad)', async () => {
+        query.mockResolvedValueOnce({ rows: [] });
+
+        await request(app)
+            .get('/api/communications/active-chats')
+            .query({ status: 'screening', project_id: 'proj-9' })
+            .expect(200);
+
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).toContain("LOWER(COALESCE(ca.status, 'new'))");
+        expect(sql).toContain('COALESCE(la.project_id, adt.project_id)');
+        expect(sql).toContain('effective_project_id');
+        expect(sql).toContain('ad_tracking');
+        expect(params).toEqual(expect.arrayContaining(['screening', 'proj-9']));
+    });
+
+    test('active-chats unassigned project filter matches a null effective project', async () => {
+        query.mockResolvedValueOnce({ rows: [] });
+
+        await request(app)
+            .get('/api/communications/active-chats')
+            .query({ status: 'new', project_id: 'unassigned' })
+            .expect(200);
+
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).toContain('COALESCE(la.project_id, adt.project_id) IS NULL');
+        expect(params).toEqual(expect.arrayContaining(['new']));
+        expect(params).not.toContain('unassigned');   // sentinel, not a bound param
     });
 
     test('status-sync persists delivered/read updates by whatsapp message id', async () => {

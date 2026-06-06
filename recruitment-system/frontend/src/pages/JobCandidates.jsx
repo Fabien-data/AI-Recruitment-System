@@ -45,6 +45,7 @@ import { apiClient } from '../api'
 import { updateApplication, transferApplication, getJobs, rejectToPool, batchCertifyApplications, batchAutoAssign } from '../api'
 import { resolveDocumentUrl, PENDING_URL } from '../utils/documents'
 import { useRole } from '../stores/authStore'
+import { normalizeStatus, getStatusLabel } from '../constants/lifecycle'
 import toast from 'react-hot-toast'
 import Papa from 'papaparse'
 
@@ -108,8 +109,8 @@ export default function JobCandidates() {
             if (statusFilter === 'excellent') return c.match_score >= 80
             if (statusFilter === 'good') return c.match_score >= 60 && c.match_score < 80
             if (statusFilter === 'fair') return c.match_score >= 50 && c.match_score < 60
-            if (statusFilter === 'certified') return c.application_status === 'certified'
-            if (statusFilter === 'pending') return ['auto_assigned', 'applied', 'reviewing'].includes(c.application_status)
+            if (statusFilter === 'certified') return normalizeStatus(c.application_status) === 'certified'
+            if (statusFilter === 'pending') return normalizeStatus(c.application_status) === 'screening'
             return true
         })
         : candidates
@@ -123,7 +124,7 @@ export default function JobCandidates() {
             phone: c.candidate?.phone || '',
             email: c.candidate?.email || '',
             match_score_pct: c.match_score,
-            stage: c.application_status,
+            stage: getStatusLabel(c.application_status),
             has_cv: c.candidate?.cv_uploaded === false ? 'No' : 'Yes',
             source: c.candidate?.source || '',
             applied_at: c.applied_at || '',
@@ -514,21 +515,21 @@ function EmptyPipelineBanner({ jobId, onScanned }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// ApproveModal — sets application.status='selected'. Backend cascade
-// auto-completes the job when the last seat fills (see applications.js).
+// ApproveModal — sets application.status='hired' (final placement). Backend
+// cascade auto-completes the job when the last seat fills (see applications.js).
 // ──────────────────────────────────────────────────────────────────────────
 function ApproveModal({ data, job, positionsRemaining, onClose, onSuccess }) {
     const candidate = data.candidate || {}
     const [submitting, setSubmitting] = useState(false)
 
-    const disabled = job.status !== 'active' || positionsRemaining <= 0 || data.application_status === 'selected'
+    const disabled = job.status !== 'active' || positionsRemaining <= 0 || normalizeStatus(data.application_status) === 'hired'
 
     const handleApprove = async () => {
         if (disabled) return
         setSubmitting(true)
         try {
             await updateApplication(data.application_id, {
-                status: 'selected',
+                status: 'hired',
                 notify_channels: ['whatsapp'],
             })
             toast.success(`${candidate.name} approved for ${job.title}`)
@@ -563,7 +564,7 @@ function ApproveModal({ data, job, positionsRemaining, onClose, onSuccess }) {
                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
                         {job.status !== 'active'
                             ? `Job is ${job.status}. Set it back to Active before approving.`
-                            : data.application_status === 'selected'
+                            : normalizeStatus(data.application_status) === 'hired'
                                 ? 'This candidate has already been approved.'
                                 : 'No positions remain on this job.'}
                     </div>
@@ -784,13 +785,13 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                         <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
                                 <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{candidate.name}</h3>
-                                {application_status === 'certified' && (
+                                {normalizeStatus(application_status) === 'certified' && (
                                     <span className="inline-flex items-center gap-1 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
                                         <CheckCircle2 size={12} />
                                         Certified
                                     </span>
                                 )}
-                                {application_status === 'rejected' && (
+                                {normalizeStatus(application_status) === 'rejected' && (
                                     <span className="inline-flex items-center gap-1 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
                                         <XCircle size={12} />
                                         General Pool
@@ -878,43 +879,31 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
     )
 }
 
-// Status-aware action button cluster. Mirrors the candidate lifecycle the
-// product spec describes: Applied → Certified → Pre Screened → Scheduled →
-// Selected | Rejected. Each step exposes only the legal next actions so
-// recruiters can't skip steps or trigger the wrong notification by accident.
+// Status-aware action button cluster. Mirrors the canonical candidate lifecycle:
+// Screening → Certified → Interview Scheduled → Hired | Rejected. Each step
+// exposes only the legal next actions so recruiters can't skip steps or trigger
+// the wrong notification by accident. `status` is normalized first so legacy
+// rows (applied/pre_screened/selected/placed/…) bucket onto the canonical set.
 function LifecycleActions({ status, certifiedAt, onCertify, onPreScreen, onSchedule, onApprove, onTransfer, onReject }) {
     // Marketing agents source candidates but must not run interviews (B010);
     // the backend also rejects the request if this gate is bypassed.
     const { isMarketingAgent } = useRole()
-    if (status === 'selected' || status === 'placed') {
+    const s = normalizeStatus(status)
+    if (s === 'hired') {
         return (
             <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1 px-2 font-medium">
                 <Award size={12} /> Approved
             </span>
         )
     }
-    if (status === 'rejected') {
+    if (s === 'rejected') {
         return (
             <span className="text-xs text-red-500 flex items-center gap-1 px-2">
                 <XCircle size={12} /> Moved to Pool
             </span>
         )
     }
-    if (status === 'pre_screened') {
-        return (
-            <>
-                {!isMarketingAgent && (
-                    <Button size="sm" onClick={onSchedule} className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white">
-                        <Calendar size={14} /> Schedule Interview
-                    </Button>
-                )}
-                <Button variant="danger" size="sm" onClick={onReject} className="gap-1" style={{ backgroundColor: '#ef4444', color: 'white', border: 'none' }}>
-                    <UserX size={14} /> Reject
-                </Button>
-            </>
-        )
-    }
-    if (status === 'interview_scheduled' || status === 'interviewed') {
+    if (s === 'interview_scheduled') {
         return (
             <>
                 <Button size="sm" onClick={onApprove} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white">
@@ -926,12 +915,20 @@ function LifecycleActions({ status, certifiedAt, onCertify, onPreScreen, onSched
             </>
         )
     }
-    if (status === 'certified') {
+    if (s === 'certified') {
+        // Canonical `certified` covers both the just-certified and the
+        // pre-screened sub-stages (pre_screened folds into certified), so both
+        // forward actions stay reachable here to preserve the stepper UX.
         return (
             <>
                 <Button size="sm" onClick={onPreScreen} className="gap-1 bg-teal-600 hover:bg-teal-700 text-white">
                     <CheckCircle2 size={14} /> Mark Pre-Screened
                 </Button>
+                {!isMarketingAgent && (
+                    <Button size="sm" onClick={onSchedule} className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white">
+                        <Calendar size={14} /> Schedule Interview
+                    </Button>
+                )}
                 <span className="text-xs text-green-600 flex items-center gap-1 px-2 font-medium">
                     <CheckCircle2 size={12} />
                     Certified {certifiedAt && new Date(certifiedAt).toLocaleDateString()}
@@ -942,7 +939,7 @@ function LifecycleActions({ status, certifiedAt, onCertify, onPreScreen, onSched
             </>
         )
     }
-    // Default = applied / auto_assigned / reviewing / screening
+    // Default = screening (legacy applied / auto_assigned / reviewing)
     return (
         <>
             <Button variant="secondary" size="sm" onClick={onCertify} className="gap-1">
@@ -1108,7 +1105,7 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
                 {/* Actions */}
                 <div className="flex justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                     <Button variant="secondary" onClick={onClose}>Close</Button>
-                    {application_status !== 'certified' && application_status !== 'rejected' && (
+                    {normalizeStatus(application_status) !== 'certified' && normalizeStatus(application_status) !== 'rejected' && (
                         <>
                             <button
                                 onClick={onReject}
@@ -1760,10 +1757,11 @@ function TransferModal({ data, currentJob, onClose }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// MarkPreScreenedModal — records the outcome of the in-person pre-screen
-// and transitions certified → pre_screened. The chatbot sends the candidate
-// a "you passed pre-screening" WhatsApp via the new pre_screened_passed
-// notification template.
+// MarkPreScreenedModal — records the outcome of the in-person pre-screen.
+// Pre-screen is a sub-stage of the canonical `certified` status, so this writes
+// status 'certified' (a same-state no-op upstream) while attaching the
+// prescreening notes/rating. The chatbot sends the candidate a "you passed
+// pre-screening" WhatsApp via the pre_screened_passed notification template.
 // ──────────────────────────────────────────────────────────────────────────
 function MarkPreScreenedModal({ data, job, onClose }) {
     const queryClient = useQueryClient()
@@ -1774,7 +1772,7 @@ function MarkPreScreenedModal({ data, job, onClose }) {
 
     const mutation = useMutation({
         mutationFn: () => updateApplication(data.application_id, {
-            status: 'pre_screened',
+            status: 'certified',
             prescreening_notes: notes || undefined,
             prescreening_rating: rating || undefined,
             notify_channels: notifyWhatsApp ? ['whatsapp'] : [],

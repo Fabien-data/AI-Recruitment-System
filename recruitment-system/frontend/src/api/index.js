@@ -42,6 +42,12 @@ export const createCandidate = (data) =>
 export const updateCandidate = (id, data) =>
   apiClient.put(`/api/candidates/${id}`, data).then(res => res.data)
 
+// Set the candidate's pipeline stage — writes through to the candidate's active
+// applications (the source of truth) so the change reflects on the Applications
+// page and survives candidate-stage re-derivation.
+export const setCandidateStage = (id, stage) =>
+  apiClient.put(`/api/candidates/${id}/stage`, { stage }).then(res => res.data)
+
 export const deleteCandidate = (id) =>
   apiClient.delete(`/api/candidates/${id}`).then(res => res.data)
 
@@ -478,6 +484,9 @@ export const getEngagementAnalytics = (params) =>
 
 export const getDailyDigest = () =>
   apiClient.get('/api/engagement/daily-digest').then(res => res.data)
+
+export const getAgentCallActivity = (params) =>
+  apiClient.get('/api/engagement/call-logs', { params }).then(res => res.data)
 
 export const getCandidateTimeline = (id) =>
   apiClient.get(`/api/engagement/candidates/${id}/timeline`).then(res => res.data)

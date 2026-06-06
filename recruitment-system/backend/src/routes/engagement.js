@@ -20,6 +20,7 @@ const axios = require('axios');
 const { query } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const logger = require('../utils/logger');
 
 /**
@@ -57,7 +58,7 @@ const PROACTIVE_TYPES = [
 // ── Stuck candidates ──────────────────────────────────────────────────────────
 // Candidates whose furthest stage is early (new/screening/certified) and who
 // have had no interaction for `days`. Returns a per-stage summary + the list.
-router.get('/stuck', authenticate, async (req, res, next) => {
+router.get('/stuck', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const days = String(Math.max(0, parseInt(req.query.days, 10) || 2));
         const stages = ['new', 'screening', 'certified'];
@@ -105,7 +106,7 @@ router.get('/stuck', authenticate, async (req, res, next) => {
 });
 
 // ── Per-candidate proactive timeline ─────────────────────────────────────────
-router.get('/candidates/:id/timeline', authenticate, async (req, res, next) => {
+router.get('/candidates/:id/timeline', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery(`
@@ -134,7 +135,7 @@ router.get('/candidates/:id/timeline', authenticate, async (req, res, next) => {
 });
 
 // ── Next-best-action for a single candidate ──────────────────────────────────
-router.get('/candidates/:id/next-action', authenticate, async (req, res, next) => {
+router.get('/candidates/:id/next-action', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const r = await query(
             adaptQuery(`
@@ -150,7 +151,7 @@ router.get('/candidates/:id/next-action', authenticate, async (req, res, next) =
 });
 
 // ── Re-engagement analytics ───────────────────────────────────────────────────
-router.get('/analytics', authenticate, async (req, res, next) => {
+router.get('/analytics', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const days = String(Math.max(1, parseInt(req.query.days, 10) || 30));
 
@@ -205,7 +206,7 @@ router.get('/analytics', authenticate, async (req, res, next) => {
 // ── Bulk re-engagement campaign (#8) ─────────────────────────────────────────
 // Agent selects a cohort of candidates → nudge them all now via the chatbot.
 // Each send still respects opt-out / completion / quiet hours / the 3-nudge cap.
-router.post('/bulk-nudge', authenticate, async (req, res, next) => {
+router.post('/bulk-nudge', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
     try {
         const { candidate_ids } = req.body || {};
         if (!Array.isArray(candidate_ids) || candidate_ids.length === 0) {
@@ -238,10 +239,91 @@ router.post('/bulk-nudge', authenticate, async (req, res, next) => {
 });
 
 // ── Daily digest snapshot (dashboard widget) ─────────────────────────────────
-router.get('/daily-digest', authenticate, async (req, res, next) => {
+router.get('/daily-digest', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const { gatherDigest } = require('../services/daily-digest');
         res.json(await gatherDigest());
+    } catch (err) { next(err); }
+});
+
+// ── Agent call activity (calling-console engagement rollup) ──────────────────
+// Per-agent engagement from call_logs over a window: calls logged, distinct
+// candidates contacted, answered / no-answer / callback counts, leads, call
+// duration, remarks — plus a recent activity feed (the full end-to-end log).
+// Powers the Engagement page: each agent sees their own day; admin sees everyone.
+router.get('/call-logs', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+    try {
+        const { agent_id, date_from, date_to } = req.query;
+        const params = [];
+        const where = [];
+        const p = (v) => { params.push(v); return `$${params.length}`; };
+        if (agent_id) where.push(`cl.agent_id = ${p(agent_id)}`);
+        if (date_from) where.push(`cl.called_at >= ${p(date_from)}`);
+        if (date_to) where.push(`cl.called_at <= ${p(date_to)}`);
+        const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+        const perAgentSql = adaptQuery(`
+            SELECT cl.agent_id,
+                   COALESCE(u.full_name, 'Unknown') AS agent_name,
+                   COUNT(*)                                   AS calls_logged,
+                   COUNT(DISTINCT cl.candidate_id)            AS candidates_contacted,
+                   COUNT(*) FILTER (WHERE cl.remark IS NOT NULL AND cl.remark <> '') AS remarks_made,
+                   COUNT(*) FILTER (WHERE cl.outcome = 'answered')       AS answered,
+                   COUNT(*) FILTER (WHERE cl.outcome = 'no_answer')      AS no_answer,
+                   COUNT(*) FILTER (WHERE cl.outcome = 'callback')       AS callbacks,
+                   COUNT(*) FILTER (WHERE cl.outcome = 'not_interested') AS not_interested,
+                   COUNT(DISTINCT cl.candidate_id) FILTER (WHERE cl.disposition IN ('interested','qualified')) AS leads,
+                   COALESCE(SUM(cl.duration_seconds), 0)      AS total_duration_seconds,
+                   ROUND(AVG(cl.duration_seconds) FILTER (WHERE cl.duration_seconds IS NOT NULL))::int AS avg_duration_seconds,
+                   MAX(cl.called_at)                          AS last_activity_at
+            FROM call_logs cl
+            LEFT JOIN users u ON u.id = cl.agent_id
+            ${whereClause}
+            GROUP BY cl.agent_id, u.full_name
+            ORDER BY calls_logged DESC
+        `);
+
+        const byDispositionSql = adaptQuery(`
+            SELECT COALESCE(cl.disposition, 'none') AS disposition, COUNT(*) AS count
+            FROM call_logs cl
+            ${whereClause}
+            GROUP BY cl.disposition
+            ORDER BY count DESC
+        `);
+
+        const recentSql = adaptQuery(`
+            SELECT cl.id, cl.candidate_id, c.name AS candidate_name, cl.agent_id,
+                   COALESCE(u.full_name, 'Unknown') AS agent_name,
+                   cl.outcome, cl.disposition, cl.remark, cl.duration_seconds, cl.called_at
+            FROM call_logs cl
+            LEFT JOIN users u ON u.id = cl.agent_id
+            LEFT JOIN candidates c ON c.id = cl.candidate_id
+            ${whereClause}
+            ORDER BY cl.called_at DESC
+            LIMIT 100
+        `);
+
+        const [perAgent, byDisposition, recent] = await Promise.all([
+            query(perAgentSql, params),
+            query(byDispositionSql, params),
+            query(recentSql, params),
+        ]);
+
+        const totals = perAgent.rows.reduce((acc, r) => {
+            acc.calls_logged += Number(r.calls_logged || 0);
+            acc.remarks_made += Number(r.remarks_made || 0);
+            acc.answered += Number(r.answered || 0);
+            acc.no_answer += Number(r.no_answer || 0);
+            acc.leads += Number(r.leads || 0);
+            return acc;
+        }, { calls_logged: 0, remarks_made: 0, answered: 0, no_answer: 0, leads: 0 });
+
+        res.json({
+            per_agent: perAgent.rows,
+            by_disposition: byDisposition.rows,
+            recent: recent.rows,
+            totals,
+        });
     } catch (err) { next(err); }
 });
 

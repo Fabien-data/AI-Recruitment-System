@@ -14,6 +14,7 @@ const router = express.Router();
 const multer = require('multer');
 const { query, withTransaction } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { normalizePhone } = require('../utils/phone');
 const { uploadToGCS } = require('../utils/gcs-upload');
 const whatsapp = require('../services/whatsapp');
@@ -101,7 +102,7 @@ async function fetchLeadCallEvents(leadId) {
 }
 
 // ── GET /lead-sources ────────────────────────────────────────────────────────
-router.get('/lead-sources', authenticate, authorize(...ALLOWED_ROLES), async (_req, res, next) => {
+router.get('/lead-sources', authenticate, requireSection('marketing_hub', 'view'), authorize(...ALLOWED_ROLES), async (_req, res, next) => {
     try {
         const result = await query(
             `SELECT id, slug, label FROM lead_sources WHERE is_active = TRUE ORDER BY label ASC`
@@ -115,7 +116,7 @@ router.get('/lead-sources', authenticate, authorize(...ALLOWED_ROLES), async (_r
 // ── GET /countries ──────────────────────────────────────────────────────────
 // Distinct countries pulled from active projects so the dropdown stays
 // in sync with what the recruitment team actually recruits for.
-router.get('/countries', authenticate, authorize(...ALLOWED_ROLES), async (_req, res, next) => {
+router.get('/countries', authenticate, requireSection('marketing_hub', 'view'), authorize(...ALLOWED_ROLES), async (_req, res, next) => {
     try {
         const result = await query(
             `SELECT DISTINCT jsonb_array_elements_text(countries) AS country
@@ -132,7 +133,7 @@ router.get('/countries', authenticate, authorize(...ALLOWED_ROLES), async (_req,
 // ── GET /job-search?q=… ─────────────────────────────────────────────────────
 // Autocomplete for the "Preferred job role" field. Ranks active jobs by
 // ILIKE match on title then category, urgent jobs surface first.
-router.get('/job-search', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.get('/job-search', authenticate, requireSection('marketing_hub', 'view'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const q = String(req.query.q || '').trim();
         const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 25);
@@ -165,7 +166,7 @@ router.get('/job-search', authenticate, authorize(...ALLOWED_ROLES), async (req,
 });
 
 // ── GET /leads ──────────────────────────────────────────────────────────────
-router.get('/leads', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.get('/leads', authenticate, requireSection('marketing_hub', 'view'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const {
             stage, source_id, assigned_agent_id, search,
@@ -236,7 +237,7 @@ router.get('/leads', authenticate, authorize(...ALLOWED_ROLES), async (req, res,
 });
 
 // ── POST /leads ─────────────────────────────────────────────────────────────
-router.post('/leads', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.post('/leads', authenticate, requireSection('marketing_hub', 'create'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const {
             full_name, phone, nic, dob, country,
@@ -305,7 +306,7 @@ router.post('/leads', authenticate, authorize(...ALLOWED_ROLES), async (req, res
 });
 
 // ── GET /leads/:id ──────────────────────────────────────────────────────────
-router.get('/leads/:id', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.get('/leads/:id', authenticate, requireSection('marketing_hub', 'view'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const lead = await fetchLeadById(req.params.id);
         if (!lead) return res.status(404).json({ error: 'lead_not_found' });
@@ -323,7 +324,7 @@ router.get('/leads/:id', authenticate, authorize(...ALLOWED_ROLES), async (req, 
 });
 
 // ── PATCH /leads/:id ────────────────────────────────────────────────────────
-router.patch('/leads/:id', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.patch('/leads/:id', authenticate, requireSection('marketing_hub', 'edit'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = req.body || {};
@@ -381,7 +382,7 @@ router.patch('/leads/:id', authenticate, authorize(...ALLOWED_ROLES), async (req
 });
 
 // ── DELETE /leads/:id ───────────────────────────────────────────────────────
-router.delete('/leads/:id', authenticate, authorize('admin'), async (req, res, next) => {
+router.delete('/leads/:id', authenticate, requireSection('marketing_hub', 'delete'), async (req, res, next) => {
     try {
         const result = await query(
             `DELETE FROM marketing_leads WHERE id = $1 RETURNING id`,
@@ -398,6 +399,7 @@ router.delete('/leads/:id', authenticate, authorize('admin'), async (req, res, n
 router.post(
     '/leads/:id/documents',
     authenticate,
+    requireSection('marketing_hub', 'create'),
     authorize(...ALLOWED_ROLES),
     upload.single('file'),
     async (req, res, next) => {
@@ -436,7 +438,7 @@ router.post(
 );
 
 // ── DELETE /documents/:id ──────────────────────────────────────────────────
-router.delete('/documents/:id', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.delete('/documents/:id', authenticate, requireSection('marketing_hub', 'delete'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const result = await query(
             `DELETE FROM lead_documents WHERE id = $1 RETURNING id, lead_id`,
@@ -451,7 +453,7 @@ router.delete('/documents/:id', authenticate, authorize(...ALLOWED_ROLES), async
 
 // ── Follow-ups ─────────────────────────────────────────────────────────────
 
-router.get('/leads/:id/follow-ups', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.get('/leads/:id/follow-ups', authenticate, requireSection('marketing_hub', 'view'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const rows = await fetchLeadFollowUps(req.params.id);
         res.json(rows);
@@ -460,7 +462,7 @@ router.get('/leads/:id/follow-ups', authenticate, authorize(...ALLOWED_ROLES), a
     }
 });
 
-router.post('/leads/:id/follow-ups', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.post('/leads/:id/follow-ups', authenticate, requireSection('marketing_hub', 'create'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const { due_at, note } = req.body || {};
         if (!due_at) return res.status(400).json({ error: 'due_at_required' });
@@ -476,7 +478,7 @@ router.post('/leads/:id/follow-ups', authenticate, authorize(...ALLOWED_ROLES), 
     }
 });
 
-router.patch('/follow-ups/:id', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.patch('/follow-ups/:id', authenticate, requireSection('marketing_hub', 'edit'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const { status, note, due_at } = req.body || {};
         const setClauses = [];
@@ -512,7 +514,7 @@ router.patch('/follow-ups/:id', authenticate, authorize(...ALLOWED_ROLES), async
 });
 
 // Today's callback queue for the assigned agent (or all if admin/sourcing).
-router.get('/follow-ups/due', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.get('/follow-ups/due', authenticate, requireSection('marketing_hub', 'view'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const params = [];
         let agentFilter = '';
@@ -536,7 +538,7 @@ router.get('/follow-ups/due', authenticate, authorize(...ALLOWED_ROLES), async (
 });
 
 // ── POST /leads/:id/send-template ──────────────────────────────────────────
-router.post('/leads/:id/send-template', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.post('/leads/:id/send-template', authenticate, requireSection('marketing_hub', 'edit'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const { template_key, channel } = req.body || {};
         if (!LEAD_TEMPLATES[template_key]) {
@@ -575,7 +577,7 @@ router.post('/leads/:id/send-template', authenticate, authorize(...ALLOWED_ROLES
 });
 
 // Template catalog so the frontend can render the dropdown without hardcoding.
-router.get('/templates', authenticate, authorize(...ALLOWED_ROLES), (_req, res) => {
+router.get('/templates', authenticate, requireSection('marketing_hub', 'view'), authorize(...ALLOWED_ROLES), (_req, res) => {
     res.json(
         Object.entries(LEAD_TEMPLATES).map(([key, t]) => ({ key, label: t.label, preview: t.body }))
     );
@@ -586,7 +588,7 @@ router.get('/templates', authenticate, authorize(...ALLOWED_ROLES), (_req, res) 
 // cv_files, optionally creates an applications row when preferred_job_id is set,
 // and flips the lead to stage='converted'. If any step fails the entire
 // operation rolls back and the lead stays in its previous stage.
-router.post('/leads/:id/convert', authenticate, authorize(...ALLOWED_ROLES), async (req, res, next) => {
+router.post('/leads/:id/convert', authenticate, requireSection('marketing_hub', 'edit'), authorize(...ALLOWED_ROLES), async (req, res, next) => {
     try {
         const leadId = req.params.id;
         const { create_application = true, job_id_override } = req.body || {};
@@ -644,7 +646,7 @@ router.post('/leads/:id/convert', authenticate, authorize(...ALLOWED_ROLES), asy
             if (create_application && targetJobId) {
                 const appInsert = await client.query(
                     `INSERT INTO applications (candidate_id, job_id, status)
-                     VALUES ($1, $2, 'applied') RETURNING id`,
+                     VALUES ($1, $2, 'screening') RETURNING id`,
                     [candidateId, targetJobId]
                 );
                 applicationId = appInsert.rows[0].id;

@@ -158,6 +158,18 @@ class CVService:
                 except Exception:
                     pass
 
+            # Tag the document category so the backend stores it on the cv_files
+            # row (parsed_data.__document_category) → recruiter sees CV vs
+            # ID/passport/certificate/photo in CV Manager + conversations. The
+            # orchestrator also uses it to decide whether this counts as a real CV.
+            doc_category = getattr(result, "document_category", "cv") or "cv"
+            out["_document_category"] = doc_category
+            cv_blob = out.get("cv_parsed_data")
+            if not isinstance(cv_blob, dict):
+                cv_blob = {}
+            cv_blob["__document_category"] = doc_category
+            out["cv_parsed_data"] = cv_blob
+
             # Pass extraction confidence so orchestrator can gate on low-quality results
             if result.extraction_confidence is not None:
                 out["_extraction_confidence"] = result.extraction_confidence

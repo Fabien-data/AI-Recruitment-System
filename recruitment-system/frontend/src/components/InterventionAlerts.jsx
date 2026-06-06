@@ -55,7 +55,7 @@ export default function InterventionAlerts() {
           <div key={candidate.id} className="flex items-center justify-between rounded-xl border border-red-100 bg-white p-3">
             <div>
               <p className="text-sm font-semibold text-zinc-900">{candidate.name || candidate.phone}</p>
-              <p className="text-xs text-zinc-500">{candidate.intervention_reason || 'AI requested human support.'}</p>
+              <p className="text-xs text-zinc-500">{candidate.escalation_reason || candidate.intervention_reason || 'AI requested human support.'}</p>
             </div>
             <div className="flex gap-2">
               <button

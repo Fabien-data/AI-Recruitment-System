@@ -1158,9 +1158,15 @@ router.post(
                     ]);
                 }
 
+                // CV is the hard gate (#5): only place the candidate in future_pool
+                // if a CV is on file — otherwise they stay New (awaiting CV).
                 const setFuturePoolSQL = isMySQL
-                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = ?`
-                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`;
+                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW()
+                       WHERE id = ?
+                         AND (cv_uploaded = TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`
+                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW()
+                       WHERE id = $1
+                         AND (cv_uploaded IS TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`;
                 await query(setFuturePoolSQL, [candidateId]).catch(err =>
                     logger.warn(`Failed to set future_pool status for general-pool candidate ${candidateId}: ${err.message}`)
                 );
@@ -1178,15 +1184,19 @@ router.post(
                     logger.info(`Chatbot intake: application already exists ${applicationId}`);
                 } else {
                     applicationId = generateUUID();
+                    // Intent application (canonical entry status 'screening', #1) — kept
+                    // for attribution. The candidate stays New and the application is
+                    // invisible on eligibility surfaces (which filter to CV-present)
+                    // until a CV arrives (#5).
                     const appSQL = isMySQL
                         ? `INSERT INTO applications
                             (id, candidate_id, job_id, status, applied_at,
                              metadata)
-                           VALUES (?, ?, ?, 'applied', NOW(), ?)`
+                           VALUES (?, ?, ?, 'screening', NOW(), ?)`
                         : `INSERT INTO applications
                             (id, candidate_id, job_id, status,
                              metadata)
-                           VALUES ($1, $2, $3, 'applied', $4)`;
+                           VALUES ($1, $2, $3, 'screening', $4)`;
 
                     await query(appSQL, [
                         applicationId,
@@ -1210,9 +1220,14 @@ router.post(
             // When the chatbot marks a candidate as future_pool (requested role not available),
             // update their status so recruiters can find them in the Future Pool view.
             if (!resolvedJobId && cv_parsed_data && cv_parsed_data.future_pool) {
+                // CV gate (#5): only move New → future_pool when a CV is on file.
                 const futurePoolSQL = isMySQL
-                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = ? AND status = 'new'`
-                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1 AND status = 'new'`;
+                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW()
+                       WHERE id = ? AND status = 'new'
+                         AND (cv_uploaded = TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`
+                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW()
+                       WHERE id = $1 AND status = 'new'
+                         AND (cv_uploaded IS TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`;
                 await query(futurePoolSQL, [candidateId]).catch(err =>
                     logger.warn(`Failed to set future_pool status for candidate ${candidateId}: ${err.message}`)
                 );

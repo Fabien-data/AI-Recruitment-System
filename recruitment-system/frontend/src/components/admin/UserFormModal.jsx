@@ -10,11 +10,12 @@ import {
   getUserPermissions, updateUserPermissions,
 } from '../../api'
 import SectionPermissionMatrix from './SectionPermissionMatrix'
+import { baselineRows, lockedActions, mergeBaseline, extrasOf } from '../../constants/roleAccess'
 
 const ROLE_OPTIONS = [
-  { value: 'project_handler',     label: 'Project Handler',     desc: 'Standard recruiter access — candidates, jobs, projects' },
+  { value: 'project_handler',     label: 'Project Handler',     desc: 'Pipeline ops — projects, applications, candidates, CV Manager, interviews; jobs view-only' },
   { value: 'sourcing_department', label: 'Sourcing Department', desc: 'Full operational access except admin panel' },
-  { value: 'marketing_agent',     label: 'Marketing Agent',     desc: 'Marketing Hub and lead intake only' },
+  { value: 'marketing_agent',     label: 'Marketing Agent',     desc: 'Onboard from chat — Marketing Hub, CV Manager, Messages; candidates & jobs (view)' },
   { value: 'admin',               label: 'Administrator',       desc: 'Full system control + observability' },
 ]
 
@@ -65,22 +66,23 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
       setFormError(null)
     } else {
       setForm({ full_name: '', email: '', password: '', phone: '', role: 'project_handler' })
-      setPermissions([])
+      // Pre-check the mandatory baseline for the default role (UPGRADES.md #2).
+      setPermissions(baselineRows('project_handler'))
       setFormError(null)
     }
   }, [open, isEdit, user])
 
   useEffect(() => {
     if (permData?.permissions) {
-      // Only carry over rows where the user has at least one permission true
-      // — sections with all-false are equivalent to no row, and we don't want
-      // to send those back as "deny everything".
-      const meaningful = permData.permissions.filter(p =>
+      // Genuine extra grants beyond the role baseline (the rest is the floor,
+      // applied server-side). Merge baseline + extras so the matrix shows the
+      // mandatory rows locked-on plus any extras.
+      const extras = permData.permissions.filter(p =>
         p.source === 'custom' && (p.can_view || p.can_create || p.can_edit || p.can_delete)
       )
-      setPermissions(meaningful)
+      setPermissions(mergeBaseline(user?.role || 'project_handler', extras))
     }
-  }, [permData])
+  }, [permData, user])
 
   const createMutation = useMutation({
     mutationFn: createAdminUser,
@@ -103,9 +105,10 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
       if (Object.keys(updates).length > 0) {
         await updateAdminUser(user.id, updates)
       }
-      // 2. Permissions — always sent so the matrix is the single source of truth.
+      // 2. Permissions — persist only the EXTRA grants beyond the role baseline
+      // (the baseline is enforced server-side as a floor, so we never store it).
       if (form.role !== 'admin') {
-        await updateUserPermissions(user.id, permissions)
+        await updateUserPermissions(user.id, extrasOf(form.role, permissions))
       }
     },
     onSuccess: () => {
@@ -135,8 +138,9 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
       phone:     form.phone || null,
       role:      form.role,
     }
-    if (form.role !== 'admin' && permissions.length > 0) {
-      payload.section_permissions = permissions
+    const extras = extrasOf(form.role, permissions)
+    if (form.role !== 'admin' && extras.length > 0) {
+      payload.section_permissions = extras
     }
     createMutation.mutate(payload)
   }
@@ -206,7 +210,7 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
                 <button
                   key={r.value}
                   type="button"
-                  onClick={() => setForm(p => ({ ...p, role: r.value }))}
+                  onClick={() => { setForm(p => ({ ...p, role: r.value })); setPermissions(baselineRows(r.value)) }}
                   className={`group text-left rounded-2xl border p-3 transition-all
                     ${active
                       ? 'border-primary-500 bg-primary-50 dark:bg-primary-950/40 dark:border-primary-400 shadow-glow-blue/50'
@@ -255,7 +259,7 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
               ))}
             </div>
           ) : (
-            <SectionPermissionMatrix value={permissions} onChange={setPermissions} />
+            <SectionPermissionMatrix value={permissions} onChange={setPermissions} lockedActions={lockedActions(form.role)} />
           )}
         </section>
 

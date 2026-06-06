@@ -6,11 +6,17 @@ const express = require('express');
 const router = express.Router();
 const { pool, withTransaction } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
 const { resolveCvAccessUrl } = require('../utils/cv-url');
-const { syncCandidateStage } = require('../services/candidate-stage');
+const { syncCandidateStage, hasCvSql } = require('../services/candidate-stage');
 const notifications = require('../services/notifications');
 const logger = require('../utils/logger');
+
+// CV eligibility test (#5): a candidate has a CV iff cv_uploaded OR a cv_files row.
+function candidateRowHasCv(candidate) {
+    return candidate.cv_uploaded === true || candidate.has_cv_file === true;
+}
 
 /**
  * Skill matching configuration
@@ -51,21 +57,15 @@ function calculateMatchScore(candidate, job) {
     let totalScore = 0;
     let maxScore = 0;
 
-    // ── B012: hard CV gate ──────────────────────────────────────────────
-    // A candidate with no uploaded CV has no real basis for a match score.
-    // Previously such candidates scored 100% because the experience block
-    // below awarded full credit for "0 years >= 0 required". Gate them to 0
-    // up front. cv_uploaded (migration 010) is authoritative; fall back to
-    // "has any parsed signal" for legacy rows written before that column.
-    const hasParsedSignal = candidateSkills.length > 0
-        || ['experience_years', 'age', 'height_cm'].some(k => {
-            const v = candidateMetadata[k];
-            return v !== undefined && v !== null && v !== '';
-        });
-    if (candidate.cv_uploaded !== true && !hasParsedSignal) {
+    // ── Hard CV gate (UPGRADES.md #5) ───────────────────────────────────
+    // CV is THE eligibility gate for assignment: a candidate with no CV on
+    // file (cv_uploaded OR a cv_files row) can never score/match/assign — the
+    // old "parsed-signal bypass" (skills/age typed in chat counted as enough)
+    // is removed, so chat-only leads stay New until a real CV arrives.
+    if (!candidateRowHasCv(candidate)) {
         return {
             score: 0,
-            factors: [{ factor: 'cv', score: 0, detail: 'No CV / unparsed profile — cannot match' }],
+            factors: [{ factor: 'cv', score: 0, detail: 'No CV on file — not eligible for assignment' }],
             is_qualified: false,
             is_excellent: false,
             no_cv: true,
@@ -237,14 +237,14 @@ function calculateMatchScore(candidate, job) {
 /**
  * Auto-assign a single candidate to matching jobs
  */
-router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
+router.post('/candidate/:candidateId', authenticate, requireSection('applications', 'create'), async (req, res, next) => {
     try {
         const { candidateId } = req.params;
         const { threshold = 50 } = req.body; // Minimum match score to assign
 
-        // Get candidate
+        // Get candidate (+ CV-presence so the hard CV gate applies, #5)
         const candidateResult = await pool.query(
-            'SELECT * FROM candidates WHERE id = $1',
+            `SELECT c.*, ${hasCvSql('c')} AS has_cv_file FROM candidates c WHERE c.id = $1`,
             [candidateId]
         );
 
@@ -286,7 +286,7 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
                 // index already exists, so we just no-op and skip on conflict.
                 const appResult = await pool.query(
                     `INSERT INTO applications (candidate_id, job_id, status, match_score, screening_details)
-                     VALUES ($1, $2, 'auto_assigned', $3, $4)
+                     VALUES ($1, $2, 'screening', $3, $4)
                      ON CONFLICT (candidate_id, job_id) DO NOTHING
                      RETURNING *`,
                     [candidateId, job.id, matchResult.score / 100, JSON.stringify(matchResult)]
@@ -311,8 +311,9 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
             }
         }
 
-        // If no jobs matched, move to future pool
-        if (assignments.length === 0 && candidate.status !== 'future_pool') {
+        // If no jobs matched, move to future pool — but ONLY if a CV is on file
+        // (#5: future_pool = "has CV but no matching role"; no CV ⇒ stays New).
+        if (assignments.length === 0 && candidateRowHasCv(candidate) && candidate.status !== 'future_pool') {
             await pool.query(
                 `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`,
                 [candidateId]
@@ -370,13 +371,13 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
 /**
  * Auto-assign all new candidates
  */
-router.post('/batch', authenticate, async (req, res, next) => {
+router.post('/batch', authenticate, requireSection('applications', 'create'), async (req, res, next) => {
     try {
         const { threshold = 50, status = 'new' } = req.body;
 
-        // Get candidates to process
+        // Get candidates to process (+ CV-presence for the hard CV gate, #5)
         const candidatesResult = await pool.query(
-            `SELECT * FROM candidates WHERE status = $1 LIMIT 50`,
+            `SELECT c.*, ${hasCvSql('c')} AS has_cv_file FROM candidates c WHERE c.status = $1 LIMIT 50`,
             [status]
         );
 
@@ -415,7 +416,7 @@ router.post('/batch', authenticate, async (req, res, next) => {
                 if (matchResult.score >= threshold) {
                     const ins = await pool.query(
                         `INSERT INTO applications (candidate_id, job_id, status, match_score, screening_details)
-                         VALUES ($1, $2, 'auto_assigned', $3, $4)
+                         VALUES ($1, $2, 'screening', $3, $4)
                          ON CONFLICT (candidate_id, job_id) DO NOTHING`,
                         [candidate.id, job.id, matchResult.score / 100, JSON.stringify(matchResult)]
                     );
@@ -429,11 +430,15 @@ router.post('/batch', authenticate, async (req, res, next) => {
             }
 
             if (assignedCount === 0) {
-                await pool.query(
-                    `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`,
-                    [candidate.id]
-                );
-                results.to_pool++;
+                // No match → future_pool ONLY if a CV is on file (#5). A CV-less
+                // candidate stays New (awaiting CV), never dropped into the pool.
+                if (candidateRowHasCv(candidate)) {
+                    await pool.query(
+                        `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`,
+                        [candidate.id]
+                    );
+                    results.to_pool++;
+                }
             } else {
                 await pool.query(
                     `UPDATE candidates SET status = 'screening', updated_at = NOW() WHERE id = $1`,
@@ -471,7 +476,7 @@ router.post('/batch', authenticate, async (req, res, next) => {
 /**
  * Get candidates assigned to a job with match details
  */
-router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
+router.get('/job/:jobId/candidates', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const { jobId } = req.params;
         const { status } = req.query;
@@ -524,6 +529,7 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                 LIMIT 1
             ) cv ON true
             WHERE a.job_id = $1
+              AND ${hasCvSql('c')}
         `;
 
         const params = [jobId];
@@ -595,7 +601,7 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                 good: candidates.filter(c => c.match_score >= 60 && c.match_score < 80).length,
                 fair: candidates.filter(c => c.match_score >= 50 && c.match_score < 60).length,
                 certified: candidates.filter(c => c.application_status === 'certified').length,
-                pending: candidates.filter(c => ['auto_assigned', 'applied', 'reviewing'].includes(c.application_status)).length
+                pending: candidates.filter(c => c.application_status === 'screening').length
             }
         });
 
@@ -608,11 +614,13 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
 /**
  * Get future pool candidates
  */
-router.get('/pool', authenticate, async (req, res, next) => {
+router.get('/pool', authenticate, requireSection('general_pool', 'view'), async (req, res, next) => {
     try {
         const { page = 1, limit = 20 } = req.query;
         const offset = (page - 1) * limit;
 
+        // future_pool = "has CV but no matching role" (#5). Surface only CV-present
+        // rows; a CV-less candidate is never a valid pool member.
         const result = await pool.query(
             `SELECT c.*, cv.file_url as cv_raw_url, cv.file_name as cv_filename
              FROM candidates c
@@ -624,13 +632,14 @@ router.get('/pool', authenticate, async (req, res, next) => {
                 LIMIT 1
              ) cv ON true
              WHERE c.status = 'future_pool'
+               AND ${hasCvSql('c')}
              ORDER BY c.updated_at DESC
              LIMIT $1 OFFSET $2`,
             [limit, offset]
         );
 
         const countResult = await pool.query(
-            `SELECT COUNT(*) FROM candidates WHERE status = 'future_pool'`
+            `SELECT COUNT(*) FROM candidates c WHERE c.status = 'future_pool' AND ${hasCvSql('c')}`
         );
 
         // Expose a browser-openable cv_url + cv_filename so the pool modal can
@@ -671,14 +680,20 @@ router.get('/pool', authenticate, async (req, res, next) => {
  * Get alternative jobs for a candidate (excluding current job)
  * GET /api/auto-assign/candidate/:id/alternatives?threshold=40
  */
-router.get('/candidate/:id/alternatives', authenticate, async (req, res, next) => {
+router.get('/candidate/:id/alternatives', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { threshold = 40 } = req.query;
 
-        const candidateResult = await pool.query('SELECT * FROM candidates WHERE id = $1', [id]);
+        const candidateResult = await pool.query(
+            `SELECT c.*, ${hasCvSql('c')} AS has_cv_file FROM candidates c WHERE c.id = $1`,
+            [id]
+        );
         if (candidateResult.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
         const candidate = candidateResult.rows[0];
+
+        // No CV ⇒ not eligible for any job match yet (#5) — return no alternatives.
+        if (!candidateRowHasCv(candidate)) return res.json({ alternatives: [] });
 
         // Active jobs the candidate has NOT already applied to
         const existingApps = await pool.query('SELECT job_id FROM applications WHERE candidate_id = $1', [id]);

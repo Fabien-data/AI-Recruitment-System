@@ -19,6 +19,7 @@ const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { pool, withTransaction, generateUUID } = require('../config/database');
 const chatbotOutbox = require('../services/chatbot-outbox');
 const { buildKbDocChunkPayload } = require('../services/chatbot-payloads');
@@ -135,7 +136,7 @@ function approxTokens(text) {
  * GET /api/knowledge-documents
  * List with pagination and optional category filter
  */
-router.get('/', async (req, res, next) => {
+router.get('/', requireSection('knowledge_base', 'view'), async (req, res, next) => {
     try {
         const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
         const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
@@ -180,7 +181,7 @@ router.get('/', async (req, res, next) => {
  * POST /api/knowledge-documents
  * Upload a single document. Form field: file. Optional fields: title, category.
  */
-router.post('/', authorize('admin', 'sourcing_department'), upload.single('file'), async (req, res, next) => {
+router.post('/', requireSection('knowledge_base', 'create'), authorize('admin', 'sourcing_department'), upload.single('file'), async (req, res, next) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded (form field "file")' });
@@ -276,7 +277,7 @@ router.post('/', authorize('admin', 'sourcing_department'), upload.single('file'
  * GET /api/knowledge-documents/:id/chunks
  * Inspect the parsed chunks for a document (debug + preview)
  */
-router.get('/:id/chunks', async (req, res, next) => {
+router.get('/:id/chunks', requireSection('knowledge_base', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const result = await pool.query(
@@ -296,7 +297,7 @@ router.get('/:id/chunks', async (req, res, next) => {
  * The chatbot calls this directly when it wants document-level knowledge in
  * addition to the FAQ vector results.
  */
-router.get('/search', async (req, res, next) => {
+router.get('/search', requireSection('knowledge_base', 'view'), async (req, res, next) => {
     try {
         const q = String(req.query.q || '').trim();
         if (!q) return res.status(400).json({ error: 'Query parameter "q" is required' });
@@ -328,7 +329,7 @@ router.get('/search', async (req, res, next) => {
  * Cascade deletes chunks via FK ON DELETE CASCADE, and enqueues chatbot deletes
  * for every chunk so the bot stops returning them.
  */
-router.delete('/:id', authorize('admin', 'sourcing_department'), async (req, res, next) => {
+router.delete('/:id', requireSection('knowledge_base', 'delete'), authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id } = req.params;
 

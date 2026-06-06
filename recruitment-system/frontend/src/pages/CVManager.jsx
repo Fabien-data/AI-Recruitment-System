@@ -17,8 +17,11 @@ import {
   reparseCv,
   screenCandidate,
   uploadCandidateDocument,
+  setCandidateStage,
+  apiClient,
 } from '../api'
-import { getStatusLabel, CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS } from '../constants/lifecycle'
+import { getStatusLabel, normalizeStatus, CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS } from '../constants/lifecycle'
+import { useSectionAccess } from '../stores/authStore'
 import { EditCandidateModal } from '../components/EditCandidateModal'
 import {
   Search,
@@ -49,6 +52,8 @@ import {
   Sparkles,
   Plus,
   Pencil,
+  Calendar,
+  MapPinned,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -57,6 +62,7 @@ import { Modal, ConfirmModal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Tabs } from '../components/ui/Tabs'
+import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
 import { EmptyState } from '../components/ui/EmptyState'
 import { FileSearch } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -120,6 +126,11 @@ export default function CVManager() {
   const [showFilters, setShowFilters] = useState(false)
 
   const queryClient = useQueryClient()
+
+  // Auto-assign hits backend routes that require applications.create; hide the
+  // trigger for roles that can reach CV Manager but would get a 403 (e.g.
+  // marketing_agent, project_handler).
+  const canAutoAssign = useSectionAccess('applications', 'create')
 
   // Options for the Job / Project selects (active jobs + all projects).
   const { data: jobsOptions } = useQuery({
@@ -238,15 +249,17 @@ export default function CVManager() {
         subtitle="Review, Remark, and Assign Candidates to Projects"
         actions={
           <>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => autoAssignMutation.mutate()}
-              loading={autoAssignMutation.isPending}
-            >
-              <Sparkles size={16} />
-              Auto-Assign All
-            </Button>
+            {canAutoAssign && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => autoAssignMutation.mutate()}
+                loading={autoAssignMutation.isPending}
+              >
+                <Sparkles size={16} />
+                Auto-Assign All
+              </Button>
+            )}
             <Button variant="secondary" size="sm" onClick={() => refetch()} aria-label="Refresh">
               <RefreshCw size={16} />
             </Button>
@@ -366,11 +379,11 @@ export default function CVManager() {
       {/* Stats Bar */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
         <StatCard label="Total CVs" value={pagination?.total || 0} color="blue" />
-        <StatCard label="New" value={candidatesList.filter(c => c.status === 'new').length} color="green" />
-        <StatCard label="Screening" value={candidatesList.filter(c => c.status === 'screening').length} color="amber" />
-        <StatCard label="Certified" value={candidatesList.filter(c => c.status === 'certified').length} color="emerald" />
-        <StatCard label="Interview Scheduled" value={candidatesList.filter(c => c.status === 'interview_scheduled').length} color="purple" />
-        <StatCard label="Future Pool" value={candidatesList.filter(c => c.status === 'future_pool').length} color="gray" />
+        <StatCard label="New" value={candidatesList.filter(c => normalizeStatus(c.status) === 'new').length} color="green" />
+        <StatCard label="Screening" value={candidatesList.filter(c => normalizeStatus(c.status) === 'screening').length} color="amber" />
+        <StatCard label="Certified" value={candidatesList.filter(c => normalizeStatus(c.status) === 'certified').length} color="emerald" />
+        <StatCard label="Interview Scheduled" value={candidatesList.filter(c => normalizeStatus(c.status) === 'interview_scheduled').length} color="purple" />
+        <StatCard label="Future Pool" value={candidatesList.filter(c => normalizeStatus(c.status) === 'future_pool').length} color="gray" />
       </div>
 
       {/* Candidates List */}
@@ -520,7 +533,10 @@ function SourceBadge({ source }) {
   )
 }
 
-function CVReviewModal({ candidate, onClose }) {
+// Exported so the Communications panel can open the full CV review/edit flow
+// in-place (as a modal over the conversation) without navigating away — the
+// agent never loses the chat they were on.
+export function CVReviewModal({ candidate, onClose }) {
   const [activeTab, setActiveTab] = useState('overview')
   const queryClient = useQueryClient()
 
@@ -589,13 +605,16 @@ function OverviewTab({ candidate }) {
   const docFileRef = useRef(null)
   const queryClient = useQueryClient()
 
-  // Quick status change from the overview header (manual override; the
-  // canonical stage is also auto-synced from applications server-side).
+  // Quick status change from the overview header. Writes the chosen stage
+  // THROUGH to the candidate's active applications (the source of truth) so it
+  // reflects on the Applications page and isn't clobbered by the server-side
+  // candidate-stage re-derivation.
   const statusMutation = useMutation({
-    mutationFn: (status) => updateCandidate(candidate.id, { status }),
+    mutationFn: (status) => setCandidateStage(candidate.id, status),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
       queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['applications'] })
       toast.success('Status updated')
     },
     onError: (e) => toast.error(e?.response?.data?.error || 'Failed to update status'),
@@ -687,7 +706,7 @@ function OverviewTab({ candidate }) {
             <Badge status={candidate.status} />
             {/* Quick status change */}
             <select
-              value={CANDIDATE_STAGES.includes(candidate.status) ? candidate.status : ''}
+              value={CANDIDATE_STAGES.includes(normalizeStatus(candidate.status)) ? normalizeStatus(candidate.status) : ''}
               onChange={(e) => { if (e.target.value) statusMutation.mutate(e.target.value) }}
               disabled={statusMutation.isPending}
               title="Change candidate status"
@@ -1332,6 +1351,12 @@ Examples:
         />
       </div>
 
+      {/* Call log & remarks — shared with the conversation panel so the agent's
+          call history follows the candidate everywhere (synced source of truth). */}
+      <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+        <CallRemarksPanel candidateId={candidate.id} />
+      </div>
+
       {/* Save Button */}
       <div className="flex justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
         <Button variant="secondary" onClick={() => {
@@ -1353,6 +1378,7 @@ function ApplicationsTab({ applications, candidate, jobs }) {
   const queryClient = useQueryClient()
   const [screeningAppId, setScreeningAppId] = useState(null)
   const [transferId, setTransferId] = useState(null)
+  const [scheduleApp, setScheduleApp] = useState(null)
   const [assignJobId, setAssignJobId] = useState('')
 
   // A CV on file is the hard gate for moving New → Screening (matches the
@@ -1527,13 +1553,16 @@ function ApplicationsTab({ applications, candidate, jobs }) {
           </div>
 
           {(() => {
-            const isEntryState = ['applied', 'auto_assigned', 'new', 'reviewing'].includes(app.status)
-            const isCertifiedPlus = ['certified', 'pre_screened', 'interview_scheduled', 'selected', 'placed'].includes(app.status)
+            const appStatus = normalizeStatus(app.status)
+            // Entry = an application still in the screening bucket (legacy
+            // applied/auto_assigned/reviewing all fold to 'screening').
+            const isEntryState = appStatus === 'screening'
+            const isCertifiedPlus = ['certified', 'interview_scheduled', 'hired'].includes(appStatus)
             return (
               <div className="flex gap-2 items-center border-t border-zinc-100 dark:border-zinc-800/60 pt-3">
                 {/* New → Screening: the only stage action in CV Manager. Certify
                     (Screening → Certified) is done by agents in Applications. */}
-                {candidate.status === 'new' && isEntryState && (
+                {normalizeStatus(candidate.status) === 'new' && isEntryState && (
                   <Button
                     size="sm"
                     className="gap-1"
@@ -1546,15 +1575,26 @@ function ApplicationsTab({ applications, candidate, jobs }) {
                     <CheckCircle size={16} /> Screening
                   </Button>
                 )}
-                {candidate.status !== 'new' && (
+                {normalizeStatus(candidate.status) !== 'new' && (
                   <span className="text-sm text-zinc-500 dark:text-zinc-400 italic flex items-center gap-1">
                     {isCertifiedPlus && <CheckCircle2 size={14} className="text-green-500" />}
-                    {app.status === 'certified'
+                    {appStatus === 'certified'
                       ? `Certified${app.certified_at ? ` on ${new Date(app.certified_at).toLocaleDateString()}` : ''}`
                       : isEntryState
                         ? 'In Screening — awaiting certification'
                         : `Status: ${getStatusLabel(app.status)}`}
                   </span>
+                )}
+                {/* Certified → let the agent book the interview right here
+                    instead of jumping to the Job Candidates page. */}
+                {appStatus === 'certified' && (
+                  <Button
+                    size="sm"
+                    className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white"
+                    onClick={() => setScheduleApp(app)}
+                  >
+                    <Calendar size={16} /> Schedule Interview
+                  </Button>
                 )}
                 {isEntryState && (
                   <Button
@@ -1587,7 +1627,157 @@ function ApplicationsTab({ applications, candidate, jobs }) {
           onClose={() => setTransferId(null)}
         />
       )}
+
+      {scheduleApp && (
+        <ScheduleInterviewModal
+          application={scheduleApp}
+          candidate={candidate}
+          onClose={() => setScheduleApp(null)}
+          onSuccess={() => {
+            setScheduleApp(null)
+            queryClient.invalidateQueries({ queryKey: ['applications'] })
+            queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+            queryClient.invalidateQueries({ queryKey: ['candidates'] })
+            queryClient.invalidateQueries({ queryKey: ['interviews'] })
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+// Single-candidate interview scheduler, surfaced in CV Manager once an
+// application is Certified / Pre-Screened. Mirrors the Job Candidates modal:
+// POST /api/interviews creates the record, flips the application to Scheduled,
+// and sends the candidate a WhatsApp invitation.
+function ScheduleInterviewModal({ application, candidate, onClose, onSuccess }) {
+  const [date, setDate] = useState('')
+  const [time, setTime] = useState('')
+  const [location, setLocation] = useState('')
+  const [duration, setDuration] = useState(30)
+  const [description, setDescription] = useState('')
+  const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!date || !time) throw new Error('Date and time are required')
+      const channels = notifyWhatsApp ? ['whatsapp'] : []
+      return apiClient.post('/api/interviews', {
+        application_id: application.id,
+        scheduled_datetime: `${date}T${time}`,
+        location: location || null,
+        duration_minutes: Number(duration) || 30,
+        description: description.trim() || null,
+        notify_channels: channels,
+      }).then((res) => res.data)
+    },
+    onSuccess: (result) => {
+      const notif = result?.notification
+      if (notif && Array.isArray(notif.failed) && notif.failed.length > 0) {
+        showNotificationToast(notif, 'Interview scheduled')
+      } else {
+        toast.success(`Interview scheduled for ${candidate.name || 'candidate'}`)
+      }
+      onSuccess()
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || err.message || 'Failed to schedule interview'),
+  })
+
+  return (
+    <Modal open onClose={onClose} title="Schedule Interview" size="md">
+      <div className="space-y-4">
+        <div className="rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 p-4 flex items-start gap-3">
+          <Calendar className="text-indigo-600 mt-0.5 flex-shrink-0" size={20} />
+          <div>
+            <h4 className="font-semibold text-indigo-800 dark:text-indigo-200">
+              Interview for {candidate.name || 'Candidate'} — {application.job_title || 'Job'}
+            </h4>
+            <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-1">
+              Creates the interview record, moves the application to <strong>Scheduled</strong>, and sends the candidate a WhatsApp invitation with the date, time, and location.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              min={new Date().toISOString().slice(0, 10)}
+              className="input w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Time</label>
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="input w-full"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
+            <MapPinned size={12} /> Location / Venue
+          </label>
+          <input
+            type="text"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="e.g., Head Office, Colombo 3"
+            className="input w-full"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Duration (minutes)</label>
+          <input
+            type="number"
+            min="10"
+            max="240"
+            value={duration}
+            onChange={(e) => setDuration(e.target.value)}
+            className="input w-full"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Extra details for the candidate (optional)</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="e.g., Bring your portfolio. Ask for Mr. Perera at reception."
+            className="input w-full resize-y"
+          />
+          {notifyWhatsApp && (
+            <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Included in the WhatsApp invitation.</p>
+          )}
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={notifyWhatsApp}
+            onChange={(e) => setNotifyWhatsApp(e.target.checked)}
+            className="accent-primary-600"
+          />
+          Send interview invitation via WhatsApp
+        </label>
+
+        <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+          <Button variant="secondary" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white">
+            <Calendar size={16} />
+            {mutation.isPending ? 'Scheduling…' : 'Schedule Interview'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 

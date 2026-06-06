@@ -18,7 +18,7 @@ import { EditProjectModal } from '../components/EditProjectModal'
 import { AdLinkCard } from '../components/AdLinkModal'
 import { format } from 'date-fns'
 import { useAuthStore } from '../stores/authStore'
-import { STATUS_LABELS, STATUS_COLORS } from '../constants/lifecycle'
+import { getStatusLabel, getStatusColor, normalizeStatus } from '../constants/lifecycle'
 
 // Project = Meta campaign. This panel lets the team build the whole campaign's
 // ads in one place: one row per job, each with its generate button or its live
@@ -166,7 +166,7 @@ function ProjectCandidateList({ projectId, jobFilter }) {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium leading-tight text-zinc-900 dark:text-zinc-50 break-words group-hover:text-primary-600">{c.name}</p>
                   <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400 break-words">
-                    {STATUS_LABELS[c.application_status] || c.application_status || c.status || 'Applied'}
+                    {getStatusLabel(normalizeStatus(c.application_status || c.status))}
                   </p>
                 </div>
                 {c.match_score != null && (
@@ -257,11 +257,11 @@ function OverviewStatCard({ icon: Icon, label, value, tone = 'blue' }) {
   )
 }
 
-// Compact lifecycle pill (Applied / Certified / Pre Screened / ...).
+// Compact lifecycle pill (Screening / Certified / Interview Scheduled / ...).
 function LifecyclePill({ status, count }) {
   return (
-    <div className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${STATUS_COLORS[status] || 'bg-zinc-50 text-zinc-700 border-zinc-200'}`}>
-      <span className="text-xs font-medium">{STATUS_LABELS[status] || status}</span>
+    <div className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${getStatusColor(status)}`}>
+      <span className="text-xs font-medium">{getStatusLabel(status)}</span>
       <span className="text-sm font-bold tabular-nums">{count || 0}</span>
     </div>
   )
@@ -676,11 +676,14 @@ export default function ProjectDetail() {
             </div>
             <div className="grid grid-cols-1 gap-2">
               {[
-                { status: 'applied',             count: stats.applied_count },
+                // One pill per CANONICAL application status. The backend's legacy
+                // stats keys now collapse onto canonical values (pre_screened_count ==
+                // certified_count, selected_count == interview_count), so we read each
+                // canonical count once — no duplicate Certified / Interview Scheduled
+                // pills — and filter /applications by the canonical status directly.
+                { status: 'screening',           count: stats.applied_count },
                 { status: 'certified',           count: stats.certified_count },
-                { status: 'pre_screened',        count: stats.pre_screened_count },
-                { status: 'interview_scheduled', count: stats.interview_count },
-                { status: 'selected',            count: stats.selected_count },
+                { status: 'interview_scheduled', count: stats.interview_scheduled ?? stats.interview_count },
                 { status: 'rejected',            count: stats.rejected_count },
               ].map(({ status, count }) => (
                 <Link

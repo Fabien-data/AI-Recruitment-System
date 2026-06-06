@@ -6,7 +6,7 @@ import { getNotifications } from '../api'
 import {
   LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell,
   FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone,
-  AlertTriangle, Activity,
+  AlertTriangle, Activity, PanelLeft,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { twMerge } from 'tailwind-merge'
@@ -107,7 +107,9 @@ const BASE_NAV = [
 ]
 
 const FULL_NAV_EXTRAS = [
-  { to: '/engagement', label: 'Engagement', icon: Activity, section: 'engagement' },
+  // Engagement is gated under the communications section (it has no dedicated
+  // catalogue section) so it surfaces for roles with Messages access.
+  { to: '/engagement', label: 'Engagement', icon: Activity, section: 'communications' },
   { to: '/cv-manager', label: 'CV Manager', icon: FileSearch, section: 'cv_manager' },
   { to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' },
   { to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' },
@@ -192,6 +194,22 @@ export default function Layout() {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // Full-screen conversations: on /communications the sidebar collapses to just
+  // the hamburger so the panel gets the whole width. Elsewhere the user's manual
+  // collapse preference applies. When collapsed, the sidebar opens as an overlay.
+  const isMessages = location.pathname.startsWith('/communications')
+  const [manualCollapsed, setManualCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebarCollapsed') === '1' } catch { return false }
+  })
+  const collapsed = isMessages || manualCollapsed
+  const toggleCollapsed = () => {
+    setManualCollapsed((v) => {
+      const next = !v
+      try { localStorage.setItem('sidebarCollapsed', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }
+
   const navItems = buildNav(role, sectionPermissions)
 
   const handleLogout = async () => {
@@ -215,7 +233,7 @@ export default function Layout() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-30 bg-primary-950/40 backdrop-blur-sm lg:hidden"
+            className={twMerge('fixed inset-0 z-30 bg-primary-950/40 backdrop-blur-sm', collapsed ? '' : 'lg:hidden')}
             onClick={() => setSidebarOpen(false)}
             aria-hidden="true"
           />
@@ -225,9 +243,10 @@ export default function Layout() {
       {/* Floating Sidebar */}
       <aside
         className={twMerge(
-          'fixed lg:static inset-y-0 left-0 z-40 w-72 h-[calc(100vh-2rem)] my-4 ml-4 lg:my-4 lg:ml-4 flex flex-col bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          'fixed inset-y-0 left-0 z-40 w-72 h-[calc(100vh-2rem)] my-4 ml-4 lg:my-4 lg:ml-4 flex flex-col bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          collapsed ? '' : 'lg:static',
           'before:content-[""] before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-brand-gradient before:rounded-l-3xl',
-          sidebarOpen ? 'translate-x-0' : '-translate-x-[120%] lg:translate-x-0'
+          sidebarOpen ? 'translate-x-0' : (collapsed ? '-translate-x-[120%]' : '-translate-x-[120%] lg:translate-x-0')
         )}
       >
         {/* Logo */}
@@ -236,7 +255,7 @@ export default function Layout() {
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
-            className="lg:hidden p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            className={twMerge('p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors', collapsed ? '' : 'lg:hidden')}
           >
             <X size={20} />
           </button>
@@ -319,10 +338,22 @@ export default function Layout() {
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-2.5 text-zinc-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 rounded-2xl shadow-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+              aria-label="Open menu"
+              className={twMerge('p-2.5 text-zinc-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 rounded-2xl shadow-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors', collapsed ? '' : 'lg:hidden')}
             >
               <Menu size={20} />
             </button>
+            {!isMessages && (
+              <button
+                type="button"
+                onClick={toggleCollapsed}
+                aria-label={manualCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                title={manualCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                className="hidden lg:inline-flex p-2.5 text-zinc-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 rounded-2xl shadow-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <PanelLeft size={20} />
+              </button>
+            )}
             <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 tracking-tight truncate">
               {pageTitle}
             </h2>
@@ -334,7 +365,12 @@ export default function Layout() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto px-4 lg:px-12 pb-12 w-full custom-scrollbar">
+        <main className={twMerge(
+          'flex-1 w-full',
+          isMessages
+            ? 'overflow-hidden px-2 lg:px-4 pb-4'
+            : 'overflow-y-auto px-4 lg:px-12 pb-12 custom-scrollbar'
+        )}>
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
@@ -342,7 +378,7 @@ export default function Layout() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -10, scale: 0.998 }}
               transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-              className="max-w-[1400px] mx-auto w-full h-full"
+              className={twMerge('w-full h-full', isMessages ? '' : 'max-w-[1400px] mx-auto')}
             >
               <Outlet />
             </motion.div>

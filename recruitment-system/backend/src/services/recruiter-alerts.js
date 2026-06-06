@@ -126,7 +126,7 @@ async function findRecruitersForJob(jobId) {
         if (!jobId) {
             // Fallback: notify all admin users
             const result = await query(
-                adaptQuery("SELECT id, email, full_name, phone FROM users WHERE role IN ('admin','supervisor') AND is_active = true"),
+                adaptQuery("SELECT id, email, full_name, phone FROM users WHERE role IN ('admin','sourcing_department') AND is_active = true"),
                 []
             );
             return result.rows;

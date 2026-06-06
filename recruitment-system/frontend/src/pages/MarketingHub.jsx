@@ -9,6 +9,7 @@ import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { PageHeader } from '../components/ui/PageHeader'
+import { STATUS_COLORS } from '../constants/lifecycle'
 
 const STAGE_OPTIONS = [
   { value: '', label: 'All stages' },
@@ -19,12 +20,23 @@ const STAGE_OPTIONS = [
   { value: 'lost', label: 'Lost' },
 ]
 
+// Maps the lead vocabulary (new/contacted/qualified/converted/lost) onto
+// canonical candidate-badge keys. Every target value must be a key the shared
+// STATUS_COLORS/STATUS_LABELS (lifecycle.js) can resolve — no non-canonical
+// values like 'interview'.
 const STAGE_BADGE_STATUS = {
   new: 'new',
   contacted: 'screening',
-  qualified: 'interview',
+  qualified: 'interview_scheduled',
   converted: 'hired',
   lost: 'rejected',
+}
+
+// Resolve a lead stage to a canonical candidate-badge key. Falls back to 'new'
+// unless the mapped value is a key the shared STATUS_COLORS can actually render.
+function leadBadgeStatus(leadStage) {
+  const mapped = STAGE_BADGE_STATUS[leadStage]
+  return mapped && STATUS_COLORS[mapped] ? mapped : 'new'
 }
 
 function formatDate(iso) {
@@ -179,7 +191,7 @@ export default function MarketingHub() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <Badge status={STAGE_BADGE_STATUS[lead.stage] || 'new'}>
+                      <Badge status={leadBadgeStatus(lead.stage)}>
                         {lead.stage}
                       </Badge>
                     </td>

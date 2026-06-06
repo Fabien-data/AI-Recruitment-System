@@ -13,12 +13,12 @@ const router = express.Router();
 const { query } = require('../config/database');
 const { adaptQuery, isMySQL } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const logger = require('../utils/logger');
 
+// Canonical application-status funnel order (UPGRADES.md #1).
 const PIPELINE_STATUS_ORDER = [
-    'applied', 'reviewing', 'screening', 'certified',
-    'interview_scheduled', 'interviewed', 'selected', 'placed',
-    'rejected', 'transferred'
+    'screening', 'certified', 'interview_scheduled', 'hired', 'rejected',
 ];
 
 function formatStatusLabel(status = '') {
@@ -29,7 +29,7 @@ function formatStatusLabel(status = '') {
 }
 
 // ── Overview KPIs ─────────────────────────────────────────────────────────────
-router.get('/overview', authenticate, async (req, res, next) => {
+router.get('/overview', authenticate, requireSection('analytics', 'view'), async (req, res, next) => {
     try {
         const { period = '30' } = req.query; // days
         const days = parseInt(period, 10) || 30;
@@ -58,9 +58,9 @@ router.get('/overview', authenticate, async (req, res, next) => {
             // Current period
             query(adaptQuery(`
                 SELECT
-                    SUM(CASE WHEN status NOT IN ('rejected', 'transferred') THEN 1 ELSE 0 END) AS total_applications,
-                    SUM(CASE WHEN status IN ('certified','interview_scheduled','interviewed','selected','placed') THEN 1 ELSE 0 END) AS certified,
-                    SUM(CASE WHEN status IN ('selected', 'placed') THEN 1 ELSE 0 END) AS selected,
+                    SUM(CASE WHEN status <> 'rejected' THEN 1 ELSE 0 END) AS total_applications,
+                    SUM(CASE WHEN status IN ('certified','interview_scheduled','hired') THEN 1 ELSE 0 END) AS certified,
+                    SUM(CASE WHEN status = 'hired' THEN 1 ELSE 0 END) AS selected,
                     COUNT(DISTINCT candidate_id) AS unique_candidates
                 FROM applications
                 WHERE applied_at >= ${currentFrom}
@@ -68,9 +68,9 @@ router.get('/overview', authenticate, async (req, res, next) => {
             // Previous period (for % change)
             query(adaptQuery(`
                 SELECT
-                    SUM(CASE WHEN status NOT IN ('rejected', 'transferred') THEN 1 ELSE 0 END) AS total_applications,
-                    SUM(CASE WHEN status IN ('certified','interview_scheduled','interviewed','selected','placed') THEN 1 ELSE 0 END) AS certified,
-                    SUM(CASE WHEN status IN ('selected', 'placed') THEN 1 ELSE 0 END) AS selected,
+                    SUM(CASE WHEN status <> 'rejected' THEN 1 ELSE 0 END) AS total_applications,
+                    SUM(CASE WHEN status IN ('certified','interview_scheduled','hired') THEN 1 ELSE 0 END) AS certified,
+                    SUM(CASE WHEN status = 'hired' THEN 1 ELSE 0 END) AS selected,
                     COUNT(DISTINCT candidate_id) AS unique_candidates
                 FROM applications
                 WHERE applied_at >= ${prevFrom}
@@ -88,7 +88,7 @@ router.get('/overview', authenticate, async (req, res, next) => {
                 SELECT
                     ${weeklyBucketExpr} AS week,
                     COUNT(*) AS applications,
-                    SUM(CASE WHEN status IN ('certified','interview_scheduled','interviewed','selected','placed') THEN 1 ELSE 0 END) AS certified
+                    SUM(CASE WHEN status IN ('certified','interview_scheduled','hired') THEN 1 ELSE 0 END) AS certified
                 FROM applications
                 WHERE applied_at >= ${trendFrom}
                 GROUP BY week
@@ -115,7 +115,7 @@ router.get('/overview', authenticate, async (req, res, next) => {
                     p.interview_date,
                     COUNT(DISTINCT j.id) AS total_jobs,
                     COUNT(DISTINCT a.id) AS total_applications,
-                    COUNT(DISTINCT CASE WHEN a.status IN ('certified','interview_scheduled','interviewed') THEN a.id END) AS active_pipeline
+                    COUNT(DISTINCT CASE WHEN a.status IN ('certified','interview_scheduled') THEN a.id END) AS active_pipeline
                 FROM projects p
                 LEFT JOIN jobs j ON j.project_id = p.id
                 LEFT JOIN applications a ON a.job_id = j.id
@@ -236,7 +236,7 @@ router.get('/overview', authenticate, async (req, res, next) => {
 });
 
 // ── Job pipeline funnel ───────────────────────────────────────────────────────
-router.get('/jobs/:id/pipeline', authenticate, async (req, res, next) => {
+router.get('/jobs/:id/pipeline', authenticate, requireSection('analytics', 'view'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery(`
@@ -249,7 +249,7 @@ router.get('/jobs/:id/pipeline', authenticate, async (req, res, next) => {
             [req.params.id]
         );
 
-        const ORDER = ['applied','reviewing','screening','certified','interview_scheduled','interviewed','selected','placed','rejected','transferred'];
+        const ORDER = PIPELINE_STATUS_ORDER;
         const map = {};
         result.rows.forEach(r => { map[r.status] = parseInt(r.count, 10); });
         const funnel = ORDER.map(s => ({ status: s, count: map[s] || 0 }));
@@ -259,7 +259,7 @@ router.get('/jobs/:id/pipeline', authenticate, async (req, res, next) => {
 });
 
 // ── Recruiter performance ─────────────────────────────────────────────────────
-router.get('/recruiter-performance', authenticate, async (req, res, next) => {
+router.get('/recruiter-performance', authenticate, requireSection('analytics', 'view'), async (req, res, next) => {
     try {
         const { period = '30' } = req.query;
         const days = parseInt(period, 10) || 30;
@@ -282,7 +282,7 @@ router.get('/recruiter-performance', authenticate, async (req, res, next) => {
 });
 
 // ── Ad performance ────────────────────────────────────────────────────────────
-router.get('/ad-performance', authenticate, async (req, res, next) => {
+router.get('/ad-performance', authenticate, requireSection('analytics', 'view'), async (req, res, next) => {
     try {
         const result = await query(adaptQuery(`
             SELECT
@@ -304,7 +304,7 @@ router.get('/ad-performance', authenticate, async (req, res, next) => {
 });
 
 // ── CSV export ────────────────────────────────────────────────────────────────
-router.get('/export', authenticate, async (req, res, next) => {
+router.get('/export', authenticate, requireSection('analytics', 'view'), async (req, res, next) => {
     try {
         const { status, job_id, date_from, date_to } = req.query;
         const params = [];

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { adaptQuery, isMySQL } = require('../utils/query-adapter');
 const { normalizePhone } = require('../utils/phone');
 const axios = require('axios');
@@ -9,7 +10,13 @@ const logger = require('../utils/logger');
 const { resolveCvAccessUrl } = require('../utils/cv-url');
 const { openai, createChatCompletion } = require('../config/openai');
 const notifications = require('../services/notifications');
-const { syncCandidateStage } = require('../services/candidate-stage');
+const {
+    syncCandidateStage,
+    setCandidateStage,
+    emitStageChanged,
+    candidateHasCv,
+    CANDIDATE_STATUS_SET,
+} = require('../services/candidate-stage');
 
 function parseCandidateMetadata(metadata) {
     if (!metadata) return {};
@@ -80,7 +87,7 @@ function normalizeAgeInput(value) {
  * Get all candidates with filters and pagination
  * Compatible with both MySQL and PostgreSQL
  */
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const {
             page = 1,
@@ -161,8 +168,10 @@ router.get('/', authenticate, async (req, res, next) => {
         }
 
         if (search) {
-            // Strip non-digits to also match phone numbers stored with/without country code/spaces.
-            const digits = String(search).replace(/\D/g, '');
+            // Strip non-digits, plus a local-format leading zero: SL numbers are
+            // stored as 94XXXXXXXXX but recruiters type 0XXXXXXXXX — keeping the
+            // leading 0 makes the digit substring miss the stored number.
+            const digits = String(search).replace(/\D/g, '').replace(/^0+/, '');
             // Search now also covers skills + the metadata JSON (so recruiters can
             // find candidates by skill, licence, previous employer, country, etc.).
             if (isMySQL) {
@@ -185,9 +194,12 @@ router.get('/', authenticate, async (req, res, next) => {
         }
 
         if (intervention_needed !== undefined) {
+            // Prod candidates table has NO `intervention_needed` column — human
+            // handoff is tracked by requires_human / is_human_handoff (mirrors
+            // notifications.js). Querying the old column 500s on every poll.
             const asBool = String(intervention_needed).toLowerCase() === 'true';
-            whereClause += isMySQL ? ' AND c.intervention_needed = ?' : ` AND c.intervention_needed = $${params.length + 1}`;
-            params.push(asBool);
+            const cond = '(c.requires_human IS TRUE OR c.is_human_handoff IS TRUE)';
+            whereClause += asBool ? ` AND ${cond}` : ` AND NOT ${cond}`;
         }
 
         // Has-CV: a candidate "has a CV" if the cv_uploaded flag is set OR a
@@ -298,7 +310,7 @@ router.get('/', authenticate, async (req, res, next) => {
  * fails the UUID lookup with a 500). This activates the existing
  * duplicate-detection service + the "Scan for Duplicates" UI.
  */
-router.get('/duplicates', authenticate, async (req, res, next) => {
+router.get('/duplicates', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const { min_confidence = 0.5, limit = 100 } = req.query;
         const { findDuplicates } = require('../services/duplicate-detection');
@@ -307,7 +319,7 @@ router.get('/duplicates', authenticate, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-router.get('/:id', authenticate, async (req, res, next) => {
+router.get('/:id', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const placeholder = isMySQL ? '?' : '$1';
@@ -414,7 +426,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 /**
  * Create new candidate manually
  */
-router.post('/', authenticate, async (req, res, next) => {
+router.post('/', authenticate, requireSection('candidates', 'create'), async (req, res, next) => {
     try {
         const {
             name,
@@ -479,10 +491,19 @@ router.post('/', authenticate, async (req, res, next) => {
 /**
  * Update candidate
  */
-router.put('/:id', authenticate, async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = req.body;
+
+        // Enforce the canonical 7-value candidate vocabulary on any direct status
+        // write (#1) — no ad-hoc status word can be persisted here.
+        if (Object.prototype.hasOwnProperty.call(updates, 'status')
+            && updates.status != null && !CANDIDATE_STATUS_SET.has(updates.status)) {
+            return res.status(400).json({
+                error: `Invalid candidate status "${updates.status}". Allowed: ${[...CANDIDATE_STATUS_SET].join(', ')}.`,
+            });
+        }
 
         const allowedFields = ['name', 'phone', 'email', 'source', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
         // Profile fields stored inside the metadata JSON (like age) rather than
@@ -603,15 +624,66 @@ router.put('/:id', authenticate, async (req, res, next) => {
 });
 
 /**
+ * Set the candidate's pipeline stage from CV Manager.
+ *
+ * candidates.status is auto-derived from applications.status, so writing it
+ * directly (the old behaviour) never showed up on the Applications page and was
+ * clobbered by the next syncCandidateStage(). Instead we write the chosen stage
+ * THROUGH to all of the candidate's active (non-terminal) applications — the
+ * source of truth — then re-derive candidate.status from them. Stages without
+ * an application equivalent (new / future_pool) or candidates with no active
+ * applications fall back to a direct candidate.status write. The cascade itself
+ * lives in setCandidateStage() (services/candidate-stage.js) so the calling
+ * console can reuse it.
+ */
+const VALID_CANDIDATE_STAGES = new Set([
+    'new', 'screening', 'certified', 'interview_scheduled', 'future_pool',
+]);
+
+router.put('/:id/stage', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { stage } = req.body;
+        if (!VALID_CANDIDATE_STAGES.has(stage)) {
+            return res.status(400).json({ error: 'Invalid stage' });
+        }
+
+        const candRes = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        // CV is the hard gate (#5): a candidate with no CV can only be 'new'. Any
+        // forward/pool stage requires a CV on file — reuse the screening_gate 422.
+        if (stage !== 'new' && !(await candidateHasCv(id))) {
+            return res.status(422).json({
+                error: 'Upload a CV/resume before advancing the candidate past New.',
+                code: 'screening_gate',
+                has_cv: false,
+            });
+        }
+
+        // Cascade through applications + re-derive candidate.status, and broadcast
+        // the live `candidate_stage_changed` event (shared with the calling console).
+        const { updatedApplications: updatedApps } = await setCandidateStage(id, stage);
+
+        const fresh = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [id]);
+        return res.json({ success: true, candidate: fresh.rows[0], updated_applications: updatedApps });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
  * Resolve AI intervention flag after human takeover
  */
-router.post('/:id/resolve-intervention', authenticate, async (req, res, next) => {
+router.post('/:id/resolve-intervention', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const placeholder = isMySQL ? '?' : '$1';
+        // Clear the real handoff flags (requires_human / is_human_handoff +
+        // escalation_reason) — there is no intervention_needed column in prod.
         const updateSql = isMySQL
-            ? 'UPDATE candidates SET intervention_needed = FALSE, intervention_reason = NULL, updated_at = NOW() WHERE id = ?'
-            : 'UPDATE candidates SET intervention_needed = FALSE, intervention_reason = NULL, updated_at = NOW() WHERE id = $1 RETURNING id';
+            ? 'UPDATE candidates SET requires_human = FALSE, is_human_handoff = FALSE, escalation_reason = NULL, updated_at = NOW() WHERE id = ?'
+            : 'UPDATE candidates SET requires_human = FALSE, is_human_handoff = FALSE, escalation_reason = NULL, updated_at = NOW() WHERE id = $1 RETURNING id';
 
         const updated = await query(updateSql, [id]);
         if ((!isMySQL && updated.rows.length === 0) || (isMySQL && updated.rowCount === 0)) {
@@ -635,7 +707,7 @@ router.post('/:id/resolve-intervention', authenticate, async (req, res, next) =>
  * Certification (Screening → Certified) is a separate, agent-driven action that
  * lives in Applications/Projects.
  */
-router.post('/:id/screening', authenticate, async (req, res, next) => {
+router.post('/:id/screening', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { note, notify_channels = ['whatsapp'] } = req.body || {};
@@ -674,6 +746,7 @@ router.post('/:id/screening', authenticate, async (req, res, next) => {
             adaptQuery("UPDATE candidates SET status = 'screening', conversation_stage = 'screening', updated_at = NOW() WHERE id = $1"),
             [id]
         );
+        emitStageChanged(id, 'screening');
 
         // Optional internal note — append to candidate notes for an audit trail.
         if (note && String(note).trim()) {
@@ -720,7 +793,7 @@ router.post('/:id/screening', authenticate, async (req, res, next) => {
 /**
  * Delete candidate
  */
-router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('candidates', 'delete'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const placeholder = isMySQL ? '?' : '$1';
@@ -754,7 +827,7 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) =
  * POST /api/candidates/merge
  * Merges merge_id into keep_id — migrates all data, soft-deletes the duplicate.
  */
-router.post('/merge', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
+router.post('/merge', authenticate, requireSection('candidates', 'delete'), async (req, res, next) => {
     try {
         const { keep_id, merge_id } = req.body;
         if (!keep_id || !merge_id) {
@@ -803,7 +876,7 @@ const photoUpload = multer({
 router.post(
     '/:id/photo',
     authenticate,
-    authorize('admin', 'sourcing_department', 'project_handler'),
+    requireSection('cv_manager', 'edit'),
     photoUpload.single('photo'),
     async (req, res, next) => {
         try {
@@ -864,7 +937,7 @@ const documentUpload = multer({
 router.post(
     '/:id/documents',
     authenticate,
-    authorize('admin', 'sourcing_department', 'project_handler'),
+    requireSection('cv_manager', 'create'),
     documentUpload.single('file'),
     async (req, res, next) => {
         try {
@@ -1018,7 +1091,7 @@ const CV_REPARSE_PROMPT = 'Extract recruitment data from this CV/document and re
     + 'certifications (array), licenses (string), country, '
     + 'document_type (one of: cv, passport, certificate, photo, other), raw_text, overall_confidence (0-1).';
 
-router.post('/cv/:cvId/reparse', authenticate, async (req, res) => {
+router.post('/cv/:cvId/reparse', authenticate, requireSection('cv_manager', 'edit'), async (req, res) => {
     const { cvId } = req.params;
     try {
         const sql = isMySQL ? 'SELECT * FROM cv_files WHERE id = ? LIMIT 1' : 'SELECT * FROM cv_files WHERE id = $1 LIMIT 1';

@@ -18,6 +18,7 @@ const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 
 const VALID_STATUS = new Set(['pending', 'done', 'cancelled']);
 
@@ -34,7 +35,7 @@ const SELECT_WITH_JOINS = `
     LEFT JOIN users cu ON t.created_by  = cu.id`;
 
 // ── Create a task ─────────────────────────────────────────────────────────────
-router.post('/', authenticate, async (req, res, next) => {
+router.post('/', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
     try {
         const { candidate_id, application_id, due_at, note, task_type, assigned_to } = req.body || {};
         if (!candidate_id || !due_at) {
@@ -56,7 +57,7 @@ router.post('/', authenticate, async (req, res, next) => {
 });
 
 // ── List tasks ────────────────────────────────────────────────────────────────
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
         const { status, assigned_to, candidate_id, overdue, due_before, limit = 100, offset = 0 } = req.query;
         const params = [];
@@ -78,14 +79,18 @@ router.get('/', authenticate, async (req, res, next) => {
 });
 
 // ── Due tasks (pending, due now or overdue) — agent dashboard ─────────────────
-router.get('/due', authenticate, async (req, res, next) => {
+router.get('/due', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {
-        const { mine } = req.query;
+        const { mine, task_type } = req.query;
         const params = [];
         let mineClause = '';
         if (mine === 'true') { params.push(req.user.id); mineClause = `AND t.assigned_to = $${params.length}`; }
+        // Optional task_type filter powers the Engagement "Catch-up (No answer)"
+        // card (task_type='no_answer') vs. the generic "Due work" list.
+        let typeClause = '';
+        if (task_type) { params.push(task_type); typeClause = `AND t.task_type = $${params.length}`; }
         const sql = `${SELECT_WITH_JOINS}
-            WHERE t.status = 'pending' AND t.due_at <= NOW() ${mineClause}
+            WHERE t.status = 'pending' AND t.due_at <= NOW() ${mineClause} ${typeClause}
             ORDER BY t.due_at ASC
             LIMIT 200`;
         const result = await query(sql, params);
@@ -94,7 +99,7 @@ router.get('/due', authenticate, async (req, res, next) => {
 });
 
 // ── Update a task (complete / reschedule / annotate) ─────────────────────────
-router.patch('/:id', authenticate, async (req, res, next) => {
+router.patch('/:id', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status, outcome, note, due_at, assigned_to } = req.body || {};
@@ -120,7 +125,7 @@ router.patch('/:id', authenticate, async (req, res, next) => {
 });
 
 // ── Cancel a task ─────────────────────────────────────────────────────────────
-router.delete('/:id', authenticate, async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery("UPDATE candidate_tasks SET status = 'cancelled' WHERE id = $1 RETURNING id"),

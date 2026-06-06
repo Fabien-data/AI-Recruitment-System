@@ -20,49 +20,89 @@ const { pool } = require('../config/database');
 const ALL_PERMS = { can_view: true, can_create: true, can_edit: true, can_delete: true };
 const VIEW_ONLY = { can_view: true, can_create: false, can_edit: false, can_delete: false };
 const NONE      = { can_view: false, can_create: false, can_edit: false, can_delete: false };
+// CRUD shorthands for the mandatory matrix below.
+const V    = VIEW_ONLY;                                                        // view
+const VE   = { can_view: true, can_create: false, can_edit: true,  can_delete: false }; // view + edit
+const VCE  = { can_view: true, can_create: true,  can_edit: true,  can_delete: false }; // view + create + edit
+const VCED = ALL_PERMS;                                                        // full CRUD
+
+// The canonical section catalogue (matches the seeded `sections` table).
+const SECTION_KEYS = [
+    'dashboard', 'projects', 'applications', 'candidates', 'cv_manager',
+    'communications', 'interviews', 'jobs', 'marketing_hub', 'analytics',
+    'general_pool', 'knowledge_base',
+];
 
 // Sections every authenticated user can at minimum see — keeps the app navigable
 // even if no permissions are configured.
 const UNIVERSAL_SECTIONS = ['dashboard'];
 
 /**
- * Role-based defaults. Used when a user has NO rows in user_section_permissions
- * for a given section. Mirrors the historical Layout.jsx nav behaviour so existing
- * users keep the access they had before Migration 021.
+ * MANDATORY ROLE BASELINE (UPGRADES.md #2 — the locked access matrix).
+ * The single source of truth for what each role can do per section. Selecting a
+ * role in the user form auto-applies + locks these rows; admins may grant EXTRAS
+ * on top, but the baseline is a floor that cannot be removed (enforced by the
+ * baseline-OR-custom logic in loadPerms/requireSection and by admin.js seeding).
+ *
+ * admin = full CRUD everywhere (handled by the bypass; listed for completeness).
+ * sourcing_department = full operations except the admin panel (locked decision).
+ * project_handler = pipeline ops, jobs view-only, no delete.
+ * marketing_agent = onboard-from-chat: jobs view-only, candidates view, cv_manager
+ *                   + marketing_hub full, communications view+edit.
  */
-const ROLE_DEFAULTS = {
+const ROLE_BASELINE = {
     admin: {
-        // Everything, always.
-        match: () => ALL_PERMS,
-    },
-    sourcing_department: {
-        match: () => ALL_PERMS,
+        dashboard: VCED, projects: VCED, applications: VCED, candidates: VCED,
+        cv_manager: VCED, communications: VCED, interviews: VCED, jobs: VCED,
+        marketing_hub: VCED, analytics: VCED, general_pool: VCED, knowledge_base: VCED,
     },
     project_handler: {
-        match: (key) => {
-            const allowed = [
-                'dashboard', 'candidates', 'jobs', 'projects', 'applications',
-                'interviews', 'communications', 'analytics', 'general_pool',
-            ];
-            if (!allowed.includes(key)) return NONE;
-            // Project handlers historically couldn't delete entities.
-            return { can_view: true, can_create: true, can_edit: true, can_delete: false };
-        },
+        dashboard: V, projects: VCE, applications: VE, candidates: VE,
+        cv_manager: VCE, communications: VE, interviews: VCE, jobs: V,
+        marketing_hub: NONE, analytics: V, general_pool: V, knowledge_base: NONE,
     },
     marketing_agent: {
-        match: (key) => {
-            if (key === 'dashboard') return VIEW_ONLY;
-            if (key === 'marketing_hub') return { can_view: true, can_create: true, can_edit: true, can_delete: false };
-            return NONE;
-        },
+        dashboard: V, projects: NONE, applications: NONE, candidates: V,
+        cv_manager: VCE, communications: VE, interviews: NONE, jobs: V,
+        marketing_hub: VCE, analytics: NONE, general_pool: NONE, knowledge_base: NONE,
+    },
+    sourcing_department: {
+        dashboard: V, projects: VCED, applications: VCED, candidates: VCED,
+        cv_manager: VCED, communications: VCED, interviews: VCED, jobs: VCED,
+        marketing_hub: VCED, analytics: VCED, general_pool: VCED, knowledge_base: VCED,
     },
 };
 
+// Back-compat alias (older references) — same source of truth.
+const ROLE_DEFAULTS = ROLE_BASELINE;
+
+/**
+ * The mandatory baseline permission set for (role, section). This is the floor
+ * a user is guaranteed regardless of custom rows. Admin is full CRUD.
+ */
 function roleDefault(role, sectionKey) {
-    if (UNIVERSAL_SECTIONS.includes(sectionKey)) return ALL_PERMS;
-    const def = ROLE_DEFAULTS[role];
-    if (!def) return NONE;
-    return def.match(sectionKey);
+    if (role === 'admin') return ALL_PERMS;
+    const roleMap = ROLE_BASELINE[role];
+    const base = (roleMap && roleMap[sectionKey]) ? roleMap[sectionKey] : NONE;
+    // Dashboard stays at least viewable for any authenticated role so the app
+    // never traps a user with nowhere to land.
+    if (UNIVERSAL_SECTIONS.includes(sectionKey) && !base.can_view) return VIEW_ONLY;
+    return base;
+}
+
+/**
+ * Effective permission = mandatory baseline OR per-user custom grant. Custom rows
+ * can only ADD access on top of the baseline; they can never drop below it.
+ */
+function effectiveSectionPerms(role, sectionKey, customRow) {
+    const base = roleDefault(role, sectionKey);
+    if (!customRow) return base;
+    return {
+        can_view:   !!base.can_view   || !!customRow.can_view,
+        can_create: !!base.can_create || !!customRow.can_create,
+        can_edit:   !!base.can_edit   || !!customRow.can_edit,
+        can_delete: !!base.can_delete || !!customRow.can_delete,
+    };
 }
 
 /**
@@ -83,7 +123,8 @@ async function loadPerms(userId, role) {
 
     return sectionsRes.rows.map(s => {
         const custom = customByKey.get(s.key);
-        const perms = custom || roleDefault(role, s.key);
+        // Effective = mandatory baseline OR custom grant (custom can only add).
+        const perms = effectiveSectionPerms(role, s.key, custom);
         return {
             section_key: s.key,
             section_name: s.name,
@@ -120,7 +161,8 @@ function requireSection(sectionKey, action) {
                  WHERE user_id = $1 AND section_key = $2`,
                 [req.user.id, sectionKey]
             );
-            const row = r.rows[0] || roleDefault(req.user.role, sectionKey);
+            // Effective = mandatory baseline OR custom grant (custom can only add).
+            const row = effectiveSectionPerms(req.user.role, sectionKey, r.rows[0]);
             if (!row || !row[`can_${action}`]) {
                 return res.status(403).json({
                     error: 'Section access denied',
@@ -139,6 +181,9 @@ module.exports = {
     requireSection,
     loadPerms,
     roleDefault,
+    effectiveSectionPerms,
+    ROLE_BASELINE,
     ROLE_DEFAULTS,
+    SECTION_KEYS,
     UNIVERSAL_SECTIONS,
 };

@@ -254,6 +254,48 @@ applyMigrations()
             initWebSocket(server);
             logger.info('🔌 WebSocket (Socket.io) server ready');
 
+            // ── In-call presence TTL sweep ─────────────────────────────────
+            // Backstop for hard crashes where the socket 'disconnect' cleanup
+            // never ran: clear any 'on_call' rows whose heartbeat went stale
+            // (the frontend heartbeats every ~60s while a call toggle is ON).
+            try {
+                const { query } = require('./config/database');
+                const { getIO } = require('./utils/websocket');
+                const STALE_MIN = parseInt(process.env.CALL_PRESENCE_TTL_MIN, 10) || 15;
+                const sweepStaleCalls = async () => {
+                    try {
+                        const stale = await query(
+                            `SELECT id FROM candidates
+                             WHERE call_status = 'on_call'
+                               AND call_started_at < NOW() - make_interval(mins => $1)`,
+                            [STALE_MIN]
+                        );
+                        if (!stale.rows || stale.rows.length === 0) return;
+                        await query(
+                            `UPDATE candidates SET call_status = NULL, call_agent_id = NULL, call_started_at = NULL
+                             WHERE call_status = 'on_call'
+                               AND call_started_at < NOW() - make_interval(mins => $1)`,
+                            [STALE_MIN]
+                        );
+                        const io = getIO();
+                        if (io) {
+                            for (const r of stale.rows) {
+                                io.emit('call_status_changed', {
+                                    candidate_id: r.id, on_call: false, ts: new Date().toISOString(),
+                                });
+                            }
+                        }
+                        logger.info(`Call-presence TTL sweep cleared ${stale.rows.length} stale on_call row(s)`);
+                    } catch (err) {
+                        logger.debug(`call-presence sweep skipped: ${err.message}`);
+                    }
+                };
+                const sweepTimer = setInterval(sweepStaleCalls, 60 * 1000);
+                sweepTimer.unref();
+            } catch (err) {
+                logger.warn(`call-presence TTL sweep not started: ${err.message}`);
+            }
+
             // ── Start chatbot knowledge sync worker (outbox drain + reconcile)
             try {
                 const chatbotSyncWorker = require('./workers/chatbot-sync-worker');

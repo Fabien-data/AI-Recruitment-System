@@ -1,33 +1,73 @@
 // Single source of truth for application/candidate lifecycle, industries,
-// and benefits. Pages that previously hardcoded these lists should import
-// from here so we only update one place when the model changes.
+// and benefits. Pages MUST import from here instead of hardcoding status
+// strings so the canonical vocabulary (UPGRADES.md #1) lives in one place.
+//
+// ── Canonical vocabulary (UPGRADES.md #1) ───────────────────────────────────
+//   candidate.status  (7): new, screening, certified, interview_scheduled,
+//                          future_pool, merged, hired
+//   application.status (5): screening, certified, interview_scheduled, hired,
+//                          rejected
+// Legacy values may still appear on un-migrated rows briefly; normalizeStatus()
+// folds them onto the canonical set so reads/labels/colors stay correct.
 
 // ── Application status lifecycle (in order) ─────────────────────────────────
-// Backend column: applications.status (TEXT)
-// Flow: applied → certified → pre_screened → interview_scheduled → selected | rejected
-// Legacy values still in the DB (screening, interviewed, placed) are tolerated
-// but not produced by new UI flows.
+// Flow: screening → certified → interview_scheduled → hired (| rejected at any step)
 export const APPLICATION_STATUSES = [
-  'applied',
+  'screening',
   'certified',
-  'pre_screened',
   'interview_scheduled',
-  'selected',
+  'hired',
   'rejected',
-  'placed',
 ]
 
+// ── Candidate status vocabulary (the 7) ─────────────────────────────────────
+export const CANDIDATE_STATUSES = [
+  'new', 'screening', 'certified', 'interview_scheduled',
+  'future_pool', 'merged', 'hired',
+]
+// First 4 = the agent pipeline (Messages tabs). Last 3 = terminal/protected.
+export const CANDIDATE_PIPELINE_STATUSES = ['new', 'screening', 'certified', 'interview_scheduled']
+export const CANDIDATE_PROTECTED_STATUSES = ['future_pool', 'merged', 'hired']
+
+// Legacy → canonical map. Used to normalize any value read from a not-yet-
+// migrated row (and to keep transition/fold logic back-compatible).
+export const LEGACY_STATUS_MAP = {
+  applied: 'screening',
+  auto_assigned: 'screening',
+  reviewing: 'screening',
+  pre_screened: 'certified',
+  interviewed: 'interview_scheduled',
+  selected: 'interview_scheduled',
+  placed: 'hired',
+  transferred: 'rejected',
+}
+
+// Normalize any (possibly legacy) status string onto the canonical vocabulary.
+// Canonical values (and candidate-only values like new/future_pool/merged/hired)
+// pass through unchanged.
+export function normalizeStatus(status) {
+  if (!status) return status
+  return LEGACY_STATUS_MAP[status] || status
+}
+// Alias for clarity at application-status call sites.
+export const normalizeApplicationStatus = normalizeStatus
+
 export const STATUS_LABELS = {
+  // Canonical candidate + application
   new: 'New',
-  applied: 'Applied',
+  screening: 'Screening',
   certified: 'Certified',
+  interview_scheduled: 'Interview Scheduled',
+  future_pool: 'Future Pool',
+  merged: 'Merged',
+  hired: 'Hired',
+  rejected: 'Rejected',
+  // Legacy (rendered only if an un-normalized value slips through)
+  applied: 'Applied',
   pre_screened: 'Pre Screened',
-  interview_scheduled: 'Scheduled',
   interviewed: 'Interviewed',
   selected: 'Selected',
-  rejected: 'Rejected',
   placed: 'Placed',
-  screening: 'Screening',
   auto_assigned: 'Auto-Matched',
   reviewing: 'In Review',
 }
@@ -35,91 +75,106 @@ export const STATUS_LABELS = {
 // Tailwind classes for status badges. Pair with the existing `badge` base.
 export const STATUS_COLORS = {
   new: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/50',
-  applied: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/50',
-  certified: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50',
-  pre_screened: 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/40 dark:text-teal-300 dark:border-teal-800/50',
-  interview_scheduled: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/50',
-  interviewed: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/50',
-  selected: 'bg-green-50 text-green-700 border-green-200 dark:bg-green-950/40 dark:text-green-300 dark:border-green-800/50',
-  rejected: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800/50',
-  placed: 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50',
   screening: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50',
-  auto_assigned: 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800/50',
+  certified: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50',
+  interview_scheduled: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/50',
+  future_pool: 'bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800/40 dark:text-slate-300 dark:border-slate-700/50',
+  merged: 'bg-zinc-50 text-zinc-600 border-zinc-200 dark:bg-zinc-800/40 dark:text-zinc-300 dark:border-zinc-700/50',
+  hired: 'bg-green-50 text-green-700 border-green-200 dark:bg-green-950/40 dark:text-green-300 dark:border-green-800/50',
+  rejected: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800/50',
+  // Legacy fallbacks
+  applied: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50',
+  pre_screened: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50',
+  interviewed: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/50',
+  selected: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/50',
+  placed: 'bg-green-50 text-green-700 border-green-200 dark:bg-green-950/40 dark:text-green-300 dark:border-green-800/50',
+  auto_assigned: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50',
   reviewing: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50',
 }
 
-// Valid status transitions enforced by the UI. The backend re-validates.
+// Valid application-status transitions enforced by the UI. The backend
+// re-validates (applications.js VALID_TRANSITIONS — keep these in sync).
 export const STATUS_TRANSITIONS = {
-  // Entry states from sourcing / auto-match — must be certifiable (B011).
-  auto_assigned: ['certified', 'rejected'],
-  reviewing: ['certified', 'rejected'],
-  applied: ['certified', 'rejected'],
-  certified: ['pre_screened', 'rejected'],
-  pre_screened: ['interview_scheduled', 'rejected'],
-  interview_scheduled: ['selected', 'rejected', 'interviewed'],
-  interviewed: ['selected', 'rejected'],
-  selected: ['placed'],
+  screening: ['certified', 'rejected'],
+  certified: ['interview_scheduled', 'rejected'],
+  interview_scheduled: ['hired', 'rejected'],
+  hired: [],
   rejected: [],
-  placed: [],
 }
 
 export function canTransition(from, to) {
-  if (!from) return to === 'applied'
-  return (STATUS_TRANSITIONS[from] || []).includes(to)
+  const f = normalizeStatus(from)
+  const t = normalizeStatus(to)
+  if (!f) return t === 'screening'
+  return (STATUS_TRANSITIONS[f] || []).includes(t)
 }
 
 export function getStatusLabel(status) {
-  return STATUS_LABELS[status] || status
+  return STATUS_LABELS[status] || STATUS_LABELS[normalizeStatus(status)] || status
 }
 
-// Filter dropdown options — what we show in status filter UIs.
-// (Excludes terminal-only-from-elsewhere statuses like `placed`.)
+// Tailwind color string for a status badge (normalized; grey fallback).
+export function getStatusColor(status) {
+  return (
+    STATUS_COLORS[status] ||
+    STATUS_COLORS[normalizeStatus(status)] ||
+    'bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800/40 dark:text-gray-300 dark:border-gray-700/50'
+  )
+}
+
+// Filter dropdown options — canonical application statuses.
 export const STATUS_FILTER_OPTIONS = [
   { value: '', label: 'All statuses' },
-  { value: 'applied', label: 'Applied' },
+  { value: 'screening', label: 'Screening' },
   { value: 'certified', label: 'Certified' },
-  { value: 'pre_screened', label: 'Pre Screened' },
-  { value: 'interview_scheduled', label: 'Scheduled' },
-  { value: 'selected', label: 'Selected' },
+  { value: 'interview_scheduled', label: 'Interview Scheduled' },
+  { value: 'hired', label: 'Hired' },
   { value: 'rejected', label: 'Rejected' },
 ]
 
 // ── Candidate lifecycle stages (candidate.status) ────────────────────────────
-// The single 4-stage progression shown on the candidate everywhere. Backend
-// derives candidate.status from the furthest-along application; the frontend
-// renders these labels. `pre_screened` folds under "Certified" via
-// foldToCandidateStage so agents see one clean progression.
-export const CANDIDATE_STAGES = ['new', 'screening', 'certified', 'interview_scheduled']
+// The 4-stage forward pipeline shown on the candidate everywhere. Backend
+// derives candidate.status from the furthest-along application.
+export const CANDIDATE_STAGES = CANDIDATE_PIPELINE_STATUSES
 
 export const CANDIDATE_STAGE_LABELS = {
   new: 'New',
   screening: 'Screening',
   certified: 'Certified',
   interview_scheduled: 'Interview Scheduled',
+  future_pool: 'Future Pool',
+  merged: 'Merged',
+  hired: 'Hired',
 }
 
 const APP_STATUS_TO_CANDIDATE_STAGE = {
+  screening: 'screening',
+  certified: 'certified',
+  interview_scheduled: 'interview_scheduled',
+  // Legacy app statuses fold the same way
   applied: 'screening',
   auto_assigned: 'screening',
   reviewing: 'screening',
-  screening: 'screening',
-  certified: 'certified',
   pre_screened: 'certified',
-  interview_scheduled: 'interview_scheduled',
   interviewed: 'interview_scheduled',
   selected: 'interview_scheduled',
   placed: 'interview_scheduled',
-  // rejected / transferred / merged → null (not part of the forward pipeline)
+  // hired / rejected / transferred / merged → null (not a forward pipeline stage)
 }
 
-// Fold a per-application status down to the candidate's canonical stage.
+// Fold a per-application status down to the candidate's canonical pipeline stage.
 export function foldToCandidateStage(appStatus) {
   return APP_STATUS_TO_CANDIDATE_STAGE[appStatus] || null
 }
 
 // Prefer the candidate-stage label, fall back to the application-status label.
 export function getStageLabel(status) {
-  return CANDIDATE_STAGE_LABELS[status] || STATUS_LABELS[status] || status
+  return (
+    CANDIDATE_STAGE_LABELS[status] ||
+    STATUS_LABELS[status] ||
+    STATUS_LABELS[normalizeStatus(status)] ||
+    status
+  )
 }
 
 // Candidate-stage filter options for CV Manager / candidate lists.
@@ -129,6 +184,28 @@ export const CANDIDATE_STAGE_FILTER_OPTIONS = [
   { value: 'screening', label: 'Screening' },
   { value: 'certified', label: 'Certified' },
   { value: 'interview_scheduled', label: 'Interview Scheduled' },
+  { value: 'future_pool', label: 'Future Pool' },
+]
+
+// Messages workspace status buckets (mutually exclusive tabs) — the pipeline 4
+// plus Future Pool. Shared so pages don't redefine this locally.
+export const CANDIDATE_STATUS_BUCKETS = [
+  { value: 'new', label: 'New' },
+  { value: 'screening', label: 'Screening' },
+  { value: 'certified', label: 'Certified' },
+  { value: 'interview_scheduled', label: 'Interview Scheduled' },
+  { value: 'future_pool', label: 'Future Pool' },
+]
+
+// Candidate statuses an agent can manually set from the candidate edit/stage UIs.
+// Terminal/protected merged & hired are set by system flows (merge, placement),
+// not a free dropdown — so the manual list is the 4 pipeline values + future_pool.
+export const CANDIDATE_MANUAL_STATUS_OPTIONS = [
+  { value: 'new', label: 'New' },
+  { value: 'screening', label: 'Screening' },
+  { value: 'certified', label: 'Certified' },
+  { value: 'interview_scheduled', label: 'Interview Scheduled' },
+  { value: 'future_pool', label: 'Future Pool' },
 ]
 
 // ── Industries (Project create/edit) ────────────────────────────────────────

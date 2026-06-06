@@ -36,6 +36,30 @@ import { Modal } from '../components/ui/Modal'
 import { getCommunications, sendCommunication, getCandidate } from '../api'
 import { useAuthStore } from '../stores/authStore'
 import { ConversationDocumentsPanel } from '../components/communications/ConversationDocumentsPanel'
+import { CallPresenceToggle } from '../components/communications/CallPresenceToggle'
+import { DispositionSelect, dispositionClasses, dispositionLabel } from '../components/communications/DispositionSelect'
+import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
+import { CVReviewModal } from './CVManager'
+import { CANDIDATE_STAGE_LABELS, CANDIDATE_STATUS_BUCKETS, STATUS_COLORS, normalizeStatus, getStageLabel } from '../constants/lifecycle'
+
+// Primary status buckets the agent works through, one at a time. Bound to the
+// canonical candidates.status (server-side filter) — mutually exclusive, so a
+// candidate appears in exactly one bucket and drops out as it advances.
+// Shared source of truth: CANDIDATE_STATUS_BUCKETS (lifecycle.js).
+const STATUS_BUCKET_VALUES = new Set(CANDIDATE_STATUS_BUCKETS.map((b) => b.value))
+
+// The candidate's canonical recruitment stage (New/Screening/Certified/…) shown
+// on the chat row so an agent sees — and live-tracks — where each lead sits.
+function StageBadge({ status }) {
+  const key = normalizeStatus(String(status || '').toLowerCase())
+  const label = CANDIDATE_STAGE_LABELS[key]
+  if (!label) return null
+  return (
+    <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-semibold border', STATUS_COLORS[key] || 'bg-zinc-100 text-zinc-600 border-zinc-200')}>
+      {label}
+    </span>
+  )
+}
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
@@ -57,15 +81,6 @@ async function apiFetch(path, opts = {}) {
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
   return res.json()
 }
-
-const STAGE_OPTIONS = [
-  { value: '', label: 'All stages' },
-  { value: 'new', label: 'New' },
-  { value: 'responding', label: 'Responding' },
-  { value: 'screening', label: 'Screening' },
-  { value: 'interview', label: 'Interview' },
-  { value: 'completed', label: 'Completed' },
-]
 
 const PIPELINE_OPTIONS = [
   { value: '', label: 'All pipeline' },
@@ -96,19 +111,32 @@ const RESPONSE_OPTIONS = [
   { value: 'replied', label: 'Replied' },
 ]
 
-const getActiveChats = ({ search, conversationStage, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo }) => {
+// One-tap label suggestions (Messenger-style) — common recruitment-call labels.
+// Dynamic queue tags are appended at the call site; already-applied ones hidden.
+const SUGGESTED_LABELS = ['Interested', 'Callback', 'CV pending', 'Strong candidate', 'Not reachable', 'Wrong number']
+
+const getActiveChats = ({ search, statusBucket, projectId, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus }) => {
   const params = new URLSearchParams()
   params.set('limit', '5000')
   if (search) params.set('search', search)
-  if (conversationStage) params.set('conversation_stage', conversationStage)
+  if (statusBucket) params.set('status', statusBucket)
+  if (projectId) params.set('project_id', projectId)
   if (pipelineStage) params.set('pipeline_stage', pipelineStage)
   if (handoffState) params.set('handoff_state', handoffState)
   if (sortBy) params.set('sort_by', sortBy)
   if (responseStatus) params.set('response_status', responseStatus)
   if (dateFrom) params.set('date_from', dateFrom)
   if (dateTo) params.set('date_to', dateTo)
+  if (disposition) params.set('disposition', disposition)
+  if (contacted) params.set('contacted', contacted)
+  if (claimed) params.set('claimed', claimed)
+  if (callStatus) params.set('call_status', callStatus)
   return apiFetch(`/api/communications/active-chats?${params.toString()}`)
 }
+
+// Server-side project list for the conversations filter dropdown.
+const getProjectsForFilter = () =>
+  apiFetch('/api/projects?limit=200').then((r) => (Array.isArray(r) ? r : (r?.data || r?.projects || [])))
 const getTranscript = ({ id, responseStatus, dateFrom, dateTo }) => {
   const params = new URLSearchParams()
   params.set('limit', '5000')
@@ -123,6 +151,35 @@ const updateCandidateIdentity = (id, body) => apiFetch(`/api/candidates/${id}`, 
 })
 const takeover = (id) => apiFetch(`/api/communications/candidate/${id}/takeover`, { method: 'POST' })
 const release = (id) => apiFetch(`/api/communications/candidate/${id}/release`, { method: 'POST' })
+
+// Call presence. start surfaces the 409 conflict body (who's already on the
+// call) so the UI can warn the agent and offer to start anyway (?force=1).
+async function startCall(id, force) {
+  const token = useAuthStore.getState().token
+  const res = await fetch(`${API_BASE}/api/communications/candidate/${id}/call-start${force ? '?force=1' : ''}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+  })
+  const data = await res.json().catch(() => ({}))
+  if (res.status === 409) {
+    const err = new Error('call_conflict')
+    err.conflict = data
+    throw err
+  }
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+  return data
+}
+const endCall = (id) => apiFetch(`/api/communications/candidate/${id}/call-end`, { method: 'POST' })
+const callHeartbeat = (ids) => apiFetch('/api/communications/calls/heartbeat', {
+  method: 'POST',
+  body: JSON.stringify({ candidate_ids: ids }),
+})
+const setDispositionApi = (id, disposition) => apiFetch(`/api/communications/candidate/${id}/disposition`, {
+  method: 'PATCH',
+  body: JSON.stringify({ disposition }),
+})
+const claimCandidate = (id) => apiFetch(`/api/communications/candidate/${id}/claim`, { method: 'POST' })
+const unclaimCandidate = (id) => apiFetch(`/api/communications/candidate/${id}/unclaim`, { method: 'POST' })
 const sendMsg = (body) => apiFetch('/api/communications/send', {
   method: 'POST',
   body: body instanceof FormData ? body : JSON.stringify(body)
@@ -378,7 +435,7 @@ function parseTagList(value) {
   return []
 }
 
-function LabelsEditor({ tags, onAdd, onRemove, saving }) {
+function LabelsEditor({ tags, onAdd, onRemove, saving, suggestions = [] }) {
   const [input, setInput] = useState('')
   const submit = () => {
     const v = input.trim()
@@ -386,8 +443,8 @@ function LabelsEditor({ tags, onAdd, onRemove, saving }) {
   }
   return (
     <div className="p-4 border-b border-zinc-100 dark:border-zinc-800/60">
-      <p className="text-[10px] text-zinc-400 dark:text-zinc-500 uppercase tracking-wide mb-2 flex items-center gap-1">
-        <Tag size={11} /> Labels
+      <p className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+        <Tag size={12} /> Labels
       </p>
       <div className="flex flex-wrap gap-1 mb-2">
         {tags.length === 0 && <span className="text-xs text-zinc-400 dark:text-zinc-500 italic">No labels yet</span>}
@@ -406,13 +463,31 @@ function LabelsEditor({ tags, onAdd, onRemove, saving }) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit() } }}
           placeholder="Add label…"
-          className="flex-1 text-xs px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800"
+          className="flex-1 text-xs px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800"
         />
         <button type="button" onClick={submit} disabled={saving}
-          className="text-xs px-2 py-1 rounded-lg bg-zinc-900 text-white disabled:opacity-50">
+          className="text-xs px-2.5 py-1.5 rounded-lg bg-zinc-900 text-white disabled:opacity-50">
           Add
         </button>
       </div>
+      {suggestions.length > 0 && (
+        <div className="mt-2.5">
+          <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mb-1.5">Suggested</p>
+          <div className="flex flex-wrap gap-1">
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => onAdd(s)}
+                disabled={saving}
+                className="inline-flex items-center gap-0.5 text-[10px] px-2 py-0.5 rounded-full border border-dashed border-zinc-300 dark:border-zinc-600 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:border-zinc-400 disabled:opacity-50 transition-colors"
+              >
+                <span className="text-zinc-400">+</span> {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -494,20 +569,31 @@ function MsgBubble({ msg }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Communications() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [selectedId, setSelectedId] = useState(null)
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState(searchParams.get('q') || '')
-  const [conversationStage, setConversationStage] = useState(searchParams.get('conversation_stage') || '')
   const [pipelineStage, setPipelineStage] = useState(searchParams.get('pipeline_stage') || '')
   const [handoffState, setHandoffState] = useState(searchParams.get('handoff_state') || '')
   const [sortBy, setSortBy] = useState(searchParams.get('sort_by') || 'latest_desc')
   const [responseStatus, setResponseStatus] = useState(searchParams.get('response_status') || '')
   const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '')
   const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '')
+  // Primary status bucket (server-side, ca.status) — defaults to New so an agent
+  // starts on the queue they work first.
+  const [statusBucket, setStatusBucket] = useState(() => {
+    const s = searchParams.get('status')
+    return s && STATUS_BUCKET_VALUES.has(s) ? s : 'new'
+  })
+  // Project scope (server-side, effective project) — remembered per agent.
+  const [projectId, setProjectId] = useState(() => searchParams.get('project_id') || localStorage.getItem('comms.projectId') || '')
   const [jobFilter, setJobFilter] = useState('')
-  const [projectFilter, setProjectFilter] = useState('')
   const [tagFilter, setTagFilter] = useState('')
+  // Smart-view / triage filters (Phase 2).
+  const [disposition, setDispositionFilter] = useState(searchParams.get('disposition') || '')
+  const [contacted, setContacted] = useState(searchParams.get('contacted') || '')
+  const [claimed, setClaimed] = useState(searchParams.get('claimed') || '')
+  const [callStatus, setCallStatus] = useState(searchParams.get('call_status') || '')
   const [transcriptResponseStatus, setTranscriptResponseStatus] = useState('')
   const [transcriptDateFrom, setTranscriptDateFrom] = useState('')
   const [transcriptDateTo, setTranscriptDateTo] = useState('')
@@ -533,6 +619,37 @@ export default function Communications() {
   const mediaStreamRef = useRef(null)
   const fileInputRef = useRef(null)
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((s) => s.user)
+  const [cvModalOpen, setCvModalOpen] = useState(false)
+  // Refs used by the takeover/disposition fix so the selected chat survives a
+  // list refetch even when an active filter would exclude it.
+  const selectedIdRef = useRef(null)
+  const chatListRef = useRef([])
+  const selectedCandidateRef = useRef(null)
+  // Mirror the active status bucket into a ref so the socket effect (deps: [])
+  // can decide whether a live stage-change should drop a row from the list.
+  const statusBucketRef = useRef(statusBucket)
+  useEffect(() => { statusBucketRef.current = statusBucket }, [statusBucket])
+
+  // Remember the agent's chosen project across sessions.
+  useEffect(() => {
+    if (projectId) localStorage.setItem('comms.projectId', projectId)
+    else localStorage.removeItem('comms.projectId')
+  }, [projectId])
+
+  // Server-side project list for the filter dropdown.
+  const { data: projectList = [] } = useQuery({
+    queryKey: ['comms-projects'],
+    queryFn: getProjectsForFilter,
+    staleTime: 5 * 60 * 1000,
+  })
+  // If the remembered project is no longer available, fall back to All.
+  useEffect(() => {
+    if (projectId && projectId !== 'unassigned' && projectList.length > 0
+        && !projectList.some((p) => String(p.id) === String(projectId))) {
+      setProjectId('')
+    }
+  }, [projectList, projectId])
 
   const getCandidateDisplayName = useCallback((candidate) => {
     if (!candidate) return 'Unknown'
@@ -567,17 +684,25 @@ export default function Communications() {
     return displayName.charAt(0).toUpperCase() || '?'
   }, [getCandidateDisplayName])
 
-  // Selected candidate object from chatList
-  const selectedCandidate = chatList.find(c => c.candidate_id === selectedId)
+  // Selected candidate object — resilient so it never goes undefined mid-action.
+  // Right after a takeover / disposition change under an active filter, the row
+  // can drop out of the refetched list; we fall back to the last-known selected
+  // row so the header/input/buttons don't blank out (the takeover-after-filter
+  // bug). The list itself also pins the selected row (see active-chats effect).
+  const matchedSelected = chatList.find(c => c.candidate_id === selectedId)
+  const selectedCandidate = matchedSelected
+    || (selectedCandidateRef.current?.candidate_id === selectedId ? selectedCandidateRef.current : null)
 
-  // Client-side category filters — distinct options derived from the loaded list
-  // so newly added jobs/projects appear automatically (no API/param changes).
-  const jobOptions = [...new Set(chatList.map(c => c.latest_job_title).filter(Boolean))].sort()
-  const projectOptions = [...new Set(chatList.map(c => c.latest_project_title).filter(Boolean))].sort()
+  useEffect(() => { selectedIdRef.current = selectedId }, [selectedId])
+  useEffect(() => { chatListRef.current = chatList }, [chatList])
+  useEffect(() => { if (matchedSelected) selectedCandidateRef.current = matchedSelected }, [matchedSelected])
+
+  // Client-side role/label filters — distinct options derived from the loaded
+  // list. Project + status are filtered server-side (see active-chats query).
+  const jobOptions = [...new Set(chatList.map(c => c.effective_job_title || c.latest_job_title).filter(Boolean))].sort()
   const tagOptions = [...new Set(chatList.flatMap(c => parseTagList(c.tags)))].sort()
   const visibleChats = chatList.filter(c =>
-    (!jobFilter || c.latest_job_title === jobFilter) &&
-    (!projectFilter || c.latest_project_title === projectFilter) &&
+    (!jobFilter || (c.effective_job_title || c.latest_job_title) === jobFilter) &&
     (!tagFilter || parseTagList(c.tags).includes(tagFilter))
   )
 
@@ -603,6 +728,18 @@ export default function Communications() {
       setSelectedId(candidateFromUrl)
     }
   }, [searchParams])
+
+  // Mirror the open chat into the URL (?candidate=) so leaving Messages (e.g. to
+  // CV Manager full page, Candidates, etc.) and coming back restores the exact
+  // conversation the agent was working — they never lose their place.
+  useEffect(() => {
+    const current = searchParams.get('candidate') || ''
+    if (selectedId && selectedId !== current) {
+      const next = new URLSearchParams(searchParams)
+      next.set('candidate', selectedId)
+      setSearchParams(next, { replace: true })
+    }
+  }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isCandidateEscalated = useCallback((candidate) => {
     if (!candidate) return false
@@ -648,24 +785,37 @@ export default function Communications() {
 
   // ── Fetch active chat list ─────────────────────────────────────────────────
   const { data: activeChatsData, isLoading: listLoading } = useQuery({
-    queryKey: ['active-chats', search, conversationStage, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo],
+    queryKey: ['active-chats', search, statusBucket, projectId, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus],
     queryFn: () => getActiveChats({
       search,
-      conversationStage,
+      statusBucket,
+      projectId,
       pipelineStage,
       handoffState,
       sortBy,
       responseStatus,
       dateFrom,
       dateTo,
+      disposition,
+      contacted,
+      claimed,
+      callStatus,
     }),
     refetchInterval: 30000, // fallback poll every 30s
   })
 
   useEffect(() => {
-    if (Array.isArray(activeChatsData)) {
-      setChatList(activeChatsData)
+    if (!Array.isArray(activeChatsData)) return
+    let next = activeChatsData
+    const selId = selectedIdRef.current
+    // If the open conversation fell out of the current filter, keep it pinned at
+    // the top (flagged) so a takeover / disposition change never blanks out the
+    // chat the agent is actively working.
+    if (selId && !next.some(c => c.candidate_id === selId)) {
+      const prevRow = chatListRef.current.find(c => c.candidate_id === selId)
+      if (prevRow) next = [{ ...prevRow, _pinned: true }, ...next]
     }
+    setChatList(next)
   }, [activeChatsData])
 
   // ── Fetch transcript when candidate changes ────────────────────────────────
@@ -811,6 +961,52 @@ export default function Communications() {
       ))
     })
 
+    // In-call presence: another agent started/ended a phone call. Patch the row
+    // so the 📞 badge appears/disappears live for everyone.
+    socket.on('call_status_changed', (data) => {
+      if (!data?.candidate_id) return
+      setChatList(prev => prev.map(c =>
+        c.candidate_id === data.candidate_id
+          ? (data.on_call
+              ? { ...c, call_status: 'on_call', call_agent_id: data.call_agent_id, call_agent_name: data.call_agent_name, call_started_at: data.call_started_at }
+              : { ...c, call_status: null, call_agent_id: null, call_agent_name: null, call_started_at: null })
+          : c
+      ))
+    })
+
+    // Lead status (disposition) changed by any agent — patch the row live.
+    socket.on('disposition_changed', (d) => {
+      if (!d?.candidate_id) return
+      setChatList(prev => prev.map(c =>
+        c.candidate_id === d.candidate_id ? { ...c, disposition: d.disposition, last_contacted_at: d.ts } : c
+      ))
+    })
+
+    // Candidate advanced/changed stage (any source: calling console, CV Manager,
+    // applications). Patch the live status badge, and drop the row from the list
+    // if it no longer matches the active bucket — unless it's the open chat.
+    socket.on('candidate_stage_changed', (d) => {
+      if (!d?.candidate_id || !d.status) return
+      setChatList(prev => {
+        const bucket = statusBucketRef.current
+        const isOpen = selectedIdRef.current === d.candidate_id
+        return prev.flatMap(c => {
+          if (c.candidate_id !== d.candidate_id) return [c]
+          const updated = { ...c, candidate_status: d.status, conversation_stage: d.status }
+          if (bucket && d.status !== bucket && !isOpen) return []   // left this bucket
+          return [updated]
+        })
+      })
+    })
+
+    // Shared-pool claim changed by any agent — patch the row live.
+    socket.on('claim_changed', (d) => {
+      if (!d?.candidate_id) return
+      setChatList(prev => prev.map(c =>
+        c.candidate_id === d.candidate_id ? { ...c, claimed_by: d.claimed_by || null, claimer_name: d.claimer_name || null } : c
+      ))
+    })
+
     socket.on('chat_escalated', (data) => {
       const escalatedPhone = String(data?.phone || '').trim()
       if (escalatedPhone) {
@@ -848,6 +1044,18 @@ export default function Communications() {
     return () => { if (selectedId) socket.emit('leave_candidate', selectedId) }
   }, [selectedId])
 
+  // ── Heartbeat my active calls so the server TTL sweep never reaps them ──────
+  const myCallKey = chatList
+    .filter(c => c.call_status === 'on_call' && c.call_agent_id === currentUser?.id)
+    .map(c => c.candidate_id)
+    .join(',')
+  useEffect(() => {
+    if (!myCallKey) return undefined
+    const ids = myCallKey.split(',')
+    const t = setInterval(() => { callHeartbeat(ids).catch(() => {}) }, 60000)
+    return () => clearInterval(t)
+  }, [myCallKey])
+
   // Auto-scroll to bottom of transcript
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -863,13 +1071,82 @@ export default function Communications() {
   }, [audioUrl])
 
   // ── Takeover / Release mutations ───────────────────────────────────────────
+  // Optimistically flip the row locally so the open chat updates instantly and
+  // survives the refetch even under a handoff_state filter (the takeover-after-
+  // filter fix). The WebSocket handoff_start/end echo merges by candidate_id.
   const takeoverMut = useMutation({
     mutationFn: (candidateId) => takeover(candidateId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['active-chats'] }),
+    onSuccess: (_data, candidateId) => {
+      setChatList(prev => prev.map(c => c.candidate_id === candidateId
+        ? { ...c, is_human_handoff: true, agent_id: currentUser?.id, agent_name: currentUser?.full_name || 'You', pipeline_stage: 'human_takeover_active' }
+        : c))
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+    },
   })
   const releaseMut = useMutation({
-    mutationFn: () => release(selectedId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['active-chats'] }),
+    mutationFn: (candidateId) => release(candidateId || selectedId),
+    onSuccess: (_data, candidateId) => {
+      const id = candidateId || selectedId
+      setChatList(prev => prev.map(c => c.candidate_id === id
+        ? { ...c, is_human_handoff: false, agent_id: null, agent_name: null, pipeline_stage: 'bot_engaging' }
+        : c))
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+    },
+  })
+
+  // ── In-call presence mutations ─────────────────────────────────────────────
+  const callStartMut = useMutation({
+    mutationFn: ({ id, force }) => startCall(id, force),
+    onSuccess: (_data, vars) => {
+      setChatList(prev => prev.map(c => c.candidate_id === vars.id
+        ? { ...c, call_status: 'on_call', call_agent_id: currentUser?.id, call_agent_name: currentUser?.full_name || 'You', call_started_at: new Date().toISOString() }
+        : c))
+    },
+    onError: (err, vars) => {
+      if (err?.conflict) {
+        const who = err.conflict.call_agent_name || 'Another agent'
+        if (window.confirm(`${who} is already on a call with this candidate. Start a call anyway?`)) {
+          callStartMut.mutate({ id: vars.id, force: true })
+        }
+      } else {
+        window.alert('Could not start the call. Please try again.')
+      }
+    },
+  })
+  const callEndMut = useMutation({
+    mutationFn: (id) => endCall(id),
+    onSuccess: (_data, id) => {
+      setChatList(prev => prev.map(c => c.candidate_id === id
+        ? { ...c, call_status: null, call_agent_id: null, call_agent_name: null, call_started_at: null }
+        : c))
+    },
+  })
+
+  // ── Disposition (lead status) + shared-pool claim mutations ────────────────
+  const dispositionMut = useMutation({
+    mutationFn: ({ id, value }) => setDispositionApi(id, value),
+    onSuccess: (_data, vars) => {
+      setChatList(prev => prev.map(c => c.candidate_id === vars.id
+        ? { ...c, disposition: vars.value, last_contacted_at: new Date().toISOString() }
+        : c))
+      queryClient.invalidateQueries({ queryKey: ['candidate-detail', vars.id] })
+    },
+  })
+  const claimMut = useMutation({
+    mutationFn: (id) => claimCandidate(id),
+    onSuccess: (_data, id) => {
+      setChatList(prev => prev.map(c => c.candidate_id === id
+        ? { ...c, claimed_by: currentUser?.id, claimer_name: currentUser?.full_name || 'You' }
+        : c))
+    },
+  })
+  const unclaimMut = useMutation({
+    mutationFn: (id) => unclaimCandidate(id),
+    onSuccess: (_data, id) => {
+      setChatList(prev => prev.map(c => c.candidate_id === id
+        ? { ...c, claimed_by: null, claimer_name: null }
+        : c))
+    },
   })
 
   const identityMut = useMutation({
@@ -1092,6 +1369,40 @@ export default function Communications() {
               </div>
             )
           })()}
+          {/* Primary status buckets — the agent works one at a time; a candidate
+              drops out of its bucket as it advances (New → Screening → … ). */}
+          <div className="mb-2 flex flex-wrap gap-1">
+            {CANDIDATE_STATUS_BUCKETS.map((b) => (
+              <button
+                key={b.value}
+                type="button"
+                onClick={() => setStatusBucket(b.value)}
+                className={clsx(
+                  'px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors',
+                  statusBucket === b.value
+                    ? 'bg-primary-600 text-white border-primary-600'
+                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800'
+                )}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+          {/* Project scope — server-side; one agent typically works one project. */}
+          <div className="mb-2 flex items-center gap-1.5">
+            <FolderKanban size={14} className="text-zinc-400 dark:text-zinc-500 shrink-0" />
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
+            >
+              <option value="">All projects</option>
+              <option value="unassigned">Unassigned (no project)</option>
+              {projectList.map((p) => (
+                <option key={p.id} value={p.id}>{p.title || p.name || 'Untitled project'}</option>
+              ))}
+            </select>
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" size={16} />
             <input
@@ -1102,8 +1413,33 @@ export default function Communications() {
               className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-400 transition-all"
             />
           </div>
+          {/* Smart views — one-tap triage filters so the 5 agents can divide the
+              queue without colliding (these set the same query state the API uses). */}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {[
+              { key: 'oncall', label: 'On call now', active: callStatus === 'on_call', toggle: () => setCallStatus(callStatus === 'on_call' ? '' : 'on_call') },
+              { key: 'uncontacted', label: 'Uncontacted', active: contacted === 'no', toggle: () => setContacted(contacted === 'no' ? '' : 'no') },
+              { key: 'mine', label: 'Mine', active: claimed === 'me', toggle: () => setClaimed(claimed === 'me' ? '' : 'me') },
+              { key: 'escalated', label: 'Escalated', active: pipelineStage === 'pending_human_review', toggle: () => setPipelineStage(pipelineStage === 'pending_human_review' ? '' : 'pending_human_review') },
+            ].map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={chip.toggle}
+                className={clsx(
+                  'px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors',
+                  chip.active
+                    ? 'bg-primary-600 text-white border-primary-600'
+                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800'
+                )}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
           {(() => {
-            const activeFilterCount = [conversationStage, pipelineStage, responseStatus, handoffState, dateFrom, dateTo, jobFilter, projectFilter].filter(Boolean).length
+            // Status bucket + project are primary scopes shown above (not counted).
+            const activeFilterCount = [pipelineStage, responseStatus, handoffState, dateFrom, dateTo, jobFilter, disposition, contacted, claimed, callStatus].filter(Boolean).length
               + (sortBy && sortBy !== 'latest_desc' ? 1 : 0)
             return (
               <div className="mt-2 flex items-center justify-between gap-2">
@@ -1125,7 +1461,6 @@ export default function Communications() {
                   <button
                     type="button"
                     onClick={() => {
-                      setConversationStage('')
                       setPipelineStage('')
                       setHandoffState('')
                       setSortBy('latest_desc')
@@ -1133,7 +1468,10 @@ export default function Communications() {
                       setDateFrom('')
                       setDateTo('')
                       setJobFilter('')
-                      setProjectFilter('')
+                      setDispositionFilter('')
+                      setContacted('')
+                      setClaimed('')
+                      setCallStatus('')
                     }}
                     className="inline-flex items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
                   >
@@ -1145,15 +1483,6 @@ export default function Communications() {
           })()}
           {showFilters && (
             <div className="mt-2 grid grid-cols-2 gap-2 animate-fade-in">
-              <select
-                value={conversationStage}
-                onChange={(e) => setConversationStage(e.target.value)}
-                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-              >
-                {STAGE_OPTIONS.map((option) => (
-                  <option key={option.value || 'all'} value={option.value}>{option.label}</option>
-                ))}
-              </select>
               <select
                 value={pipelineStage}
                 onChange={(e) => setPipelineStage(e.target.value)}
@@ -1189,16 +1518,6 @@ export default function Communications() {
                 <option value="">All roles</option>
                 {jobOptions.map((option) => (
                   <option key={`role-${option}`} value={option}>{option}</option>
-                ))}
-              </select>
-              <select
-                value={projectFilter}
-                onChange={(e) => setProjectFilter(e.target.value)}
-                className="w-full px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400"
-              >
-                <option value="">All projects</option>
-                {projectOptions.map((option) => (
-                  <option key={`project-${option}`} value={option}>{option}</option>
                 ))}
               </select>
               {tagOptions.length > 0 && (
@@ -1318,6 +1637,29 @@ export default function Communications() {
                     </div>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{c.last_message || 'No messages'}</p>
                     <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                      {c._pinned && (
+                        <span className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded-full font-medium" title="Kept open — outside the current filter">
+                          pinned
+                        </span>
+                      )}
+                      {c.call_status === 'on_call' && (
+                        <span className="text-[10px] bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                          <Phone size={10} className="animate-pulse" /> {c.call_agent_id === currentUser?.id ? 'You' : (c.call_agent_name || 'On call')}
+                        </span>
+                      )}
+                      {c.disposition && (
+                        <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-semibold', dispositionClasses(c.disposition))}>
+                          {dispositionLabel(c.disposition)}
+                        </span>
+                      )}
+                      {c.claimed_by && (
+                        <span
+                          className="text-[10px] bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full font-medium flex items-center gap-1"
+                          title={`Claimed by ${c.claimed_by === currentUser?.id ? 'you' : (c.claimer_name || 'an agent')}`}
+                        >
+                          <UserCheck size={10} /> {c.claimed_by === currentUser?.id ? 'Mine' : (c.claimer_name || 'Claimed')}
+                        </span>
+                      )}
                       {c.is_human_handoff
                         ? <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-medium flex items-center gap-1">
                           <UserCheck size={10} /> {c.agent_name || 'Agent'}
@@ -1330,12 +1672,13 @@ export default function Communications() {
                           AI Hold
                         </span>
                       )}
+                      <StageBadge status={c.candidate_status} />
                       <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(c.pipeline_stage))}>
                         {getPipelineStageLabel(c.pipeline_stage)}
                       </span>
                       {c.last_language && <LangBadge lang={c.last_language} />}
-                      <CategoryBadge value={c.latest_job_title}     icon={Briefcase}    title="Role" />
-                      <CategoryBadge value={c.latest_project_title} icon={FolderKanban} title="Project" />
+                      <CategoryBadge value={c.effective_job_title || c.latest_job_title}     icon={Briefcase}    title="Role" />
+                      <CategoryBadge value={c.effective_project_title || c.latest_project_title} icon={FolderKanban} title="Project" />
                       <CategoryBadge value={c.latest_job_category}  icon={Tag}          title="Sector" />
                       <CategoryBadge value={c.latest_job_country}   icon={MapPin}       title="Country" />
                       {/* Manual labels (capped to keep the row tidy). */}
@@ -1364,11 +1707,12 @@ export default function Communications() {
                 <div>
                   <h2 className="font-semibold text-zinc-900 dark:text-zinc-50 text-sm">{getCandidateDisplayName(selectedCandidate)}</h2>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <StageBadge status={selectedCandidate?.candidate_status} />
                     <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(selectedCandidate?.pipeline_stage))}>
                       {getPipelineStageLabel(selectedCandidate?.pipeline_stage)}
                     </span>
-                    <CategoryBadge value={selectedCandidate?.latest_job_title}     icon={Briefcase}    title="Role" max={28} />
-                    <CategoryBadge value={selectedCandidate?.latest_project_title} icon={FolderKanban} title="Project" max={28} />
+                    <CategoryBadge value={selectedCandidate?.effective_job_title || selectedCandidate?.latest_job_title}     icon={Briefcase}    title="Role" max={28} />
+                    <CategoryBadge value={selectedCandidate?.effective_project_title || selectedCandidate?.latest_project_title} icon={FolderKanban} title="Project" max={28} />
                     <CategoryBadge value={selectedCandidate?.latest_job_category}  icon={Tag}          title="Sector" max={28} />
                     <CategoryBadge value={selectedCandidate?.latest_job_country}   icon={MapPin}       title="Country" max={28} />
                   </div>
@@ -1383,8 +1727,16 @@ export default function Communications() {
                 </div>
               </div>
 
-              {/* Takeover / Release button */}
+              {/* In-call presence + Takeover / Release */}
               <div className="flex items-center gap-2">
+                <CallPresenceToggle
+                  candidate={selectedCandidate}
+                  currentUserId={currentUser?.id}
+                  starting={callStartMut.isPending}
+                  ending={callEndMut.isPending}
+                  onStart={() => selectedId && callStartMut.mutate({ id: selectedId })}
+                  onEnd={() => selectedId && callEndMut.mutate(selectedId)}
+                />
                 {selectedCandidate?.is_human_handoff ? (
                   <Button
                     variant="outline"
@@ -1648,14 +2000,31 @@ export default function Communications() {
 
       {/* ── Right: Candidate context ─────────────────────────────────────────── */}
       {selectedCandidate && (
-        <div className="w-64 shrink-0 border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col overflow-y-auto scrollbar-thin">
+        <div className="w-80 shrink-0 border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col overflow-y-auto scrollbar-thin">
+          {/* Header — identity + quick jumps (Messenger-style) */}
           <div className="p-4 border-b border-zinc-100 dark:border-zinc-800/60">
-            <h3 className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3">Candidate Info</h3>
-            <div className="flex flex-col items-center text-center">
-              <div className="w-14 h-14 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-xl font-bold mb-2">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-lg font-bold shrink-0">
                 {getCandidateInitial(selectedCandidate)}
               </div>
-              <p className="font-semibold text-zinc-900 dark:text-zinc-50">{getCandidateDisplayName(selectedCandidate)}</p>
+              <div className="min-w-0">
+                <p className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{getCandidateDisplayName(selectedCandidate)}</p>
+                <Link to={`/candidates/${selectedId}`} className="text-[11px] text-indigo-600 hover:text-indigo-700">View profile</Link>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+              <Phone size={12} className="shrink-0" /> {selectedCandidate.phone || selectedCandidate.whatsapp_phone || '—'}
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              {/* Opens the full CV review/edit flow as a modal over the chat —
+                  the agent never leaves the conversation they're working. */}
+              <button
+                type="button"
+                onClick={() => setCvModalOpen(true)}
+                className="flex-1 inline-flex items-center justify-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <FileText size={12} /> CV Manager
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1668,27 +2037,66 @@ export default function Communications() {
                   setIdentityError(null)
                   setShowEditContactModal(true)
                 }}
-                className="mt-1 text-[11px] text-indigo-600 hover:text-indigo-700"
+                className="flex-1 inline-flex items-center justify-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
               >
-                Edit contact
+                <User size={12} /> Edit
               </button>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">{selectedCandidate.phone || selectedCandidate.whatsapp_phone}</p>
-              {/* Quick jumps to this candidate's CV Manager + full profile. */}
-              <div className="flex items-center gap-3 mt-2">
-                <Link to={`/cv-manager?candidate=${selectedId}`} className="inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-700">
-                  <FileText size={12} /> CV Manager
-                </Link>
-                <Link to={`/candidates/${selectedId}`} className="inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-700">
-                  <User size={12} /> Profile
-                </Link>
-              </div>
             </div>
           </div>
 
-          {/* Manual labels (tags) for this candidate. */}
+          {/* Activity — assignment + last contact (the agent's working state) */}
+          <div className="p-4 border-b border-zinc-100 dark:border-zinc-800/60">
+            <p className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3">Activity</p>
+            <div>
+              {selectedCandidate.claimed_by ? (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-violet-700 dark:text-violet-300 inline-flex items-center gap-1 min-w-0">
+                    <UserCheck size={12} className="shrink-0" />
+                    <span className="truncate">{selectedCandidate.claimed_by === currentUser?.id ? 'Claimed by you' : `Claimed by ${selectedCandidate.claimer_name || 'an agent'}`}</span>
+                  </span>
+                  {selectedCandidate.claimed_by === currentUser?.id && (
+                    <button
+                      type="button"
+                      onClick={() => unclaimMut.mutate(selectedId)}
+                      disabled={unclaimMut.isPending}
+                      className="text-[11px] text-zinc-500 hover:text-rose-600 underline underline-offset-2 shrink-0"
+                    >
+                      Release
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => claimMut.mutate(selectedId)}
+                  disabled={claimMut.isPending}
+                  className="w-full text-xs inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg border border-violet-200 text-violet-700 hover:bg-violet-50 disabled:opacity-60"
+                >
+                  <UserCheck size={13} /> Claim this chat
+                </button>
+              )}
+            </div>
+            {selectedCandidate.last_contacted_at && (
+              <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">
+                Last contacted {formatDistanceToNow(new Date(selectedCandidate.last_contacted_at), { addSuffix: true })}
+              </p>
+            )}
+          </div>
+
+          {/* Call log & remarks — kept high (above Labels) so agents log and see
+              calls first while working the candidate. */}
+          <div className="border-b border-zinc-100 dark:border-zinc-800/60 pt-3">
+            <CallRemarksPanel candidateId={selectedId} candidateStatus={selectedCandidate?.candidate_status} />
+          </div>
+
+          {/* Manual labels (tags) for this candidate + one-tap suggestions. */}
           <LabelsEditor
             tags={parseTagList(candidateDetail?.tags ?? selectedCandidate.tags)}
             saving={tagsMut.isPending}
+            suggestions={(() => {
+              const applied = parseTagList(candidateDetail?.tags ?? selectedCandidate.tags)
+              return [...new Set([...SUGGESTED_LABELS, ...tagOptions])].filter((t) => !applied.includes(t)).slice(0, 6)
+            })()}
             onAdd={(t) => {
               const cur = parseTagList(candidateDetail?.tags ?? selectedCandidate.tags)
               if (cur.includes(t)) return
@@ -1701,6 +2109,7 @@ export default function Communications() {
           />
 
           <div className="p-4 space-y-3 text-sm">
+            <p className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">Status &amp; details</p>
             {/* Status */}
             <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
               <div className={clsx('w-2 h-2 rounded-full', selectedCandidate.is_human_handoff ? 'bg-indigo-500' : 'bg-emerald-500')} />
@@ -1730,7 +2139,7 @@ export default function Communications() {
             {selectedCandidate.candidate_status && (
               <div className="flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
                 <Briefcase size={13} className="text-zinc-400 dark:text-zinc-500 shrink-0" />
-                <span className="text-xs capitalize">{selectedCandidate.candidate_status}</span>
+                <span className="text-xs capitalize">{getStageLabel(normalizeStatus(String(selectedCandidate.candidate_status || '').toLowerCase()))}</span>
               </div>
             )}
 
@@ -1817,6 +2226,19 @@ export default function Communications() {
             )}
           </div>
         </div>
+      )}
+
+      {/* CV Manager — opened in-place over the conversation (no navigation), so
+          the agent returns to the exact same chat when they close it. */}
+      {cvModalOpen && selectedId && (
+        <CVReviewModal
+          candidate={{ id: selectedId, name: getCandidateDisplayName(selectedCandidate) }}
+          onClose={() => {
+            setCvModalOpen(false)
+            queryClient.invalidateQueries({ queryKey: ['candidate', selectedId] })
+            queryClient.invalidateQueries({ queryKey: ['candidate-detail', selectedId] })
+          }}
+        />
       )}
 
       <Modal

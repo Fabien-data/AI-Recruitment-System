@@ -27,6 +27,25 @@ async function safeAlter(sql, label) {
     }
 }
 
+/**
+ * Run a one-time DATA migration (UPDATE/INSERT). Logs the affected row count and
+ * never throws into startup — a WARN keeps the server booting (table-ownership
+ * issues on Cloud SQL surface here as a WARN, never a crash). Idempotent by
+ * construction: the WHERE clauses match only the legacy values they rewrite, so
+ * re-running on already-migrated data is a no-op (0 rows).
+ */
+async function safeUpdate(sql, label) {
+    try {
+        const res = await query(sql, []);
+        const n = res.rowCount != null ? res.rowCount : (res.rows ? res.rows.length : 0);
+        logger.info(`  migration: OK  — ${label} (${n} row${n === 1 ? '' : 's'})`);
+        return n;
+    } catch (err) {
+        logger.warn(`  migration: WARN — ${label}: ${err.message.split('\n')[0]}`);
+        return -1;
+    }
+}
+
 async function applyMigrations() {
     logger.info('🔄 Running startup migrations...');
 
@@ -748,6 +767,204 @@ async function applyMigrations() {
     await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_due_pending ON candidate_tasks(due_at) WHERE status = 'pending'`, 'idx_candidate_tasks_due_pending');
     await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_candidate ON candidate_tasks(candidate_id)`, 'idx_candidate_tasks_candidate');
     await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_assignee ON candidate_tasks(assigned_to) WHERE status = 'pending'`, 'idx_candidate_tasks_assignee');
+
+    // ── Migration 028: in-call presence (multi-agent calling console) ─────────
+    // Lets an agent flag "I'm on a call with this candidate" so the other agents
+    // see it live and don't double-call. Manual toggle (external dialer, no API).
+    // Cleared on socket disconnect + a TTL sweep in server.js. recruitment_db only
+    // — the Python chatbot maps a different candidates table (chatbot_db) and never
+    // reads these columns.
+    const callPresenceCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS call_status     VARCHAR(20)`, 'candidates.call_status'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS call_agent_id   UUID REFERENCES users(id) ON DELETE SET NULL`, 'candidates.call_agent_id'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS call_started_at TIMESTAMPTZ`, 'candidates.call_started_at'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_on_call ON candidates(call_agent_id) WHERE call_status = 'on_call'`, 'idx_candidates_on_call'],
+    ];
+    for (const [sql, label] of callPresenceCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 029: call disposition + contacted markers + shared-pool claim ─
+    // `disposition` is the agent's call outcome / lead status (app-validated, no
+    // CHECK so other writers can't trip it). `last_contacted_at` is dedicated to
+    // AGENT contact — distinct from `last_contact_at`, which the bot/email/webhook
+    // bump on every inbound. `claimed_by` lets an agent claim a chat to themselves
+    // in the shared pool so the 5 agents don't collide.
+    const triageCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS disposition       VARCHAR(24)`, 'candidates.disposition'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS disposition_at    TIMESTAMPTZ`, 'candidates.disposition_at'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS disposition_by    UUID REFERENCES users(id) ON DELETE SET NULL`, 'candidates.disposition_by'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS last_contacted_at TIMESTAMPTZ`, 'candidates.last_contacted_at'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS contacted_by      UUID REFERENCES users(id) ON DELETE SET NULL`, 'candidates.contacted_by'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS claimed_by        UUID REFERENCES users(id) ON DELETE SET NULL`, 'candidates.claimed_by'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS claimed_at        TIMESTAMPTZ`, 'candidates.claimed_at'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_disposition ON candidates(disposition) WHERE disposition IS NOT NULL`, 'idx_candidates_disposition'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_claimed_by ON candidates(claimed_by) WHERE claimed_by IS NOT NULL`, 'idx_candidates_claimed_by'],
+    ];
+    for (const [sql, label] of triageCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 030: call_logs (agent call/remark engagement log) ───────────
+    // One row per logged call or standalone remark; powers the per-candidate call
+    // log and the per-agent engagement rollup. General CRUD actions stay in
+    // audit_logs — this table is specifically the calling-console engagement feed.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS call_logs (
+            id               UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id     UUID         NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+            agent_id         UUID         REFERENCES users(id) ON DELETE SET NULL,
+            outcome          VARCHAR(24),
+            disposition      VARCHAR(24),
+            remark           TEXT,
+            duration_seconds INTEGER,
+            called_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'call_logs table');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_call_logs_candidate  ON call_logs(candidate_id, called_at DESC)`, 'idx_call_logs_candidate');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_call_logs_agent_date ON call_logs(agent_id, called_at DESC)`, 'idx_call_logs_agent_date');
+
+    // ── Migration 031: link a call log to the job it assigned + the reason ──────
+    // When an agent advances a New candidate to Screening via the "Done" action
+    // they pick a job/project; `job_id` records that assignment so the call log
+    // can show "Assigned to <job> @ <project>". `reason` captures the structured
+    // not-interested reason (Salary too low / Wrong location / …). Both nullable —
+    // a plain remark-only log still works.
+    const callLogAssignmentCols = [
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS job_id         UUID REFERENCES jobs(id) ON DELETE SET NULL`, 'call_logs.job_id'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS application_id UUID REFERENCES applications(id) ON DELETE SET NULL`, 'call_logs.application_id'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS reason         VARCHAR(48)`, 'call_logs.reason'],
+        [`CREATE INDEX IF NOT EXISTS idx_call_logs_job ON call_logs(job_id) WHERE job_id IS NOT NULL`, 'idx_call_logs_job'],
+    ];
+    for (const [sql, label] of callLogAssignmentCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 032: status-vocabulary standardization (UPGRADES.md #1 + #5) ──
+    // Collapse the legacy application vocabulary onto the canonical 5, normalize
+    // the candidate vocabulary onto the canonical 7, re-bucket CV-less candidates
+    // back to New (the CV is the hard eligibility gate — #5), and retire
+    // conversation_stage as a separate vocabulary (mirror it to status).
+    //
+    // Canonical candidate.status : new, screening, certified, interview_scheduled,
+    //                              future_pool, merged, hired
+    // Canonical application.status: screening, certified, interview_scheduled,
+    //                              hired, rejected
+    //
+    // All UPDATEs are idempotent (they only match values they rewrite) and run via
+    // safeUpdate so a table-ownership WARN can never abort startup.
+
+    // (a) candidate-level 'rejected' is NOT a canonical candidate status — a
+    //     decline maps to future_pool (re-engageable). CV-less ones get pulled to
+    //     New by step (b) below, consistent with #5.
+    await safeUpdate(
+        `UPDATE candidates SET status = 'future_pool' WHERE status = 'rejected'`,
+        '032a candidates rejected → future_pool'
+    );
+
+    // (b) CV is the hard gate: a candidate with no CV on file can only be New.
+    //     Pull any CV-less candidate sitting in an eligibility/pool stage back to
+    //     New. Protected terminals (merged/hired) are intentionally excluded.
+    await safeUpdate(
+        `UPDATE candidates
+            SET status = 'new'
+          WHERE status IN ('screening','certified','interview_scheduled','future_pool')
+            AND NOT (cv_uploaded IS TRUE
+                     OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`,
+        '032b CV-less candidates re-bucketed → new'
+    );
+
+    // (c) collapse application.status legacy values onto the canonical 5.
+    await safeUpdate(
+        `UPDATE applications SET status = 'screening'
+          WHERE status IN ('applied','auto_assigned','reviewing')`,
+        '032c applications applied/auto_assigned/reviewing → screening'
+    );
+    await safeUpdate(
+        `UPDATE applications SET status = 'certified' WHERE status = 'pre_screened'`,
+        '032c applications pre_screened → certified'
+    );
+    await safeUpdate(
+        `UPDATE applications SET status = 'interview_scheduled'
+          WHERE status IN ('interviewed','selected')`,
+        '032c applications interviewed/selected → interview_scheduled'
+    );
+    await safeUpdate(
+        `UPDATE applications SET status = 'hired' WHERE status = 'placed'`,
+        '032c applications placed → hired'
+    );
+    await safeUpdate(
+        `UPDATE applications SET status = 'rejected' WHERE status = 'transferred'`,
+        '032c applications transferred → rejected'
+    );
+
+    // NOTE: conversation_stage is intentionally NOT mass-mirrored here. It is no
+    // longer a status axis anywhere in the CRM (the active-chats + Messages filters
+    // that keyed off it are removed in this release), so the chatbot may keep using
+    // it as its own chat-flow indicator without conflicting with candidate.status.
+
+    // (e) observability: surface any value still outside the canonical sets so a
+    //     stray writer is caught in the deploy log (does not block startup).
+    try {
+        const strayCand = await query(
+            `SELECT status, COUNT(*)::int AS n FROM candidates
+              WHERE status IS NOT NULL
+                AND status NOT IN ('new','screening','certified','interview_scheduled','future_pool','merged','hired')
+              GROUP BY status`, []
+        );
+        if (strayCand.rows.length) {
+            logger.warn(`  migration: 032 ⚠ candidates with non-canonical status remain: ${JSON.stringify(strayCand.rows)}`);
+        }
+        const strayApp = await query(
+            `SELECT status, COUNT(*)::int AS n FROM applications
+              WHERE status IS NOT NULL
+                AND status NOT IN ('screening','certified','interview_scheduled','hired','rejected')
+              GROUP BY status`, []
+        );
+        if (strayApp.rows.length) {
+            logger.warn(`  migration: 032 ⚠ applications with non-canonical status remain: ${JSON.stringify(strayApp.rows)}`);
+        }
+    } catch (err) {
+        logger.warn(`  migration: 032e stray-status audit skipped: ${err.message.split('\n')[0]}`);
+    }
+
+    // ── Migration 033: integrity constraints (UPGRADES.md #1 + #2) ─────────────
+    // Best-effort CHECK constraints (added via safeAlter so an ownership failure
+    // is a WARN, not a crash). Application-level validation is the primary guard;
+    // these make the DB the backstop. Run AFTER 032 so existing rows validate.
+
+    // users.role: normalize any legacy values first, then constrain to the 4 roles.
+    await safeUpdate(
+        `UPDATE users SET role = 'project_handler' WHERE role = 'recruiter'`,
+        '033 users.role recruiter → project_handler'
+    );
+    await safeUpdate(
+        `UPDATE users SET role = 'sourcing_department' WHERE role = 'supervisor'`,
+        '033 users.role supervisor → sourcing_department'
+    );
+    await safeAlter(
+        `ALTER TABLE users ADD CONSTRAINT users_role_chk
+            CHECK (role IN ('admin','project_handler','marketing_agent','sourcing_department'))`,
+        '033 users_role_chk'
+    );
+
+    // Realign the column default so it can never violate the new CHECK (the
+    // legacy default 'applied' is no longer a permitted value).
+    await safeAlter(
+        `ALTER TABLE applications ALTER COLUMN status SET DEFAULT 'screening'`,
+        "033 applications.status default → screening"
+    );
+    await safeAlter(
+        `ALTER TABLE applications ADD CONSTRAINT applications_status_chk
+            CHECK (status IN ('screening','certified','interview_scheduled','hired','rejected'))`,
+        '033 applications_status_chk'
+    );
+    await safeAlter(
+        `ALTER TABLE candidates ADD CONSTRAINT candidates_status_chk
+            CHECK (status IS NULL OR status IN ('new','screening','certified','interview_scheduled','future_pool','merged','hired'))`,
+        '033 candidates_status_chk'
+    );
 
     logger.info('✅ Startup migrations complete.');
 }

@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { pool } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { syncJobAsync, syncJobDeleteAsync, syncProjectAsync } = require('./chatbot-sync');
 const { processJobFlyer, extractJobFlyer } = require('../services/auto-ingest');
 const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT, JOB_COUNTS_JOIN, JOB_COUNTS_SELECT } = require('../utils/job-queries');
@@ -156,9 +157,9 @@ async function handleMagicCreate(req, res, next) {
     }
 }
 
-router.post('/extract',      authenticate, authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleExtractFlyers);
-router.post('/magic-create', authenticate, authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
-router.post('/auto-ingest',  authenticate, authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
+router.post('/extract',      authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleExtractFlyers);
+router.post('/magic-create', authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
+router.post('/auto-ingest',  authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,7 +177,7 @@ router.post('/auto-ingest',  authenticate, authorize('admin', 'sourcing_departme
  * positions_filled / positions_remaining are derived from applications, not
  * read from the stored column (which is no longer written).
  */
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('jobs', 'view'), async (req, res, next) => {
     try {
         const {
             category,
@@ -276,7 +277,7 @@ router.get('/', authenticate, async (req, res, next) => {
     }
 });
 
-router.get('/:id', authenticate, async (req, res, next) => {
+router.get('/:id', authenticate, requireSection('jobs', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
@@ -321,7 +322,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
  * for back-compat with the chatbot's Pinecone metadata. The manual
  * positions_filled override is no longer accepted — counts are derived.
  */
-router.post('/', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+router.post('/', authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const {
             title,
@@ -431,7 +432,7 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
  * If project_id changes, both the old and the new project are re-enqueued
  * to the chatbot KB so neither stale-references the moved job.
  */
-router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('jobs', 'edit'), authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = req.body;
@@ -552,7 +553,7 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
     }
 });
 
-router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('jobs', 'delete'), authorize('admin'), async (req, res, next) => {
     try {
         const { id } = req.params;
 

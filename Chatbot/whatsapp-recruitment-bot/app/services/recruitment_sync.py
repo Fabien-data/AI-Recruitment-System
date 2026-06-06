@@ -321,10 +321,26 @@ class RecruitmentSyncService:
             )
             return False
 
-        force_general_pool = job_unknown and not is_general_pool and not has_ad_job
+        # CV is the hard gate for general-pool routing: the backend moves
+        # is_general_pool=true leads to status 'future_pool', but a lead with no
+        # CV on file must stay 'New' (it can't satisfy the New→Screening CV gate).
+        # Only force the general pool for a partial/unknown-job lead once a CV
+        # actually exists — via the cv_uploaded signal (state/collected), the
+        # persisted resume_file_path, or the cv_path being uploaded on this push.
+        has_cv = (
+            bool(agent_state.get("cv_uploaded"))
+            or bool(collected.get("cv_uploaded"))
+            or bool(collected.get("cv"))
+            or bool(getattr(candidate, "resume_file_path", None))
+            or bool(cv_path)
+        )
+
+        force_general_pool = (
+            job_unknown and not is_general_pool and not has_ad_job and has_cv
+        )
         if force_general_pool:
             logger.info(
-                "Partial-lead sync for %s — job unknown, saving to general pool",
+                "Partial-lead sync for %s — job unknown, CV on file, saving to general pool",
                 candidate.phone_number,
             )
 

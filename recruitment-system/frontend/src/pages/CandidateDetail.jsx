@@ -8,9 +8,11 @@ import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
 import { EditCandidateModal } from '../components/EditCandidateModal'
+import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
 import { useRole } from '../stores/authStore'
 import { format } from 'date-fns'
 import { getDocumentCategory, resolveDocumentUrl, PENDING_URL } from '../utils/documents'
+import { normalizeStatus } from '../constants/lifecycle'
 
 const LANGUAGE_LABELS = {
   en: 'English',
@@ -20,7 +22,10 @@ const LANGUAGE_LABELS = {
   tanglish: 'Tanglish',
 }
 
-const INACTIVE_APPLICATION_STATUSES = new Set(['rejected', 'withdrawn', 'dropped', 'archived'])
+// Canonical vocabulary: the only inactive application status is 'rejected'
+// (the backend never emits withdrawn/dropped/archived). Legacy 'transferred'
+// folds to 'rejected' via normalizeStatus, so it's treated as inactive too.
+const INACTIVE_APPLICATION_STATUSES = new Set(['rejected'])
 
 function parseCandidateMetadata(metadata) {
   if (!metadata) return {}
@@ -38,7 +43,7 @@ function getCandidateLanguageLabel(candidate, metadata) {
 }
 
 function getPrimaryApplication(applications) {
-  return applications.find((application) => !INACTIVE_APPLICATION_STATUSES.has(String(application?.status || '').toLowerCase())) || applications[0] || null
+  return applications.find((application) => !INACTIVE_APPLICATION_STATUSES.has(normalizeStatus(String(application?.status || '').toLowerCase()))) || applications[0] || null
 }
 
 export default function CandidateDetail() {
@@ -154,7 +159,7 @@ export default function CandidateDetail() {
           <div className="space-y-4">
             <div className="flex flex-wrap items-start gap-3">
               <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 break-words">{candidate.name || candidate.phone || 'Unknown'}</h1>
-              <Badge status={candidate.status} className="text-sm" />
+              <Badge status={normalizeStatus(candidate.status)} className="text-sm" />
             </div>
 
             <div className="flex flex-wrap items-center gap-4 text-zinc-600 dark:text-zinc-400">
@@ -183,7 +188,7 @@ export default function CandidateDetail() {
                 <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Application Status</p>
                 <div className="mt-2">
                   {primaryApplication ? (
-                    <Badge status={primaryApplication.status} className="text-xs" />
+                    <Badge status={normalizeStatus(primaryApplication.status)} className="text-xs" />
                   ) : (
                     <span className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Not assigned</span>
                   )}
@@ -306,6 +311,17 @@ export default function CandidateDetail() {
                 </dd>
               </div>
             )}
+          </Card>
+
+          {/* Call log & remarks — same engagement feed shown in the chat + CV
+              Manager, so an agent's calls/notes follow the candidate everywhere. */}
+          <Card>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3 flex items-center gap-2">
+              <MessageSquare size={20} aria-hidden /> Call log &amp; remarks
+            </h2>
+            <div className="-mx-2">
+              <CallRemarksPanel candidateId={candidate.id} />
+            </div>
           </Card>
 
           {Object.keys(applicationForm).length > 0 && (
@@ -555,7 +571,7 @@ export default function CandidateDetail() {
                 <div className="rounded-xl bg-zinc-50 dark:bg-zinc-900/60 p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Application Status</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Badge status={primaryApplication.status} className="text-xs" />
+                    <Badge status={normalizeStatus(primaryApplication.status)} className="text-xs" />
                     {primaryApplication.match_score != null && (
                       <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Match score: {primaryApplication.match_score}%</span>
                     )}
@@ -596,7 +612,7 @@ export default function CandidateDetail() {
                         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{app.job_category || 'Job role'}</p>
                       </div>
                     </div>
-                    <Badge status={app.status} className="mt-3 text-xs" />
+                    <Badge status={normalizeStatus(app.status)} className="mt-3 text-xs" />
                   </li>
                 ))}
               </ul>
