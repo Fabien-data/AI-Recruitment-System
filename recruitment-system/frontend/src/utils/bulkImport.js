@@ -54,7 +54,8 @@ export const COLUMN_HELP = {
 const HEADER_ALIASES = {
   name: 'name', full_name: 'name', candidate_name: 'name', applicant: 'name', applicant_name: 'name',
   phone: 'phone', phone_number: 'phone', mobile: 'phone', mobile_number: 'phone', contact: 'phone',
-  contact_number: 'phone', whatsapp: 'phone', whatsapp_number: 'phone', tel: 'phone', telephone: 'phone',
+  contact_number: 'phone', contact_details: 'phone', contact_no: 'phone', contact_numbers: 'phone',
+  whatsapp: 'phone', whatsapp_number: 'phone', tel: 'phone', telephone: 'phone',
   email: 'email', e_mail: 'email', email_address: 'email',
   job_title: 'job_title', job: 'job_title', position: 'job_title', role: 'job_title',
   applied_for: 'job_title', vacancy: 'job_title', designation: 'job_title',

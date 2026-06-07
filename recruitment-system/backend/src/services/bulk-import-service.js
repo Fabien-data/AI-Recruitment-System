@@ -73,6 +73,31 @@ function normalizeLanguage(v) {
 }
 
 /**
+ * Import-tolerant phone parser. Agency spreadsheets routinely carry phone shapes
+ * that the strict E.164 normalizer rejects:
+ *   - several numbers in one cell ("0771234567 / 0712345678") — strip-and-glue
+ *     would fuse them into one invalid 20-digit string, so we split and try each.
+ *   - 9-digit Sri Lankan mobiles ("766379024") — Excel stores the cell as a number
+ *     and drops the leading 0; re-add it (→ "0766379024") and retry.
+ * Returns the first segment that normalizes, else null. Scoped to bulk import so
+ * the shared normalizePhone (WhatsApp intake, etc.) keeps its strict contract.
+ */
+function parseImportPhone(raw) {
+    if (raw == null) return null;
+    const segments = String(raw).split(/[/,;|\n]+/).map((s) => s.trim()).filter(Boolean);
+    for (const seg of segments) {
+        const direct = normalizePhone(seg);
+        if (direct) return direct;
+        const d = seg.replace(/\D/g, '');
+        if (d.length === 9) {
+            const withZero = normalizePhone('0' + d); // dropped-leading-zero SL number
+            if (withZero) return withZero;
+        }
+    }
+    return null;
+}
+
+/**
  * Map a raw spreadsheet row (already keyed by canonical column names on the
  * frontend) into a trimmed, predictable shape. Defensive — re-cleans on the
  * backend so a hand-built JSON payload still behaves.
@@ -136,6 +161,54 @@ async function loadProjectJobs(projectId) {
 }
 
 /**
+ * Find (or lazily create) the per-project "catch-all" job that unresolved rows
+ * bucket into when `assignUnresolvedToProject` is on. Titled exactly the project
+ * name so an import with no matching job lands under "<Project>" instead of
+ * dead-ending. Find-or-create on (project_id, LOWER(title)) so it's reused across
+ * rows AND batches, and so a project that already has a job named after itself is
+ * reused rather than duplicated. Insert shape mirrors routes/projects.js (the
+ * known-good prod path) to satisfy NOT NULL columns. Only ever called at commit
+ * time — the dry-run never writes.
+ */
+async function resolveProjectFallbackJob(projectId, userId) {
+    const pr = await query(
+        isMySQL ? 'SELECT title FROM projects WHERE id = ? LIMIT 1' : 'SELECT title FROM projects WHERE id = $1 LIMIT 1',
+        [projectId]
+    );
+    const projectTitle = (pr.rows && pr.rows[0] && cleanStr(pr.rows[0].title)) || 'General';
+
+    const existing = await query(
+        isMySQL
+            ? 'SELECT id FROM jobs WHERE project_id = ? AND LOWER(title) = LOWER(?) LIMIT 1'
+            : 'SELECT id FROM jobs WHERE project_id = $1 AND LOWER(title) = LOWER($2) LIMIT 1',
+        [projectId, projectTitle]
+    );
+    if (existing.rows && existing.rows.length) return existing.rows[0].id;
+
+    const description = 'Auto-created bucket for bulk-imported applications with no matching job in this project.';
+    const requirements = JSON.stringify({});
+    const wiggleRoom = JSON.stringify({});
+    if (isMySQL) {
+        const jobId = generateUUID();
+        await query(
+            `INSERT INTO jobs (id, title, category, description, requirements, wiggle_room, positions_available,
+                               salary_range, location, deadline, project_id, created_by, status, created_at, updated_at)
+             VALUES (?, ?, 'general', ?, ?, ?, 1, NULL, NULL, NULL, ?, ?, 'active', NOW(), NOW())`,
+            [jobId, projectTitle, description, requirements, wiggleRoom, projectId, userId]
+        );
+        return jobId;
+    }
+    const ins = await query(
+        `INSERT INTO jobs (title, category, description, requirements, wiggle_room, positions_available,
+                           salary_range, location, deadline, project_id, created_by, status)
+         VALUES ($1, 'general', $2, $3::jsonb, $4::jsonb, 1, NULL, NULL, NULL, $5, $6, 'active')
+         RETURNING id`,
+        [projectTitle, description, requirements, wiggleRoom, projectId, userId]
+    );
+    return ins.rows[0].id;
+}
+
+/**
  * One batched probe for existing candidates matching any of the given phones or
  * emails. Returns Sets used by the dry-run analysis. Portable IN-list (works on
  * both PG and MySQL — avoids PG-only ANY(array)).
@@ -172,7 +245,7 @@ async function loadExistingContacts(phones, emails) {
  * endpoint. `cv_present` per row (set by the frontend match step) feeds the
  * missing_cv count.
  */
-function analyzeRows(rawRows, { jobs, defaultJobId, existingPhones, existingEmails }) {
+function analyzeRows(rawRows, { jobs, defaultJobId, existingPhones, existingEmails, assignUnresolvedToProject = true }) {
     const seenPhones = new Set();
     const seenEmails = new Set();
     const rows = [];
@@ -188,7 +261,7 @@ function analyzeRows(rawRows, { jobs, defaultJobId, existingPhones, existingEmai
         const v = { row_index: row._index, name: row.name, phone: null, verdict: 'ok', reason: null, matched_field: null };
 
         if (!row.name) { v.verdict = 'error'; v.reason = 'missing_name'; errors++; rows.push(v); return; }
-        const phone = normalizePhone(row.phone);
+        const phone = parseImportPhone(row.phone);
         if (!phone) { v.verdict = 'error'; v.reason = 'invalid_phone'; errors++; rows.push(v); return; }
         v.phone = phone;
         const email = row.email ? row.email.toLowerCase() : null;
@@ -210,14 +283,17 @@ function analyzeRows(rawRows, { jobs, defaultJobId, existingPhones, existingEmai
         }
 
         const jobId = resolveJobId(row, jobs, defaultJobId);
-        if (!jobId) {
+        if (!jobId && !assignUnresolvedToProject) {
             v.verdict = 'unresolved_job';
             v.reason = row.job_title
                 ? `No job "${row.job_title}" in this project`
                 : 'No job_title and no default job selected';
             unresolvedJob++; rows.push(v); return;
         }
-        v.job_id = jobId;
+        // jobId may be null here when the project catch-all will be used at commit;
+        // the row still imports, so it counts toward will_create.
+        v.job_id = jobId || null;
+        if (!jobId) v.reason = 'Will use the project catch-all job';
         if (!row.cv_present) missingCv++;
         willCreate++;
         rows.push(v);
@@ -236,15 +312,15 @@ function analyzeRows(rawRows, { jobs, defaultJobId, existingPhones, existingEmai
 }
 
 /** Validate endpoint core: load jobs + existing contacts, then analyze. */
-async function validateRows(rawRows, { projectId, defaultJobId }) {
+async function validateRows(rawRows, { projectId, defaultJobId, assignUnresolvedToProject = true }) {
     const jobs = await loadProjectJobs(projectId);
     const normalized = rawRows.map((r, i) => normalizeRow(r, i));
-    const phones = normalized.map((r) => normalizePhone(r.phone)).filter(Boolean);
+    const phones = normalized.map((r) => parseImportPhone(r.phone)).filter(Boolean);
     const emails = normalized.map((r) => (r.email ? r.email.toLowerCase() : null)).filter(Boolean);
     const { existingPhones, existingEmails } = await loadExistingContacts(phones, emails);
     return {
         jobs_count: jobs.length,
-        ...analyzeRows(rawRows, { jobs, defaultJobId, existingPhones, existingEmails }),
+        ...analyzeRows(rawRows, { jobs, defaultJobId, existingPhones, existingEmails, assignUnresolvedToProject }),
     };
 }
 
@@ -267,7 +343,7 @@ async function importRow(raw, cvFile, ctx) {
     };
 
     if (!row.name) { result.reason = 'missing_name'; return result; }
-    const phone = normalizePhone(row.phone);
+    const phone = parseImportPhone(row.phone);
     if (!phone) { result.reason = 'invalid_phone'; return result; }
     const email = row.email ? row.email.toLowerCase() : null;
 
@@ -279,14 +355,22 @@ async function importRow(raw, cvFile, ctx) {
         return result;
     }
 
-    // Resolve the job up-front so we never create an orphan candidate.
-    const jobId = resolveJobId(row, ctx.jobs, ctx.defaultJobId);
+    // Resolve the job up-front so we never create an orphan candidate. When the row
+    // matches no job and no default was picked, fall back to the per-project
+    // catch-all job (find-or-create, lazily) instead of dead-ending the row.
+    let jobId = resolveJobId(row, ctx.jobs, ctx.defaultJobId);
+    if (!jobId && ctx.assignUnresolvedToProject) {
+        jobId = await ctx.getFallbackJobId();
+    }
     if (!jobId) { result.status = 'error'; result.reason = 'unresolved_job'; return result; }
 
     // DB duplicate → skip the whole row, keep the system record (locked rule 4).
+    // $2 carries email and is NULL for spreadsheets with no email column — cast it
+    // to text so Postgres can infer the parameter type ("could not determine data
+    // type of parameter $2" otherwise, which failed every null-email row).
     const dupSql = isMySQL
         ? 'SELECT id FROM candidates WHERE phone = ? OR (email IS NOT NULL AND ? IS NOT NULL AND LOWER(email) = ?) LIMIT 1'
-        : 'SELECT id FROM candidates WHERE phone = $1 OR (email IS NOT NULL AND $2 IS NOT NULL AND LOWER(email) = $2) LIMIT 1';
+        : 'SELECT id FROM candidates WHERE phone = $1 OR ($2::text IS NOT NULL AND LOWER(email) = $2::text) LIMIT 1';
     const dupParams = isMySQL ? [phone, email, email] : [phone, email];
     const dup = await query(dupSql, dupParams);
     if (dup.rows && dup.rows.length) {
@@ -436,20 +520,25 @@ async function importRow(raw, cvFile, ctx) {
                 applicationId = ins.rows[0] ? ins.rows[0].id : appId;
             }
 
-            // 4) Conversation (communications) — the "Conversations object".
+            // 4) Conversation (communications) — the "Conversations object". Written
+            //    on the 'whatsapp' channel (not 'import') because the imported phone
+            //    IS the candidate's WhatsApp number, and the Conversations panel only
+            //    surfaces candidates with a 'whatsapp' message (communications.js list
+            //    filters channel = 'whatsapp'). metadata.source = 'bulk_import' keeps
+            //    provenance so these are still distinguishable from real inbound chats.
             const commId = generateUUID();
             if (isMySQL) {
                 await client.query(
                     `INSERT INTO communications
                         (id, candidate_id, channel, direction, message_type, content, metadata, sent_at)
-                     VALUES (?, ?, 'import', 'inbound', 'document', ?, ?, NOW())`,
+                     VALUES (?, ?, 'whatsapp', 'inbound', 'document', ?, ?, NOW())`,
                     [commId, candidateId, content, commMeta]
                 );
             } else {
                 await client.query(
                     `INSERT INTO communications
                         (id, candidate_id, channel, direction, message_type, content, metadata)
-                     VALUES ($1, $2, 'import', 'inbound', 'document', $3, $4::jsonb)`,
+                     VALUES ($1, $2, 'whatsapp', 'inbound', 'document', $3, $4::jsonb)`,
                     [commId, candidateId, content, commMeta]
                 );
             }
@@ -485,14 +574,22 @@ async function importRow(raw, cvFile, ctx) {
  * mimetype } (the route reconstructs this from multer files + the file_map).
  */
 async function importApplicationBatch(rawRows, files, options) {
-    const { projectId, defaultJobId, userId, batchId } = options;
+    const { projectId, defaultJobId, userId, batchId, assignUnresolvedToProject = true } = options;
     const jobs = await loadProjectJobs(projectId);
+    // Memoized so the catch-all job is found/created at most once per batch, and
+    // only if an unresolved row actually needs it.
+    let fallbackJobPromise = null;
     const ctx = {
         projectId,
         defaultJobId,
         userId,
         batchId,
         jobs,
+        assignUnresolvedToProject,
+        getFallbackJobId: () => {
+            if (!fallbackJobPromise) fallbackJobPromise = resolveProjectFallbackJob(projectId, userId);
+            return fallbackJobPromise;
+        },
         seenPhones: new Set(),
         seenEmails: new Set(),
     };
@@ -536,8 +633,10 @@ module.exports = {
     // exported for unit tests
     normalizeRow,
     resolveJobId,
+    resolveProjectFallbackJob,
     analyzeRows,
     importRow,
+    parseImportPhone,
     splitList,
     normalizeGender,
 };

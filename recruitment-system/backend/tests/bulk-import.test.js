@@ -145,15 +145,64 @@ describe('importApplicationBatch — dedup & skip rules', () => {
         expect(withTransaction).not.toHaveBeenCalled();
     });
 
-    test('unknown job with no default errors the row without creating a candidate', async () => {
+    test('unknown job errors the row when project-fallback is OFF', async () => {
         wireDb();
         const rows = [{ _index: 0, name: 'Lost Job', phone: '0773334444', job_title: 'Astronaut' }];
 
-        const { results } = await svc.importApplicationBatch(rows, {}, baseOpts);
+        const { results } = await svc.importApplicationBatch(rows, {}, { ...baseOpts, assignUnresolvedToProject: false });
 
         expect(results[0].status).toBe('error');
         expect(results[0].reason).toBe('unresolved_job');
         expect(withTransaction).not.toHaveBeenCalled();
+    });
+
+    test('unknown job buckets into the per-project catch-all job when fallback is ON (default)', async () => {
+        wireDb();
+        // No job matches and no catch-all exists yet → create one titled after the project.
+        query.mockImplementation((sql) => {
+            if (/LOWER\(title\)/.test(sql)) return Promise.resolve({ rows: [] });          // no existing catch-all
+            if (/FROM jobs WHERE project_id/.test(sql)) return Promise.resolve({ rows: [] }); // project has no matching jobs
+            if (/FROM projects WHERE id/.test(sql)) return Promise.resolve({ rows: [{ title: 'Lulu Hyper Market' }] });
+            if (/INSERT INTO jobs/.test(sql)) return Promise.resolve({ rows: [{ id: 'job-fallback' }] });
+            if (/SELECT id FROM candidates WHERE phone/.test(sql)) return Promise.resolve({ rows: [] });
+            return Promise.resolve({ rows: [] });
+        });
+
+        const rows = [{ _index: 0, name: 'Lost Job', phone: '0773334444', job_title: 'Astronaut' }];
+        const { results, summary } = await svc.importApplicationBatch(rows, {}, baseOpts);
+
+        expect(results[0].status).toBe('created');
+        expect(summary.created).toBe(1);
+        // a catch-all job titled after the project was created…
+        const jobInsert = query.mock.calls.find(([sql]) => /INSERT INTO jobs/.test(sql));
+        expect(jobInsert).toBeTruthy();
+        expect(jobInsert[1]).toContain('Lulu Hyper Market');
+        // …and the application was attached to it
+        const appInsert = findClientSql(/INSERT INTO applications/);
+        expect(appInsert[1]).toContain('job-fallback');
+    });
+
+    test('catch-all job is created at most once across many unresolved rows', async () => {
+        wireDb();
+        let jobInserts = 0;
+        query.mockImplementation((sql) => {
+            if (/LOWER\(title\)/.test(sql)) return Promise.resolve({ rows: [] });
+            if (/FROM jobs WHERE project_id/.test(sql)) return Promise.resolve({ rows: [] });
+            if (/FROM projects WHERE id/.test(sql)) return Promise.resolve({ rows: [{ title: 'Lulu Hyper Market' }] });
+            if (/INSERT INTO jobs/.test(sql)) { jobInserts++; return Promise.resolve({ rows: [{ id: 'job-fallback' }] }); }
+            if (/SELECT id FROM candidates WHERE phone/.test(sql)) return Promise.resolve({ rows: [] });
+            return Promise.resolve({ rows: [] });
+        });
+
+        const rows = [
+            { _index: 0, name: 'One', phone: '0773334441', job_title: 'Astronaut' },
+            { _index: 1, name: 'Two', phone: '0773334442', job_title: 'Wizard' },
+            { _index: 2, name: 'Three', phone: '0773334443', job_title: '' },
+        ];
+        const { summary } = await svc.importApplicationBatch(rows, {}, baseOpts);
+
+        expect(summary.created).toBe(3);
+        expect(jobInserts).toBe(1); // memoized — one find-or-create per batch
     });
 
     test('invalid phone and missing name are reported as errors, never inserted', async () => {
@@ -196,6 +245,7 @@ describe('analyzeRows (dry-run) + helpers', () => {
                 defaultJobId: null,
                 existingPhones: new Set(['+94770000004']),
                 existingEmails: new Set(),
+                assignUnresolvedToProject: false, // strict mode: unresolved jobs are an error
             }
         );
 
@@ -206,6 +256,20 @@ describe('analyzeRows (dry-run) + helpers', () => {
         expect(report.errors).toBe(1);
         expect(report.missing_cv).toBe(1);
         expect(report.will_create).toBe(2); // rows 0 and 2
+    });
+
+    test('dry-run with project-fallback ON counts unresolved-job rows as will_create', () => {
+        const report = svc.analyzeRows(
+            [
+                { _index: 0, name: 'A', phone: '0770000001', job_title: 'Security Guard', cv_present: true },
+                { _index: 1, name: 'C', phone: '0770000003', job_title: 'Astronaut', cv_present: true }, // no matching job
+                { _index: 2, name: 'E', phone: '0770000006', job_title: '', cv_present: true },          // no job_title at all
+            ],
+            { jobs: JOBS, defaultJobId: null, existingPhones: new Set(), existingEmails: new Set() } // default: fallback ON
+        );
+
+        expect(report.unresolved_job).toBe(0);
+        expect(report.will_create).toBe(3); // all bucket into the project catch-all
     });
 
     test('resolveJobId: exact, partial, default fallback, and miss', () => {
@@ -220,5 +284,20 @@ describe('analyzeRows (dry-run) + helpers', () => {
         expect(svc.splitList('')).toEqual([]);
         expect(svc.normalizeGender('M')).toBe('male');
         expect(svc.normalizeGender('woman')).toBe('female');
+    });
+
+    test('parseImportPhone tolerates agency spreadsheet phone shapes', () => {
+        // 9-digit SL mobile with the leading 0 dropped by Excel
+        expect(svc.parseImportPhone('766379024')).toBe('+94766379024');
+        expect(svc.parseImportPhone('768412314')).toBe('+94768412314');
+        // multiple numbers in one cell → first valid wins
+        expect(svc.parseImportPhone('0759822664 / 0753111416')).toBe('+94759822664');
+        expect(svc.parseImportPhone('762132759 / 0707063368')).toBe('+94762132759');
+        // already-valid shapes pass straight through
+        expect(svc.parseImportPhone('0771234567')).toBe('+94771234567');
+        expect(svc.parseImportPhone('+94771234567')).toBe('+94771234567');
+        // genuinely empty / junk still rejected
+        expect(svc.parseImportPhone('')).toBeNull();
+        expect(svc.parseImportPhone('abc')).toBeNull();
     });
 });

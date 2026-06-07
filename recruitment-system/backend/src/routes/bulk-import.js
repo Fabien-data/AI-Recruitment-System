@@ -34,7 +34,7 @@ const upload = multer({
 // POST /api/applications/bulk-import/validate
 router.post('/validate', authenticate, requireSection('applications', 'create'), async (req, res, next) => {
     try {
-        const { project_id, default_job_id, rows } = req.body || {};
+        const { project_id, default_job_id, assign_unresolved_to_project, rows } = req.body || {};
         if (!project_id) return res.status(400).json({ error: 'project_id is required' });
         if (!Array.isArray(rows) || rows.length === 0) {
             return res.status(400).json({ error: 'rows must be a non-empty array' });
@@ -45,6 +45,9 @@ router.post('/validate', authenticate, requireSection('applications', 'create'),
         const report = await validateRows(rows, {
             projectId: project_id,
             defaultJobId: default_job_id || null,
+            // Default on: rows with no matching job bucket into a per-project
+            // catch-all rather than dead-ending. Pass false to opt out.
+            assignUnresolvedToProject: assign_unresolved_to_project !== false,
         });
         res.json(report);
     } catch (err) {
@@ -67,7 +70,7 @@ router.post(
                 return res.status(400).json({ error: 'Invalid payload JSON' });
             }
 
-            const { project_id, default_job_id, batch_id, batch_index, rows } = payload;
+            const { project_id, default_job_id, assign_unresolved_to_project, batch_id, batch_index, rows } = payload;
             if (!project_id) return res.status(400).json({ error: 'project_id is required' });
             if (!batch_id) return res.status(400).json({ error: 'batch_id is required' });
             if (!Array.isArray(rows) || rows.length === 0) {
@@ -93,6 +96,7 @@ router.post(
             const { results, summary } = await importApplicationBatch(rows, files, {
                 projectId: project_id,
                 defaultJobId: default_job_id || null,
+                assignUnresolvedToProject: assign_unresolved_to_project !== false,
                 userId: req.user.id,
                 batchId: batch_id,
             });
