@@ -6,7 +6,11 @@ A running log of system upgrades. Newest decisions at the top of each section.
 
 ## Session handoff (read this first in a new chat)
 
-**Branch:** `fix/active-jobs-cap-no-dead-end` — all work below is **uncommitted in the working tree**.
+**Branch:** `fix/active-jobs-cap-no-dead-end`.
+
+> **✅ PHASE 0 SHIPPED + DEPLOYED + verified on prod (2026-06-07, commit `3285349`).** Items #1 (status standardization), #5 (CV eligibility gate), #2 (role-based access) are live. Prod deploy: backend rev `recruitment-backend-00092-jdq`; chatbot `whatsapp-chatbot-00138-kxs` + `whatsapp-celery-worker-00103-zcs`; frontend Firebase Hosting `a35d451cf6b2a7c1`. Data migration 032/033 ran clean (032a 18 rows, 032b CV-less re-bucket 431 rows, 032c collapse 581+16 rows; candidates_status_chk + applications_status_chk applied; **zero CV-less candidates past New**). Verified by 40 jest tests, Vite build, py_compile, a 37-agent adversarial review (25 findings fixed), and live prod DB re-query + health checks. **Known follow-ups:** (a) `users_role_chk` not applied — `users` table is postgres-owned (WARN; role validity still app-enforced); (b) frontend went out via the Hosting REST API because the firebase CLI login expired (`firebase login --reauth` to restore). Two LOW review findings intentionally deferred (calling-console "Done→Screening" creating an application is by design; redundant `authorize()` under `requireSection` fails-closed). **Next: Phase 1** (per the locked plan — phase-by-phase, pause for go-ahead before each prod deploy; Phase 4 full scope).
+
+The original pre-Phase-0 handoff (now historical) follows.
 
 ### Already implemented this session (code done — NOT committed, separate from items #1–#6)
 The "smart status + project filtering + calling-console workflow" feature (plan file `~/.claude/plans/in-the-conversation-uh-mossy-hearth.md`). What shipped:
