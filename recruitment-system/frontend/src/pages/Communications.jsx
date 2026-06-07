@@ -30,6 +30,7 @@ import {
 import { clsx } from 'clsx'
 import { categoryColor } from '../utils/categoryColor'
 import { format, formatDistanceToNow } from 'date-fns'
+import { formatInterviewLong, formatInterviewDateTime } from '../utils/datetime'
 import { Button } from '../components/ui/Button'
 import { Skeleton } from '../components/ui/Skeleton'
 import { Modal } from '../components/ui/Modal'
@@ -837,10 +838,8 @@ export default function Communications() {
       }
     }
     if (interview?.scheduled_datetime) {
-      const dt = new Date(interview.scheduled_datetime)
-      const dateStr = dt.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-      const timeStr = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-      parts.push(`Your interview is scheduled for ${dateStr} at ${timeStr}.`)
+      // Literal wall-clock — the candidate must see the exact time the recruiter set.
+      parts.push(`Your interview is scheduled for ${formatInterviewLong(interview.scheduled_datetime)}.`)
       if (interview.interview_job_title && interview.interview_job_title !== application?.job_title) {
         parts.push(`Role: ${interview.interview_job_title}.`)
       }
@@ -1975,7 +1974,7 @@ export default function Communications() {
                   {msgContext.application.job_title}
                   {msgContext.interview?.scheduled_datetime && (
                     <span className="ml-1 text-emerald-600">
-                      · Interview {format(new Date(msgContext.interview.scheduled_datetime), 'dd MMM HH:mm')}
+                      · Interview {formatInterviewDateTime(msgContext.interview.scheduled_datetime, '')}
                     </span>
                   )}
                 </div>

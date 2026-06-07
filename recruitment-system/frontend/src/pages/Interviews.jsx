@@ -17,6 +17,7 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { Modal } from '../components/ui/Modal'
 import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
+import { formatInterviewDateTime } from '../utils/datetime'
 
 const STATUS_META = {
   scheduled: { tone: 'blue',    label: 'Scheduled',  pill: 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 ring-blue-200 dark:ring-blue-900/60' },
@@ -26,12 +27,10 @@ const STATUS_META = {
   no_show:   { tone: 'amber',   label: 'No Show',    pill: 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 ring-amber-200 dark:ring-amber-900/60' },
 }
 
+// Interview times are a literal Asia/Colombo wall-clock — render them without a
+// browser-timezone shift so the dashboard matches the candidate's WhatsApp invite.
 function formatDateTime(dt) {
-  if (!dt) return '—'
-  return new Date(dt).toLocaleString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  })
+  return formatInterviewDateTime(dt)
 }
 
 function RatingStars({ value, onChange }) {

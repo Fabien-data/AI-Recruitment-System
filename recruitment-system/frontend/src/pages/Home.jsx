@@ -6,6 +6,7 @@ import {
   AlertTriangle, Briefcase, ArrowRight, FolderKanban, FileText,
 } from 'lucide-react'
 import { getWorkToday } from '../api'
+import { formatInterviewTime } from '../utils/datetime'
 import { useAuthStore, useRole } from '../stores/authStore'
 import Dashboard from './Dashboard'
 
@@ -62,7 +63,7 @@ export default function Home() {
               render={(iv) => (
                 <Row key={iv.id} to="/interviews"
                   primary={iv.candidate_name} secondary={iv.job_title}
-                  meta={iv.scheduled_datetime ? format(new Date(iv.scheduled_datetime), 'p') : ''} />
+                  meta={formatInterviewTime(iv.scheduled_datetime)} />
               )}
             />
           </>
@@ -121,7 +122,7 @@ export default function Home() {
               empty="No interviews today."
               render={(iv) => (
                 <Row key={iv.id} to="/interviews" primary={iv.candidate_name} secondary={iv.job_title}
-                  meta={iv.scheduled_datetime ? format(new Date(iv.scheduled_datetime), 'p') : ''} />
+                  meta={formatInterviewTime(iv.scheduled_datetime)} />
               )}
             />
             <PipelineCard pipeline={q.pipeline} />

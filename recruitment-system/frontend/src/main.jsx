@@ -13,12 +13,28 @@ import './index.css'
 
 apiClient.interceptors.response.use(
   (res) => res,
-  (err) => {
-    if (err.response?.status === 401) {
-      const url = err.config?.url || ''
+  async (err) => {
+    const { response, config } = err
+    if (response?.status === 401) {
+      const url = config?.url || ''
       if (!url.includes('/auth/login') && !url.includes('/auth/register')) {
         useAuthStore.getState().logout()
         window.location.href = '/login'
+      }
+      return Promise.reject(err)
+    }
+    // Transient rate-limit (429): with ~20 agents hitting one backend instance, a
+    // brief burst can trip the limiter. Retry a few times with backoff (honouring
+    // the server's Retry-After) so it self-heals instead of surfacing as an error.
+    if (response?.status === 429 && config) {
+      config.__retryCount = (config.__retryCount || 0) + 1
+      if (config.__retryCount <= 3) {
+        const retryAfter = Number(response.headers?.['retry-after'])
+        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.min(retryAfter * 1000, 10000)
+          : Math.min(8000, 400 * 2 ** (config.__retryCount - 1)) + Math.floor(Math.random() * 300)
+        await new Promise((resolve) => setTimeout(resolve, waitMs))
+        return apiClient(config)
       }
     }
     return Promise.reject(err)

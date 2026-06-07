@@ -62,7 +62,11 @@ export function EditApplicationModal({ open, onClose, application }) {
       return
     }
     const payload = { status }
-    if (interviewDt)   payload.interview_datetime = new Date(interviewDt).toISOString()
+    // Send the literal wall-clock the recruiter typed (YYYY-MM-DDTHH:mm), NOT a
+    // UTC instant. toISOString() shifted it by the browser↔Sri Lanka offset, so the
+    // candidate's WhatsApp invite showed the wrong time. `interviewDt` is already a
+    // naive datetime-local string — forward it verbatim to match the schedule panels.
+    if (interviewDt)   payload.interview_datetime = interviewDt
     if (interviewLoc)  payload.interview_location = interviewLoc
     if (interviewNotes) payload.interview_notes = interviewNotes
     if (rejectionReason) payload.rejection_reason = rejectionReason

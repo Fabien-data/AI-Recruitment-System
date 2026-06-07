@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   getAnalyticsOverview, getUpcomingInterviews, batchAutoAssign
 } from '../api'
+import { formatInterviewTime, formatInterviewDateTime } from '../utils/datetime'
 import {
   Users, Briefcase, FileText, FolderKanban, CalendarDays, LayoutDashboard,
   MapPin, Clock, Zap, ArrowUpRight, ArrowDownRight, ChevronRight, Download
@@ -313,7 +314,7 @@ export default function Dashboard() {
                     <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate tracking-tight">{intv.candidate_name}</p>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate flex items-center gap-1 mt-0.5">
                       <Clock size={12} />
-                      {new Date(intv.scheduled_datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {formatInterviewTime(intv.scheduled_datetime)}
                     </p>
                   </div>
                   <ChevronRight size={16} className="text-zinc-300 dark:text-zinc-600 group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors" />
@@ -364,7 +365,7 @@ export default function Dashboard() {
                   <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">{event.candidate_name} • {event.job_title}</p>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{event.project_title || 'Unassigned project'}</p>
                   <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400 flex flex-wrap items-center gap-3">
-                    <span className="flex items-center gap-1"><Clock size={12} />{new Date(event.scheduled_datetime).toLocaleString()}</span>
+                    <span className="flex items-center gap-1"><Clock size={12} />{formatInterviewDateTime(event.scheduled_datetime)}</span>
                     <span className="flex items-center gap-1"><MapPin size={12} />{event.location || 'TBD'}</span>
                   </div>
                 </div>

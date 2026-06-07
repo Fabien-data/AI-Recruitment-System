@@ -117,12 +117,21 @@ function rateLimitUserId(req) {
 
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    // Authenticated agent → 2000/15min keyed by user; anonymous → 300/15min by IP.
-    max: (req) => (rateLimitUserId(req) ? 2000 : 300),
+    // PER-AGENT limiting: an authenticated request is keyed by the logged-in user
+    // (`user:<id>`), never the IP — so agents sharing the office NAT IP each get
+    // their OWN budget and never throttle one another. The per-agent cap is set
+    // intentionally very high (100k/15min ≈ 6.6k req/min) so normal dashboard use is
+    // effectively unlimited; it exists only as a backstop against a runaway client
+    // stuck in an infinite request loop. Anonymous (pre-login) traffic is still
+    // capped per-IP to blunt login brute-force. High-frequency chatbot/3cx routes
+    // keep their own dedicated limiters.
+    max: (req) => (rateLimitUserId(req) ? 100000 : 600),
     keyGenerator: (req) => {
         const uid = rateLimitUserId(req);
         return uid ? `user:${uid}` : (req.ip || 'unknown');
     },
+    standardHeaders: true,  // emit RateLimit-* + Retry-After so the client can back off
+    legacyHeaders: false,
     message: { error: 'Too many requests, please slow down and try again shortly.' },
     validate: false, // disable dev-time sanity warnings (custom keyGenerator + trust proxy)
 });

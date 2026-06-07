@@ -964,6 +964,45 @@ async function sendCertificationNotification(candidateId, jobTitle, certificatio
     });
 }
 
+// ── Interview date/time formatting ────────────────────────────────────────────
+// Interview datetimes are a *literal Asia/Colombo wall-clock* — the exact time the
+// recruiter typed in the schedule panel — NOT a UTC instant. They must be rendered
+// by their literal calendar components and never run through a timezone conversion.
+// The old `new Date(x).toLocaleString('en-US', …)` shifted the time by the server↔
+// Sri Lanka offset (e.g. 2:30 PM → 9:00 AM on a UTC Cloud Run host), so candidates
+// received the wrong interview time. This reads Y/M/D/H/M straight off the value
+// (naive string, ISO string, or pg Date) and formats those exact numbers, so
+// "what you scheduled" is always "what the candidate receives", regardless of the
+// host timezone.
+function formatInterviewWallClock(value) {
+    if (value === null || value === undefined || value === '') return '';
+    let d;
+    if (value instanceof Date) {
+        // pg returns tz-naive TIMESTAMP columns as a Date whose UTC fields hold the
+        // stored wall-clock when the process runs in UTC (Cloud Run default).
+        d = value;
+    } else {
+        const m = String(value).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+        if (m) {
+            // Place the literal components in the UTC slot so formatting in UTC echoes
+            // them back unchanged — no offset math, no DST surprises.
+            d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]));
+        } else {
+            d = new Date(value); // last-resort parse for unexpected formats
+        }
+    }
+    if (Number.isNaN(d.getTime())) return String(value);
+    return d.toLocaleString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'UTC',
+    });
+}
+
 /**
  * Send interview reminder (bell icon / scheduled reminder job).
  * Same job/datetime fields as sendInterviewNotification but uses the
@@ -976,14 +1015,7 @@ async function sendInterviewReminderNotification(candidateId, jobTitle, intervie
         type: 'interview_reminder',
         data: {
             job_title: jobTitle,
-            interview_datetime: new Date(interviewDatetime).toLocaleString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            }),
+            interview_datetime: formatInterviewWallClock(interviewDatetime),
             interview_location: interviewLocation
         },
         channels
@@ -1000,14 +1032,7 @@ async function sendInterviewDayOfNotification(candidateId, jobTitle, interviewDa
         type: 'interview_day_reminder',
         data: {
             job_title: jobTitle,
-            interview_datetime: new Date(interviewDatetime).toLocaleString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            }),
+            interview_datetime: formatInterviewWallClock(interviewDatetime),
             interview_location: interviewLocation
         },
         channels
@@ -1032,14 +1057,7 @@ async function sendPreScreenedPassedNotification(candidateId, jobTitle, channels
 }
 
 async function sendPreScreeningNotification(candidateId, jobTitle, prescreeningDatetime, prescreeningLocation, channels = ['whatsapp']) {
-    const formattedDateTime = new Date(prescreeningDatetime).toLocaleString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-    });
+    const formattedDateTime = formatInterviewWallClock(prescreeningDatetime);
 
     return sendNotification({
         candidateId,
@@ -1065,14 +1083,7 @@ async function sendInterviewNotification(candidateId, jobTitle, interviewDatetim
         type: 'interview_scheduled',
         data: {
             job_title: jobTitle,
-            interview_datetime: new Date(interviewDatetime).toLocaleString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            }),
+            interview_datetime: formatInterviewWallClock(interviewDatetime),
             interview_location: interviewLocation,
             // notes_block: pre-formatted, used by the email/SMS templates here.
             notes_block: notesBlock,
@@ -1344,9 +1355,7 @@ async function sendInterviewRescheduledNotification(candidateId, jobTitle, inter
         type: 'interview_rescheduled',
         data: {
             job_title: jobTitle,
-            interview_datetime: new Date(interviewDatetime).toLocaleString('en-US', {
-                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
-            }),
+            interview_datetime: formatInterviewWallClock(interviewDatetime),
             interview_location: interviewLocation,
         },
         channels,
