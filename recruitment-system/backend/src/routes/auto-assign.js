@@ -11,6 +11,7 @@ const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job
 const { resolveCvAccessUrl } = require('../utils/cv-url');
 const { syncCandidateStage, hasCvSql } = require('../services/candidate-stage');
 const notifications = require('../services/notifications');
+const semanticMatch = require('../services/semantic-match');
 const logger = require('../utils/logger');
 
 // CV eligibility test (#5): a candidate has a CV iff cv_uploaded OR a cv_files row.
@@ -736,6 +737,38 @@ router.get('/candidate/:id/alternatives', authenticate, requireSection('candidat
     } catch (error) {
         logger.error('Get alternatives error:', error);
         next(error);
+    }
+});
+
+/**
+ * GET /api/auto-assign/job/:jobId/shortlist  (#4a)
+ * Ranked SEMANTIC shortlist: candidates ordered by embedding similarity to the
+ * job, with a deterministic "why matched". Read-only suggestion surface (the
+ * actual assignment still goes through the CV-gated assign endpoints).
+ */
+router.get('/job/:jobId/shortlist', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
+        const result = await semanticMatch.shortlistForJob(req.params.jobId, { limit });
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * POST /api/auto-assign/embed-backfill  (#4a, ops)
+ * Generate/refresh embeddings for jobs + CV-present candidates. Admin/sourcing
+ * only (candidates:create) — it spends OpenAI tokens. Idempotent (skips up-to-date
+ * rows by content hash). Run once after deploy, then periodically as CVs change.
+ */
+router.post('/embed-backfill', authenticate, requireSection('candidates', 'create'), async (req, res, next) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.body?.limit, 10) || 1000, 1), 5000);
+        const result = await semanticMatch.backfillEmbeddings({ limit });
+        res.json({ ok: true, ...result });
+    } catch (err) {
+        next(err);
     }
 });
 

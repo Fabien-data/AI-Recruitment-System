@@ -73,6 +73,13 @@ export const uploadCandidateDocument = (id, file, docType = 'cv') => {
   }).then(res => res.data)
 }
 
+// Semantic auto-shortlist for a job (#4a) — ranked candidates + "why matched"
+export const getJobShortlist = (jobId, limit = 20) =>
+  apiClient.get(`/api/auto-assign/job/${jobId}/shortlist`, { params: { limit } }).then(res => res.data)
+
+export const runEmbedBackfill = (limit = 1000) =>
+  apiClient.post('/api/auto-assign/embed-backfill', { limit }).then(res => res.data)
+
 // Global ⌘K search (#3.0) + sourcing control tower (#3.3)
 export const globalSearch = (q) =>
   apiClient.get('/api/search', { params: { q } }).then(res => res.data)
@@ -204,6 +211,16 @@ export const deleteApplication = (id) =>
 
 export const getMatchingCandidates = (jobId) =>
   apiClient.get(`/api/applications/match/${jobId}`).then(res => res.data)
+
+// Bulk application import (project-by-project from Excel/CSV).
+// validate = dry-run (JSON only); commit = one batch (multipart with CV files).
+export const validateBulkImport = (data) =>
+  apiClient.post('/api/applications/bulk-import/validate', data).then(res => res.data)
+
+export const commitBulkImportBatch = (formData) =>
+  apiClient.post('/api/applications/bulk-import/commit', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(res => res.data)
 
 // Communications
 export const getCommunications = (candidateId) =>

@@ -990,6 +990,39 @@ async function applyMigrations() {
         '035 candidates.photo_source',
     );
 
+    // ── Migration 036: semantic-match embeddings (#4a) ───────────────────────
+    // Embeddings (OpenAI text-embedding-3-small, 1536 dims) stored as JSONB +
+    // a content hash to detect staleness. We compute cosine similarity in JS at
+    // shortlist time (tiny scale: ~900 CVs / ~14 jobs) — no pgvector needed, so
+    // no CREATE EXTENSION privilege is required.
+    const embedCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_embedding      JSONB`,        '036 candidates.cv_embedding'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_embedding_hash VARCHAR(64)`,  '036 candidates.cv_embedding_hash'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_embedding_at   TIMESTAMPTZ`,  '036 candidates.cv_embedding_at'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding      JSONB`,        '036 jobs.embedding'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding_hash VARCHAR(64)`,  '036 jobs.embedding_hash'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding_at   TIMESTAMPTZ`,  '036 jobs.embedding_at'],
+    ];
+    for (const [sql, label] of embedCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 037: hot-path indexes for list/analytics performance ───────
+    // The Applications list filters/sorts on applications.status + applied_at;
+    // the active-chats + analytics queries scan communications.sent_at. These
+    // were the full-scan hot spots behind slow loads / laggy writes. Distinct
+    // from existing indexes: candidates(status) [024], communications(candidate_id,
+    // sent_at) [010] and the UNIQUE applications(candidate_id, job_id) [024] are
+    // already covered. safeAlter degrades to a WARN if a table is postgres-owned.
+    const perfIdx = [
+        [`CREATE INDEX IF NOT EXISTS idx_applications_status     ON applications(status)`,         '037 idx_applications_status'],
+        [`CREATE INDEX IF NOT EXISTS idx_applications_applied_at ON applications(applied_at DESC)`, '037 idx_applications_applied_at'],
+        [`CREATE INDEX IF NOT EXISTS idx_communications_sent_at  ON communications(sent_at DESC)`,  '037 idx_communications_sent_at'],
+    ];
+    for (const [sql, label] of perfIdx) {
+        await safeAlter(sql, label);
+    }
+
     logger.info('✅ Startup migrations complete.');
 }
 

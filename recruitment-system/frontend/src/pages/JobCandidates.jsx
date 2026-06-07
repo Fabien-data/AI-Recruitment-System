@@ -46,6 +46,7 @@ import { updateApplication, transferApplication, getJobs, rejectToPool, batchCer
 import { resolveDocumentUrl, PENDING_URL } from '../utils/documents'
 import { useRole } from '../stores/authStore'
 import { normalizeStatus, getStatusLabel } from '../constants/lifecycle'
+import SmartShortlist from '../components/SmartShortlist'
 import toast from 'react-hot-toast'
 import Papa from 'papaparse'
 
@@ -257,6 +258,11 @@ export default function JobCandidates() {
             {candidates.length === 0 && (
                 <EmptyPipelineBanner jobId={jobId} onScanned={() => queryClient.invalidateQueries({ queryKey: ['job-candidates', jobId] })} />
             )}
+
+            {/* Smart Shortlist (#4a) — collapsible, read-only semantic best
+                matches. Lazily fetches only when expanded. Suggestion-only;
+                does not touch the assigned-candidate pipeline below. */}
+            <SmartShortlist jobId={jobId} />
 
             {/* Candidates List */}
             <div className="card overflow-hidden">
