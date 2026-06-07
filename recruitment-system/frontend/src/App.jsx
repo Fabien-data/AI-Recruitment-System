@@ -26,6 +26,7 @@ import Communications from './pages/Communications'
 import Interviews from './pages/Interviews'
 import Engagement from './pages/Engagement'
 import Analytics from './pages/Analytics'
+import SourcingControlTower from './pages/SourcingControlTower'
 import KnowledgeBase from './pages/KnowledgeBase'
 import MarketingHub from './pages/MarketingHub'
 import LeadIntake from './pages/LeadIntake'
@@ -172,6 +173,11 @@ function App() {
         <Route path="analytics" element={
           <RoleGuard requireSection="analytics" action="view">
             <RouteBoundary name="Analytics"><Analytics /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="control-tower" element={
+          <RoleGuard requireSection="projects" action="view">
+            <RouteBoundary name="ControlTower"><SourcingControlTower /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="knowledge-base" element={

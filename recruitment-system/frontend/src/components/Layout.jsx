@@ -6,13 +6,14 @@ import { getNotifications } from '../api'
 import {
   LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell,
   FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone,
-  AlertTriangle, Activity, PanelLeft,
+  AlertTriangle, Activity, PanelLeft, Radar,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { twMerge } from 'tailwind-merge'
 import { ThemeToggle } from './ui/ThemeToggle'
 import { TopProgressBar } from './ui/TopProgressBar'
 import { Logo } from './ui/Logo'
+import { CommandPalette } from './CommandPalette'
 
 // Header notification bell — opens a dropdown of live-aggregated actionable
 // signals (interventions, recent applications, today's interviews). Polls
@@ -113,6 +114,7 @@ const FULL_NAV_EXTRAS = [
   { to: '/cv-manager', label: 'CV Manager', icon: FileSearch, section: 'cv_manager' },
   { to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' },
   { to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' },
+  { to: '/control-tower', label: 'Control Tower', icon: Radar, section: 'projects' },
   { to: '/knowledge-base', label: 'Knowledge Base', icon: BookOpen, section: 'knowledge_base' },
   { to: '/general-pool', label: 'General Pool', icon: Database, section: 'general_pool' },
 ]
@@ -225,6 +227,8 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen bg-zinc-50 dark:bg-zinc-950 font-sans overflow-hidden selection:bg-primary-600 selection:text-white transition-colors">
+      {/* Global ⌘K command palette — self-registers its hotkey, renders nothing until opened (#3.0) */}
+      <CommandPalette />
       <TopProgressBar />
 
       <AnimatePresence>

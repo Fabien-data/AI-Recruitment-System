@@ -73,6 +73,13 @@ export const uploadCandidateDocument = (id, file, docType = 'cv') => {
   }).then(res => res.data)
 }
 
+// Global ⌘K search (#3.0) + sourcing control tower (#3.3)
+export const globalSearch = (q) =>
+  apiClient.get('/api/search', { params: { q } }).then(res => res.data)
+
+export const getControlTowerHealth = (days = 2) =>
+  apiClient.get('/api/control-tower', { params: { days } }).then(res => res.data)
+
 // Per-role "My Work Today" landing queue (#3.0–3.4)
 export const getWorkToday = () =>
   apiClient.get('/api/me/work-today').then(res => res.data)

@@ -185,6 +185,8 @@ app.use('/api/candidate-tasks', candidateTasksRouter);
 app.use('/api/engagement', engagementRouter);
 app.use('/api/preferences', require('./routes/preferences'));
 app.use('/api/me', require('./routes/work-today'));
+app.use('/api/search', require('./routes/search'));
+app.use('/api/control-tower', require('./routes/control-tower'));
 
 // ── WhatsApp Ad Integration ──────────────────────────────────────────────
 app.use('/api/chatbot/intake', chatbotIntakeRouter); // POST /api/chatbot/intake

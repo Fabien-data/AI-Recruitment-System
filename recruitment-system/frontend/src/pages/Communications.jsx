@@ -40,6 +40,7 @@ import { JobDrawer } from '../components/communications/JobDrawer'
 import { CallPresenceToggle } from '../components/communications/CallPresenceToggle'
 import { DispositionSelect, dispositionClasses, dispositionLabel } from '../components/communications/DispositionSelect'
 import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
+import { QuickReplyPicker } from '../components/communications/QuickReplyPicker'
 import { CVReviewModal } from './CVManager'
 import { CANDIDATE_STAGE_LABELS, CANDIDATE_STATUS_BUCKETS, STATUS_COLORS, normalizeStatus, getStageLabel } from '../constants/lifecycle'
 
@@ -1943,6 +1944,14 @@ export default function Communications() {
                     <Wand2 size={12} /> Use template
                   </button>
                 )}
+                {/* Canned localized replies — appended to (never replacing) the
+                    composer text, so an agent can stack a greeting + answer. */}
+                <div className={clsx(!(msgContext && buildDefaultMessage()) && 'ml-auto')}>
+                  <QuickReplyPicker
+                    selectedCandidate={selectedCandidate}
+                    onInsert={(text) => setMessage((m) => (m ? `${m}\n${text}` : text))}
+                  />
+                </div>
               </div>
 
               {/* Job/interview context hint */}

@@ -32,6 +32,7 @@ import { TransferApplicationModal } from '../components/applications/TransferApp
 import { useAuthStore } from '../stores/authStore'
 import { useViewMode, ViewToggle } from '../components/ui/ViewToggle'
 import { CVReviewModal } from './CVManager'
+import SavedViews from '../components/SavedViews'
 import { DocumentPreview } from '../components/documents/DocumentPreview'
 import { getDocumentCategory } from '../utils/documents'
 import { STATUS_FILTER_OPTIONS, normalizeStatus } from '../constants/lifecycle'
@@ -344,9 +345,27 @@ export default function Applications() {
       {tab === 'all' && (
       <>
       <Card className="p-4 sm:p-5 mb-6">
-        <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200 mb-4">
-          <ListFilter size={18} aria-hidden />
-          <h2 className="text-base font-semibold">Filters</h2>
+        <div className="flex items-center justify-between gap-3 text-zinc-800 dark:text-zinc-200 mb-4">
+          <div className="flex items-center gap-2">
+            <ListFilter size={18} aria-hidden />
+            <h2 className="text-base font-semibold">Filters</h2>
+          </div>
+          <SavedViews
+            pageKey="applications"
+            currentFilters={{ projectId, jobId, status, dateFrom, dateTo, search }}
+            onApply={(f) => {
+              setProjectId(f.projectId || '')
+              setJobId(f.jobId || '')
+              setStatus(f.status || '')
+              setDateFrom(f.dateFrom || '')
+              setDateTo(f.dateTo || '')
+              // Update both the visible input and the debounced query value so
+              // the search box reflects the view AND results refresh at once.
+              setSearchInput(f.search || '')
+              setSearch(f.search || '')
+              setPage(1)
+            }}
+          />
         </div>
 
         <div className="relative mb-3">
