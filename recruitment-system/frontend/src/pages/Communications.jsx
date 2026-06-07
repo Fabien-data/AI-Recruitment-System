@@ -926,10 +926,24 @@ export default function Communications() {
     })
     socketRef.current = socket
 
+    // Lives for the socket's lifetime (the effect runs once): lets us tell the
+    // first connect from a reconnect.
+    let hasConnected = false
     socket.on('connect', () => {
       setConnected(true)
-      // Re-join current candidate room after reconnect
-      if (selectedId) socket.emit('join_candidate', selectedId)
+      // Re-join the CURRENTLY open candidate room after reconnect (selectedId is
+      // captured at mount in this once-only effect, so read the live ref).
+      const selId = selectedIdRef.current
+      if (selId) socket.emit('join_candidate', selId)
+      // On a RECONNECT (deploy, network blip, Cloud Run instance churn) any
+      // events emitted while we were disconnected were missed. Resync: the chat
+      // list and the open transcript. (The 30s poll heals the list eventually,
+      // but the open transcript would otherwise stay stale until manual refresh.)
+      if (hasConnected) {
+        queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+        queryClient.invalidateQueries({ queryKey: ['transcript'] })
+      }
+      hasConnected = true
     })
     socket.on('disconnect', () => setConnected(false))
 

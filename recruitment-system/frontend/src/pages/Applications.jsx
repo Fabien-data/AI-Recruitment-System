@@ -12,7 +12,7 @@ import {
   MoreHorizontal, Eye, Pencil, ArrowRightLeft, Trash2, User,
   ChevronDown, ChevronRight, Send, MapPinned, X, Clock,
   Search, ArrowDownWideNarrow, ChevronsDownUp, ChevronsUpDown,
-  Inbox, Check, Archive, Star, Phone, Loader2,
+  Inbox, Check, Archive, Star, Phone, Loader2, Upload,
 } from 'lucide-react'
 import { Modal } from '../components/ui/Modal'
 import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
@@ -36,9 +36,26 @@ import SavedViews from '../components/SavedViews'
 import { DocumentPreview } from '../components/documents/DocumentPreview'
 import { getDocumentCategory } from '../utils/documents'
 import { STATUS_FILTER_OPTIONS, normalizeStatus } from '../constants/lifecycle'
+import { useRealtime } from '../hooks/useRealtime'
 
 // How many collapsed project rows to show per page of the project list.
 const PROJECTS_PER_PAGE = 15
+
+// Live-update triggers: another agent (or the chatbot) creating/accepting/
+// rejecting/transferring an application broadcasts one of these — refetch the
+// list + candidate caches so the page stays current without a manual refresh.
+// Module-level consts → stable references for useRealtime's mount-once contract.
+const APP_REALTIME_EVENTS = ['application_changed', 'candidate_stage_changed']
+const APP_REALTIME_KEYS = [['applications'], ['candidates']]
+
+// Remove one application row from a React Query cache entry, tolerating BOTH
+// shapes getApplications returns ({ data: [...] } and a bare [...]) so the
+// optimistic inbox update works whichever the endpoint sends.
+function removeAppFromCache(old, id) {
+  if (Array.isArray(old?.data)) return { ...old, data: old.data.filter((a) => a.id !== id) }
+  if (Array.isArray(old)) return old.filter((a) => a.id !== id)
+  return old
+}
 
 export default function Applications() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -87,6 +104,9 @@ export default function Applications() {
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false)
   const queryClient = useQueryClient()
+
+  // Real-time: refetch when any agent/chatbot changes an application anywhere.
+  useRealtime({ events: APP_REALTIME_EVENTS, invalidateKeys: APP_REALTIME_KEYS })
 
   const toggleSelected = (id) => setSelectedIds((prev) => {
     const next = new Set(prev)
@@ -138,6 +158,10 @@ export default function Applications() {
   const { data: applications, isLoading } = useQuery({
     queryKey: ['applications', queryParams],
     queryFn: () => getApplications(queryParams),
+    // This pulls the full (limit:0) set, so don't poll it tightly — sockets
+    // (useRealtime above) are the primary live trigger; this is a long
+    // self-heal in case a socket event is missed. Pauses on hidden tabs.
+    refetchInterval: 120000,
   })
 
   const { data: jobsData } = useQuery({
@@ -302,6 +326,12 @@ export default function Applications() {
         actions={
           <>
             {tab === 'all' && <ViewToggle mode={viewMode} onChange={setViewMode} />}
+            <Link to="/applications/import">
+              <Button variant="secondary">
+                <Upload size={16} />
+                Bulk Import
+              </Button>
+            </Link>
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
               <Plus size={16} />
               New Application
@@ -1204,6 +1234,9 @@ function ApplicationsInbox({ projects = [] }) {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['applications', 'inbox', params],
     queryFn: () => getApplications(params),
+    // Small payload (limit:100) and the active triage surface — poll as a
+    // backstop to the socket pushes (pauses while the tab is hidden).
+    refetchInterval: 30000,
   })
 
   const list = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : []
@@ -1253,28 +1286,53 @@ function ApplicationsInbox({ projects = [] }) {
     }
   }
 
+  // Optimistically drop the acted row from the inbox so the action feels
+  // instant instead of waiting for a full refetch. The inbox key carries a
+  // `params` filter (project scope) so there can be several cached entries —
+  // snapshot/patch them ALL with the plural get/setQueriesData. Capture the
+  // candidate name in onMutate since the row is gone from `list` by onSuccess.
+  const optimisticRemove = async (id) => {
+    setActingId(id)
+    const name = list.find((a) => a.id === id)?.candidate_name || 'Candidate'
+    await queryClient.cancelQueries({ queryKey: ['applications', 'inbox'] })
+    const previous = queryClient.getQueriesData({ queryKey: ['applications', 'inbox'] })
+    queryClient.setQueriesData({ queryKey: ['applications', 'inbox'] }, (old) => removeAppFromCache(old, id))
+    return { previous, name }
+  }
+  const rollback = (ctx) => {
+    ctx?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data))
+  }
+
   const acceptMutation = useMutation({
     mutationFn: (id) => updateApplication(id, { status: 'certified' }),
-    onMutate: (id) => setActingId(id),
-    onSuccess: (_res, id) => {
-      const name = list.find((a) => a.id === id)?.candidate_name || 'Candidate'
-      toast.success(`${name} accepted (certified)`)
-      invalidate()
+    onMutate: optimisticRemove,
+    onSuccess: (_res, _id, ctx) => {
+      toast.success(`${ctx?.name || 'Candidate'} accepted (certified)`)
     },
-    onError: (err) => onActionError(err, 'Accept failed'),
-    onSettled: () => setActingId(null),
+    onError: (err, _id, ctx) => {
+      rollback(ctx)
+      onActionError(err, 'Accept failed')
+    },
+    onSettled: () => {
+      setActingId(null)
+      invalidate() // reconcile the optimistic removal with the server truth
+    },
   })
 
   const rejectMutation = useMutation({
     mutationFn: (id) => rejectToPool(id, { rejection_reason: POOL_REASON }),
-    onMutate: (id) => setActingId(id),
-    onSuccess: (_res, id) => {
-      const name = list.find((a) => a.id === id)?.candidate_name || 'Candidate'
-      toast.success(`${name} moved to general pool`)
+    onMutate: optimisticRemove,
+    onSuccess: (_res, _id, ctx) => {
+      toast.success(`${ctx?.name || 'Candidate'} moved to general pool`)
+    },
+    onError: (err, _id, ctx) => {
+      rollback(ctx)
+      onActionError(err, 'Reject failed')
+    },
+    onSettled: () => {
+      setActingId(null)
       invalidate()
     },
-    onError: (err) => onActionError(err, 'Reject failed'),
-    onSettled: () => setActingId(null),
   })
 
   const bulkAcceptMutation = useMutation({
