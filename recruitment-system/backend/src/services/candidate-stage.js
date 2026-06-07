@@ -99,6 +99,24 @@ function emitStageChanged(candidateId, status) {
 }
 
 /**
+ * Broadcast that an application row changed (created / status updated / rejected)
+ * so the Applications page can refetch live — covering the cases that do NOT
+ * move the candidate's canonical stage (a brand-new application, or a status
+ * write whose derived stage is unchanged), which `candidate_stage_changed`
+ * would not signal. Same fire-and-forget contract as emitStageChanged: lazy-
+ * required getIO + swallowed so callers (incl. fire-and-forget paths) never break.
+ */
+function emitApplicationChanged(payload = {}) {
+    try {
+        const { getIO } = require('../utils/websocket');
+        const io = getIO();
+        if (io) io.emit('application_changed', { ts: new Date().toISOString(), ...payload });
+    } catch (err) {
+        logger.debug(`candidate-stage: application_changed emit skipped: ${err.message}`);
+    }
+}
+
+/**
  * Map a single application status to a candidate stage, applying the CV gate:
  * a candidate without a CV on file can be at most 'new', even if an application
  * row exists (mirrors the New→Screening hard gate).
@@ -283,6 +301,7 @@ module.exports = {
     syncCandidateStage,
     setCandidateStage,
     emitStageChanged,
+    emitApplicationChanged,
     hasCvSql,
     candidateHasCv,
 };

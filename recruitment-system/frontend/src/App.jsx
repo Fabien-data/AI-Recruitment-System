@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { Component } from 'react'
+import { Component, lazy, Suspense } from 'react'
 import { useAuthStore } from './stores/authStore'
 import { ErrorBoundary as LocalErrorBoundary } from './components/ui/ErrorBoundary'
 import Layout from './components/Layout'
@@ -21,6 +21,8 @@ import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import GeneralPool from './pages/GeneralPool'
 import Applications from './pages/Applications'
+// Lazy — pulls in SheetJS (xlsx) + fflate, ~700KB, only when the importer opens.
+const BulkImport = lazy(() => import('./pages/BulkImport'))
 import CVManager from './pages/CVManager'
 import Communications from './pages/Communications'
 import Interviews from './pages/Interviews'
@@ -148,6 +150,15 @@ function App() {
         <Route path="applications" element={
           <RoleGuard requireSection="applications" action="view">
             <RouteBoundary name="Applications"><Applications /></RouteBoundary>
+          </RoleGuard>
+        } />
+        <Route path="applications/import" element={
+          <RoleGuard requireSection="applications" action="create">
+            <RouteBoundary name="BulkImport">
+              <Suspense fallback={<div className="p-8 text-sm text-zinc-500">Loading importer…</div>}>
+                <BulkImport />
+              </Suspense>
+            </RouteBoundary>
           </RoleGuard>
         } />
         <Route path="cv-manager" element={

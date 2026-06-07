@@ -13,6 +13,7 @@ const {
     candidateHasCv,
     normalizeApplicationStatus,
     APPLICATION_STATUS_SET,
+    emitApplicationChanged,
 } = require('../services/candidate-stage');
 const logger = require('../utils/logger');
 
@@ -237,6 +238,9 @@ router.post('/', authenticate, requireSection('applications', 'create'), async (
         // New application → candidate moves into screening (or stays 'new' if no
         // CV on file yet). Derived centrally so candidate.status stays in sync.
         syncCandidateStage(candidate_id).catch(() => {});
+        // Push to the Applications page even when the stage doesn't move (e.g. the
+        // candidate was already screening) — candidate_stage_changed wouldn't fire.
+        emitApplicationChanged({ candidate_id, application_id: application?.id, job_id, status: application?.status, created });
 
         res.status(created ? 201 : 200).json(application);
     } catch (error) {
@@ -352,6 +356,9 @@ router.put('/:id', authenticate, requireSection('applications', 'edit'), async (
 
         // Re-derive the candidate's canonical stage from this status change.
         if (status) syncCandidateStage(application.candidate_id).catch(() => {});
+        // Live-refresh the Applications page even when the derived stage is
+        // unchanged (e.g. reviewing → screening both map to 'screening').
+        if (status) emitApplicationChanged({ candidate_id: application.candidate_id, application_id: application.id, job_id: application.job_id, status: application.status });
 
         // 'hired' is a protected/terminal CANDIDATE status that syncCandidateStage
         // never derives (it only computes the 4 pipeline stages) — promote the
@@ -641,6 +648,10 @@ router.post('/:id/transfer', authenticate, requireSection('applications', 'edit'
 
         // The new (reviewing) application resets the candidate's furthest stage.
         syncCandidateStage(originalApp.candidate_id).catch(() => {});
+        // Transfer closes one app and opens another at the same stage, so the
+        // candidate's furthest stage often doesn't move — push application_changed
+        // so both the source job's list and the target's refresh live.
+        emitApplicationChanged({ candidate_id: originalApp.candidate_id, application_id: newAppId, job_id: target_job_id, status: 'screening' });
 
         // Notify candidate that their application has been moved
         const channels = Array.isArray(req.body.notify_channels) ? req.body.notify_channels : ['whatsapp'];

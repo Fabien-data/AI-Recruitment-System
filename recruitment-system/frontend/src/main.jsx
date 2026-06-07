@@ -28,9 +28,17 @@ apiClient.interceptors.response.use(
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: false,
+      // Live-by-default: agents previously had to hard-refresh to see updates.
+      // Refetch when the tab regains focus / the network reconnects, and treat
+      // data as stale after 20s so a returning tab pulls fresh data. Socket
+      // pushes (Communications + useRealtime) are the primary trigger; these
+      // are the always-on backstop. refetchIntervalInBackground:false makes
+      // every per-query refetchInterval pause while the tab is hidden.
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
       retry: 1,
-      staleTime: 5 * 60 * 1000,
+      staleTime: 20 * 1000,
+      refetchIntervalInBackground: false,
     },
   },
 })

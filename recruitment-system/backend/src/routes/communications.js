@@ -378,7 +378,10 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
     try {
         const {
             search = '',
-            limit = 5000,
+            // Default to a screenful-plus rather than the whole table — this is a
+            // heavy 9-LEFT-JOIN + DISTINCT ON query and the list is scrolled from
+            // the top. An explicit ?limit= still works up to the 5000 max below.
+            limit = 200,
             date_from,
             date_to,
             status,
@@ -389,7 +392,7 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
             sort_by = 'latest_desc',
         } = req.query;
 
-        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 5000, 1), 5000);
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 5000);
         const params = [];
         const filters = [];
         // Effective project/job = the candidate's latest application's project/job,

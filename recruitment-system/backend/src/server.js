@@ -13,6 +13,7 @@ const { initWebSocket } = require('./utils/websocket');
 const candidatesRouter = require('./routes/candidates');
 const jobsRouter = require('./routes/jobs');
 const applicationsRouter = require('./routes/applications');
+const bulkImportRouter = require('./routes/bulk-import');
 const communicationsRouter = require('./routes/communications');
 const webhooksRouter = require('./routes/webhooks');
 const authRouter = require('./routes/auth');
@@ -172,6 +173,9 @@ app.use('/api/admin', adminRouter);
 app.use('/api/candidates', candidatesRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/projects', projectsRouter); // Projects management
+// Mount bulk-import BEFORE the generic applications router so the more specific
+// /bulk-import/* path is matched first.
+app.use('/api/applications/bulk-import', bulkImportRouter);
 app.use('/api/applications', applicationsRouter);
 app.use('/api/communications', communicationsRouter);
 app.use('/api/gmail', gmailRouter);
