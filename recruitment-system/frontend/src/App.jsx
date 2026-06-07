@@ -7,6 +7,7 @@ import RoleGuard from './components/RoleGuard'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
+import Home from './pages/Home'
 import AdminDashboard from './pages/AdminDashboard'
 import ActivityMonitor from './pages/admin/ActivityMonitor'
 import UserDetail from './pages/admin/UserDetail'
@@ -100,7 +101,7 @@ function App() {
             "no access" toast (RoleGuard default deny). Dashboard is universal. */}
         <Route index element={
           <RoleGuard requireSection="dashboard" action="view">
-            <RouteBoundary name="Dashboard"><Dashboard /></RouteBoundary>
+            <RouteBoundary name="Home"><Home /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="candidates" element={

@@ -400,6 +400,7 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
         const effProjectIdExpr    = `COALESCE(la.project_id, adt.project_id)`;
         const effProjectTitleExpr = `COALESCE(NULLIF(la.project_title, ''), adt.project_title)`;
         const effJobTitleExpr      = `COALESCE(NULLIF(la.job_title, ''), adt.job_title)`;
+        const effJobIdExpr         = `COALESCE(la.job_id, adt.job_id)`;
         const pipelineStageExpr = `
             CASE
                 WHEN COALESCE(ca.is_human_handoff, FALSE) = TRUE THEN 'human_takeover_active'
@@ -543,6 +544,7 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
                 ${effProjectIdExpr}    AS effective_project_id,
                 COALESCE(${effProjectTitleExpr}, '') AS effective_project_title,
                 COALESCE(${effJobTitleExpr}, '')     AS effective_job_title,
+                ${effJobIdExpr}    AS effective_job_id,
                 u.full_name      AS agent_name,
                 lm.content       AS last_message,
                 lm.direction     AS last_direction,
@@ -576,6 +578,7 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
                 SELECT DISTINCT ON (a.candidate_id)
                     a.candidate_id,
                     a.status AS application_status,
+                    a.job_id   AS job_id,
                     j.title    AS job_title,
                     j.category AS job_category,
                     j.country  AS job_country,
@@ -588,7 +591,7 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
                 ORDER BY a.candidate_id, COALESCE(a.updated_at, a.applied_at) DESC
             ) la ON la.candidate_id = ca.id
             LEFT JOIN (
-                SELECT t.ad_ref, t.project_id, p.title AS project_title, j.title AS job_title
+                SELECT t.ad_ref, t.project_id, t.job_id, p.title AS project_title, j.title AS job_title
                 FROM ad_tracking t
                 LEFT JOIN projects p ON p.id = t.project_id
                 LEFT JOIN jobs j ON j.id = t.job_id

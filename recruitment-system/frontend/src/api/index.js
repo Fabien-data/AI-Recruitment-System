@@ -73,6 +73,21 @@ export const uploadCandidateDocument = (id, file, docType = 'cv') => {
   }).then(res => res.data)
 }
 
+// Per-role "My Work Today" landing queue (#3.0–3.4)
+export const getWorkToday = () =>
+  apiClient.get('/api/me/work-today').then(res => res.data)
+
+// CV-chase: new leads with no CV on file — the #1 conversion leak (#7)
+export const getAwaitingCv = () =>
+  apiClient.get('/api/engagement/awaiting-cv').then(res => res.data)
+
+// Per-user workspace preferences (persistent Messages workspace #3.0, saved views)
+export const getMyPreferences = () =>
+  apiClient.get('/api/preferences').then(res => res.data)
+
+export const updateMyPreferences = (patch) =>
+  apiClient.put('/api/preferences', patch).then(res => res.data)
+
 // Jobs
 export const getJobs = (params) =>
   apiClient.get('/api/jobs', { params }).then(res => res.data)

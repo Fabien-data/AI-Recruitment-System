@@ -966,6 +966,21 @@ async function applyMigrations() {
         '033 candidates_status_chk'
     );
 
+    // ── Migration 034: per-user workspace preferences ────────────────────────
+    // A separate table (NOT a users column) on purpose: the `users` table is
+    // postgres-owned, so ALTER TABLE users fails for recruitment_user (see the
+    // 033 users_role_chk WARN). recruitment_user CAN create new tables, so the
+    // per-user prefs live here. Stores a free-form JSON blob namespaced by
+    // feature (e.g. { communications: {...}, ... }) — powers the persistent
+    // Messages workspace (#3.0) and future saved-views.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            user_id    UUID         PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            prefs      JSONB        NOT NULL DEFAULT '{}'::jsonb,
+            updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, '034 user_preferences table');
+
     logger.info('✅ Startup migrations complete.');
 }
 

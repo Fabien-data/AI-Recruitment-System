@@ -21,6 +21,7 @@ const { query } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
 const { requireSection } = require('../middleware/sections');
+const { hasCvSql } = require('../services/candidate-stage');
 const logger = require('../utils/logger');
 
 /**
@@ -101,6 +102,34 @@ router.get('/stuck', authenticate, requireSection('communications', 'view'), asy
                 const row = { ...r, days_since_contact: Math.round(Number(r.days_since_contact) * 10) / 10 };
                 return { ...row, next_action: nextBestAction(row) };
             }),
+        });
+    } catch (err) { next(err); }
+});
+
+// ── Awaiting CV — the #1 conversion leak (#7) ────────────────────────────────
+// New leads with NO CV on file: they started intake but never sent a CV, so the
+// pipeline can't move (CV is the hard gate, #5). Surface them so an agent chases.
+// Pure read over recruitment_db — works regardless of the chatbot nudge engine's
+// state, so the agent list is useful even before automated nudging is switched on.
+router.get('/awaiting-cv', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+    try {
+        const listSql = adaptQuery(`
+            SELECT c.id, c.name, c.phone, c.status, c.agent_id,
+                   c.last_interaction, c.created_at,
+                   EXTRACT(EPOCH FROM (NOW() - c.created_at)) / 86400.0 AS days_since_created
+            FROM candidates c
+            WHERE c.status = 'new'
+              AND NOT ${hasCvSql('c')}
+            ORDER BY c.created_at DESC
+            LIMIT 500
+        `);
+        const list = await query(listSql, []);
+        res.json({
+            total: list.rows.length,
+            candidates: list.rows.map((r) => ({
+                ...r,
+                days_since_created: Math.round(Number(r.days_since_created) * 10) / 10,
+            })),
         });
     } catch (err) { next(err); }
 });

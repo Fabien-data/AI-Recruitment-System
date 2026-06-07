@@ -183,6 +183,8 @@ app.use('/api/analytics', analyticsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/candidate-tasks', candidateTasksRouter);
 app.use('/api/engagement', engagementRouter);
+app.use('/api/preferences', require('./routes/preferences'));
+app.use('/api/me', require('./routes/work-today'));
 
 // ── WhatsApp Ad Integration ──────────────────────────────────────────────
 app.use('/api/chatbot/intake', chatbotIntakeRouter); // POST /api/chatbot/intake

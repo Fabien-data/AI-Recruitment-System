@@ -2,11 +2,11 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  CalendarDays, MessageSquare, Clock, Target, ListTodo, RefreshCw, CheckCircle2, Phone, PhoneMissed,
+  CalendarDays, MessageSquare, Clock, Target, ListTodo, RefreshCw, CheckCircle2, Phone, PhoneMissed, FileText,
 } from 'lucide-react'
 import {
   getStuckCandidates, getEngagementAnalytics, getDailyDigest,
-  getDueCandidateTasks, updateCandidateTask, bulkNudgeCandidates, getAgentCallActivity,
+  getDueCandidateTasks, updateCandidateTask, bulkNudgeCandidates, getAgentCallActivity, getAwaitingCv,
 } from '../api'
 import { useAuthStore, useRole } from '../stores/authStore'
 
@@ -122,6 +122,11 @@ export default function Engagement() {
   const catchUp = useQuery({
     queryKey: ['engagement', 'due-tasks', 'no_answer', isAdmin ? 'all' : currentUser?.id],
     queryFn: () => getDueCandidateTasks({ ...scope, task_type: 'no_answer' }),
+  })
+  // Awaiting CV: new leads with no CV on file — the #1 conversion leak (#7).
+  const awaitingCv = useQuery({
+    queryKey: ['engagement', 'awaiting-cv'],
+    queryFn: getAwaitingCv,
   })
 
   const completeTask = useMutation({
@@ -273,6 +278,42 @@ export default function Engagement() {
                   >
                     <CheckCircle2 size={15} /> Done
                   </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Awaiting CV — new leads with no CV on file (the #1 conversion leak, #7). */}
+        <div className="bg-white dark:bg-zinc-900 rounded-lg border border-slate-200 dark:border-zinc-800 p-4 lg:col-span-3">
+          <h2 className="font-medium text-slate-800 dark:text-zinc-100 mb-3 flex items-center gap-2">
+            <FileText size={16} className="text-blue-600" /> Awaiting CV
+            {(awaitingCv.data?.total ?? 0) > 0 && (
+              <span className="text-[11px] font-semibold bg-blue-100 text-blue-700 rounded-full px-2 py-0.5">{awaitingCv.data.total}</span>
+            )}
+          </h2>
+          {awaitingCv.isLoading ? (
+            <div className="text-sm text-slate-400 dark:text-zinc-500">Loading…</div>
+          ) : (awaitingCv.data?.candidates || []).length === 0 ? (
+            <div className="text-sm text-slate-400 dark:text-zinc-500">Every new lead has a CV on file. 🎉</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 divide-y md:divide-y-0 divide-slate-100">
+              {(awaitingCv.data.candidates).slice(0, 40).map((c) => (
+                <div key={c.id} className="py-2 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <Link to={`/communications?candidate=${c.id}`} className="text-sm font-medium text-slate-800 dark:text-zinc-100 hover:underline">
+                      {c.name || c.phone || 'Candidate'}
+                    </Link>
+                    <div className="text-xs text-slate-500 dark:text-zinc-400 truncate">
+                      No CV · waiting {Math.floor(c.days_since_created)}d{c.phone ? ` · ${c.phone}` : ''}
+                    </div>
+                  </div>
+                  <Link
+                    to={`/communications?candidate=${c.id}`}
+                    className="inline-flex items-center gap-1 text-xs text-blue-700 hover:text-blue-900"
+                  >
+                    <MessageSquare size={15} /> Chase
+                  </Link>
                 </div>
               ))}
             </div>

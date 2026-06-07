@@ -33,9 +33,10 @@ import { format, formatDistanceToNow } from 'date-fns'
 import { Button } from '../components/ui/Button'
 import { Skeleton } from '../components/ui/Skeleton'
 import { Modal } from '../components/ui/Modal'
-import { getCommunications, sendCommunication, getCandidate } from '../api'
+import { getCommunications, sendCommunication, getCandidate, getMyPreferences, updateMyPreferences } from '../api'
 import { useAuthStore } from '../stores/authStore'
 import { ConversationDocumentsPanel } from '../components/communications/ConversationDocumentsPanel'
+import { JobDrawer } from '../components/communications/JobDrawer'
 import { CallPresenceToggle } from '../components/communications/CallPresenceToggle'
 import { DispositionSelect, dispositionClasses, dispositionLabel } from '../components/communications/DispositionSelect'
 import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
@@ -47,6 +48,18 @@ import { CANDIDATE_STAGE_LABELS, CANDIDATE_STATUS_BUCKETS, STATUS_COLORS, normal
 // candidate appears in exactly one bucket and drops out as it advances.
 // Shared source of truth: CANDIDATE_STATUS_BUCKETS (lifecycle.js).
 const STATUS_BUCKET_VALUES = new Set(CANDIDATE_STATUS_BUCKETS.map((b) => b.value))
+
+// Persist the agent's Messages workspace (bucket / sort / every list filter) so
+// navigating away and back — or refreshing — never dumps them on "all chats"
+// (UPGRADES.md #3.0, "never lose your place"). localStorage gives instant
+// same-device restore (read in the state initializers below, the same proven
+// pattern as comms.projectId); the server copy in user_preferences syncs it
+// across devices and is seeded back into localStorage on first load.
+const COMMS_PREFS_KEY = 'comms.filters'
+function loadCommsPrefs() {
+  try { return JSON.parse(localStorage.getItem(COMMS_PREFS_KEY) || '{}') || {} }
+  catch { return {} }
+}
 
 // The candidate's canonical recruitment stage (New/Screening/Certified/…) shown
 // on the chat row so an agent sees — and live-tracks — where each lead sits.
@@ -570,30 +583,36 @@ function MsgBubble({ msg }) {
 
 export default function Communications() {
   const [searchParams, setSearchParams] = useSearchParams()
+  // Saved workspace prefs (localStorage), computed once. URL params win, then
+  // saved prefs, then defaults — so a deep-link still overrides, but a plain
+  // nav back to Messages restores the agent's last filters.
+  const savedPrefsRef = useRef(undefined)
+  if (savedPrefsRef.current === undefined) savedPrefsRef.current = loadCommsPrefs()
+  const savedPrefs = savedPrefsRef.current
   const [selectedId, setSelectedId] = useState(null)
   const [message, setMessage] = useState('')
-  const [search, setSearch] = useState(searchParams.get('q') || '')
-  const [pipelineStage, setPipelineStage] = useState(searchParams.get('pipeline_stage') || '')
-  const [handoffState, setHandoffState] = useState(searchParams.get('handoff_state') || '')
-  const [sortBy, setSortBy] = useState(searchParams.get('sort_by') || 'latest_desc')
-  const [responseStatus, setResponseStatus] = useState(searchParams.get('response_status') || '')
-  const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '')
-  const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '')
+  const [search, setSearch] = useState(searchParams.get('q') || savedPrefs.search || '')
+  const [pipelineStage, setPipelineStage] = useState(searchParams.get('pipeline_stage') || savedPrefs.pipelineStage || '')
+  const [handoffState, setHandoffState] = useState(searchParams.get('handoff_state') || savedPrefs.handoffState || '')
+  const [sortBy, setSortBy] = useState(searchParams.get('sort_by') || savedPrefs.sortBy || 'latest_desc')
+  const [responseStatus, setResponseStatus] = useState(searchParams.get('response_status') || savedPrefs.responseStatus || '')
+  const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || savedPrefs.dateFrom || '')
+  const [dateTo, setDateTo] = useState(searchParams.get('date_to') || savedPrefs.dateTo || '')
   // Primary status bucket (server-side, ca.status) — defaults to New so an agent
   // starts on the queue they work first.
   const [statusBucket, setStatusBucket] = useState(() => {
-    const s = searchParams.get('status')
+    const s = searchParams.get('status') || savedPrefs.statusBucket
     return s && STATUS_BUCKET_VALUES.has(s) ? s : 'new'
   })
   // Project scope (server-side, effective project) — remembered per agent.
   const [projectId, setProjectId] = useState(() => searchParams.get('project_id') || localStorage.getItem('comms.projectId') || '')
-  const [jobFilter, setJobFilter] = useState('')
-  const [tagFilter, setTagFilter] = useState('')
+  const [jobFilter, setJobFilter] = useState(savedPrefs.jobFilter || '')
+  const [tagFilter, setTagFilter] = useState(savedPrefs.tagFilter || '')
   // Smart-view / triage filters (Phase 2).
-  const [disposition, setDispositionFilter] = useState(searchParams.get('disposition') || '')
-  const [contacted, setContacted] = useState(searchParams.get('contacted') || '')
-  const [claimed, setClaimed] = useState(searchParams.get('claimed') || '')
-  const [callStatus, setCallStatus] = useState(searchParams.get('call_status') || '')
+  const [disposition, setDispositionFilter] = useState(searchParams.get('disposition') || savedPrefs.disposition || '')
+  const [contacted, setContacted] = useState(searchParams.get('contacted') || savedPrefs.contacted || '')
+  const [claimed, setClaimed] = useState(searchParams.get('claimed') || savedPrefs.claimed || '')
+  const [callStatus, setCallStatus] = useState(searchParams.get('call_status') || savedPrefs.callStatus || '')
   const [transcriptResponseStatus, setTranscriptResponseStatus] = useState('')
   const [transcriptDateFrom, setTranscriptDateFrom] = useState('')
   const [transcriptDateTo, setTranscriptDateTo] = useState('')
@@ -636,6 +655,52 @@ export default function Communications() {
     if (projectId) localStorage.setItem('comms.projectId', projectId)
     else localStorage.removeItem('comms.projectId')
   }, [projectId])
+
+  // Persist the full workspace filter set: localStorage (instant, read by the
+  // initializers above) + server (debounced, cross-device). Skips the server
+  // write on mount so a fresh-device default blob can't clobber the saved
+  // server copy before the seed effect below restores it.
+  const firstPersistRef = useRef(true)
+  useEffect(() => {
+    const blob = {
+      statusBucket, sortBy, search, pipelineStage, handoffState,
+      responseStatus, disposition, contacted, claimed, callStatus,
+      dateFrom, dateTo, jobFilter, tagFilter, projectId,
+    }
+    try { localStorage.setItem(COMMS_PREFS_KEY, JSON.stringify(blob)) } catch { /* quota — ignore */ }
+    if (firstPersistRef.current) { firstPersistRef.current = false; return }
+    const t = setTimeout(() => { updateMyPreferences({ communications: blob }).catch(() => {}) }, 800)
+    return () => clearTimeout(t)
+  }, [statusBucket, sortBy, search, pipelineStage, handoffState, responseStatus,
+      disposition, contacted, claimed, callStatus, dateFrom, dateTo, jobFilter, tagFilter, projectId])
+
+  // Cross-device restore: on first load, if THIS device has no saved filters,
+  // hydrate from the server preference. Runs once; never overrides a deep-link
+  // or a choice the agent makes during the session.
+  const seededRef = useRef(false)
+  useEffect(() => {
+    if (seededRef.current) return
+    seededRef.current = true
+    if (Object.keys(savedPrefs).length > 0) return // device already has local prefs
+    getMyPreferences().then((prefs) => {
+      const c = prefs && prefs.communications
+      if (!c || typeof c !== 'object') return
+      if (c.statusBucket && STATUS_BUCKET_VALUES.has(c.statusBucket)) setStatusBucket(c.statusBucket)
+      if (c.sortBy) setSortBy(c.sortBy)
+      if (typeof c.search === 'string') setSearch(c.search)
+      if (typeof c.pipelineStage === 'string') setPipelineStage(c.pipelineStage)
+      if (typeof c.handoffState === 'string') setHandoffState(c.handoffState)
+      if (typeof c.responseStatus === 'string') setResponseStatus(c.responseStatus)
+      if (typeof c.disposition === 'string') setDispositionFilter(c.disposition)
+      if (typeof c.contacted === 'string') setContacted(c.contacted)
+      if (typeof c.claimed === 'string') setClaimed(c.claimed)
+      if (typeof c.dateFrom === 'string') setDateFrom(c.dateFrom)
+      if (typeof c.dateTo === 'string') setDateTo(c.dateTo)
+      if (typeof c.jobFilter === 'string') setJobFilter(c.jobFilter)
+      if (typeof c.tagFilter === 'string') setTagFilter(c.tagFilter)
+      if (c.projectId && !projectId) setProjectId(c.projectId)
+    }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Server-side project list for the filter dropdown.
   const { data: projectList = [] } = useQuery({
@@ -2198,6 +2263,13 @@ export default function Communications() {
               )
             })()}
           </div>
+
+          {/* Applied-role cheat-sheet — salary/country/requirements without leaving the chat (#3.2) */}
+          {selectedCandidate?.effective_job_id && (
+            <div className="px-3 pb-3">
+              <JobDrawer jobId={selectedCandidate.effective_job_id} />
+            </div>
+          )}
 
           {/* Documents & CVs sent by this candidate */}
           <div className="px-3 pb-3">
