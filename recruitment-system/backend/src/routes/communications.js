@@ -380,7 +380,11 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
             search = '',
             // Default to a screenful-plus rather than the whole table — this is a
             // heavy 9-LEFT-JOIN + DISTINCT ON query and the list is scrolled from
-            // the top. An explicit ?limit= still works up to the 5000 max below.
+            // the top. HARD-capped at 500 below: the legacy client asks for 5000
+            // (~3.4 MB per poll), which — every 30s × every agent on ONE pinned
+            // instance — saturated the DB pool and cascaded into 500s. The list is
+            // sorted most-recent-first and search/filter is server-side, so 500 is
+            // ample for the working set.
             limit = 200,
             date_from,
             date_to,
@@ -392,7 +396,7 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
             sort_by = 'latest_desc',
         } = req.query;
 
-        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 5000);
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500);
         const params = [];
         const filters = [];
         // Effective project/job = the candidate's latest application's project/job,

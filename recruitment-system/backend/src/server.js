@@ -7,6 +7,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
 const { initWebSocket } = require('./utils/websocket');
 
 // Import routes
@@ -93,12 +94,37 @@ app.use(cors({
     credentials: true
 }));
 
-// Rate limiting
+// Rate limiting — keyed by the AUTHENTICATED USER, not the IP. Our agents share a
+// single office IP (NAT), so a per-IP cap lumped them all into one budget and the
+// polling dashboard 429'd everyone (worse since the backend is pinned to one
+// instance → one in-memory counter). Each logged-in agent now gets their own
+// generous budget; anonymous traffic keeps the original tight per-IP cap for
+// login brute-force protection. (High-frequency chatbot/3cx/internal routes have
+// their own dedicated limiters.)
+function rateLimitUserId(req) {
+    if (req._rlUserId !== undefined) return req._rlUserId;
+    let uid = null;
+    const auth = req.headers.authorization;
+    if (auth && auth.startsWith('Bearer ') && process.env.JWT_SECRET) {
+        try {
+            const decoded = jwt.verify(auth.slice(7), process.env.JWT_SECRET);
+            uid = decoded.userId || decoded.id || null;
+        } catch (e) { uid = null; }
+    }
+    req._rlUserId = uid;
+    return uid;
+}
+
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 300, // Limit each IP to 300 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.',
-    validate: { xForwardedForHeader: false }, // suppress warning — trust proxy is set above
+    // Authenticated agent → 2000/15min keyed by user; anonymous → 300/15min by IP.
+    max: (req) => (rateLimitUserId(req) ? 2000 : 300),
+    keyGenerator: (req) => {
+        const uid = rateLimitUserId(req);
+        return uid ? `user:${uid}` : (req.ip || 'unknown');
+    },
+    message: { error: 'Too many requests, please slow down and try again shortly.' },
+    validate: false, // disable dev-time sanity warnings (custom keyGenerator + trust proxy)
 });
 app.use('/api/', limiter);
 
