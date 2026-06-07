@@ -83,11 +83,7 @@ export function JobDrawer({ jobId, defaultExpanded = true }) {
                 )}
               </div>
 
-              {job.requirements && (
-                <Section icon={ListChecks} title="Requirements">
-                  {job.requirements}
-                </Section>
-              )}
+              <RequirementsSection requirements={job.requirements} />
               {job.description && (
                 <Section title="Details">{job.description}</Section>
               )}
@@ -127,6 +123,67 @@ function Section({ icon: Icon, title, children }) {
         {Icon && <Icon size={10} />} {title}
       </p>
       <p className="text-xs text-zinc-600 dark:text-zinc-300 whitespace-pre-line line-clamp-5">{children}</p>
+    </div>
+  )
+}
+
+// Friendly labels for the structured requirement keys (CreateJob/EditJob modals
+// build requirements as a JSONB object with exactly these fields).
+const REQ_LABELS = {
+  min_age: 'Min age', max_age: 'Max age', gender: 'Gender',
+  min_height: 'Min height', experience_years: 'Experience (yrs)',
+  education: 'Education', languages: 'Languages', skills: 'Skills',
+  required_skills: 'Skills', required_languages: 'Languages',
+}
+
+// Render job requirements safely whatever shape they arrive in. Production jobs
+// store requirements as a JSONB OBJECT ({min_age, max_age, education, …}); some
+// legacy/free-text jobs store a plain string. Rendering the raw object as a
+// React child throws "Objects are not valid as a React child" (React #31), which
+// blanked the whole Messages panel for every conversation with a resolved job.
+function RequirementsSection({ requirements }) {
+  let req = requirements
+  if (typeof req === 'string') {
+    const s = req.trim()
+    if (!s) return null
+    if (s.startsWith('{') || s.startsWith('[')) {
+      try { req = JSON.parse(s) } catch { /* keep as free text */ }
+    }
+  }
+
+  let body = null
+  if (typeof req === 'string') {
+    // Plain free-text requirements.
+    body = <p className="text-xs text-zinc-600 dark:text-zinc-300 whitespace-pre-line line-clamp-5">{req}</p>
+  } else if (req && typeof req === 'object') {
+    const entries = Object.entries(req).filter(
+      ([, v]) => v != null && v !== '' && !(Array.isArray(v) && v.length === 0)
+    )
+    if (entries.length > 0) {
+      body = (
+        <div className="flex flex-col gap-1">
+          {entries.map(([key, value]) => (
+            <div key={key} className="flex items-baseline justify-between gap-3">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
+                {REQ_LABELS[key] || key.replace(/_/g, ' ')}
+              </span>
+              <span className="text-xs font-medium text-zinc-700 dark:text-zinc-200 text-right break-words">
+                {Array.isArray(value) ? value.join(', ') : String(value)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )
+    }
+  }
+
+  if (!body) return null
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mb-1 inline-flex items-center gap-1">
+        <ListChecks size={10} /> Requirements
+      </p>
+      {body}
     </div>
   )
 }

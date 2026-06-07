@@ -166,18 +166,23 @@ class DocumentProcessor:
                 # Classify the image rather than a binary CV/not-CV gate: real CVs
                 # get full extraction, while ID/passport/certificate/CV-photos are
                 # still stored as supporting documents (never silently dropped).
-                # Only genuine non-documents (selfies, random photos) are rejected.
+                # Only genuine non-documents (random/unrelated photos) are rejected.
+                # A person-photo/selfie is NOT rejected (#6): it flows through as a
+                # classified image so the orchestrator can route it to the candidate's
+                # profile picture instead of dropping it.
                 category = self._classify_document_image(file_content, image_url)
-                if category in ("selfie", "other"):
-                    logger.warning("Image rejected by pre-flight check — not a document (%s)", category)
+                if category == "other":
+                    logger.warning("Image rejected by pre-flight check — not a document or photo (%s)", category)
                     return ProcessingResult(
                         success=False,
                         error_message="not_cv_image",
                         document_category=category,
                     )
                 if category != "cv":
-                    # Document-like but not a full CV — store it, skip field extraction.
-                    logger.info("Image classified as '%s' — storing as a supporting document", category)
+                    # Document-like, a person-photo, or a selfie — store/route it,
+                    # skip CV field extraction. Orchestrator decides: photo/selfie →
+                    # profile picture; id/passport/certificate → supporting document.
+                    logger.info("Image classified as '%s' — non-CV image", category)
                     return ProcessingResult(
                         success=True,
                         extracted_data=None,

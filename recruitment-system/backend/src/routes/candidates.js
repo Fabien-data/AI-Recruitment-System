@@ -388,6 +388,29 @@ router.get('/:id', authenticate, requireSection('candidates', 'view'), async (re
             [id]
         );
 
+        // Get interviews (for the onboarding checklist, #3.1) — degrade to [] if
+        // the interview_schedules table/column isn't present on this DB.
+        let interviewsRows = [];
+        try {
+            const interviewsResult = await query(
+                isMySQL
+                    ? `SELECT iv.id, iv.scheduled_datetime, iv.status, iv.location, a.job_id
+                       FROM interview_schedules iv JOIN applications a ON iv.application_id = a.id
+                       WHERE a.candidate_id = ? ORDER BY iv.scheduled_datetime DESC`
+                    : `SELECT iv.id, iv.scheduled_datetime, iv.status, iv.location, a.job_id
+                       FROM interview_schedules iv JOIN applications a ON iv.application_id = a.id
+                       WHERE a.candidate_id = $1 ORDER BY iv.scheduled_datetime DESC`,
+                [id]
+            );
+            interviewsRows = interviewsResult.rows || [];
+        } catch (e) {
+            // Degrade to [] so the candidate page still loads (e.g. if the
+            // interview_schedules table isn't present on this DB), but log it so
+            // a real query error isn't fully silent.
+            logger.warn(`candidate ${id} interviews query failed (degrading to []): ${e.message}`);
+            interviewsRows = [];
+        }
+
         const enrichedCvs = (cvsResult.rows || []).map((cv) => {
             const resolved = resolveCvAccessUrl(cv);
             const parsedData = cv?.parsed_data && typeof cv.parsed_data === 'string'
@@ -416,7 +439,8 @@ router.get('/:id', authenticate, requireSection('candidates', 'view'), async (re
             ...candidate,
             cvs: enrichedCvs,
             applications: applicationsResult.rows,
-            communications: communicationsResult.rows
+            communications: communicationsResult.rows,
+            interviews: interviewsRows
         });
     } catch (error) {
         next(error);
@@ -889,8 +913,11 @@ router.post(
             const placeholder = isMySQL ? '?' : '$1';
             const idPlaceholder = isMySQL ? '?' : '$2';
 
+            // A manual upload always wins and LOCKS the picture (#6): photo_source
+            // = 'manual' so the chatbot's auto person-photo detection never
+            // overwrites a recruiter's chosen avatar.
             const result = await query(
-                `UPDATE candidates SET photo_url = ${placeholder} WHERE id = ${idPlaceholder} RETURNING id, photo_url`,
+                `UPDATE candidates SET photo_url = ${placeholder}, photo_source = 'manual' WHERE id = ${idPlaceholder} RETURNING id, photo_url, photo_source`,
                 [photoUrl, id]
             );
 
@@ -898,7 +925,7 @@ router.post(
                 return res.status(404).json({ error: 'Candidate not found' });
             }
 
-            res.json({ photo_url: result.rows[0].photo_url });
+            res.json({ photo_url: result.rows[0].photo_url, photo_source: result.rows[0].photo_source });
         } catch (error) {
             next(error);
         }

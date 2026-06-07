@@ -7,6 +7,7 @@ import {
   ArrowLeft, FolderKanban, MapPin, Calendar, Users, Briefcase,
   DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User, Download,
   HeartPulse, UtensilsCrossed, CheckCircle2, Clock, Award, XCircle, TrendingUp, Building2, Megaphone, Pencil,
+  List, LayoutGrid,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Badge } from '../components/ui/Badge'
@@ -16,6 +17,7 @@ import { Button } from '../components/ui/Button'
 import { CreateJobModal } from '../components/CreateJobModal'
 import { EditProjectModal } from '../components/EditProjectModal'
 import { AdLinkCard } from '../components/AdLinkModal'
+import ProjectKanban from '../components/ProjectKanban'
 import { format } from 'date-fns'
 import { useAuthStore } from '../stores/authStore'
 import { getStatusLabel, getStatusColor, normalizeStatus } from '../constants/lifecycle'
@@ -303,6 +305,7 @@ export default function ProjectDetail() {
   const { id } = useParams()
   const { user } = useAuthStore()
   const [candidatesJobFilter, setCandidatesJobFilter] = useState('')
+  const [candidatesView, setCandidatesView] = useState('list') // 'list' | 'board'
   const [isJobModalOpen, setIsJobModalOpen] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   // Mirrors the backend PUT /api/projects/:id authorization.
@@ -642,6 +645,33 @@ export default function ProjectDetail() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Candidates</h2>
               <div className="flex flex-wrap items-center justify-end gap-3">
+                {/* List / Board view toggle */}
+                <div className="inline-flex rounded-lg border border-zinc-200 dark:border-zinc-700 p-0.5 bg-zinc-50 dark:bg-zinc-800/60">
+                  <button
+                    type="button"
+                    onClick={() => setCandidatesView('list')}
+                    aria-pressed={candidatesView === 'list'}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      candidatesView === 'list'
+                        ? 'bg-white dark:bg-zinc-900 text-primary-600 shadow-sm'
+                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    <List size={14} /> List
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCandidatesView('board')}
+                    aria-pressed={candidatesView === 'board'}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      candidatesView === 'board'
+                        ? 'bg-white dark:bg-zinc-900 text-primary-600 shadow-sm'
+                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    <LayoutGrid size={14} /> Board
+                  </button>
+                </div>
                 {project.jobs && project.jobs.length > 1 && (
                   <select
                     value={candidatesJobFilter}
@@ -662,7 +692,11 @@ export default function ProjectDetail() {
                 </Link>
               </div>
             </div>
-            <ProjectCandidateList projectId={id} jobFilter={candidatesJobFilter} />
+            {candidatesView === 'board' ? (
+              <ProjectKanban projectId={id} jobFilter={candidatesJobFilter} />
+            ) : (
+              <ProjectCandidateList projectId={id} jobFilter={candidatesJobFilter} />
+            )}
           </Card>
         </div>
 

@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
 import { EditCandidateModal } from '../components/EditCandidateModal'
+import { CandidateOnboardingChecklist } from '../components/CandidateOnboardingChecklist'
 import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
 import { useRole } from '../stores/authStore'
 import { format } from 'date-fns'
@@ -543,6 +544,8 @@ export default function CandidateDetail() {
         </div>
 
         <div className="space-y-6">
+          <CandidateOnboardingChecklist candidate={candidate} />
+
           <Card>
             <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
               <FolderKanban size={20} aria-hidden /> Current Assignment

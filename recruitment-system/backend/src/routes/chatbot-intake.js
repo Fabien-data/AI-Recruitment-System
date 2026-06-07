@@ -318,6 +318,52 @@ router.post('/media-upload', chatbotLimiter, authenticateChatbot, async (req, re
     }
 });
 
+/**
+ * POST /api/chatbot/set-profile-photo  (#6)
+ * Set a candidate's profile picture from a chatbot-detected person-photo.
+ * Uploads the bytes to GCS, then sets candidates.photo_url + photo_source='auto'
+ * — but NEVER overwrites a manually-uploaded picture (photo_source='manual' is
+ * locked). Matches the candidate by phone (same normalization as intake).
+ * Body: { base64, phone, mime_type?, filename? }
+ */
+router.post('/set-profile-photo', chatbotLimiter, authenticateChatbot, async (req, res) => {
+    try {
+        const { base64, phone, mime_type = 'image/jpeg', filename = 'photo.jpg' } = req.body || {};
+        if (!base64 || typeof base64 !== 'string' || !phone) {
+            return res.status(400).json({ error: 'base64 and phone are required' });
+        }
+        const normalizedPhone = normalizePhone(phone);
+        const cand = await query(
+            adaptQuery('SELECT id, photo_source FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1'),
+            [normalizedPhone, normalizedPhone],
+        );
+        if (cand.rows.length === 0) {
+            return res.status(404).json({ error: 'Candidate not found' });
+        }
+        const c = cand.rows[0];
+        // Manual upload wins + locks — auto never overwrites it.
+        if (c.photo_source === 'manual') {
+            return res.json({ success: false, reason: 'manual_locked' });
+        }
+        const safePhone = String(phone).replace(/[^0-9]/g, '') || 'unknown';
+        const safeName = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const destPath = `photos/${safePhone}/${Date.now()}_${safeName}`;
+        const url = await uploadToGCS(Buffer.from(base64, 'base64'), destPath, mime_type);
+        if (!url) {
+            return res.status(502).json({ error: 'photo storage unavailable' });
+        }
+        await query(
+            adaptQuery("UPDATE candidates SET photo_url = $1, photo_source = 'auto', updated_at = NOW() WHERE id = $2"),
+            [url, c.id],
+        );
+        logger.info(`set-profile-photo: candidate ${c.id} avatar set (auto)`);
+        return res.json({ success: true, photo_url: url, photo_source: 'auto' });
+    } catch (error) {
+        logger.error('Chatbot set-profile-photo error:', error);
+        return res.status(500).json({ error: 'Failed to set profile photo', detail: error.message });
+    }
+});
+
 // ── Payload Validation middleware ────────────────────────────────────────────
 function validateIntakePayload(req, res, next) {
     const { phone, name, job_interest } = req.body;

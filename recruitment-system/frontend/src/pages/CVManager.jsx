@@ -794,7 +794,7 @@ function OverviewTab({ candidate }) {
           </h4>
           <ul className="list-disc list-inside text-sm text-amber-800 dark:text-amber-200 space-y-1 ml-1">
             {mismatches.map((mismatch, idx) => (
-              <li key={idx}>{mismatch}</li>
+              <li key={idx}>{typeof mismatch === 'string' ? mismatch : (mismatch?.reason || mismatch?.field || JSON.stringify(mismatch))}</li>
             ))}
           </ul>
         </div>
@@ -1200,7 +1200,7 @@ function AIInsightsTab({ candidate }) {
                 <XCircle size={15} className="text-rose-500 mt-0.5 flex-shrink-0"/>
                 <div>
                   {m.field && <span className="font-semibold text-rose-700 dark:text-rose-300">{m.field}: </span>}
-                  <span className="text-rose-700 dark:text-rose-300">{m.reason || m.field || m}</span>
+                  <span className="text-rose-700 dark:text-rose-300">{m.reason || m.field || (typeof m === 'object' ? JSON.stringify(m) : String(m))}</span>
                 </div>
               </div>
             ))}
@@ -1221,7 +1221,7 @@ function AIInsightsTab({ candidate }) {
             {otherMismatches.map((m, i) => (
               <div key={i} className="flex items-start gap-2 p-2.5 bg-white/70 dark:bg-zinc-900/40 ring-1 ring-amber-200/70 dark:ring-amber-900/40 rounded-xl text-sm text-amber-800 dark:text-amber-200">
                 <AlertCircle size={13} className="mt-0.5 flex-shrink-0"/>
-                <span>{m.reason || m.field || m}</span>
+                <span>{m.reason || m.field || (typeof m === 'object' ? JSON.stringify(m) : String(m))}</span>
               </div>
             ))}
           </div>

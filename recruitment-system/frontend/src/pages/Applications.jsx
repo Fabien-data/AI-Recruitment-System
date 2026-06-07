@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { getApplications, getJobs, getProjects, apiClient, getInterviewers, previewInterviewAllocation, bulkScheduleInterviews } from '../api'
+import {
+  getApplications, getJobs, getProjects, apiClient, getInterviewers,
+  previewInterviewAllocation, bulkScheduleInterviews,
+  updateApplication, rejectToPool, batchCertifyApplications, batchRejectToPool,
+  getCandidate,
+} from '../api'
 import {
   CalendarDays, FileText, FolderKanban, Briefcase, ListFilter, Plus,
   MoreHorizontal, Eye, Pencil, ArrowRightLeft, Trash2, User,
   ChevronDown, ChevronRight, Send, MapPinned, X, Clock,
   Search, ArrowDownWideNarrow, ChevronsDownUp, ChevronsUpDown,
+  Inbox, Check, Archive, Star, Phone, Loader2,
 } from 'lucide-react'
 import { Modal } from '../components/ui/Modal'
 import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
@@ -26,6 +32,8 @@ import { TransferApplicationModal } from '../components/applications/TransferApp
 import { useAuthStore } from '../stores/authStore'
 import { useViewMode, ViewToggle } from '../components/ui/ViewToggle'
 import { CVReviewModal } from './CVManager'
+import { DocumentPreview } from '../components/documents/DocumentPreview'
+import { getDocumentCategory } from '../utils/documents'
 import { STATUS_FILTER_OPTIONS, normalizeStatus } from '../constants/lifecycle'
 
 // How many collapsed project rows to show per page of the project list.
@@ -52,6 +60,18 @@ export default function Applications() {
     searchParams.get('view') === 'expanded' ? 'card' : 'card',
   )
   const isTable = viewMode === 'table'
+
+  // Top-level tab: the existing grouped "All applications" browser vs. the
+  // focused "Inbox" for triaging pending (screening) applications. Persisted
+  // so an agent who lives in the inbox lands back there on reload.
+  const [tab, setTab] = useState(() => {
+    try { return localStorage.getItem('apps.view') === 'inbox' ? 'inbox' : 'all' }
+    catch { return 'all' }
+  })
+  const selectTab = (next) => {
+    setTab(next)
+    try { localStorage.setItem('apps.view', next) } catch { /* ignore */ }
+  }
 
   // Modal state
   const [createOpen, setCreateOpen] = useState(false)
@@ -280,7 +300,7 @@ export default function Applications() {
         subtitle="Track candidate applications across jobs"
         actions={
           <>
-            <ViewToggle mode={viewMode} onChange={setViewMode} />
+            {tab === 'all' && <ViewToggle mode={viewMode} onChange={setViewMode} />}
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
               <Plus size={16} />
               New Application
@@ -289,6 +309,40 @@ export default function Applications() {
         }
       />
 
+      {/* Top-level view tabs: full browser vs. focused triage inbox. */}
+      <div className="mb-6 inline-flex items-center gap-1 rounded-xl bg-zinc-100 dark:bg-zinc-800 p-1">
+        <button
+          type="button"
+          onClick={() => selectTab('all')}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
+            tab === 'all'
+              ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 shadow'
+              : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
+          }`}
+          aria-pressed={tab === 'all'}
+        >
+          <FileText size={15} /> All applications
+        </button>
+        <button
+          type="button"
+          onClick={() => selectTab('inbox')}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
+            tab === 'inbox'
+              ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 shadow'
+              : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
+          }`}
+          aria-pressed={tab === 'inbox'}
+        >
+          <Inbox size={15} /> Inbox
+        </button>
+      </div>
+
+      {tab === 'inbox' && (
+        <ApplicationsInbox projects={projects} />
+      )}
+
+      {tab === 'all' && (
+      <>
       <Card className="p-4 sm:p-5 mb-6">
         <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200 mb-4">
           <ListFilter size={18} aria-hidden />
@@ -536,6 +590,8 @@ export default function Applications() {
             queryClient.invalidateQueries({ queryKey: ['interviews'] })
           }}
         />
+      )}
+      </>
       )}
 
       <CreateApplicationModal open={createOpen} onClose={() => setCreateOpen(false)} />
@@ -1101,5 +1157,401 @@ function MenuButton({ icon: Icon, label, onClick, tone }) {
     >
       <Icon size={14} /> {label}
     </button>
+  )
+}
+
+// ── ApplicationsInbox ──────────────────────────────────────────────────────
+// Focused triage queue for pending (screening) applications. Each row can be
+// accepted (screening → certified), rejected to the general pool, or have its
+// CV previewed inline; a sticky bar drives the same two actions in bulk.
+const POOL_REASON = 'Moved to general pool'
+
+function ApplicationsInbox({ projects = [] }) {
+  const queryClient = useQueryClient()
+  const [projectId, setProjectId] = useState('')
+  // Local selection set (independent of the All-view bulk-schedule selection).
+  const [selected, setSelected] = useState(new Set())
+  // CV preview target: { id, name }.
+  const [cvTarget, setCvTarget] = useState(null)
+  // Tracks the row whose single-row action is in flight (for the spinner).
+  const [actingId, setActingId] = useState(null)
+
+  const params = useMemo(() => ({
+    status: 'screening',
+    project_id: projectId || undefined,
+    limit: 100,
+  }), [projectId])
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['applications', 'inbox', params],
+    queryFn: () => getApplications(params),
+  })
+
+  const list = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : []
+
+  // Drop ids from the selection that are no longer in the current result set
+  // (e.g. after a refetch removes accepted/rejected rows).
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev
+      const valid = new Set(list.map((a) => a.id))
+      const next = new Set([...prev].filter((id) => valid.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [list])
+
+  const ids = list.map((a) => a.id)
+  const selectedCount = selected.size
+  const allSelected = ids.length > 0 && ids.every((id) => selected.has(id))
+  const someSelected = selectedCount > 0 && !allSelected
+
+  const toggleOne = (id) => setSelected((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  const toggleAll = () => setSelected((prev) => {
+    if (ids.length > 0 && ids.every((id) => prev.has(id))) return new Set()
+    return new Set(ids)
+  })
+  const clearSelected = () => setSelected(new Set())
+
+  const invalidate = () => {
+    // Refresh both the inbox and any All-view application lists.
+    queryClient.invalidateQueries({ queryKey: ['applications'] })
+    queryClient.invalidateQueries({ queryKey: ['candidates'] })
+  }
+
+  // 422 screening_gate (no eligible CV) gets a specific toast; everything else
+  // falls back to the generic error toast.
+  const onActionError = (err, prefix) => {
+    const code = err?.response?.data?.code
+    if (code === 'screening_gate') {
+      toast.error(err?.response?.data?.error || 'Upload a CV before accepting this candidate.', { duration: 6000 })
+    } else {
+      showErrorToast(err, prefix)
+    }
+  }
+
+  const acceptMutation = useMutation({
+    mutationFn: (id) => updateApplication(id, { status: 'certified' }),
+    onMutate: (id) => setActingId(id),
+    onSuccess: (_res, id) => {
+      const name = list.find((a) => a.id === id)?.candidate_name || 'Candidate'
+      toast.success(`${name} accepted (certified)`)
+      invalidate()
+    },
+    onError: (err) => onActionError(err, 'Accept failed'),
+    onSettled: () => setActingId(null),
+  })
+
+  const rejectMutation = useMutation({
+    mutationFn: (id) => rejectToPool(id, { rejection_reason: POOL_REASON }),
+    onMutate: (id) => setActingId(id),
+    onSuccess: (_res, id) => {
+      const name = list.find((a) => a.id === id)?.candidate_name || 'Candidate'
+      toast.success(`${name} moved to general pool`)
+      invalidate()
+    },
+    onError: (err) => onActionError(err, 'Reject failed'),
+    onSettled: () => setActingId(null),
+  })
+
+  const bulkAcceptMutation = useMutation({
+    mutationFn: () => batchCertifyApplications({
+      application_ids: [...selected],
+      notify_channels: ['whatsapp'],
+    }),
+    onSuccess: (res) => {
+      const n = res?.certified?.length ?? res?.total_certified ?? selected.size
+      toast.success(`Accepted ${n} application${n === 1 ? '' : 's'}`)
+      clearSelected()
+      invalidate()
+    },
+    onError: (err) => showErrorToast(err, 'Bulk accept failed'),
+  })
+
+  const bulkRejectMutation = useMutation({
+    mutationFn: () => batchRejectToPool({
+      application_ids: [...selected],
+      rejection_reason: POOL_REASON,
+      notify_channels: ['whatsapp'],
+    }),
+    onSuccess: (res) => {
+      const n = res?.rejected?.length ?? res?.total_rejected ?? selected.size
+      toast.success(`Moved ${n} application${n === 1 ? '' : 's'} to general pool`)
+      clearSelected()
+      invalidate()
+    },
+    onError: (err) => showErrorToast(err, 'Bulk reject failed'),
+  })
+
+  const bulkBusy = bulkAcceptMutation.isPending || bulkRejectMutation.isPending
+
+  return (
+    <div className="pb-24">
+      {/* Inbox filter bar — just the project scope; status is fixed to pending. */}
+      <Card className="p-3 sm:p-4 mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex items-center gap-2 text-zinc-800 dark:text-zinc-200">
+            <Inbox size={18} aria-hidden />
+            <h2 className="text-base font-semibold">Pending applications</h2>
+          </div>
+          <div className="sm:ml-auto w-full sm:w-72">
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="input w-full"
+              aria-label="Filter inbox by project"
+            >
+              <option value="">All Projects</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>{project.title}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+          Applications awaiting review. Accept to certify, or move to the general pool.
+        </p>
+      </Card>
+
+      {isLoading ? (
+        <Card className="overflow-hidden p-0">
+          <div className="p-5">
+            <TableSkeleton rows={6} cols={6} />
+          </div>
+        </Card>
+      ) : isError ? (
+        <Card className="overflow-hidden p-0">
+          <EmptyState
+            icon={FileText}
+            tone="rose"
+            title="Couldn't load the inbox"
+            description="Something went wrong fetching pending applications. Try again in a moment."
+          />
+        </Card>
+      ) : list.length === 0 ? (
+        <Card className="overflow-hidden p-0">
+          <EmptyState
+            icon={Inbox}
+            tone="emerald"
+            title="Inbox zero 🎉"
+            description="No applications are waiting for review right now. New screening applications will show up here."
+          />
+        </Card>
+      ) : (
+        <Card className="overflow-hidden p-0">
+          <Table>
+            <Table.Head>
+              <Table.Tr hover={false}>
+                <Table.Th>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all pending applications"
+                    className="w-4 h-4 rounded accent-primary-600 cursor-pointer"
+                    checked={allSelected}
+                    ref={(el) => { if (el) el.indeterminate = someSelected }}
+                    onChange={toggleAll}
+                  />
+                </Table.Th>
+                <Table.Th icon={User}>Candidate</Table.Th>
+                <Table.Th icon={Briefcase}>Job</Table.Th>
+                <Table.Th icon={FolderKanban}>Project</Table.Th>
+                <Table.Th icon={CalendarDays}>Applied</Table.Th>
+                <Table.Th>Match</Table.Th>
+                <Table.Th align="right">Actions</Table.Th>
+              </Table.Tr>
+            </Table.Head>
+            <Table.Body>
+              {list.map((app) => (
+                <InboxRow
+                  key={app.id}
+                  app={app}
+                  selected={selected.has(app.id)}
+                  onToggle={() => toggleOne(app.id)}
+                  onAccept={() => acceptMutation.mutate(app.id)}
+                  onReject={() => rejectMutation.mutate(app.id)}
+                  onPreview={() => setCvTarget({ id: app.candidate_id, name: app.candidate_name })}
+                  busy={actingId === app.id}
+                  disabled={(actingId !== null && actingId !== app.id) || bulkBusy}
+                />
+              ))}
+            </Table.Body>
+          </Table>
+        </Card>
+      )}
+
+      {/* Sticky bulk-action bar — mirrors the All view's floating bar. */}
+      {selectedCount > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white rounded-2xl shadow-2xl px-6 py-3 flex items-center gap-3 max-w-[95vw]">
+          <span className="text-sm font-medium whitespace-nowrap">
+            {selectedCount} selected
+          </span>
+          <Button
+            size="sm"
+            onClick={() => bulkAcceptMutation.mutate()}
+            disabled={bulkBusy}
+            className="bg-emerald-500 hover:bg-emerald-400 text-white border-0 gap-1"
+          >
+            {bulkAcceptMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            Accept selected
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => bulkRejectMutation.mutate()}
+            disabled={bulkBusy}
+            className="bg-rose-500 hover:bg-rose-400 text-white border-0 gap-1"
+          >
+            {bulkRejectMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}
+            Reject to pool
+          </Button>
+          <button
+            onClick={clearSelected}
+            disabled={bulkBusy}
+            className="text-zinc-400 hover:text-white text-sm flex items-center gap-1 disabled:opacity-50"
+          >
+            <X size={14} /> Clear
+          </button>
+        </div>
+      )}
+
+      {cvTarget && (
+        <InboxCvModal candidate={cvTarget} onClose={() => setCvTarget(null)} />
+      )}
+    </div>
+  )
+}
+
+// Format a match score that may arrive as a 0–1 fraction or a 0–100 percentage.
+function formatMatch(score) {
+  if (score == null) return null
+  const pct = score <= 1 ? score * 100 : score
+  return Math.round(pct)
+}
+
+function InboxRow({ app, selected, onToggle, onAccept, onReject, onPreview, busy, disabled }) {
+  const match = formatMatch(app.match_score)
+  const matchClass = match == null
+    ? ''
+    : match >= 70 ? 'text-emerald-600 dark:text-emerald-400'
+    : match >= 50 ? 'text-amber-600 dark:text-amber-400'
+    : 'text-rose-600 dark:text-rose-400'
+
+  return (
+    <Table.Tr accent="amber">
+      <Table.Td>
+        <input
+          type="checkbox"
+          aria-label={`Select ${app.candidate_name || 'application'}`}
+          className="w-4 h-4 rounded accent-primary-600 cursor-pointer"
+          checked={selected}
+          onChange={onToggle}
+        />
+      </Table.Td>
+      <Table.Td className="font-semibold text-zinc-900 dark:text-zinc-50 min-w-[200px]">
+        <button type="button" onClick={onPreview} className="group inline-flex items-center gap-3 text-left" title="Preview CV">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900">
+            {app.candidate_name?.charAt(0)?.toUpperCase() || '?'}
+          </div>
+          <span className="min-w-0">
+            <span className="block text-sm group-hover:text-primary-600 dark:group-hover:text-primary-400 truncate">
+              {app.candidate_name || 'Candidate'}
+            </span>
+            {app.candidate_phone && (
+              <span className="block text-xs font-normal text-zinc-500 dark:text-zinc-400 inline-flex items-center gap-1">
+                <Phone size={10} /> {app.candidate_phone}
+              </span>
+            )}
+          </span>
+        </button>
+      </Table.Td>
+      <Table.Td>
+        <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
+          <Briefcase size={13} />
+          <span className="truncate max-w-[160px]">{app.job_title || 'Job'}</span>
+        </Link>
+      </Table.Td>
+      <Table.Td className="text-sm text-zinc-600 dark:text-zinc-400">
+        <span className="truncate max-w-[160px] inline-block align-bottom">{app.project_title || '—'}</span>
+      </Table.Td>
+      <Table.Td className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
+        {app.applied_at ? new Date(app.applied_at).toLocaleDateString() : '—'}
+      </Table.Td>
+      <Table.Td>
+        {match == null ? (
+          <span className="text-xs text-zinc-400">—</span>
+        ) : (
+          <span className={`inline-flex items-center gap-1 text-sm font-semibold ${matchClass}`}>
+            <Star size={13} /> {match}%
+          </span>
+        )}
+      </Table.Td>
+      <Table.Td align="right">
+        <div className="inline-flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onPreview}
+            disabled={disabled}
+            className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
+            title="Preview CV"
+          >
+            <Eye size={13} /> View CV
+          </button>
+          <button
+            type="button"
+            onClick={onAccept}
+            disabled={disabled || busy}
+            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 disabled:opacity-50"
+            title="Accept (certify)"
+          >
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Accept
+          </button>
+          <button
+            type="button"
+            onClick={onReject}
+            disabled={disabled || busy}
+            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 px-2 py-1 text-xs font-semibold text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 disabled:opacity-50"
+            title="Reject to general pool"
+          >
+            <Archive size={13} /> Pool
+          </button>
+        </div>
+      </Table.Td>
+    </Table.Tr>
+  )
+}
+
+// CV preview modal: pulls the candidate's enriched cv_files (resolved_file_url
+// + document_category) and previews the primary CV inline — same pattern as
+// ConversationDocumentsPanel.
+function InboxCvModal({ candidate, onClose }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['candidate', candidate.id],
+    queryFn: () => getCandidate(candidate.id),
+    enabled: !!candidate.id,
+  })
+
+  const cvs = data?.cvs || []
+  const cvList = cvs
+    .filter((cv) => getDocumentCategory(cv) === 'cv')
+    .sort((a, b) => new Date(b.uploaded_at || 0) - new Date(a.uploaded_at || 0))
+  // Prefer the primary CV, else the most recent; fall back to any document.
+  const primary = cvList.find((cv) => cv.is_primary) || cvList[0] || cvs[0] || null
+  const fileName = primary?.file_name || `${candidate.name || 'Candidate'} CV`
+
+  return (
+    <Modal open onClose={onClose} title={`CV — ${candidate.name || 'Candidate'}`} size="2xl">
+      {isLoading ? (
+        <div className="flex items-center justify-center gap-2 h-[60vh] text-zinc-500 dark:text-zinc-400">
+          <Loader2 size={18} className="animate-spin" /> Loading CV…
+        </div>
+      ) : (
+        // DocumentPreview internally renders the "processing"/"no document"
+        // states, so a missing CV degrades gracefully.
+        <DocumentPreview cv={primary || undefined} fileName={fileName} className="h-[70vh]" />
+      )}
+    </Modal>
   )
 }

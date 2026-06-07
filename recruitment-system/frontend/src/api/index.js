@@ -289,6 +289,9 @@ export const sendBulkCommunication = (data) =>
 export const batchCertifyApplications = (data) =>
   apiClient.post('/api/applications/batch-certify', data).then(res => res.data)
 
+export const batchRejectToPool = (data) =>
+  apiClient.post('/api/applications/batch-reject-to-pool', data).then(res => res.data)
+
 // Interviews
 export const getInterviews = (params) =>
   apiClient.get('/api/interviews', { params }).then(res => res.data)

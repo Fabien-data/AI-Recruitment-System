@@ -981,6 +981,15 @@ async function applyMigrations() {
         )
     `, '034 user_preferences table');
 
+    // ── Migration 035: profile-picture source flag (#6) ──────────────────────
+    // 'auto'  = set from a chatbot-detected person-photo (latest one refreshes it)
+    // 'manual'= an agent uploaded it → LOCKED, auto never overwrites.
+    // NULL    = no picture yet. candidates.photo_url already exists (migration 005).
+    await safeAlter(
+        `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS photo_source VARCHAR(10)`,
+        '035 candidates.photo_source',
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 

@@ -2233,7 +2233,7 @@ export default function Communications() {
                 ['Height', meta.height_cm ? `${meta.height_cm} cm` : null],
                 ['Experience', (candidateDetail.experience_years || meta.experience_years) ? `${candidateDetail.experience_years || meta.experience_years} yrs` : null],
                 ['Country', meta.destination_country || meta.country || null],
-                ['Licenses', meta.licenses || null],
+                ['Licenses', Array.isArray(meta.licenses) ? (meta.licenses.filter(Boolean).join(', ') || null) : (meta.licenses || null)],
                 ['Prev. Employer', meta.previous_employer || null],
                 ['English', meta.english_proficiency || null],
               ].filter(r => r[1])
@@ -2248,7 +2248,7 @@ export default function Communications() {
                     {rows.map(([label, val]) => (
                       <div key={label} className="flex justify-between gap-2 text-xs">
                         <span className="text-zinc-400 dark:text-zinc-500 shrink-0">{label}</span>
-                        <span className="text-zinc-700 dark:text-zinc-200 text-right break-words">{val}</span>
+                        <span className="text-zinc-700 dark:text-zinc-200 text-right break-words">{val && typeof val === 'object' ? (Array.isArray(val) ? val.filter(Boolean).join(', ') : JSON.stringify(val)) : val}</span>
                       </div>
                     ))}
                   </div>

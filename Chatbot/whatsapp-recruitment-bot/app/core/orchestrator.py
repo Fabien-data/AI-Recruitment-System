@@ -570,6 +570,33 @@ class IntakeOrchestrator:
         # and no application-complete flow. The recruiter still sees it in CV
         # Manager + the conversation via cv_files.parsed_data.__document_category.
         doc_category = extracted.pop("_document_category", "cv") if isinstance(extracted, dict) else "cv"
+
+        # --- 1b-i. Person photo / selfie → profile picture (#6), NOT a document ---
+        # Route a headshot/selfie to candidates.photo_url (photo_source='auto');
+        # the backend skips it if a recruiter manually set+locked the avatar. We do
+        # NOT persist it as a cv_files document and do NOT set cv_uploaded, so it
+        # can't satisfy the CV gate.
+        if doc_category in ("photo", "selfie"):
+            try:
+                await recruitment_sync.push_profile_photo(
+                    candidate,
+                    media_content,
+                    mime_type="image/jpeg",
+                    filename=media_filename or "photo.jpg",
+                )
+            except Exception as exc:
+                logger.warning("Profile-photo sync failed: %s", exc)
+            locked_language = state.get("locked_language") or "en"
+            _photo_ack = {
+                "en": "Thanks! I've saved that as your profile photo. If you haven't shared your CV/resume yet, please send it so we can continue.",
+                "si": "ස්තූතියි! එය ඔබගේ පැතිකඩ ඡායාරූපය ලෙස සුරැකුවා. ඔබ තවම CV එක එවා නැත්නම්, කරුණාකර එය එවන්න.",
+                "ta": "நன்றி! அதை உங்கள் சுயவிவரப் படமாக சேமித்தேன். நீங்கள் இன்னும் CV அனுப்பவில்லை என்றால், தயவுசெய்து அனுப்பவும்.",
+                "singlish": "Sthuthi! Eka oyage profile photo eka widihata save kara. CV eka thamath naehe nam, karunakara eka evanna.",
+                "tanglish": "Nandri! Adha unga profile photo-a save pannitten. CV innum anuppala na, please anuppunga.",
+            }
+            return _photo_ack.get(locked_language, _photo_ack["en"])
+
+        # --- 1b-ii. Other supporting document (ID / passport / certificate) ---
         if doc_category != "cv":
             cv_blob = dict(extracted.get("cv_parsed_data") or {}) if isinstance(extracted, dict) else {}
             cv_blob["__document_category"] = doc_category

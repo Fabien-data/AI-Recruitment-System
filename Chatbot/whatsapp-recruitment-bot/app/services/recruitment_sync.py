@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -255,6 +256,41 @@ class RecruitmentSyncService:
             return False, f"status {response.status_code}: {response.text[:200]}"
         except Exception as exc:
             return False, str(exc)
+
+    async def push_profile_photo(
+        self,
+        candidate,
+        photo_bytes: bytes,
+        mime_type: str = "image/jpeg",
+        filename: str = "photo.jpg",
+    ) -> bool:
+        """Push a chatbot-detected person-photo to the backend as the candidate's
+        profile picture (#6). The backend uploads it to GCS and sets
+        candidates.photo_url + photo_source='auto', skipping if a recruiter has
+        manually set+locked the avatar. Best-effort: logs and swallows errors so
+        a failed avatar push never breaks the media-handling flow."""
+        if not photo_bytes:
+            return False
+        phone = getattr(candidate, "phone_number", None)
+        if not phone:
+            return False
+        url = f"{RECRUITMENT_API_URL}/api/chatbot/set-profile-photo"
+        payload = {
+            "phone": phone,
+            "base64": base64.b64encode(photo_bytes).decode("ascii"),
+            "mime_type": mime_type,
+            "filename": filename,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(url, json=payload, headers=self._build_headers())
+            if response.status_code in (200, 201):
+                return True
+            logger.warning("profile-photo push: status %s %s", response.status_code, response.text[:160])
+            return False
+        except Exception as exc:
+            logger.warning("profile-photo push failed: %s", exc)
+            return False
 
     def _queue_pending(
         self,

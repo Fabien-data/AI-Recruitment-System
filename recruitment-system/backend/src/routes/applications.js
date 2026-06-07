@@ -538,6 +538,57 @@ router.post('/:id/reject-to-pool', authenticate, requireSection('applications', 
 });
 
 /**
+ * Batch reject-to-pool — bulk version for the accept-applications inbox (#3.1).
+ * Rejects each application + moves its candidate to future_pool (CV-gated via
+ * setCandidateStage) + notifies. Mirrors POST /:id/reject-to-pool per item.
+ */
+router.post('/batch-reject-to-pool', authenticate, requireSection('applications', 'edit'), async (req, res, next) => {
+    try {
+        const { application_ids, rejection_reason, notify_channels = ['whatsapp'] } = req.body;
+        if (!Array.isArray(application_ids) || application_ids.length === 0) {
+            return res.status(400).json({ error: 'application_ids array is required' });
+        }
+        const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
+        const results = { success: [], failed: [] };
+
+        for (const appId of application_ids) {
+            try {
+                const appResult = await query(
+                    adaptQuery('SELECT candidate_id FROM applications WHERE id = $1'),
+                    [appId],
+                );
+                if (appResult.rows.length === 0) {
+                    results.failed.push({ application_id: appId, error: 'not found' });
+                    continue;
+                }
+                const candidateId = appResult.rows[0].candidate_id;
+                await query(
+                    adaptQuery("UPDATE applications SET status = 'rejected', rejection_reason = $1 WHERE id = $2"),
+                    [rejection_reason || 'Moved to general pool', appId],
+                );
+                await setCandidateStage(candidateId, 'future_pool');
+                let notification = { success: [], failed: [] };
+                try {
+                    notification = await notifications.sendGeneralPoolNotification(candidateId, channels);
+                } catch (e) {
+                    notification.failed.push({ channel: 'all', error: e.message });
+                }
+                results.success.push({ application_id: appId, candidate_id: candidateId, notification });
+            } catch (err) {
+                results.failed.push({ application_id: appId, error: err.message });
+            }
+        }
+
+        res.json({
+            processed: application_ids.length,
+            success_count: results.success.length,
+            failed_count: results.failed.length,
+            results,
+        });
+    } catch (error) { next(error); }
+});
+
+/**
  * Transfer application to a different job
  */
 router.post('/:id/transfer', authenticate, requireSection('applications', 'edit'), async (req, res, next) => {
