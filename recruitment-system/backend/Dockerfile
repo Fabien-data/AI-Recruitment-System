@@ -2,6 +2,11 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
+# Native deps (bcrypt) compile from source on Alpine when no musl prebuilt is
+# available — node-gyp needs python3 + a C/C++ toolchain. Builder-stage only, so
+# the runtime image stays slim (the compiled .node is copied via node_modules).
+RUN apk add --no-cache python3 make g++
+
 COPY package*.json ./
 RUN npm ci --only=production
 
