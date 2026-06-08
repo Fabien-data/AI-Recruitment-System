@@ -45,6 +45,14 @@ const APP_STATUS_TO_STAGE = {
 // explicit, intentional writes (General Pool / hire) and outrank the pipeline.
 const PROTECTED_CANDIDATE_STATUSES = new Set(['future_pool', 'merged', 'hired']);
 
+// TERMINAL statuses are never auto-changed. future_pool is intentionally NOT
+// terminal: it's a "parked / no current match" state that must be LIFTED back
+// into the pipeline once the candidate gains a real forward application
+// (screening+). Otherwise a candidate parked first and applied-to later stays
+// stuck in the pool and shows inconsistently (future_pool in Messages vs.
+// Screening in Applications) — the exact drift bug agents kept hitting.
+const TERMINAL_CANDIDATE_STATUSES = new Set(['merged', 'hired']);
+
 // ── Canonical vocabularies (UPGRADES.md #1) — the single backend source ───────
 // candidate.status: the 7 canonical values. application.status: the 5 canonical
 // values. Every backend writer validates/maps against these so no parallel or
@@ -190,8 +198,9 @@ async function syncCandidateStage(candidateId) {
         if (candRes.rows.length === 0) return;
 
         const currentStatus = candRes.rows[0].current_status;
-        // Never fight an explicit terminal/pool write.
-        if (PROTECTED_CANDIDATE_STATUSES.has(currentStatus)) return;
+        // merged / hired are terminal — never auto-change them. future_pool is
+        // handled below: it can be LIFTED to a forward stage but is otherwise kept.
+        if (TERMINAL_CANDIDATE_STATUSES.has(currentStatus)) return;
 
         const hasCv = truthy(candRes.rows[0].has_cv);
 
@@ -214,11 +223,16 @@ async function syncCandidateStage(candidateId) {
         // leave the candidate's status untouched.
         if (!best || best === currentStatus) return;
 
+        // future_pool is a parked state: lift it ONLY when the candidate now has a
+        // real FORWARD application (screening or beyond). A bare/CV-less signal
+        // (best === 'new') must NOT un-park a deliberately-pooled candidate.
+        if (currentStatus === 'future_pool' && STAGE_ORDER[best] < STAGE_ORDER.screening) return;
+
         await query(
             adaptQuery(`
                 UPDATE candidates
                 SET status = $1, conversation_stage = $2, updated_at = NOW()
-                WHERE id = $3 AND status NOT IN ('future_pool', 'merged', 'hired')
+                WHERE id = $3 AND status NOT IN ('merged', 'hired')
             `),
             [best, best, candidateId]
         );

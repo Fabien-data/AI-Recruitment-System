@@ -437,17 +437,24 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
         // now just a mirror of candidates.status. Status filtering goes through the
         // canonical status buckets below. (`conversation_stage` query param ignored.)
 
+        // A search is a GLOBAL lookup: when the agent types a name/phone we bypass
+        // the active status-bucket + project filters so the candidate is found no
+        // matter which tab/project is selected (the #1 "I searched the number and
+        // it's not showing" complaint — e.g. a candidate sitting in Future Pool
+        // while the New tab is active). Without a search, the tab/project scope the list.
+        const isSearch = Boolean(String(search || '').trim());
+
         // Canonical status bucket (New → Screening → Certified → Interview
         // Scheduled, + Future Pool). Mutually exclusive — driven by ca.status,
         // kept in sync by candidate-stage.js. NULL status counts as 'new'.
         const CANDIDATE_STATUS_BUCKETS = new Set(['new', 'screening', 'certified', 'interview_scheduled', 'future_pool']);
-        if (status && CANDIDATE_STATUS_BUCKETS.has(String(status).toLowerCase())) {
+        if (!isSearch && status && CANDIDATE_STATUS_BUCKETS.has(String(status).toLowerCase())) {
             filters.push(`LOWER(COALESCE(ca.status, 'new')) = ${addParam(String(status).toLowerCase())}`);
         }
 
         // Project scope, matched on the EFFECTIVE project (latest app OR ad).
         // 'unassigned' = no application and no ad-resolved project.
-        if (project_id) {
+        if (!isSearch && project_id) {
             if (String(project_id).toLowerCase() === 'unassigned') {
                 filters.push(`${effProjectIdExpr} IS NULL`);
             } else {

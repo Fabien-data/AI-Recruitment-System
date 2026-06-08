@@ -9,7 +9,7 @@ jest.mock('../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), debu
 jest.mock('../src/utils/websocket', () => ({ getIO: () => null }));
 
 const { query } = require('../src/config/database');
-const { setCandidateStage } = require('../src/services/candidate-stage');
+const { setCandidateStage, syncCandidateStage } = require('../src/services/candidate-stage');
 
 describe('setCandidateStage', () => {
     beforeEach(() => jest.clearAllMocks());
@@ -44,14 +44,45 @@ describe('setCandidateStage', () => {
         expect(params[0]).toBe('new');
     });
 
-    test('a protected status (future_pool) is never overwritten by the re-derive', async () => {
+    test('merged/hired are terminal — never overwritten by the re-derive', async () => {
         query
-            .mockResolvedValueOnce({ rowCount: 1 })                                              // UPDATE applications
-            .mockResolvedValueOnce({ rows: [{ current_status: 'future_pool', has_cv: true }] }); // sync: protected → returns early
+            .mockResolvedValueOnce({ rowCount: 1 })                                          // UPDATE applications
+            .mockResolvedValueOnce({ rows: [{ current_status: 'hired', has_cv: true }] });   // sync: terminal → returns early
 
         const res = await setCandidateStage('cand-3', 'certified');
         expect(res.updatedApplications).toBe(1);
-        // Only the apps update + the protected-status select ran — candidates untouched.
+        // Only the apps update + the terminal-status select ran — candidates untouched.
+        expect(query).toHaveBeenCalledTimes(2);
+    });
+
+    test('future_pool is LIFTED to its forward stage once a real application appears (drift fix)', async () => {
+        // Reproduces the agents' bug: a candidate parked in future_pool who then
+        // gets a screening/certified application must move OUT of the pool so
+        // Messages (bucketed by candidate.status) matches Applications.
+        query
+            .mockResolvedValueOnce({ rowCount: 1 })                                              // UPDATE applications → certified
+            .mockResolvedValueOnce({ rows: [{ current_status: 'future_pool', has_cv: true }] })  // sync: candidate select
+            .mockResolvedValueOnce({ rows: [{ status: 'certified' }] })                          // sync: applications select
+            .mockResolvedValueOnce({ rowCount: 1 });                                             // sync: UPDATE candidates → certified
+
+        await setCandidateStage('cand-3', 'certified');
+        const lastCall = query.mock.calls[query.mock.calls.length - 1];
+        expect(lastCall[0]).toContain('UPDATE candidates');
+        expect(lastCall[1][0]).toBe('certified');
+        // The WHERE no longer excludes future_pool (only merged/hired stay terminal).
+        expect(lastCall[0]).not.toContain("'future_pool'");
+    });
+
+    test('future_pool STAYS parked when the best derived stage is only "new" (no forward app)', async () => {
+        // A deliberately-parked candidate whose only signal derives to 'new' (e.g.
+        // CV-less) must not be un-parked — preserves the flexible backup pool.
+        query
+            .mockResolvedValueOnce({ rows: [{ current_status: 'future_pool', has_cv: false }] }) // candidate select, no CV
+            .mockResolvedValueOnce({ rows: [{ status: 'screening' }] });                         // apps select → derives 'new'
+
+        await syncCandidateStage('cand-park');
+        const issuedUpdate = query.mock.calls.some(([sql]) => /UPDATE candidates/.test(sql));
+        expect(issuedUpdate).toBe(false);
         expect(query).toHaveBeenCalledTimes(2);
     });
 
