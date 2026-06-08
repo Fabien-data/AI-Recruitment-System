@@ -617,11 +617,14 @@ router.get('/job/:jobId/candidates', authenticate, requireSection('candidates', 
  */
 router.get('/pool', authenticate, requireSection('general_pool', 'view'), async (req, res, next) => {
     try {
-        const { page = 1, limit = 20 } = req.query;
+        const { page = 1, limit = 20, has_cv } = req.query;
         const offset = (page - 1) * limit;
 
-        // future_pool = "has CV but no matching role" (#5). Surface only CV-present
-        // rows; a CV-less candidate is never a valid pool member.
+        // Future Pool = a flexible backup/talent pool (decided with the user). It
+        // surfaces ALL future_pool candidates regardless of CV — so candidates
+        // parked here without a CV are visible (previously they vanished). Pass
+        // ?has_cv=true to restrict to CV-present rows when needed.
+        const cvFilter = (String(has_cv) === 'true') ? `AND ${hasCvSql('c')}` : '';
         const result = await pool.query(
             `SELECT c.*, cv.file_url as cv_raw_url, cv.file_name as cv_filename
              FROM candidates c
@@ -633,14 +636,14 @@ router.get('/pool', authenticate, requireSection('general_pool', 'view'), async 
                 LIMIT 1
              ) cv ON true
              WHERE c.status = 'future_pool'
-               AND ${hasCvSql('c')}
-             ORDER BY c.updated_at DESC
+               ${cvFilter}
+             ORDER BY COALESCE(c.whatsapp_unreachable, FALSE) ASC, c.updated_at DESC
              LIMIT $1 OFFSET $2`,
             [limit, offset]
         );
 
         const countResult = await pool.query(
-            `SELECT COUNT(*) FROM candidates c WHERE c.status = 'future_pool' AND ${hasCvSql('c')}`
+            `SELECT COUNT(*) FROM candidates c WHERE c.status = 'future_pool' ${cvFilter}`
         );
 
         // Expose a browser-openable cv_url + cv_filename so the pool modal can
@@ -750,6 +753,22 @@ router.get('/job/:jobId/shortlist', authenticate, requireSection('candidates', '
     try {
         const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
         const result = await semanticMatch.shortlistForJob(req.params.jobId, { limit });
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * GET /api/auto-assign/candidate/:id/job-matches  (Future-Pool backup)
+ * Ranked SEMANTIC job matches for one candidate across all active jobs — the
+ * "quick backup plan" for pooled candidates. Read-only; assignment still goes
+ * through the CV-gated assign endpoints. Run embed-backfill to populate vectors.
+ */
+router.get('/candidate/:id/job-matches', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
+        const result = await semanticMatch.matchJobsForCandidate(req.params.id, { limit });
         res.json(result);
     } catch (err) {
         next(err);

@@ -5,15 +5,16 @@ import {
   getApplications, getJobs, getProjects, apiClient, getInterviewers,
   previewInterviewAllocation, bulkScheduleInterviews,
   updateApplication, rejectToPool, batchCertifyApplications, batchRejectToPool,
-  getCandidate,
+  getCandidate, getPendingInterviewSends, downloadUnreachableCsv,
 } from '../api'
 import {
   CalendarDays, FileText, FolderKanban, Briefcase, ListFilter, Plus,
   MoreHorizontal, Eye, Pencil, ArrowRightLeft, Trash2, User,
   ChevronDown, ChevronRight, Send, MapPinned, X, Clock,
   Search, ArrowDownWideNarrow, ChevronsDownUp, ChevronsUpDown,
-  Inbox, Check, Archive, Star, Phone, Loader2, Upload,
+  Inbox, Check, Archive, Star, Phone, Loader2, Upload, ListChecks, RotateCcw, AlertTriangle,
 } from 'lucide-react'
+import { DEFAULT_INTERVIEW_MESSAGE, DEFAULT_INTERVIEW_MESSAGE_KEY } from '../constants/interviewMessage'
 import { Modal } from '../components/ui/Modal'
 import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
 import toast from 'react-hot-toast'
@@ -103,6 +104,10 @@ export default function Applications() {
   // process together (schedule interview + notify all in one go).
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false)
+  // "Quick select 100" — applications still awaiting their interview message.
+  // We keep the fetched details (name/job) separately so the schedule modal can
+  // display them even when they're not on the currently-rendered project page.
+  const [quickPending, setQuickPending] = useState(null) // { applications:[], total_pending }
   const queryClient = useQueryClient()
 
   // Real-time: refetch when any agent/chatbot changes an application anywhere.
@@ -124,6 +129,25 @@ export default function Applications() {
     const next = new Set(prev)
     for (const id of ids) next.delete(id)
     return next
+  })
+
+  // "Quick select 100": pull the next batch of applications that still haven't
+  // received their interview message (oldest-waiting first), select them, and
+  // open the schedule modal. Pressing it again after a send returns the NEXT
+  // batch, because a successful send drops a row out of the pending set.
+  const quickSelectMutation = useMutation({
+    mutationFn: () => getPendingInterviewSends({ project_id: projectId || undefined, limit: 100 }),
+    onSuccess: (res) => {
+      const apps = res?.applications || []
+      if (apps.length === 0) {
+        toast.success('All applications have already received the interview message 🎉')
+        return
+      }
+      setSelectedIds(new Set(res.application_ids || apps.map((a) => a.application_id)))
+      setQuickPending(res)
+      setBulkScheduleOpen(true)
+    },
+    onError: (err) => showErrorToast(err, 'Could not load pending applications'),
   })
 
   // Project-list controls. All projects live on one paginated list of
@@ -326,6 +350,15 @@ export default function Applications() {
         actions={
           <>
             {tab === 'all' && <ViewToggle mode={viewMode} onChange={setViewMode} />}
+            <Button
+              variant="secondary"
+              onClick={() => quickSelectMutation.mutate()}
+              disabled={quickSelectMutation.isPending}
+              title="Select the next 100 candidates who haven't received the interview message yet"
+            >
+              {quickSelectMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <ListChecks size={16} />}
+              Quick select 100
+            </Button>
             <Link to="/applications/import">
               <Button variant="secondary">
                 <Upload size={16} />
@@ -630,10 +663,19 @@ export default function Applications() {
       {bulkScheduleOpen && (
         <BulkScheduleInterviewModal
           applicationIds={Array.from(selectedIds)}
-          applicationDetails={list.filter(a => selectedIds.has(a.id))}
-          onClose={() => setBulkScheduleOpen(false)}
+          // Prefer the quick-select details (which may include candidates not on
+          // the current project page); fall back to the loaded list otherwise.
+          applicationDetails={
+            quickPending?.applications?.length
+              ? quickPending.applications.map(a => ({ id: a.application_id, candidate_name: a.candidate_name, job_title: a.job_title }))
+              : list.filter(a => selectedIds.has(a.id))
+          }
+          pendingTotal={quickPending?.total_pending}
+          projectId={projectId || undefined}
+          onClose={() => { setBulkScheduleOpen(false); setQuickPending(null) }}
           onSuccess={() => {
             setBulkScheduleOpen(false)
+            setQuickPending(null)
             clearSelected()
             queryClient.invalidateQueries({ queryKey: ['applications'] })
             queryClient.invalidateQueries({ queryKey: ['interviews'] })
@@ -657,11 +699,29 @@ export default function Applications() {
   )
 }
 
+// Download the "couldn't reach on WhatsApp" call list as a CSV and trigger a
+// browser save. Used after a bulk send so agents can phone the unreachable.
+async function handleUnreachableCsv(projectId) {
+  try {
+    const blob = await downloadUnreachableCsv({ project_id: projectId || undefined })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `unreachable-candidates-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (err) {
+    showErrorToast(err, 'Could not download the call list')
+  }
+}
+
 // ── BulkScheduleInterviewModal ─────────────────────────────────────────────
 // Drives POST /api/interviews/bulk-schedule. Single shared date/time/location
 // across all selected candidates; each gets a WhatsApp invitation and the
 // application status flips to interview_scheduled.
-function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClose, onSuccess }) {
+function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClose, onSuccess, pendingTotal, projectId }) {
   const [mode, setMode] = useState('fixed') // 'fixed' | 'smart'
   // Fixed mode
   const [date, setDate] = useState('')
@@ -675,11 +735,24 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
   // Shared
   const [location, setLocation] = useState('')
   const [duration, setDuration] = useState(30)
-  const [description, setDescription] = useState('')
+  // Interview message body: prefill with the agent's last-used text, falling back
+  // to the default template. This is sent VERBATIM (no AI) unless "translate" is on
+  // — that keeps the per-message API cost at zero.
+  const [description, setDescription] = useState(() => {
+    try { return localStorage.getItem(DEFAULT_INTERVIEW_MESSAGE_KEY) || DEFAULT_INTERVIEW_MESSAGE }
+    catch { return DEFAULT_INTERVIEW_MESSAGE }
+  })
+  // Off by default to SAVE API cost: the message sends as typed (no OpenAI call).
+  // Turn on only when you need it auto-translated into each candidate's language.
+  const [translateNotes, setTranslateNotes] = useState(false)
   const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
 
   const today = new Date().toISOString().slice(0, 10)
   const channels = () => (notifyWhatsApp ? ['whatsapp'] : ['whatsapp'])
+  // Remember the agent's message for next time (so they don't re-type it).
+  const rememberMessage = () => {
+    try { localStorage.setItem(DEFAULT_INTERVIEW_MESSAGE_KEY, description) } catch { /* ignore */ }
+  }
 
   const { data: interviewersData } = useQuery({
     queryKey: ['interviewers'],
@@ -705,6 +778,7 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
 
   const mutation = useMutation({
     mutationFn: async () => {
+      rememberMessage()
       if (mode === 'smart') {
         if (!startDate) throw new Error('Start date is required')
         if (!interviewerId) throw new Error('Select an interviewer')
@@ -717,6 +791,7 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
           slot_minutes: Number(slotMinutes) || 30,
           location: location || null,
           description: description.trim() || null,
+          translate_notes: translateNotes,
           notify_channels: channels(),
         })
       }
@@ -727,6 +802,7 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
         location: location || null,
         duration_minutes: Number(duration) || 30,
         description: description.trim() || null,
+        translate_notes: translateNotes,
         notify_channels: channels(),
       })
     },
@@ -740,10 +816,27 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
         if (r?.notification?.success) aggregated.success.push(...r.notification.success)
         if (r?.notification?.failed) aggregated.failed.push(...r.notification.failed)
       }
+      // Split out candidates we genuinely couldn't reach on WhatsApp so the agent
+      // can call them — backed by a downloadable CSV (no application left behind).
+      const unreachable = aggregated.failed.filter((f) => f?.reason === 'no_whatsapp').length
       if (aggregated.failed.length > 0) {
         showNotificationToast(aggregated, `Scheduled ${created} interview${created === 1 ? '' : 's'}`)
       } else {
         toast.success(`Scheduled ${created} interview${created === 1 ? '' : 's'}` + (skipped ? ` (${skipped} skipped)` : ''))
+      }
+      if (unreachable > 0) {
+        toast((t) => (
+          <span className="flex items-center gap-2 text-sm">
+            <AlertTriangle size={16} className="text-amber-500" />
+            {unreachable} candidate{unreachable === 1 ? '' : 's'} not on WhatsApp.
+            <button
+              className="font-semibold text-indigo-600 hover:underline"
+              onClick={() => { handleUnreachableCsv(projectId); toast.dismiss(t.id) }}
+            >
+              Download call list (CSV)
+            </button>
+          </span>
+        ), { duration: 12000 })
       }
       onSuccess()
     },
@@ -756,6 +849,11 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
         <div className="rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 p-3 max-h-40 overflow-y-auto">
           <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-300 mb-2">
             {applicationDetails.length} candidate{applicationDetails.length === 1 ? '' : 's'}
+            {typeof pendingTotal === 'number' && pendingTotal > applicationDetails.length && (
+              <span className="ml-1 normal-case font-normal text-indigo-500 dark:text-indigo-400">
+                · {pendingTotal} still awaiting the interview message
+              </span>
+            )}
           </p>
           <div className="space-y-1">
             {applicationDetails.map((a) => (
@@ -881,19 +979,39 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
         )}
 
         <div>
-          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-            Description / Instructions (optional)
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              Interview message (sent to each candidate)
+            </label>
+            <button
+              type="button"
+              onClick={() => setDescription(DEFAULT_INTERVIEW_MESSAGE)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-700"
+              title="Reset to the default interview message"
+            >
+              <RotateCcw size={11} /> Reset to default
+            </button>
+          </div>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            rows={3}
-            placeholder="Dress code, documents to bring, where to report, who to ask for…"
-            className="input w-full"
+            rows={10}
+            placeholder="Venue, what to bring, where to report…"
+            className="input w-full font-mono text-[12px] leading-relaxed"
           />
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-            Sent to each candidate, translated into their chosen language.
-          </p>
+          <label className="mt-2 flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={translateNotes}
+              onChange={(e) => setTranslateNotes(e.target.checked)}
+              className="accent-primary-600 mt-0.5"
+            />
+            <span>
+              Translate into each candidate's language (uses AI).{' '}
+              <span className="text-zinc-400">Off = send exactly as typed and save API cost.
+              A short "Hi {'{name}'}, your interview for {'{job}'} is on {'{date}'}" line is always added automatically.</span>
+            </span>
+          </label>
         </div>
 
         <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">

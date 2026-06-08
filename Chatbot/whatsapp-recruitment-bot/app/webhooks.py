@@ -1256,6 +1256,7 @@ class CandidateStatusPayload(BaseModel):
     interview_date: Optional[str] = None
     interview_location: Optional[str] = None
     interview_notes: Optional[str] = None  # recruiter instructions (dress code, docs to bring, …)
+    translate_notes: bool = False  # translate interview_notes into the candidate's language (uses AI). Off = send verbatim, no API cost.
     alternative_jobs: Optional[list] = None
     prescreening_datetime: Optional[str] = None
     prescreening_location: Optional[str] = None
@@ -1303,6 +1304,10 @@ def _out_of_window_template(status_key: str, payload, lang: str):
     job = payload.job_title or ""
     when = payload.interview_date or ""
     mapping = {
+        # Interview invite to a candidate outside the 24h window: only an approved
+        # template can reach them (free-form is dropped by Meta). The template body
+        # carries name/job/date; full venue details follow in-window once they reply.
+        "interview_scheduled": (settings.template_interview_scheduled, [first_name, job, when]),
         "interview_reminder": (settings.template_interview_reminder, [first_name, job, when]),
         "interview_day_reminder": (settings.template_interview_day_reminder, [first_name, job, when]),
         "job_now_available": (settings.template_job_now_available, [first_name, job]),
@@ -1418,10 +1423,14 @@ async def candidate_status_webhook(
     # language so the whole invite reads in one language. Degrades to the
     # original text if translation is unavailable.
     interview_notes = payload.interview_notes
-    if interview_notes and interview_notes.strip():
-        from app.services.translation_service import translate_text
+    # Translate only when explicitly requested (saves API cost: default is to send
+    # the recruiter's text exactly as typed). English candidates never need it.
+    if interview_notes and interview_notes.strip() and payload.translate_notes and lang != "en":
+        # Link-safe + cached: preserves map URLs/addresses verbatim and only
+        # translates the same block once per language across a bulk batch.
+        from app.services.translation_service import translate_interview_notes
         try:
-            interview_notes = await translate_text(interview_notes, lang)
+            interview_notes = await translate_interview_notes(interview_notes, lang)
         except Exception as e:
             logger.warning(f"Interview notes translation failed for {phone}: {e}")
 
@@ -1476,7 +1485,12 @@ async def candidate_status_webhook(
 
         if "error" in result:
             logger.error(f"Failed to send status update to {phone}: {result}")
-            return {"status": "error", "detail": str(result.get("error"))}
+            return {
+                "status": "error",
+                "reason": result.get("reason") or "other",
+                "code": result.get("code"),
+                "detail": str(result.get("error")),
+            }
 
         logger.info(
             f"Status update sent to {phone}: status={status_key}, lang={lang}, "

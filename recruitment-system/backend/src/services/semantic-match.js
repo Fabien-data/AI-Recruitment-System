@@ -176,6 +176,44 @@ async function shortlistForJob(jobId, { limit = 20 } = {}) {
 }
 
 /**
+ * Reverse of shortlistForJob: the best-matching ACTIVE jobs for ONE candidate,
+ * ranked by embedding similarity with a deterministic "why matched". Powers the
+ * Future-Pool "quick backup plan" — given a pooled candidate, surface the jobs
+ * they best fit across the whole board. Read-only suggestion; assignment still
+ * goes through the CV-gated assign endpoints.
+ */
+async function matchJobsForCandidate(candidateId, { limit = 10 } = {}) {
+    const r = await query(adaptQuery(`${CANDIDATE_SELECT} WHERE c.id = $1`), [candidateId]);
+    if (!r.rows.length) return { error: 'candidate_not_found' };
+    const cand = r.rows[0];
+    const candVec = await ensureCandidateEmbedding(cand);
+    const candText = buildCandidateText({ ...cand, cv_text: cand.cv_text });
+    if (!candVec) return { error: 'embedding_unavailable', jobs: [] };
+
+    // Active jobs that already have an embedding (run the backfill to populate).
+    const jr = await query(adaptQuery(`
+        SELECT id, title, category, country, domain, description, requirements, embedding, project_id
+        FROM jobs
+        WHERE status = 'active' AND embedding IS NOT NULL
+    `), []);
+
+    const scored = [];
+    for (const j of jr.rows) {
+        const vec = parseEmbedding(j.embedding);
+        if (!vec) continue;
+        const score = cosineSim(candVec, vec);
+        scored.push({
+            job_id: j.id, title: j.title, category: j.category, project_id: j.project_id,
+            score: Math.round(score * 1000) / 1000,
+            match_percent: Math.round(score * 100),
+            why_matched: whyMatched(candText, buildJobText(j)),
+        });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return { candidate_id: candidateId, total_considered: scored.length, jobs: scored.slice(0, limit) };
+}
+
+/**
  * Backfill / refresh embeddings for jobs + CV-present candidates that are missing
  * or stale. Idempotent + bounded. Returns counts.
  */
@@ -226,6 +264,6 @@ module.exports = {
     embedText, embedTexts, cosineSim, sha256,
     buildJobText, buildCandidateText, whyMatched,
     ensureJobEmbedding, ensureCandidateEmbedding,
-    shortlistForJob, backfillEmbeddings,
+    shortlistForJob, matchJobsForCandidate, backfillEmbeddings,
     CANDIDATE_SELECT,
 };

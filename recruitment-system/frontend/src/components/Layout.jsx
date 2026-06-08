@@ -116,7 +116,7 @@ const FULL_NAV_EXTRAS = [
   { to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' },
   { to: '/control-tower', label: 'Control Tower', icon: Radar, section: 'projects' },
   { to: '/knowledge-base', label: 'Knowledge Base', icon: BookOpen, section: 'knowledge_base' },
-  { to: '/general-pool', label: 'General Pool', icon: Database, section: 'general_pool' },
+  { to: '/general-pool', label: 'Future Pool', icon: Database, section: 'general_pool' },
 ]
 
 /**

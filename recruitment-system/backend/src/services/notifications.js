@@ -825,6 +825,9 @@ async function sendNotification(options) {
                                 interviewDate: data.interview_datetime,
                                 interviewLocation: data.interview_location,
                                 interviewNotes: data.interview_notes,
+                                // Opt-in translation: off by default to save API cost
+                                // (the note is sent exactly as typed).
+                                translateNotes: data.translate_notes === true,
                                 alternativeJobs: data.alternative_jobs,
                                 prescreeningDatetime: data.prescreening_datetime,
                                 prescreeningLocation: data.prescreening_location,
@@ -847,10 +850,15 @@ async function sendNotification(options) {
                                 results.failed.push({
                                     channel: 'whatsapp',
                                     error: pushResult.error,
+                                    // Coarse classification (no_whatsapp / out_of_window /
+                                    // token_expired / rate_limited / other) so callers can
+                                    // flag truly-unreachable candidates vs. transient failures.
+                                    reason: pushResult.reason || null,
                                 });
                                 await logCommunication(candidateId, 'whatsapp', 'outbound', message, type, {
                                     deliveryStatus: 'failed',
                                     error: pushResult.error,
+                                    reason: pushResult.reason || null,
                                 });
                             }
                         } else {
@@ -1074,7 +1082,7 @@ async function sendPreScreeningNotification(candidateId, jobTitle, prescreeningD
 /**
  * Send interview scheduled notification
  */
-async function sendInterviewNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp'], description = null) {
+async function sendInterviewNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp'], description = null, translateNotes = false) {
     // Pre-format the optional extra-details note here so the template stays a
     // single placeholder — empty string collapses to nothing (B016).
     const notesBlock = description ? `\n📝 Additional details: ${description}` : '';
@@ -1087,11 +1095,12 @@ async function sendInterviewNotification(candidateId, jobTitle, interviewDatetim
             interview_location: interviewLocation,
             // notes_block: pre-formatted, used by the email/SMS templates here.
             notes_block: notesBlock,
-            // interview_notes: the raw description, forwarded to the chatbot so
-            // it can translate it into the candidate's language before sending
-            // the WhatsApp invite (the WhatsApp message is rendered chatbot-side,
-            // not from notes_block).
-            interview_notes: description || null
+            // interview_notes: the raw description, forwarded to the chatbot so it
+            // can be used as the message body. Translated into the candidate's
+            // language only when translate_notes is true (off by default = no LLM
+            // call = no API cost; the note is sent exactly as typed).
+            interview_notes: description || null,
+            translate_notes: translateNotes === true,
         },
         channels
     });
@@ -1145,6 +1154,7 @@ async function logCommunication(candidateId, channel, direction, content, messag
         };
         if (extras.provider) metadata.provider = extras.provider;
         if (extras.error) metadata.error = extras.error;
+        if (extras.reason) metadata.reason = extras.reason;
 
         await query(
             adaptQuery('INSERT INTO communications (candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id) VALUES ($1, $2, $3, $4, $5, $6, $7)'),
@@ -1392,5 +1402,8 @@ module.exports = {
     sendInterviewRescheduledNotification,
     sendInterviewCancelledNotification,
     processNotificationQueue,
-    NOTIFICATION_TEMPLATES
+    NOTIFICATION_TEMPLATES,
+    // Exported for unit testing the wall-clock formatter (guards the interview-time
+    // regression: the candidate must receive the exact time that was scheduled).
+    formatInterviewWallClock,
 };

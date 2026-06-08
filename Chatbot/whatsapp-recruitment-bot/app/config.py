@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     # empty means "always free-form" (today's behavior, no regression). Set the
     # env vars (TEMPLATE_INTERVIEW_REMINDER=…) once approved to light up
     # out-of-window delivery.
+    # Interview INVITE template (the "you have an interview" first message). Needed
+    # to reach candidates outside the 24h window — the #1 cause of "can't send the
+    # interview message". Empty = free-form only (dropped out-of-window, but now
+    # reported as out_of_window so the candidate lands in the manual-call CSV).
+    template_interview_scheduled: str = ""
     template_interview_reminder: str = ""
     template_interview_day_reminder: str = ""
     template_job_now_available: str = ""

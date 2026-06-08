@@ -1573,6 +1573,19 @@ Question:"""
         },
     }
 
+    # When the recruiter supplies a custom interview-details block (venue, office,
+    # maps, checklist), that block becomes the FULL message body. These short
+    # localized headers carry only name / job / date / venue; the recruiter's block
+    # (already translated, links preserved) follows. This avoids duplicating the
+    # stock "please bring documents" prep line in the default interview template.
+    INTERVIEW_INVITE_HEADER = {
+        "en": "Hi {name}! 📌 You're invited to an interview for *{job_title}* on *{interview_date}*{location_text}.\n\n{interview_notes}",
+        "si": "ආයුබෝවන් {name}! 📌 *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *{interview_date}*{location_text} දිනට නියමිතයි.\n\n{interview_notes}",
+        "ta": "வணக்கம் {name}! 📌 *{job_title}* பதவிக்கான உங்கள் நேர்காணல் *{interview_date}*{location_text} அன்று நடைபெறும்.\n\n{interview_notes}",
+        "singlish": "Hello {name}! 📌 Oyage *{job_title}* interview eka *{interview_date}*{location_text} thiyenawa.\n\n{interview_notes}",
+        "tanglish": "Hello {name}! 📌 Unga *{job_title}* interview *{interview_date}*{location_text} ku schedule panniyirukku.\n\n{interview_notes}",
+    }
+
     @classmethod
     def get_status_update_message(
         cls,
@@ -1629,6 +1642,25 @@ Question:"""
             notes_text = f"\n\n📋 {interview_notes.strip()}"
 
         name = candidate_name.strip().split()[0] if candidate_name.strip() else "there"
+
+        # Custom interview body: the recruiter supplied the full details block, so use
+        # it as the message body under a short localized header (decided with the user:
+        # "use as the full body"). Only applies to the interview invite.
+        if status == "interview_scheduled" and interview_notes and interview_notes.strip():
+            htmpl = None
+            for try_lang in fallback_chain:
+                if try_lang in cls.INTERVIEW_INVITE_HEADER:
+                    htmpl = cls.INTERVIEW_INVITE_HEADER[try_lang]
+                    break
+            if htmpl is None:
+                htmpl = cls.INTERVIEW_INVITE_HEADER.get("en", "")
+            return htmpl.format(
+                name=name,
+                job_title=job_title,
+                interview_date=interview_date or "TBD",
+                location_text=location_text,
+                interview_notes=interview_notes.strip(),
+            )
 
         return template.format(
             name=name,

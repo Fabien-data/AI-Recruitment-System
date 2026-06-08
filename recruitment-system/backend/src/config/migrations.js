@@ -1023,6 +1023,21 @@ async function applyMigrations() {
         await safeAlter(sql, label);
     }
 
+    // ── Migration 038: WhatsApp reachability flag ────────────────────────────
+    // Set when an interview/notification send comes back "not a WhatsApp user"
+    // (Meta error 131026/131030). Used to sink unreachable candidates to the
+    // bottom of lists and to export a manual-call CSV — so no application is
+    // silently skipped when the candidate can't receive WhatsApp.
+    const reachabilityCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS whatsapp_unreachable BOOLEAN NOT NULL DEFAULT FALSE`, '038 candidates.whatsapp_unreachable'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS whatsapp_last_error  TEXT`, '038 candidates.whatsapp_last_error'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS whatsapp_checked_at  TIMESTAMPTZ`, '038 candidates.whatsapp_checked_at'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_wa_unreachable ON candidates(whatsapp_unreachable)`, '038 idx_candidates_wa_unreachable'],
+    ];
+    for (const [sql, label] of reachabilityCols) {
+        await safeAlter(sql, label);
+    }
+
     logger.info('✅ Startup migrations complete.');
 }
 

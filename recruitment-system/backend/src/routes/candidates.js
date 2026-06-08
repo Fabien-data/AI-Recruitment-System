@@ -231,6 +231,9 @@ router.get('/', authenticate, requireSection('candidates', 'view'), async (req, 
             job_title:     'la.job_title',
             project_title: 'la.project_title',
             status:        'c.status',
+            // Sort by WhatsApp reachability so "can't reach on WhatsApp" candidates
+            // can be pushed to the bottom (ASC) for manual-call follow-up.
+            whatsapp_unreachable: 'COALESCE(c.whatsapp_unreachable, FALSE)',
         };
         const sortCol = SORT_MAP[String(sort_by || '').toLowerCase()] || 'c.created_at';
         const sortDir = String(sort_order || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
@@ -675,9 +678,10 @@ router.put('/:id/stage', authenticate, requireSection('candidates', 'edit'), asy
         const candRes = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [id]);
         if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
 
-        // CV is the hard gate (#5): a candidate with no CV can only be 'new'. Any
-        // forward/pool stage requires a CV on file — reuse the screening_gate 422.
-        if (stage !== 'new' && !(await candidateHasCv(id))) {
+        // CV is the hard gate (#5) for ACTIVE pipeline stages only. future_pool is
+        // exempt — it's a flexible backup/talent pool a candidate can be parked in
+        // regardless of CV (decided with the user), so don't 422 it.
+        if (stage !== 'new' && stage !== 'future_pool' && !(await candidateHasCv(id))) {
             return res.status(422).json({
                 error: 'Upload a CV/resume before advancing the candidate past New.',
                 code: 'screening_gate',

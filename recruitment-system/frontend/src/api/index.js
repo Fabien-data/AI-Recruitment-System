@@ -248,6 +248,10 @@ export const batchAutoAssign = (threshold = 50, status = 'new') =>
 export const getGeneralPool = (params) =>
   apiClient.get('/api/auto-assign/pool', { params }).then(res => res.data)
 
+// Semantic "best-fit jobs" for one candidate (Future-Pool backup plan).
+export const getCandidateJobMatches = (candidateId, params) =>
+  apiClient.get(`/api/auto-assign/candidate/${candidateId}/job-matches`, { params }).then(res => res.data)
+
 // Projects
 export const getProjects = (params) =>
   apiClient.get('/api/projects', { params }).then(res => res.data)
@@ -350,6 +354,20 @@ export const bulkScheduleInterviews = (data) =>
 // Smart-schedule preview — returns the day-by-day allocation without writing.
 export const previewInterviewAllocation = (data) =>
   apiClient.post('/api/interviews/bulk-schedule', { ...data, mode: 'smart', dry_run: true }).then(res => res.data)
+
+// Applications still awaiting their interview message ("Quick select 100").
+// params: { project_id?, limit? } → { total_pending, returned, application_ids, applications }
+export const getPendingInterviewSends = (params) =>
+  apiClient.get('/api/interviews/pending-send', { params }).then(res => res.data)
+
+// Re-send the interview WhatsApp to already-scheduled interviews. body: { interview_ids }
+export const bulkNotifyInterviews = (data) =>
+  apiClient.post('/api/interviews/bulk-notify', data).then(res => res.data)
+
+// CSV of candidates we couldn't reach on WhatsApp (for manual calling).
+// Returns a Blob; callers trigger a download. params: { project_id? }
+export const downloadUnreachableCsv = (params) =>
+  apiClient.get('/api/interviews/unreachable.csv', { params, responseType: 'blob' }).then(res => res.data)
 
 // Analytics
 export const getAnalyticsOverview = (params) =>

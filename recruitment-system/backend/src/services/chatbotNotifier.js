@@ -42,6 +42,7 @@ async function pushCandidateStatus({
     interviewDate,
     interviewLocation,
     interviewNotes,
+    translateNotes,
     alternativeJobs,
     prescreeningDatetime,
     prescreeningLocation,
@@ -68,6 +69,7 @@ async function pushCandidateStatus({
         interview_date: interviewDate || null,
         interview_location: interviewLocation || null,
         interview_notes: interviewNotes || null,
+        translate_notes: translateNotes === true,
         alternative_jobs: alternativeJobs || null,
         prescreening_datetime: prescreeningDatetime || null,
         prescreening_location: prescreeningLocation || null,
@@ -90,14 +92,17 @@ async function pushCandidateStatus({
         if (body.status === 'sent') {
             return { ok: true, messageId: body.message_id || null };
         }
-        // Chatbot responded but did not confirm a send (skipped / candidate_not_found / error)
-        const reason = body.detail || body.reason || body.status || 'chatbot did not confirm delivery';
+        // Chatbot responded but did not confirm a send (skipped / candidate_not_found / error).
+        // `reason` is the coarse, structured classification (no_whatsapp / out_of_window /
+        // token_expired / rate_limited / other) the caller uses to flag unreachable
+        // candidates; `error` stays the human-readable detail.
+        const errText = body.detail || body.reason || body.status || 'chatbot did not confirm delivery';
         logger.warn(`chatbotNotifier: non-sent response for ${phone} (${status}): ${JSON.stringify(body)}`);
-        return { ok: false, error: String(reason) };
+        return { ok: false, error: String(errText), reason: body.reason || null, code: body.code || null };
     } catch (err) {
         const detail = err.response?.data?.detail || err.response?.data || err.message;
         logger.error(`chatbotNotifier: POST failed for ${phone} (${status}): ${JSON.stringify(detail)}`);
-        return { ok: false, error: typeof detail === 'string' ? detail : JSON.stringify(detail) };
+        return { ok: false, error: typeof detail === 'string' ? detail : JSON.stringify(detail), reason: null, code: null };
     }
 }
 

@@ -87,4 +87,20 @@ describe('setCandidateStage', () => {
         const issuedCandidatesUpdate = query.mock.calls.some(([sql]) => /UPDATE candidates/.test(sql));
         expect(issuedCandidatesUpdate).toBe(false);
     });
+
+    test('future_pool is written directly even WITHOUT a CV (flexible backup pool)', async () => {
+        // C1: future_pool is exempt from the CV gate — a candidate can be parked
+        // in the pool regardless of CV. The CV check must NOT run, and the status
+        // is written straight to future_pool (no fallback to New).
+        query.mockResolvedValueOnce({ rowCount: 1 }); // direct UPDATE candidates → future_pool
+
+        const res = await setCandidateStage('cand-6', 'future_pool');
+        expect(res.updatedApplications).toBe(0);
+        // Exactly one query: the direct write. The CV-gate point-check (a SELECT)
+        // is short-circuited for future_pool, so it never fires.
+        expect(query).toHaveBeenCalledTimes(1);
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).toContain('UPDATE candidates');
+        expect(params[0]).toBe('future_pool');
+    });
 });

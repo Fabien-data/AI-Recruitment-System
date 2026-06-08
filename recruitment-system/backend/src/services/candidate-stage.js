@@ -270,11 +270,13 @@ async function setCandidateStage(candidateId, stage) {
         await syncCandidateStage(candidateId);
     } else {
         // new / future_pool, or no active applications to cascade to.
-        // CV is the hard gate (#5): a CV-less candidate can never sit past New
-        // (future_pool / certified / interview_scheduled set directly here) —
-        // fall back to New (awaiting CV). Subsumes the future_pool case.
+        // CV is the hard gate (#5) for ACTIVE pipeline stages (certified /
+        // interview_scheduled) — a CV-less candidate can't sit there, so fall
+        // back to New. future_pool is EXEMPT: it's a flexible backup/talent pool
+        // a candidate can be parked in regardless of CV (decided with the user),
+        // so it's written directly even without a CV on file.
         let finalStage = stage;
-        if (stage !== 'new' && !(await candidateHasCv(candidateId))) {
+        if (stage !== 'new' && stage !== 'future_pool' && !(await candidateHasCv(candidateId))) {
             finalStage = 'new';
         }
         await query(

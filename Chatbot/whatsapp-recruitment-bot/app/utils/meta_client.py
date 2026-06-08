@@ -19,6 +19,60 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _meta_reason_from_code(code, subcode=None) -> str:
+    """Map a Meta WhatsApp Cloud API error code to a coarse, actionable reason.
+
+    Reasons consumed downstream (recruitment backend → unreachable flag / CSV):
+      • no_whatsapp    — number is not a reachable WhatsApp user (flag + manual call)
+      • out_of_window  — >24h since the candidate last messaged; only a template can reach them
+      • token_expired  — META_ACCESS_TOKEN invalid/expired (rotate + redeploy)
+      • rate_limited   — Meta throttling; safe to retry later
+      • other          — anything else
+    """
+    try:
+        code = int(code) if code is not None else None
+    except (ValueError, TypeError):
+        code = None
+    if code == 190:
+        return "token_expired"
+    # 131047 "Re-engagement message", 470 legacy 24h-expiry, 131051 unsupported-after-window
+    if code in (131047, 470):
+        return "out_of_window"
+    # 131026 "Message undeliverable" (recipient not on WhatsApp / can't receive), 131030 not-in-allowed-list
+    if code in (131026, 131030):
+        return "no_whatsapp"
+    # 4 app-rate-limit, 80007 biz-rate-limit, 130429 cloud-api-rate-limit, 131056 pair-rate-limit
+    if code in (4, 80007, 130429, 131056):
+        return "rate_limited"
+    return "other"
+
+
+def _classify_meta_error(exc) -> Dict[str, Any]:
+    """Extract Meta error code/subcode from an httpx error (status error carries the
+    JSON body; a bare network error doesn't) and map to a coarse reason. Always
+    returns a dict containing an "error" key so existing `"error" in result` checks
+    keep working, plus structured code/subcode/reason for the new flagging path."""
+    code = subcode = fbtrace = None
+    message = str(exc)
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            err = (resp.json() or {}).get("error", {}) or {}
+            code = err.get("code")
+            subcode = err.get("error_subcode")
+            message = err.get("message", message) or message
+            fbtrace = err.get("fbtrace_id")
+        except Exception:
+            pass
+    return {
+        "error": message,
+        "code": code,
+        "subcode": subcode,
+        "fbtrace_id": fbtrace,
+        "reason": _meta_reason_from_code(code, subcode),
+    }
+
+
 class MetaWhatsAppClient:
     """
     Client for Meta WhatsApp Business API.
@@ -148,11 +202,12 @@ class MetaWhatsAppClient:
                 return result
             
         except httpx.HTTPError as e:
+            err = _classify_meta_error(e)
             logger.error(
-                f"Failed to send message to {to_number}: {e} | "
-                f"text_sample={safe_text[:60]!r} | encoding=utf-8"
+                f"Failed to send message to {to_number}: code={err.get('code')} "
+                f"reason={err.get('reason')} msg={err.get('error')!r} | text_sample={safe_text[:60]!r}"
             )
-            return {"error": str(e)}
+            return err
     
     async def send_template_message(
         self,
@@ -207,10 +262,14 @@ class MetaWhatsAppClient:
                 result = response.json()
                 logger.info(f"Template message sent to {to_number}")
                 return result
-            
+
         except httpx.HTTPError as e:
-            logger.error(f"Failed to send template message to {to_number}: {e}")
-            return {"error": str(e)}
+            err = _classify_meta_error(e)
+            logger.error(
+                f"Failed to send template message to {to_number}: code={err.get('code')} "
+                f"reason={err.get('reason')} msg={err.get('error')!r}"
+            )
+            return err
     
     async def download_media(self, media_id: str) -> Optional[bytes]:
         """
@@ -472,10 +531,14 @@ class MetaWhatsAppClient:
                 logger.info(f"Interactive buttons sent to {to_number}")
                 return result
         except httpx.HTTPError as e:
-            logger.error(f"Failed to send interactive buttons to {to_number}: {e}")
+            err = _classify_meta_error(e)
+            logger.error(
+                f"Failed to send interactive buttons to {to_number}: code={err.get('code')} "
+                f"reason={err.get('reason')} msg={err.get('error')!r}"
+            )
             if not allow_text_fallback:
-                return {"error": str(e)}
-            # Fallback: send as plain text
+                return err
+            # Fallback: send as plain text (also returns a classified error if it fails)
             def _btn_title(btn: Any) -> str:
                 if isinstance(btn, dict):
                     return str(btn.get("title", ""))

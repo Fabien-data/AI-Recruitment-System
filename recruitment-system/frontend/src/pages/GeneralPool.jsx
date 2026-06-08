@@ -31,7 +31,7 @@ import { Card } from '../components/ui/Card'
 import { Table } from '../components/ui/Table'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Pagination } from '../components/ui/Pagination'
-import { apiClient, getJobs, createApplication } from '../api'
+import { apiClient, getJobs, createApplication, getCandidateJobMatches } from '../api'
 import { useSectionAccess } from '../stores/authStore'
 import { resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
 import { DocumentPreview } from '../components/documents/DocumentPreview'
@@ -84,8 +84,8 @@ export default function GeneralPool() {
             <PageHeader
                 icon={Database}
                 tone="mixed"
-                title="General Pool"
-                subtitle="Candidates parked in the future pool — surfaces every lead the chatbot couldn't match to an open role."
+                title="Future Pool"
+                subtitle="One backup talent pool (Future Pool = General Pool) — every candidate parked for later, with their details, CV, and best-fit job matches."
                 actions={
                     <Button variant="secondary" onClick={() => refetch()}>
                         <RefreshCw size={16} />
@@ -520,6 +520,16 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
 
     const jobs = jobsData?.data || []
 
+    // Smart backup plan: best-fit jobs for this pooled candidate across the whole
+    // board (semantic match). Read-only suggestion — assignment still uses the
+    // CV-gated path below.
+    const { data: jobMatches } = useQuery({
+        queryKey: ['candidate-job-matches', candidate.id],
+        queryFn: () => getCandidateJobMatches(candidate.id, { limit: 5 }),
+        staleTime: 60_000,
+    })
+    const topMatches = Array.isArray(jobMatches?.jobs) ? jobMatches.jobs : []
+
     const manualAssignMutation = useMutation({
         mutationFn: () => createApplication({ candidate_id: candidate.id, job_id: selectedJobId }),
         onSuccess: () => {
@@ -571,6 +581,46 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
                     </div>
                 </div>
             </div>
+            )}
+
+            {/* Smart backup matches — best-fit jobs across the whole board */}
+            {topMatches.length > 0 && (
+                <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/60 dark:bg-emerald-950/20 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                        <Sparkles size={16} className="text-emerald-600" />
+                        <h3 className="font-semibold text-emerald-900 dark:text-emerald-200">Best-fit jobs (smart match)</h3>
+                    </div>
+                    <p className="text-xs text-emerald-700 dark:text-emerald-300 mb-3">
+                        Top matches for this candidate across all open roles — your quick backup plan. Click one to select it below.
+                    </p>
+                    <div className="space-y-2">
+                        {topMatches.map((m) => (
+                            <button
+                                key={m.job_id}
+                                type="button"
+                                onClick={() => setSelectedJobId(m.job_id)}
+                                className={`w-full text-left flex items-center gap-3 p-2.5 rounded-lg border transition-colors ${
+                                    selectedJobId === m.job_id
+                                        ? 'border-emerald-500 bg-emerald-100/70 dark:bg-emerald-900/30'
+                                        : 'border-emerald-200 dark:border-emerald-900/50 bg-white dark:bg-zinc-900 hover:border-emerald-300'
+                                }`}
+                            >
+                                <span className="inline-flex items-center justify-center w-12 h-7 rounded-md bg-emerald-600 text-white text-xs font-bold flex-shrink-0">
+                                    {m.match_percent}%
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                    <span className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 truncate">{m.title}</span>
+                                    {Array.isArray(m.why_matched) && m.why_matched.length > 0 && (
+                                        <span className="block text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+                                            Matches: {m.why_matched.slice(0, 5).join(', ')}
+                                        </span>
+                                    )}
+                                </span>
+                                {selectedJobId === m.job_id && <CheckCircle size={16} className="text-emerald-600 flex-shrink-0" />}
+                            </button>
+                        ))}
+                    </div>
+                </div>
             )}
 
             {/* Manual Assignment */}

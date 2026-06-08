@@ -4,10 +4,11 @@ import { Link, useSearchParams } from 'react-router-dom'
 import {
   Calendar, CalendarDays, Clock, MapPin, Briefcase, User, Phone,
   CheckCircle2, XCircle, Bell, Star, BarChart3, CalendarCheck, Hourglass, Filter,
-  Send, FolderKanban,
+  Send, FolderKanban, Download, AlertTriangle,
 } from 'lucide-react'
 import {
   getInterviews, updateInterview, deleteInterview, sendInterviewReminder, getProjects, apiClient,
+  downloadUnreachableCsv,
 } from '../api'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -18,6 +19,40 @@ import { TableSkeleton } from '../components/ui/Skeleton'
 import { Modal } from '../components/ui/Modal'
 import { showNotificationToast, showErrorToast } from '../utils/notificationToast'
 import { formatInterviewDateTime } from '../utils/datetime'
+import toast from 'react-hot-toast'
+
+// Download the "couldn't reach on WhatsApp" call list as a CSV and save it.
+async function downloadCallListCsv(projectId) {
+  try {
+    const blob = await downloadUnreachableCsv({ project_id: projectId || undefined })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `unreachable-candidates-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (err) {
+    showErrorToast(err, 'Could not download the call list')
+  }
+}
+
+// One-tap toast offering the unreachable-candidate call list after a notify run.
+function showCallListToast(count, projectId) {
+  toast((t) => (
+    <span className="flex items-center gap-2 text-sm">
+      <AlertTriangle size={16} className="text-amber-500" />
+      {count} candidate{count === 1 ? '' : 's'} not on WhatsApp.
+      <button
+        className="font-semibold text-indigo-600 hover:underline"
+        onClick={() => { downloadCallListCsv(projectId); toast.dismiss(t.id) }}
+      >
+        Download call list (CSV)
+      </button>
+    </span>
+  ), { duration: 12000 })
+}
 
 const STATUS_META = {
   scheduled: { tone: 'blue',    label: 'Scheduled',  pill: 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 ring-blue-200 dark:ring-blue-900/60' },
@@ -207,6 +242,13 @@ export default function Interviews() {
       } else {
         showNotificationToast(null, `Notified ${sent} candidate(s)`)
       }
+      // Surface candidates we couldn't reach on WhatsApp → downloadable call list.
+      const unreachable = (result?.failures || []).filter(
+        (f) => (f.errors || []).some((e) => e?.reason === 'no_whatsapp')
+      ).length
+      if (unreachable > 0) {
+        showCallListToast(unreachable, filters.project_id)
+      }
       queryClient.invalidateQueries({ queryKey: ['interviews'] })
       clearSelected()
     },
@@ -262,6 +304,16 @@ export default function Interviews() {
         tone="blue"
         title="Interview Management"
         subtitle="Schedule, track, and complete candidate interviews"
+        actions={
+          <Button
+            variant="secondary"
+            onClick={() => downloadCallListCsv(filters.project_id)}
+            title="Download the list of candidates we couldn't reach on WhatsApp, to call manually"
+          >
+            <Download size={16} />
+            Call list (no WhatsApp)
+          </Button>
+        }
       />
 
       {/* Project tabs — group all interviews by project */}
@@ -424,7 +476,17 @@ export default function Interviews() {
                           {iv.candidate_name?.charAt(0)?.toUpperCase() || '?'}
                         </div>
                         <div className="min-w-0">
-                          <p className="font-semibold text-zinc-900 dark:text-zinc-50 truncate text-sm">{iv.candidate_name}</p>
+                          <p className="font-semibold text-zinc-900 dark:text-zinc-50 truncate text-sm flex items-center gap-1.5">
+                            {iv.candidate_name}
+                            {iv.whatsapp_unreachable && (
+                              <span
+                                title="WhatsApp number not working — call this candidate manually"
+                                className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 dark:bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-200 dark:ring-amber-900/60"
+                              >
+                                <AlertTriangle size={9} /> No WhatsApp
+                              </span>
+                            )}
+                          </p>
                           {iv.candidate_phone && (
                             <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate inline-flex items-center gap-1">
                               <Phone size={10} />{iv.candidate_phone}

@@ -25,6 +25,40 @@ const {
 } = require('../services/interview-scheduler');
 const logger = require('../utils/logger');
 
+// Upper bound for a single bulk request. The per-item loops below are sequential
+// and fault-isolated (one failure never aborts the batch), so the real constraint
+// is request wall-clock vs. the platform timeout — the frontend sends very large
+// selections in sequential chunks. This ceiling is a safety backstop, not the old
+// hard "100 per time" limit the user hit.
+const BULK_MAX = 1000;
+
+// Update a candidate's WhatsApp reachability flag from a send result. A confirmed
+// WhatsApp delivery clears the flag; a genuine "not a WhatsApp user" sets it (so the
+// candidate sinks to the bottom of lists and lands in the call-list CSV). Transient
+// reasons (out_of_window / rate_limited) leave the flag untouched. Defensive: the
+// columns are added by migration; any error (e.g. missing column) is swallowed so a
+// send never fails on bookkeeping.
+async function applyWhatsappReachability(candidateId, notification) {
+    if (!candidateId || !notification) return;
+    try {
+        const okWhatsapp = (notification.success || []).some((s) => s.channel === 'whatsapp');
+        const noWhatsapp = (notification.failed || []).find((f) => f.channel === 'whatsapp' && f.reason === 'no_whatsapp');
+        if (okWhatsapp) {
+            await query(
+                adaptQuery('UPDATE candidates SET whatsapp_unreachable = FALSE, whatsapp_last_error = NULL, whatsapp_checked_at = NOW() WHERE id = $1'),
+                [candidateId]
+            );
+        } else if (noWhatsapp) {
+            await query(
+                adaptQuery('UPDATE candidates SET whatsapp_unreachable = TRUE, whatsapp_last_error = $2, whatsapp_checked_at = NOW() WHERE id = $1'),
+                [candidateId, String(noWhatsapp.error || 'Not a WhatsApp number').slice(0, 500)]
+            );
+        }
+    } catch (err) {
+        logger.debug(`whatsapp reachability update skipped for ${candidateId}: ${err.message}`);
+    }
+}
+
 // Roles permitted to schedule / run interviews. Marketing agents source leads
 // but must NOT schedule or notify interviews (B010); the UI hides the action
 // and this re-enforces it server-side so a crafted request can't bypass it.
@@ -89,6 +123,7 @@ router.get('/', authenticate, requireSection('interviews', 'view'), async (req, 
             SELECT
                 iv.*,
                 c.name AS candidate_name, c.phone AS candidate_phone,
+                c.whatsapp_unreachable,
                 j.title AS job_title, j.id AS job_id, j.project_id,
                 p.title AS project_title,
                 a.id AS application_id,
@@ -100,7 +135,7 @@ router.get('/', authenticate, requireSection('interviews', 'view'), async (req, 
             LEFT JOIN projects p ON j.project_id = p.id
             LEFT JOIN users u ON iv.interviewer_id = u.id
             WHERE ${conditions.join(' AND ')}
-            ORDER BY iv.scheduled_datetime ASC
+            ORDER BY COALESCE(c.whatsapp_unreachable, FALSE) ASC, iv.scheduled_datetime ASC
             LIMIT $${params.length - 1} OFFSET $${params.length}
         `;
 
@@ -154,6 +189,121 @@ router.get('/interviewers', authenticate, requireSection('interviews', 'view'), 
     } catch (err) { next(err); }
 });
 
+// ── Applications still awaiting their interview message ───────────────────────
+// Powers the "Quick select 100" button: the next N applications that are ready
+// to be invited (certified, or scheduled-but-the-WhatsApp-never-confirmed) and
+// have NOT yet had a successful interview invite. confirmation_sent_at is the
+// source of truth — it's set only when the invite WhatsApp succeeds, so a failed
+// (out-of-window / no-WhatsApp) send correctly leaves the application "pending".
+// Registered before '/:id' so the literal path isn't captured by the param route.
+router.get('/pending-send', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const { project_id } = req.query;
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), BULK_MAX);
+
+        const params = [];
+        const conditions = [
+            `a.status IN ('certified','interview_scheduled')`,
+            `NOT EXISTS (
+                SELECT 1 FROM interview_schedules iv
+                WHERE iv.application_id = a.id
+                  AND iv.confirmation_sent_at IS NOT NULL
+                  AND iv.status <> 'cancelled'
+            )`,
+        ];
+        if (project_id) {
+            params.push(project_id);
+            conditions.push(`j.project_id = $${params.length}`);
+        }
+        params.push(limit);
+
+        // Oldest-waiting first = fair queue; each successful send drops the row out
+        // of this set, so re-pressing the button returns the NEXT batch.
+        const sql = `
+            SELECT a.id AS application_id, a.candidate_id, a.status,
+                   c.name AS candidate_name, c.phone AS candidate_phone,
+                   j.title AS job_title, j.project_id,
+                   COUNT(*) OVER () AS total_pending
+            FROM applications a
+            JOIN candidates c ON a.candidate_id = c.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE ${conditions.join(' AND ')}
+            ORDER BY a.applied_at ASC NULLS LAST
+            LIMIT $${params.length}
+        `;
+        const result = await query(sql, params);
+        const total = result.rows.length ? parseInt(result.rows[0].total_pending, 10) : 0;
+        res.json({
+            total_pending: total,
+            returned: result.rows.length,
+            application_ids: result.rows.map((r) => r.application_id),
+            applications: result.rows.map((r) => ({
+                application_id: r.application_id,
+                candidate_id: r.candidate_id,
+                candidate_name: r.candidate_name,
+                candidate_phone: r.candidate_phone,
+                job_title: r.job_title,
+                project_id: r.project_id,
+                status: r.status,
+            })),
+        });
+    } catch (err) { next(err); }
+});
+
+// ── Unreachable candidates CSV (manual call list) ─────────────────────────────
+// Streams a CSV of candidates flagged "not a WhatsApp user" so agents can phone
+// them — the guarantee that no application is silently dropped. Registered before
+// '/:id'. The .csv suffix is captured by '/:id'-less literal matching here.
+router.get('/unreachable.csv', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const { project_id } = req.query;
+        const params = [];
+        let projectFilter = '';
+        if (project_id) {
+            params.push(project_id);
+            projectFilter = `AND app.project_id = $${params.length}`;
+        }
+        const result = await query(
+            adaptQuery(`
+                SELECT c.name, c.phone, c.whatsapp_last_error, c.whatsapp_checked_at,
+                       app.job_title, app.project_title
+                FROM candidates c
+                LEFT JOIN LATERAL (
+                    SELECT j.title AS job_title, p.title AS project_title, j.project_id
+                    FROM applications a
+                    JOIN jobs j ON a.job_id = j.id
+                    LEFT JOIN projects p ON j.project_id = p.id
+                    WHERE a.candidate_id = c.id
+                    ORDER BY a.applied_at DESC NULLS LAST
+                    LIMIT 1
+                ) app ON TRUE
+                WHERE c.whatsapp_unreachable IS TRUE ${projectFilter}
+                ORDER BY c.whatsapp_checked_at DESC NULLS LAST
+            `),
+            params
+        );
+
+        const esc = (v) => {
+            const s = v === null || v === undefined ? '' : String(v);
+            return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const header = ['Name', 'Phone', 'Job', 'Project', 'Last error', 'Last attempt'];
+        const lines = [header.join(',')];
+        for (const r of result.rows) {
+            lines.push([
+                esc(r.name), esc(r.phone), esc(r.job_title), esc(r.project_title),
+                esc(r.whatsapp_last_error),
+                esc(r.whatsapp_checked_at ? new Date(r.whatsapp_checked_at).toISOString() : ''),
+            ].join(','));
+        }
+        // BOM so Excel reads UTF-8 (Sinhala/Tamil names) correctly.
+        const csv = '﻿' + lines.join('\r\n');
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="unreachable-candidates.csv"`);
+        res.send(csv);
+    } catch (err) { next(err); }
+});
+
 // ── Get single interview ──────────────────────────────────────────────────────
 router.get('/:id', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
     try {
@@ -188,6 +338,7 @@ router.post('/', authenticate, requireSection('interviews', 'create'), authorize
             interviewer_id,
             duration_minutes = 30,
             description,
+            translate_notes = false,
             notify_channels = ['whatsapp']
         } = req.body;
 
@@ -250,7 +401,7 @@ router.post('/', authenticate, requireSection('interviews', 'create'), authorize
         let notification = { success: [], failed: [] };
         try {
             notification = await notifications.sendInterviewNotification(
-                candidate_id, job_title, scheduled_datetime, location || 'TBD', channels, description || null
+                candidate_id, job_title, scheduled_datetime, location || 'TBD', channels, description || null, translate_notes === true
             );
             if (notification.success.some(s => s.channel === 'whatsapp')) {
                 await query(
@@ -438,12 +589,12 @@ router.post('/:id/remind', authenticate, requireSection('interviews', 'edit'), a
 // handler picks several rows and clicks "Notify selected".
 router.post('/bulk-notify', authenticate, requireSection('interviews', 'edit'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
-        const { interview_ids } = req.body || {};
+        const { interview_ids, translate_notes = false } = req.body || {};
         if (!Array.isArray(interview_ids) || interview_ids.length === 0) {
             return res.status(400).json({ error: 'interview_ids must be a non-empty array' });
         }
-        if (interview_ids.length > 200) {
-            return res.status(400).json({ error: 'Cannot notify more than 200 interviews at once' });
+        if (interview_ids.length > BULK_MAX) {
+            return res.status(400).json({ error: `Cannot notify more than ${BULK_MAX} interviews at once` });
         }
 
         // Pull the rows we need to send notifications. Skip any that no
@@ -474,8 +625,10 @@ router.post('/bulk-notify', authenticate, requireSection('interviews', 'edit'), 
                     row.scheduled_datetime,
                     row.location || 'TBD',
                     ['whatsapp'],
-                    row.description || null
+                    row.description || null,
+                    translate_notes === true
                 );
+                await applyWhatsappReachability(row.candidate_id, notif);
                 if (notif.success.length > 0) {
                     successes.push({ interview_id: row.id, channels: notif.success.map(s => s.channel) });
                     await query(
@@ -515,6 +668,7 @@ router.post('/bulk-schedule', authenticate, requireSection('interviews', 'edit')
             interviewer_id,
             interviewer_ids,
             description,
+            translate_notes = false,
             notify_channels = ['whatsapp'],
             mode = 'fixed',
             start_date,
@@ -526,8 +680,8 @@ router.post('/bulk-schedule', authenticate, requireSection('interviews', 'edit')
         if (!Array.isArray(application_ids) || application_ids.length === 0) {
             return res.status(400).json({ error: 'application_ids must be a non-empty array' });
         }
-        if (application_ids.length > 100) {
-            return res.status(400).json({ error: 'Cannot schedule more than 100 interviews at once' });
+        if (application_ids.length > BULK_MAX) {
+            return res.status(400).json({ error: `Cannot schedule more than ${BULK_MAX} interviews at once` });
         }
 
         const isSmart = String(mode).toLowerCase() === 'smart';
@@ -685,8 +839,9 @@ router.post('/bulk-schedule', authenticate, requireSection('interviews', 'edit')
                 let notification = { success: [], failed: [] };
                 try {
                     notification = await notifications.sendInterviewNotification(
-                        app.candidate_id, app.job_title, apptDatetime, location || 'TBD', channels, description || null
+                        app.candidate_id, app.job_title, apptDatetime, location || 'TBD', channels, description || null, translate_notes === true
                     );
+                    await applyWhatsappReachability(app.candidate_id, notification);
                     if (notification.success.some(s => s.channel === 'whatsapp')) {
                         await query(
                             adaptQuery('UPDATE interview_schedules SET confirmation_sent_at = NOW() WHERE id = $1'),
