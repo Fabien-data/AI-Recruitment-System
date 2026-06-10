@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Phone, PhoneOff, Loader2, Plus, RotateCcw, Check, X, Briefcase, AlertCircle } from 'lucide-react'
+import { Phone, PhoneOff, Loader2, Plus, RotateCcw, Check, X, Briefcase, AlertCircle, BadgeCheck, CalendarClock } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 import { useAuthStore } from '../../stores/authStore'
 import { dispositionClasses, dispositionLabel } from './DispositionSelect'
+import { CertifyDialog, ScheduleInterviewDialog } from './StageActionDialogs'
+import { InlineCreateRole } from './InlineCreateRole'
 
 /**
  * CallRemarksPanel — the per-candidate call/remark engagement log + quick actions.
@@ -55,7 +57,26 @@ const NEXT_STAGE = {
 }
 const NOT_INTERESTED_REASONS = ['Not interested', 'Salary too low', 'Wrong location/country', 'Already employed', 'Changed mind', 'Other']
 
-export function CallRemarksPanel({ candidateId, candidateStatus }) {
+// Action-aware log labels (call_logs.action_type, migration 040) so the timeline
+// reads as what the agent DID — "Assigned to job", "Certified", "Interview
+// scheduled" — instead of every entry looking like a phone call.
+const ACTION_META = {
+  call: { label: 'Call', cls: 'text-zinc-700 dark:text-zinc-200' },
+  assign: { label: 'Assigned to job', cls: 'text-emerald-700 dark:text-emerald-300' },
+  certify: { label: 'Certified', cls: 'text-emerald-700 dark:text-emerald-300' },
+  interview: { label: 'Interview scheduled', cls: 'text-indigo-700 dark:text-indigo-300' },
+  follow_up: { label: 'Follow-up set', cls: 'text-amber-700 dark:text-amber-300' },
+  no_answer: { label: 'No answer', cls: 'text-rose-600 dark:text-rose-300' },
+  not_interested: { label: 'Not interested', cls: 'text-zinc-600 dark:text-zinc-300' },
+  note: { label: 'Note', cls: 'text-zinc-700 dark:text-zinc-200' },
+}
+const logHead = (l) => {
+  const at = l.action_type
+  if (at && at !== 'call' && ACTION_META[at]) return ACTION_META[at]
+  return { label: l.outcome ? outcomeLabel(l.outcome) : 'Logged', cls: 'text-zinc-700 dark:text-zinc-200' }
+}
+
+export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, defaultProjectId = '', defaultJobId = '' }) {
   const queryClient = useQueryClient()
   const [outcome, setOutcome] = useState('')
   const [remark, setRemark] = useState('')
@@ -66,6 +87,8 @@ export function CallRemarksPanel({ candidateId, candidateStatus }) {
   const [projId, setProjId] = useState('')
   const [jobId, setJobId] = useState('')
   const [actionError, setActionError] = useState(null)
+  const [certifyOpen, setCertifyOpen] = useState(false)       // Certified popup
+  const [interviewOpen, setInterviewOpen] = useState(false)   // Interview popup
 
   const { data: logs = [], isLoading } = useQuery({
     queryKey: ['call-logs', candidateId],
@@ -117,7 +140,12 @@ export function CallRemarksPanel({ candidateId, candidateStatus }) {
   const onDone = () => {
     if (!next || addMut.isPending) return
     setActionError(null)
+    // New → Screening assigns a role inline. Screening → Certified and
+    // Certified → Interview open the popups so the candidate is auto-notified
+    // (a bare status change must never silently skip the message).
     if (next.needsJob) { setPanel((p) => (p === 'assign' ? null : 'assign')) }
+    else if (next.value === 'certified') { setCertifyOpen(true) }
+    else if (next.value === 'interview_scheduled') { setInterviewOpen(true) }
     else { addMut.mutate({ outcome: 'answered', set_candidate_status: next.value }) }
   }
 
@@ -187,6 +215,51 @@ export function CallRemarksPanel({ candidateId, candidateStatus }) {
           )
         })}
       </div>
+
+      {/* Stage actions — open the auto-notify popups directly from any stage. */}
+      <div className="grid grid-cols-2 gap-1.5 mb-2">
+        <button
+          type="button"
+          disabled={addMut.isPending}
+          onClick={() => { setActionError(null); setCertifyOpen(true) }}
+          title="Certify & notify the candidate"
+          className={clsx(
+            'inline-flex items-center justify-center gap-1 text-[11px] font-medium px-1.5 py-1.5 rounded-lg border bg-white dark:bg-zinc-900 disabled:opacity-50 transition-colors border-emerald-200 text-emerald-700 hover:bg-emerald-50',
+            certifyOpen && 'ring-2 ring-primary-400'
+          )}
+        >
+          <BadgeCheck size={12} /> Certify
+        </button>
+        <button
+          type="button"
+          disabled={addMut.isPending}
+          onClick={() => { setActionError(null); setInterviewOpen(true) }}
+          title="Schedule interview & send the invite"
+          className={clsx(
+            'inline-flex items-center justify-center gap-1 text-[11px] font-medium px-1.5 py-1.5 rounded-lg border bg-white dark:bg-zinc-900 disabled:opacity-50 transition-colors border-indigo-200 text-indigo-700 hover:bg-indigo-50',
+            interviewOpen && 'ring-2 ring-primary-400'
+          )}
+        >
+          <CalendarClock size={12} /> Interview
+        </button>
+      </div>
+
+      <CertifyDialog
+        open={certifyOpen}
+        onClose={() => setCertifyOpen(false)}
+        candidateId={candidateId}
+        candidateName={candidateName}
+        defaultProjectId={defaultProjectId}
+        defaultJobId={defaultJobId}
+      />
+      <ScheduleInterviewDialog
+        open={interviewOpen}
+        onClose={() => setInterviewOpen(false)}
+        candidateId={candidateId}
+        candidateName={candidateName}
+        defaultProjectId={defaultProjectId}
+        defaultJobId={defaultJobId}
+      />
 
       {actionError && (
         <div className="mb-2 flex items-start gap-1.5 text-[11px] text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-lg px-2 py-1.5">
@@ -281,6 +354,11 @@ export function CallRemarksPanel({ candidateId, candidateStatus }) {
             <option value="">{projId ? 'Select role…' : 'Pick a project first'}</option>
             {jobs.map((j) => <option key={j.id} value={j.id}>{j.title || 'Untitled role'}</option>)}
           </select>
+          {/* Future project / manual role: creating one assigns + screens immediately. */}
+          <InlineCreateRole
+            defaultProjectId={projId}
+            onCreated={(job) => addMut.mutate({ outcome: 'answered', set_candidate_status: 'screening', job_id: job.id, remark: panelNote.trim() || undefined })}
+          />
           <div className="flex items-center justify-end gap-2">
             <button type="button" onClick={closePanels} className="text-[11px] text-zinc-500 hover:text-zinc-700">Cancel</button>
             <button
@@ -327,20 +405,23 @@ export function CallRemarksPanel({ candidateId, candidateStatus }) {
       {isLoading ? (
         <p className="text-[11px] text-zinc-400">Loading…</p>
       ) : logs.length === 0 ? (
-        <p className="text-[11px] text-zinc-400 dark:text-zinc-500">No calls logged yet.</p>
+        <p className="text-[11px] text-zinc-400 dark:text-zinc-500">No activity yet.</p>
       ) : (
         <ul className="space-y-2">
-          {logs.map((l) => (
+          {logs.map((l) => {
+            const head = logHead(l)
+            const showAssignedTo = l.job_title && (l.action_type === 'assign' || (!l.action_type && l.job_title))
+            return (
             <li key={l.id} className="text-xs border-l-2 border-zinc-200 dark:border-zinc-700 pl-2">
               <div className="flex items-center gap-1.5 flex-wrap">
-                {l.outcome && <span className="font-semibold text-zinc-700 dark:text-zinc-200">{outcomeLabel(l.outcome)}</span>}
+                <span className={clsx('font-semibold', head.cls)}>{head.label}</span>
                 {l.disposition && <span className={clsx('px-1.5 py-0.5 rounded-full text-[10px] font-semibold', dispositionClasses(l.disposition))}>{dispositionLabel(l.disposition)}</span>}
                 {l.reason && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-700">{l.reason}</span>}
                 {l.duration_seconds ? <span className="text-[10px] text-zinc-400">{Math.round(l.duration_seconds / 60)}m</span> : null}
               </div>
-              {l.job_title && (
+              {showAssignedTo && (
                 <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
-                  <Briefcase size={11} /> Assigned to {l.job_title}{l.project_title ? ` · ${l.project_title}` : ''}
+                  <Briefcase size={11} /> {l.job_title}{l.project_title ? ` · ${l.project_title}` : ''}
                 </p>
               )}
               {l.remark && <p className="text-zinc-600 dark:text-zinc-300 mt-0.5 break-words">{l.remark}</p>}
@@ -348,7 +429,8 @@ export function CallRemarksPanel({ candidateId, candidateStatus }) {
                 {l.agent_name || 'Agent'} · {l.called_at ? formatDistanceToNow(new Date(l.called_at), { addSuffix: true }) : ''}
               </p>
             </li>
-          ))}
+            )
+          })}
         </ul>
       )}
     </div>

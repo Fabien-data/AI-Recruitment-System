@@ -21,11 +21,11 @@ import { io } from 'socket.io-client'
 import {
   MessageSquare, Search, Send, Phone, Mail, Bot, User,
   UserCheck, RefreshCw, Globe, Briefcase, MapPin, Clock,
-  ChevronRight, AlertCircle, Wifi, WifiOff, Loader2,
+  ChevronRight, AlertCircle, Wifi, WifiOff, Loader2, Check, CheckCheck,
   Mic, Square, Trash2, Paperclip, Wand2,
   SlidersHorizontal, ChevronDown, X as XIcon,
   FileText, Download, Eye, Image as ImageIcon,
-  FolderKanban, Tag,
+  FolderKanban, Tag, UserPlus,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { categoryColor } from '../utils/categoryColor'
@@ -41,9 +41,10 @@ import { JobDrawer } from '../components/communications/JobDrawer'
 import { CallPresenceToggle } from '../components/communications/CallPresenceToggle'
 import { DispositionSelect, dispositionClasses, dispositionLabel } from '../components/communications/DispositionSelect'
 import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
+import { AddCandidateDialog } from '../components/communications/AddCandidateDialog'
 import { QuickReplyPicker } from '../components/communications/QuickReplyPicker'
 import { CVReviewModal } from './CVManager'
-import { CANDIDATE_STAGE_LABELS, CANDIDATE_STATUS_BUCKETS, STATUS_COLORS, normalizeStatus, getStageLabel } from '../constants/lifecycle'
+import { CANDIDATE_STAGE_LABELS, CANDIDATE_STATUS_BUCKETS, CANDIDATE_MANUAL_STATUS_OPTIONS, STATUS_COLORS, normalizeStatus, getStageLabel } from '../constants/lifecycle'
 
 // Primary status buckets the agent works through, one at a time. Bound to the
 // canonical candidates.status (server-side filter) — mutually exclusive, so a
@@ -149,6 +150,25 @@ const getActiveChats = ({ search, statusBucket, projectId, pipelineStage, handof
   return apiFetch(`/api/communications/active-chats?${params.toString()}`)
 }
 
+// Real aggregate counts (header pills + per-tab badges). Deliberately omits the
+// status bucket — the endpoint returns every bucket's count so each tab shows
+// its own total regardless of which tab is active.
+const getActiveChatsCounts = ({ search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus }) => {
+  const params = new URLSearchParams()
+  if (search) params.set('search', search)
+  if (projectId) params.set('project_id', projectId)
+  if (pipelineStage) params.set('pipeline_stage', pipelineStage)
+  if (handoffState) params.set('handoff_state', handoffState)
+  if (responseStatus) params.set('response_status', responseStatus)
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  if (disposition) params.set('disposition', disposition)
+  if (contacted) params.set('contacted', contacted)
+  if (claimed) params.set('claimed', claimed)
+  if (callStatus) params.set('call_status', callStatus)
+  return apiFetch(`/api/communications/active-chats/counts?${params.toString()}`)
+}
+
 // Server-side project list for the conversations filter dropdown.
 const getProjectsForFilter = () =>
   apiFetch('/api/projects?limit=200').then((r) => (Array.isArray(r) ? r : (r?.data || r?.projects || [])))
@@ -166,6 +186,12 @@ const updateCandidateIdentity = (id, body) => apiFetch(`/api/candidates/${id}`, 
 })
 const takeover = (id) => apiFetch(`/api/communications/candidate/${id}/takeover`, { method: 'POST' })
 const release = (id) => apiFetch(`/api/communications/candidate/${id}/release`, { method: 'POST' })
+// Move a candidate to a chosen canonical stage (cascades through applications +
+// re-derives candidate.status server-side). Powers the in-chat stage control.
+const setCandidateStageApi = (id, stage) => apiFetch(`/api/candidates/${id}/stage`, {
+  method: 'PUT',
+  body: JSON.stringify({ stage }),
+})
 
 // Call presence. start surfaces the 409 conflict body (who's already on the
 // call) so the UI can warn the agent and offer to start anyway (?force=1).
@@ -507,6 +533,48 @@ function LabelsEditor({ tags, onAdd, onRemove, saving, suggestions = [] }) {
   )
 }
 
+// ── Outbound delivery indicator ───────────────────────────────────────────────
+// WhatsApp-style ticks so the agent can SEE whether a message reached the
+// candidate: ✓ sent · ✓✓ delivered · ✓✓ (blue) read · ⚠ not delivered (+reason).
+// Reads metadata.delivery_status (set at send time, honest about failures) and is
+// upgraded by Meta receipts via /status-sync (delivered_at / read_at).
+const DELIVERY_REASON_LABEL = {
+  out_of_window: 'no reply in 24h — needs a template',
+  no_whatsapp: 'not a WhatsApp number',
+  token_expired: 'WhatsApp token expired',
+  rate_limited: 'rate-limited by WhatsApp',
+  no_phone: 'no phone number',
+  config: 'messaging not configured',
+}
+function deliveryState(msg) {
+  if (msg.direction === 'inbound') return null
+  let meta = msg.metadata
+  if (typeof meta === 'string') { try { meta = JSON.parse(meta) } catch { meta = {} } }
+  meta = meta || {}
+  if (msg.read_at) return { kind: 'read' }
+  if (msg.delivered_at) return { kind: 'delivered' }
+  const status = meta.delivery_status || meta.latest_status
+  if (status === 'failed') return { kind: 'failed', reason: meta.delivery_reason || meta.reason || null }
+  if (status === 'read') return { kind: 'read' }
+  if (status === 'delivered') return { kind: 'delivered' }
+  return { kind: 'sent' }
+}
+function DeliveryTick({ msg }) {
+  const st = deliveryState(msg)
+  if (!st) return null
+  if (st.kind === 'failed') {
+    const why = DELIVERY_REASON_LABEL[st.reason] || st.reason || 'not delivered'
+    return (
+      <span className="inline-flex items-center gap-0.5 text-rose-500" title={`Not delivered — ${why}`}>
+        <AlertCircle size={11} /> <span className="text-[9px] font-semibold">Not sent</span>
+      </span>
+    )
+  }
+  if (st.kind === 'read') return <span className="text-sky-500" title="Read"><CheckCheck size={12} /></span>
+  if (st.kind === 'delivered') return <span className="text-zinc-400" title="Delivered"><CheckCheck size={12} /></span>
+  return <span className="text-zinc-400" title="Sent"><Check size={12} /></span>
+}
+
 // ── Sender avatar ─────────────────────────────────────────────────────────────
 
 function MsgBubble({ msg }) {
@@ -556,6 +624,7 @@ function MsgBubble({ msg }) {
             {format(new Date(msg.sent_at), 'HH:mm')}
           </span>
           {msg.detected_language && <LangBadge lang={msg.detected_language} />}
+          {!isInbound && <DeliveryTick msg={msg} />}
           {!isInbound && (
             <span
               className={clsx(
@@ -592,6 +661,7 @@ export default function Communications() {
   if (savedPrefsRef.current === undefined) savedPrefsRef.current = loadCommsPrefs()
   const savedPrefs = savedPrefsRef.current
   const [selectedId, setSelectedId] = useState(null)
+  const [addCandidateOpen, setAddCandidateOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState(searchParams.get('q') || savedPrefs.search || '')
   const [pipelineStage, setPipelineStage] = useState(searchParams.get('pipeline_stage') || savedPrefs.pipelineStage || '')
@@ -600,11 +670,12 @@ export default function Communications() {
   const [responseStatus, setResponseStatus] = useState(searchParams.get('response_status') || savedPrefs.responseStatus || '')
   const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || savedPrefs.dateFrom || '')
   const [dateTo, setDateTo] = useState(searchParams.get('date_to') || savedPrefs.dateTo || '')
-  // Primary status bucket (server-side, ca.status) — defaults to New so an agent
-  // starts on the queue they work first.
+  // Primary status bucket (server-side, ca.status). Defaults to '' = "All chats"
+  // so an agent sees every conversation by default (a deep-link / saved pref can
+  // still pin a specific bucket).
   const [statusBucket, setStatusBucket] = useState(() => {
-    const s = searchParams.get('status') || savedPrefs.statusBucket
-    return s && STATUS_BUCKET_VALUES.has(s) ? s : 'new'
+    const s = searchParams.get('status') ?? savedPrefs.statusBucket
+    return STATUS_BUCKET_VALUES.has(s) ? s : ''
   })
   // Project scope (server-side, effective project) — remembered per agent.
   const [projectId, setProjectId] = useState(() => searchParams.get('project_id') || localStorage.getItem('comms.projectId') || '')
@@ -687,7 +758,7 @@ export default function Communications() {
     getMyPreferences().then((prefs) => {
       const c = prefs && prefs.communications
       if (!c || typeof c !== 'object') return
-      if (c.statusBucket && STATUS_BUCKET_VALUES.has(c.statusBucket)) setStatusBucket(c.statusBucket)
+      if (STATUS_BUCKET_VALUES.has(c.statusBucket)) setStatusBucket(c.statusBucket)
       if (c.sortBy) setSortBy(c.sortBy)
       if (typeof c.search === 'string') setSearch(c.search)
       if (typeof c.pipelineStage === 'string') setPipelineStage(c.pipelineStage)
@@ -756,9 +827,41 @@ export default function Communications() {
   // can drop out of the refetched list; we fall back to the last-known selected
   // row so the header/input/buttons don't blank out (the takeover-after-filter
   // bug). The list itself also pins the selected row (see active-chats effect).
+  // Full candidate record (metadata, skills, age, experience) for the info panel.
+  // Also the fallback identity when the candidate isn't in the loaded chat list
+  // (e.g. deep-linked via Applications "Open Chat" — they may be past the 500-row
+  // cap or have no whatsapp thread). Without this the header rendered "Unknown".
+  const { data: candidateDetailRaw } = useQuery({
+    queryKey: ['candidate-detail', selectedId],
+    queryFn: () => getCandidate(selectedId),
+    enabled: !!selectedId,
+  })
+  const candidateDetail = candidateDetailRaw?.candidate || candidateDetailRaw || null
+
   const matchedSelected = chatList.find(c => c.candidate_id === selectedId)
+  // Synthesize a chat-row shape from the full candidate record so a deep-linked
+  // candidate not present in chatList still shows name/phone/stage/job.
+  const detailAsRow = (candidateDetail && selectedId && String(candidateDetail.id) === String(selectedId))
+    ? {
+        candidate_id: selectedId,
+        name: candidateDetail.name,
+        phone: candidateDetail.phone,
+        whatsapp_phone: candidateDetail.whatsapp_phone,
+        email: candidateDetail.email,
+        preferred_language: candidateDetail.preferred_language,
+        notes: candidateDetail.notes,
+        candidate_status: candidateDetail.status,
+        conversation_stage: candidateDetail.conversation_stage,
+        effective_job_title: candidateDetail.job_title || candidateDetail.latest_job_title,
+        effective_project_title: candidateDetail.project_title || candidateDetail.latest_project_title,
+        tags: candidateDetail.tags,
+        cv_uploaded: candidateDetail.cv_uploaded,
+        is_human_handoff: candidateDetail.is_human_handoff,
+      }
+    : null
   const selectedCandidate = matchedSelected
     || (selectedCandidateRef.current?.candidate_id === selectedId ? selectedCandidateRef.current : null)
+    || detailAsRow
 
   useEffect(() => { selectedIdRef.current = selectedId }, [selectedId])
   useEffect(() => { chatListRef.current = chatList }, [chatList])
@@ -869,6 +972,21 @@ export default function Communications() {
     refetchInterval: 30000, // fallback poll every 30s
   })
 
+  // Real aggregate counts for the header pills + per-tab badges (true totals,
+  // not the capped list length). Status bucket is intentionally NOT in the key —
+  // switching tabs doesn't refetch; the endpoint already returns all buckets.
+  const { data: countsData } = useQuery({
+    queryKey: ['active-chats-counts', search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus],
+    queryFn: () => getActiveChatsCounts({ search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus }),
+    refetchInterval: 30000,
+  })
+  const counts = countsData || {}
+  // The list is server-capped at 500 rows (DB-pool protection); the per-tab
+  // badges come from the uncapped counts endpoint. When we hit the cap the badge
+  // reads higher than the rows shown — surface that so the agent narrows by
+  // project/search instead of seeing a silent badge≠list gap.
+  const listTruncated = Array.isArray(activeChatsData) && activeChatsData.length >= 500
+
   useEffect(() => {
     if (!Array.isArray(activeChatsData)) return
     let next = activeChatsData
@@ -895,13 +1013,6 @@ export default function Communications() {
     enabled: !!selectedId,
   })
 
-  // Full candidate record (metadata, skills, age, experience) for the info panel.
-  const { data: candidateDetailRaw } = useQuery({
-    queryKey: ['candidate-detail', selectedId],
-    queryFn: () => getCandidate(selectedId),
-    enabled: !!selectedId,
-  })
-  const candidateDetail = candidateDetailRaw?.candidate || candidateDetailRaw || null
 
   useEffect(() => {
     if (!selectedId) {
@@ -1076,6 +1187,16 @@ export default function Communications() {
           return [updated]
         })
       })
+      // Re-derive the per-tab badge counts (status distribution changed).
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
+    })
+
+    // An application changed (created / advanced / rejected) — the candidate's
+    // stage may have moved even when no candidate_stage_changed fired. Refetch
+    // the list + counts so the Conversations badges stay in sync with Applications.
+    socket.on('application_changed', () => {
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
     })
 
     // Shared-pool claim changed by any agent — patch the row live.
@@ -1171,6 +1292,23 @@ export default function Communications() {
         : c))
       queryClient.invalidateQueries({ queryKey: ['active-chats'] })
     },
+  })
+
+  // In-chat stage control: move the candidate to any canonical stage (incl.
+  // Future Pool) without leaving Messages. Optimistic patch + counts refresh.
+  const stageMut = useMutation({
+    mutationFn: ({ id, stage }) => setCandidateStageApi(id, stage),
+    onSuccess: (_data, vars) => {
+      setChatList(prev => prev.map(c => c.candidate_id === vars.id
+        ? { ...c, candidate_status: vars.stage, conversation_stage: vars.stage }
+        : c))
+      selectedCandidateRef.current = selectedCandidateRef.current && selectedCandidateRef.current.candidate_id === vars.id
+        ? { ...selectedCandidateRef.current, candidate_status: vars.stage, conversation_stage: vars.stage }
+        : selectedCandidateRef.current
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
+      queryClient.invalidateQueries({ queryKey: ['candidate-detail', vars.id] })
+    },
+    onError: (err) => { setSendError(err?.message || 'Could not change stage'); },
   })
 
   // ── In-call presence mutations ─────────────────────────────────────────────
@@ -1368,7 +1506,11 @@ export default function Communications() {
 
       const result = await sendMsg(formData)
 
-      // Add sent message to transcript immediately (optimistic insert with real server ID)
+      // Add sent message to transcript immediately (optimistic insert with real
+      // server ID). Carry the delivery state so the bubble shows the right tick
+      // (✓ sent / ⚠ not delivered) without waiting for a transcript refetch.
+      const primaryCh = (result.channels && result.channels[0]) || 'whatsapp'
+      const chRes = (result.channel_results && result.channel_results[primaryCh]) || {}
       const optimisticMsg = {
         id: result.id || `temp-${Date.now()}`,
         candidate_id: selectedId,
@@ -1379,6 +1521,11 @@ export default function Communications() {
         sender_type: 'agent',
         sender_name: 'You',
         sent_at: new Date().toISOString(),
+        whatsapp_message_id: result.whatsapp_message_id || null,
+        metadata: {
+          delivery_status: result.simulated ? 'failed' : 'sent',
+          delivery_reason: result.simulated ? (chRes.reason || chRes.error || null) : null,
+        },
         _optimistic: true,
       }
       setTranscript(prev => {
@@ -1413,27 +1560,44 @@ export default function Communications() {
             <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-primary-700 to-indigo-600 dark:from-primary-300 dark:to-indigo-300 bg-clip-text text-transparent">
               Conversations
             </h1>
-            <span
-              className={clsx(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset',
-                connected
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-900/60'
-                  : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 ring-rose-200 dark:ring-rose-900/60'
-              )}
-              title={connected ? 'Real-time connected' : 'Disconnected — reconnecting…'}
-            >
-              {connected
-                ? <Wifi size={11} />
-                : <WifiOff size={11} className="animate-pulse" />}
-              {connected ? 'Live' : 'Offline'}
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAddCandidateOpen(true)}
+                title="Add a candidate + send a welcome"
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold bg-primary-600 text-white hover:bg-primary-700 transition-colors"
+              >
+                <UserPlus size={12} /> Add
+              </button>
+              <span
+                className={clsx(
+                  'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset',
+                  connected
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 ring-emerald-200 dark:ring-emerald-900/60'
+                    : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 ring-rose-200 dark:ring-rose-900/60'
+                )}
+                title={connected ? 'Real-time connected' : 'Disconnected — reconnecting…'}
+              >
+                {connected
+                  ? <Wifi size={11} />
+                  : <WifiOff size={11} className="animate-pulse" />}
+                {connected ? 'Live' : 'Offline'}
+              </span>
+            </div>
           </div>
-          {/* At-a-glance counts so agents can size up the queue without scrolling. */}
-          {chatList.length > 0 && (() => {
-            const total = chatList.length
-            const handoff = chatList.filter(c => c.is_human_handoff).length
-            const bot = total - handoff
-            const cv = chatList.filter(c => c.cv_uploaded || c.has_cv || String(c.last_chatbot_state || '').toLowerCase().includes('cv')).length
+          <AddCandidateDialog
+            open={addCandidateOpen}
+            onClose={() => setAddCandidateOpen(false)}
+            onCreated={(cand) => { if (cand?.id) { setStatusBucket('new'); setSelectedId(cand.id) } }}
+          />
+          {/* At-a-glance counts — TRUE aggregates from the counts endpoint (the
+              old pills used chatList.length, which maxed out at the 500-row cap,
+              so "500 chats / 500 bot" was just the ceiling, not the real total). */}
+          {(counts.total_chats > 0 || chatList.length > 0) && (() => {
+            const total = counts.total_chats || 0
+            const bot = counts.bot_controlled || 0
+            const handoff = counts.human_controlled || 0
+            const cv = counts.cv_uploaded || 0
             const unread = chatList.filter(c => Number(c.unread_count) > 0).length
             const Chip = ({ tone, children }) => (
               <span className={clsx('px-2 py-0.5 rounded-full font-semibold', tone)}>{children}</span>
@@ -1451,22 +1615,39 @@ export default function Communications() {
           {/* Primary status buckets — the agent works one at a time; a candidate
               drops out of its bucket as it advances (New → Screening → … ). */}
           <div className="mb-2 flex flex-wrap gap-1">
-            {CANDIDATE_STATUS_BUCKETS.map((b) => (
-              <button
-                key={b.value}
-                type="button"
-                onClick={() => setStatusBucket(b.value)}
-                className={clsx(
-                  'px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors',
-                  statusBucket === b.value
-                    ? 'bg-primary-600 text-white border-primary-600'
-                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800'
-                )}
-              >
-                {b.label}
-              </button>
-            ))}
+            {CANDIDATE_STATUS_BUCKETS.map((b) => {
+              const badge = b.value === '' ? (counts.total_chats || 0) : (counts.by_status ? (counts.by_status[b.value] || 0) : 0)
+              const isActive = statusBucket === b.value
+              return (
+                <button
+                  key={b.value || 'all'}
+                  type="button"
+                  onClick={() => setStatusBucket(b.value)}
+                  className={clsx(
+                    'px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors inline-flex items-center gap-1.5',
+                    isActive
+                      ? 'bg-primary-600 text-white border-primary-600'
+                      : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800'
+                  )}
+                >
+                  {b.label}
+                  {badge > 0 && (
+                    <span className={clsx(
+                      'inline-flex items-center justify-center min-w-[18px] px-1 rounded-full text-[9px] font-bold',
+                      isActive ? 'bg-white/25 text-white' : 'bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200'
+                    )}>
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
           </div>
+          {listTruncated && (
+            <div className="mb-2 px-2 py-1 rounded-lg text-[10px] bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50">
+              Showing the most recent 500 — the tab counts are the true totals. Narrow by project or search to see the rest.
+            </div>
+          )}
           {/* Project scope — server-side; one agent typically works one project. */}
           <div className="mb-2 flex items-center gap-1.5">
             <FolderKanban size={14} className="text-zinc-400 dark:text-zinc-500 shrink-0" />
@@ -1787,6 +1968,19 @@ export default function Communications() {
                   <h2 className="font-semibold text-zinc-900 dark:text-zinc-50 text-sm">{getCandidateDisplayName(selectedCandidate)}</h2>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <StageBadge status={selectedCandidate?.candidate_status} />
+                    {/* Quick-change stage (incl. Future Pool) without leaving Messages. */}
+                    <select
+                      value={normalizeStatus(String(selectedCandidate?.candidate_status || '').toLowerCase()) || ''}
+                      onChange={(e) => selectedId && e.target.value && stageMut.mutate({ id: selectedId, stage: e.target.value })}
+                      disabled={stageMut.isPending}
+                      title="Change stage"
+                      className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary-400 cursor-pointer"
+                    >
+                      <option value="" disabled>Set stage…</option>
+                      {CANDIDATE_MANUAL_STATUS_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
                     <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(selectedCandidate?.pipeline_stage))}>
                       {getPipelineStageLabel(selectedCandidate?.pipeline_stage)}
                     </span>
@@ -2173,7 +2367,13 @@ export default function Communications() {
           {/* Call log & remarks — kept high (above Labels) so agents log and see
               calls first while working the candidate. */}
           <div className="border-b border-zinc-100 dark:border-zinc-800/60 pt-3">
-            <CallRemarksPanel candidateId={selectedId} candidateStatus={selectedCandidate?.candidate_status} />
+            <CallRemarksPanel
+              candidateId={selectedId}
+              candidateStatus={selectedCandidate?.candidate_status}
+              candidateName={selectedCandidate?.display_name || selectedCandidate?.name}
+              defaultProjectId={selectedCandidate?.effective_project_id || ''}
+              defaultJobId={selectedCandidate?.effective_job_id || ''}
+            />
           </div>
 
           {/* Manual labels (tags) for this candidate + one-tap suggestions. */}

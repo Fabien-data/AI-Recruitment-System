@@ -120,6 +120,13 @@ class Settings(BaseSettings):
     template_interview_reminder: str = ""
     template_interview_day_reminder: str = ""
     template_job_now_available: str = ""
+    # Welcome/intro template for candidates an agent ADDS manually from the
+    # Messages panel. These numbers have never messaged in, so they're outside
+    # the 24h window and a free-form welcome is dropped by Meta — only this
+    # approved template can open the conversation. Body param: [first_name].
+    # Empty = free-form only (delivers only if the candidate is already in-window;
+    # otherwise reported out_of_window). Set TEMPLATE_WELCOME=… once approved.
+    template_welcome: str = ""
     # Apology + onboarding-restart template for candidates wrongly told a role
     # was unavailable, re-engaged OUTSIDE the 24h window. In-window remediation
     # uses free-form text (see scripts/remediate_ad_declines.py); this is only

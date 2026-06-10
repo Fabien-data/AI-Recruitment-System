@@ -26,6 +26,13 @@ const { normalizePhone } = require('../utils/phone');
 const logger = require('../utils/logger');
 const { uploadToGCS } = require('../utils/gcs-upload');
 const { setCandidateStage, emitStageChanged } = require('../services/candidate-stage');
+const {
+    EFF_PROJECT_ID_EXPR,
+    PIPELINE_STAGE_EXPR,
+    buildConversationFilters,
+    buildCandidateStatusCountsSql,
+    shapeCountsRow,
+} = require('../services/conversation-counts');
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -404,117 +411,29 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
         // leads with no application yet still resolve to the project they asked
         // about. Used in BOTH the SELECT and the WHERE — Postgres can't reference
         // a SELECT alias in WHERE, so these are raw expressions.
-        const effProjectIdExpr    = `COALESCE(la.project_id, adt.project_id)`;
+        // Project/job/pipeline display expressions for the SELECT. The project-id
+        // and pipeline-stage exprs are imported from the shared counts module so
+        // the SELECT and the WHERE (built by buildConversationFilters) can't drift.
+        const effProjectIdExpr    = EFF_PROJECT_ID_EXPR;
         const effProjectTitleExpr = `COALESCE(NULLIF(la.project_title, ''), adt.project_title)`;
         const effJobTitleExpr      = `COALESCE(NULLIF(la.job_title, ''), adt.job_title)`;
         const effJobIdExpr         = `COALESCE(la.job_id, adt.job_id)`;
-        const pipelineStageExpr = `
-            CASE
-                WHEN COALESCE(ca.is_human_handoff, FALSE) = TRUE THEN 'human_takeover_active'
-                WHEN COALESCE(ca.requires_human, FALSE) = TRUE THEN 'pending_human_review'
-                WHEN LOWER(COALESCE(ca.cv_status, '')) = 'parsed' THEN 'cv_parsed'
-                WHEN COALESCE(ca.cv_uploaded, FALSE) = TRUE THEN 'cv_uploaded'
-                WHEN LOWER(COALESCE(la.application_status, '')) IN ('hired', 'rejected')
-                     OR LOWER(COALESCE(ca.status, '')) IN ('hired', 'merged') THEN 'shortlisted_or_rejected'
-                ELSE 'bot_engaging'
-            END
-        `;
+        const pipelineStageExpr = PIPELINE_STAGE_EXPR;
         const addParam = (value) => {
             params.push(value);
             return isMySQL ? '?' : `$${params.length}`;
         };
 
-        if (search) {
-            const searchPlaceholder = addParam(`%${search}%`);
-            if (isMySQL) {
-                filters.push(`(ca.name LIKE ${searchPlaceholder} OR ca.phone LIKE ${searchPlaceholder} OR ca.whatsapp_phone LIKE ${searchPlaceholder})`);
-            } else {
-                filters.push(`(ca.name ILIKE ${searchPlaceholder} OR ca.phone ILIKE ${searchPlaceholder} OR ca.whatsapp_phone ILIKE ${searchPlaceholder})`);
-            }
-        }
-
-        // conversation_stage is retired as a separate filter vocabulary (#1) — it is
-        // now just a mirror of candidates.status. Status filtering goes through the
-        // canonical status buckets below. (`conversation_stage` query param ignored.)
-
-        // A search is a GLOBAL lookup: when the agent types a name/phone we bypass
-        // the active status-bucket + project filters so the candidate is found no
-        // matter which tab/project is selected (the #1 "I searched the number and
-        // it's not showing" complaint — e.g. a candidate sitting in Future Pool
-        // while the New tab is active). Without a search, the tab/project scope the list.
-        const isSearch = Boolean(String(search || '').trim());
-
-        // Canonical status bucket (New → Screening → Certified → Interview
-        // Scheduled, + Future Pool). Mutually exclusive — driven by ca.status,
-        // kept in sync by candidate-stage.js. NULL status counts as 'new'.
-        const CANDIDATE_STATUS_BUCKETS = new Set(['new', 'screening', 'certified', 'interview_scheduled', 'future_pool']);
-        if (!isSearch && status && CANDIDATE_STATUS_BUCKETS.has(String(status).toLowerCase())) {
-            filters.push(`LOWER(COALESCE(ca.status, 'new')) = ${addParam(String(status).toLowerCase())}`);
-        }
-
-        // Project scope, matched on the EFFECTIVE project (latest app OR ad).
-        // 'unassigned' = no application and no ad-resolved project.
-        if (!isSearch && project_id) {
-            if (String(project_id).toLowerCase() === 'unassigned') {
-                filters.push(`${effProjectIdExpr} IS NULL`);
-            } else {
-                filters.push(`${effProjectIdExpr} = ${addParam(project_id)}`);
-            }
-        }
-
-        if (pipeline_stage) {
-            const pipelinePlaceholder = addParam(pipeline_stage);
-            filters.push(`${pipelineStageExpr} = ${pipelinePlaceholder}`);
-        }
-
-        if (handoff_state === 'human') {
-            filters.push(`ca.is_human_handoff = TRUE`);
-        } else if (handoff_state === 'bot') {
-            filters.push(`COALESCE(ca.is_human_handoff, FALSE) = FALSE`);
-        }
-
-        // Triage filters (smart views): disposition / on-call / contacted / claim.
-        if (req.query.disposition) {
-            filters.push(`ca.disposition = ${addParam(req.query.disposition)}`);
-        }
-        if (req.query.call_status === 'on_call') {
-            filters.push(`ca.call_status = 'on_call'`);
-        }
-        if (req.query.contacted === 'yes') {
-            filters.push(`ca.last_contacted_at IS NOT NULL`);
-        } else if (req.query.contacted === 'no') {
-            filters.push(`ca.last_contacted_at IS NULL`);
-        }
-        if (req.query.claimed === 'me') {
-            filters.push(`ca.claimed_by = ${addParam(req.user.id)}`);
-        } else if (req.query.claimed === 'unassigned') {
-            filters.push(`ca.claimed_by IS NULL`);
-        }
-
-        if (date_from) {
-            const fromPlaceholder = addParam(date_from);
-            filters.push(`lm.sent_at >= ${fromPlaceholder}`);
-        }
-
-        if (date_to) {
-            const toPlaceholder = addParam(date_to);
-            filters.push(`lm.sent_at <= ${toPlaceholder}`);
-        }
-
-        if (response_status === 'awaiting_candidate') {
-            filters.push(`lm.direction = 'outbound'`);
-        } else if (response_status === 'awaiting_agent') {
-            filters.push(`lm.direction = 'inbound'`);
-        } else if (response_status === 'unread') {
-            filters.push(`lm.direction = 'inbound'`);
-            filters.push(`(lm.read_at IS NULL)`);
-        } else if (response_status === 'replied') {
-            filters.push(`lm.direction = 'outbound'`);
-            filters.push(`(lm.read_at IS NOT NULL OR lm.delivered_at IS NOT NULL)`);
-        }
-
-        // Show all conversation threads (ongoing + previous) by default.
-        filters.push(`lm.sent_at IS NOT NULL`);
+        // All WHERE predicates (search/status-bucket/project/pipeline/handoff/
+        // disposition/call/contacted/claim/date/response + the lm.sent_at
+        // conversation gate) come from the shared builder so the list, the
+        // counts, and the Applications strip count the exact same population.
+        filters.push(...buildConversationFilters({
+            query: req.query,
+            userId: req.user.id,
+            addParam,
+            includeStatusBucket: true,
+        }));
 
         const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
         const latestOrder = normalizeSortOrder(sort_by);
@@ -619,7 +538,44 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
         `);
 
         const result = await query(sql, params);
+        // The list is HARD-capped at 500 (see safeLimit) to protect the DB pool.
+        // When we hit the cap the per-tab badge (from /counts, uncapped) will read
+        // higher than the rows returned here — signal that so the UI can show
+        // "500+ shown" instead of a silent badge≠list mismatch.
+        if (result.rows.length >= safeLimit) {
+            res.set('X-List-Truncated', 'true');
+        }
         res.json(result.rows);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── GET /api/communications/active-chats/counts ───────────────────────────────
+// Real aggregate counts for the Conversations header pills + per-status tab
+// badges. Same FROM/JOIN/WHERE semantics as active-chats, but WITHOUT the 500-row
+// cap and WITHOUT the status-bucket filter — so the numbers are TRUE totals
+// (the pills used to show the returned array length, which maxed out at the cap)
+// and every per-status badge is counted regardless of which tab is active.
+router.get('/active-chats/counts', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+    try {
+        const params = [];
+        const addParam = (value) => { params.push(value); return isMySQL ? '?' : `$${params.length}`; };
+
+        // Same population + filters as the list (minus the single-bucket status
+        // filter, since we fan out one count per bucket here) — shared builder so
+        // the badges can never diverge from the rows.
+        const filters = buildConversationFilters({
+            query: req.query,
+            userId: req.user.id,
+            addParam,
+            includeStatusBucket: false,
+        });
+        const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+
+        const sql = buildCandidateStatusCountsSql({ whereClause });
+        const result = await query(sql, params);
+        res.json(shapeCountsRow(result.rows[0]));
     } catch (error) {
         next(error);
     }
@@ -1207,7 +1163,7 @@ router.get('/candidate/:candidate_id/call-logs', authenticate, requireSection('c
         const { candidate_id } = req.params;
         const result = await query(
             adaptQuery(`SELECT cl.id, cl.candidate_id, cl.agent_id, cl.outcome, cl.disposition,
-                               cl.remark, cl.reason, cl.duration_seconds, cl.called_at,
+                               cl.remark, cl.reason, cl.duration_seconds, cl.called_at, cl.action_type,
                                cl.job_id, j.title AS job_title, p.title AS project_title,
                                u.full_name AS agent_name
                         FROM call_logs cl
@@ -1296,11 +1252,22 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
             applicationId = appRes.rows[0]?.id || null;
         }
 
+        // Classify the entry so the engagement log reads as the ACTION taken, not
+        // "everything is a call". A genuine logged call stays 'call'.
+        let actionType = 'call';
+        if (setStatus === 'screening' && jobId) actionType = 'assign';
+        else if (setStatus === 'certified') actionType = 'certify';
+        else if (setStatus === 'interview_scheduled') actionType = 'interview';
+        else if (isDeclineStatus(setStatus)) actionType = 'not_interested';
+        else if (createFollowup && taskType === 'no_answer') actionType = 'no_answer';
+        else if (createFollowup && taskType === 'callback') actionType = 'follow_up';
+        else if (outcome === 'note') actionType = 'note';
+
         const id = generateUUID();
         await query(
-            adaptQuery(`INSERT INTO call_logs (id, candidate_id, agent_id, outcome, disposition, remark, duration_seconds, job_id, application_id, reason)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`),
-            [id, candidate_id, req.user.id, outcome, disposition, remark, durationSeconds, jobId, applicationId, reason]
+            adaptQuery(`INSERT INTO call_logs (id, candidate_id, agent_id, outcome, disposition, remark, duration_seconds, job_id, application_id, reason, action_type)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`),
+            [id, candidate_id, req.user.id, outcome, disposition, remark, durationSeconds, jobId, applicationId, reason, actionType]
         );
 
         // Logging a call counts as agent contact; carry disposition through. The
@@ -1319,29 +1286,13 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
             setVals
         );
 
-        // CV gate for New→Screening: a CV must be on file. Keep the call log +
-        // assignment; block the stage advance with the 422 the UI already handles.
-        if (setStatus === 'screening') {
-            const gate = await query(
-                adaptQuery(`SELECT (c.cv_uploaded IS TRUE
-                                    OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = c.id)) AS has_cv
-                            FROM candidates c WHERE c.id = $1`),
-                [candidate_id]
-            );
-            const v = gate.rows[0]?.has_cv;
-            const hasCv = v === true || v === 1 || v === '1' || v === 't' || v === 'true';
-            if (!hasCv) {
-                return res.status(422).json({
-                    error: 'Upload a CV/resume before moving the candidate to Screening.',
-                    code: 'screening_gate', has_cv: false, has_application: !!applicationId, call_log_id: id,
-                });
-            }
-        }
+        // CV gate removed (2026-06-08): "Done → advance" works regardless of
+        // whether a CV is on file.
 
         // Forward stage → cascade through applications + re-derive status (emits
         // candidate_stage_changed). Decline (Not interested) → reject the active
-        // application(s) and move the candidate to future_pool (CV-gated to New if
-        // no CV); setCandidateStage emits the change.
+        // application(s) and move the candidate to future_pool; setCandidateStage
+        // emits the change.
         let appliedStatus = null;
         if (setStatus && FORWARD_STAGE_TARGETS.includes(setStatus)) {
             await setCandidateStage(candidate_id, setStatus);
@@ -1494,35 +1445,34 @@ router.post('/send', authenticate, requireSection('communications', 'edit'), upl
             channelResults[ch] = { simulated: false };
 
             if (ch === 'whatsapp') {
-                const { sendTextMessage, sendMediaMessage } = require('../services/whatsapp');
+                // Route agent WhatsApp sends through the chatbot, which owns the
+                // live WhatsApp Business identity. The backend's own Meta token is
+                // a different (frequently-expired) credential — sending on it
+                // silently dropped takeover replies (the "token split-brain").
+                const chatbotNotifier = require('../services/chatbotNotifier');
                 const waPhone = candidate.whatsapp_phone || candidate.phone;
                 if (!waPhone) {
-                    channelResults[ch] = { simulated: true, error: 'Candidate has no phone number' };
+                    channelResults[ch] = { simulated: true, error: 'Candidate has no phone number', delivery_status: 'failed', reason: 'no_phone' };
                     continue;
                 }
-                try {
-                    let waResult;
-                    if (mediaUrl) {
-                        waResult = await sendMediaMessage(waPhone.replace(/[^0-9]/g, ''), finalMessageType, mediaUrl, normalizedMessage);
-                    } else {
-                        waResult = await sendTextMessage(waPhone.replace(/[^0-9]/g, ''), normalizedMessage);
-                    }
-                    channelResults[ch].messages = waResult?.messages;
-                    channelResults[ch].whatsapp_message_id = waResult?.messages?.[0]?.id || null;
-                } catch (err) {
-                    const metaError = err.response?.data?.error;
-                    const waError = metaError
-                        ? `${metaError.message}${metaError.code ? ` (Meta code ${metaError.code})` : ''}`
-                        : err.message;
-                    logger.warn(
-                        `WhatsApp send failed for ${waPhone}: ${waError}` +
-                        (metaError?.fbtrace_id ? ` [fbtrace_id=${metaError.fbtrace_id}]` : '')
-                    );
-                    if (metaError?.code === 190) {
-                        logger.error('WhatsApp token invalid/expired (code 190) — rotate WHATSAPP_ACCESS_TOKEN and redeploy.');
-                    }
+                const sendRes = await chatbotNotifier.sendAgentMessage({
+                    phone: waPhone.replace(/[^0-9]/g, ''),
+                    message: normalizedMessage,
+                    messageType: mediaUrl ? finalMessageType : 'text',
+                    mediaUrl: mediaUrl || null,
+                    filename: mediaFile?.originalname || null,
+                });
+                if (sendRes.ok) {
+                    channelResults[ch].whatsapp_message_id = sendRes.messageId || null;
+                    channelResults[ch].delivery_status = 'sent';
+                } else {
+                    // out_of_window means the candidate is silent >24h and free-form
+                    // is dropped by Meta — surface it honestly rather than a fake "sent".
                     channelResults[ch].simulated = true;
-                    channelResults[ch].error = waError;
+                    channelResults[ch].error = sendRes.error;
+                    channelResults[ch].reason = sendRes.reason || null;
+                    channelResults[ch].delivery_status = 'failed';
+                    logger.warn(`Agent WhatsApp send not delivered for ${waPhone}: ${sendRes.reason || ''} ${sendRes.error || ''}`);
                 }
 
             } else if (ch === 'email') {
@@ -1572,11 +1522,21 @@ router.post('/send', authenticate, requireSection('communications', 'edit'), upl
         const agentName = req.user?.name || req.user?.email || 'Agent';
         const attachmentsValue = mediaUrl ? [mediaUrl] : [];
         const primaryWaId = channelResults['whatsapp']?.whatsapp_message_id || null;
+        // Honest initial delivery state for the primary channel (later upgraded to
+        // delivered/read by the /status-sync receipts webhook). 'failed' carries a
+        // coarse reason (out_of_window / no_whatsapp / token_expired / …) so the UI
+        // can tell the agent the message did NOT reach the candidate.
+        const primaryResult = channelResults[primaryChannel] || {};
+        const primaryDelivery = primaryResult.delivery_status
+            || (primaryResult.simulated ? 'failed' : 'sent');
+        const primaryReason = primaryResult.reason || primaryResult.error || null;
         const metadataValue = JSON.stringify({
             source: 'agent_dashboard',
             channels: targetChannels,
             channel_results: channelResults,
             whatsapp_message_id: primaryWaId,
+            delivery_status: primaryDelivery,
+            delivery_reason: primaryDelivery === 'failed' ? primaryReason : null,
             upload_mime_type: mediaFile?.mimetype || null,
             upload_original_name: mediaFile?.originalname || null,
             upload_size: mediaFile?.size || null,

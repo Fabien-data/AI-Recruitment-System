@@ -1464,6 +1464,16 @@ Question:"""
     # ─────────────────────────────────────────────────────────────────────────
 
     STATUS_UPDATE_TEMPLATES = {
+        # Agent manually added this candidate from the Messages panel — a warm
+        # first-touch that opens the conversation and hands them to the bot intake
+        # (their first reply runs the normal intake flow). No job_title needed.
+        "welcome": {
+            "en": "👋 Hi {name}! Welcome to Dewan Consultants — Sri Lanka's trusted overseas recruitment agency. We'd love to help you find a great job abroad. To get started, just reply here and I'll ask you a few quick questions. 🙂",
+            "si": "👋 ආයුබෝවන් {name}! Dewan Consultants වෙත සාදරයෙන් පිළිගනිමු — විදේශ රැකියා සඳහා ශ්‍රී ලංකාවේ විශ්වාසනීය ආයතනය. විදේශගත හොඳ රැකියාවක් සොයා ගැනීමට අපි ඔබට උදව් කරමු. ආරම්භ කිරීමට, මෙහි පිළිතුරු දෙන්න — මම ඔබට කෙටි ප්‍රශ්න කිහිපයක් අසන්නම්. 🙂",
+            "ta": "👋 வணக்கம் {name}! Dewan Consultants-க்கு வரவேற்கிறோம் — வெளிநாட்டு வேலைவாய்ப்புக்கான இலங்கையின் நம்பகமான நிறுவனம். வெளிநாட்டில் சிறந்த வேலையைக் கண்டுபிடிக்க உதவ விரும்புகிறோம். தொடங்க, இங்கே பதிலளியுங்கள் — சில விரைவான கேள்விகளைக் கேட்பேன். 🙂",
+            "singlish": "👋 Hello {name}! Dewan Consultants ekata aayubowan — overseas jobs walata Sri Lankawe trusted agency eka. Hodha overseas job ekak hoyaganna api oyata udaw karanawa. Patan ganna, methana reply karanna — mama poddak prashna ahannam. 🙂",
+            "tanglish": "👋 Hello {name}! Dewan Consultants-ku welcome — overseas jobs-ku Sri Lanka-vin trusted agency. Nalla overseas job kandupidikka help pannuvom. Start panna, inga reply pannunga — naan konjam questions kepen. 🙂",
+        },
         # New → Screening: details + CV received, profile under review.
         "application_complete": {
             "en": "Hi {name}! ✅ We've received your full application for *{job_title}* — thank you! Our team is now reviewing your profile. We'll be in touch with the next steps soon. 🙌",

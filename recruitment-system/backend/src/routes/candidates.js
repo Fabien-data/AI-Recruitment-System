@@ -14,9 +14,10 @@ const {
     syncCandidateStage,
     setCandidateStage,
     emitStageChanged,
-    candidateHasCv,
+    emitApplicationChanged,
     CANDIDATE_STATUS_SET,
 } = require('../services/candidate-stage');
+const { logAgentAction } = require('../services/activity-log');
 
 function parseCandidateMetadata(metadata) {
     if (!metadata) return {};
@@ -516,6 +517,117 @@ router.post('/', authenticate, requireSection('candidates', 'create'), async (re
 });
 
 /**
+ * Create a candidate AND send the auto-welcome, all from the Messages panel.
+ *
+ * Creates the candidate at status='new', optionally attaches a job, then fires
+ * the `welcome` notification — which sends the WhatsApp via the chatbot AND logs
+ * the outbound communications row, so the candidate appears immediately in the
+ * Messages "New" tab and is handed to the bot's intake flow. The welcome may be
+ * undeliverable for a brand-new (never-messaged) number outside the 24h window
+ * unless an approved welcome template is configured (TEMPLATE_WELCOME) — the
+ * `welcome` result surfaces that (sent / out_of_window / failed).
+ */
+router.post('/with-welcome', authenticate, requireSection('candidates', 'create'), async (req, res, next) => {
+    try {
+        const {
+            name,
+            phone,
+            email,
+            source = 'manual',
+            preferred_language = 'en',
+            notes,
+            age,
+            job_id,
+        } = req.body;
+
+        if (!name || !phone) {
+            return res.status(400).json({ error: 'Name and phone are required' });
+        }
+
+        const normalizedPhone = normalizePhone(phone) || String(phone).trim();
+        const ageInput = normalizeAgeInput(age);
+        if (ageInput.invalid) {
+            return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
+        }
+        const metadata = parseCandidateMetadata(req.body?.metadata);
+        if (ageInput.hasValue) {
+            if (ageInput.age === null) delete metadata.age; else metadata.age = ageInput.age;
+        }
+        const metadataPayload = Object.keys(metadata).length ? metadata : null;
+
+        // 1) Create the candidate (status='new').
+        let candidate;
+        if (isMySQL) {
+            const id = generateUUID();
+            await query(
+                `INSERT INTO candidates (id, name, phone, email, source, preferred_language, notes, metadata, status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new')`,
+                [id, name, normalizedPhone, email, source, preferred_language, notes, metadataPayload ? JSON.stringify(metadataPayload) : null]
+            );
+            const r = await query('SELECT * FROM candidates WHERE id = ?', [id]);
+            candidate = r.rows[0];
+        } else {
+            const r = await query(
+                `INSERT INTO candidates (name, phone, email, source, preferred_language, notes, metadata, status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new')
+                 RETURNING *`,
+                [name, normalizedPhone, email, source, preferred_language, notes, metadataPayload]
+            );
+            candidate = r.rows[0];
+        }
+
+        // 2) Optionally attach a job (idempotent), so the lead is already on a role.
+        if (job_id) {
+            try {
+                const jobRes = await query(adaptQuery('SELECT id FROM jobs WHERE id = $1'), [job_id]);
+                if (jobRes.rows.length > 0) {
+                    const newAppId = generateUUID();
+                    if (isMySQL) {
+                        await query(
+                            "INSERT INTO applications (id, candidate_id, job_id, status) VALUES (?, ?, ?, 'screening') ON DUPLICATE KEY UPDATE job_id = VALUES(job_id)",
+                            [newAppId, candidate.id, job_id]
+                        );
+                    } else {
+                        await query(
+                            "INSERT INTO applications (id, candidate_id, job_id, status) VALUES ($1, $2, $3, 'screening') ON CONFLICT (candidate_id, job_id) DO NOTHING",
+                            [newAppId, candidate.id, job_id]
+                        );
+                    }
+                    try { await syncCandidateStage(candidate.id); } catch (_e) { /* best-effort */ }
+                    try { emitApplicationChanged({ candidate_id: candidate.id }); } catch (_e) { /* best-effort */ }
+                }
+            } catch (e) {
+                logger.warn(`with-welcome: job attach failed for ${candidate.id}: ${e.message}`);
+            }
+        }
+
+        // 3) Send the welcome — this logs the outbound communications row, so the
+        // candidate shows up in the Messages list, and (chatbot side) seeds the
+        // intake conversation state.
+        let welcome = { success: [], failed: [] };
+        try {
+            welcome = await notifications.sendNotification({
+                candidateId: candidate.id,
+                type: 'welcome',
+                data: { name },
+                channels: ['whatsapp'],
+            });
+        } catch (e) {
+            logger.error(`with-welcome: notification failed for ${candidate.id}: ${e.message}`);
+            welcome.failed.push({ channel: 'all', error: e.message });
+        }
+
+        const fresh = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [candidate.id]);
+        return res.status(201).json({ candidate: fresh.rows[0] || candidate, welcome });
+    } catch (error) {
+        if (error.message.includes('duplicate') || error.message.includes('Duplicate')) {
+            return res.status(400).json({ error: 'Candidate with this phone or email already exists' });
+        }
+        next(error);
+    }
+});
+
+/**
  * Update candidate
  */
 router.put('/:id', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
@@ -678,16 +790,8 @@ router.put('/:id/stage', authenticate, requireSection('candidates', 'edit'), asy
         const candRes = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [id]);
         if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
 
-        // CV is the hard gate (#5) for ACTIVE pipeline stages only. future_pool is
-        // exempt — it's a flexible backup/talent pool a candidate can be parked in
-        // regardless of CV (decided with the user), so don't 422 it.
-        if (stage !== 'new' && stage !== 'future_pool' && !(await candidateHasCv(id))) {
-            return res.status(422).json({
-                error: 'Upload a CV/resume before advancing the candidate past New.',
-                code: 'screening_gate',
-                has_cv: false,
-            });
-        }
+        // CV gate removed (2026-06-08): a candidate may be moved to any stage
+        // regardless of whether a CV is on file.
 
         // Cascade through applications + re-derive candidate.status, and broadcast
         // the live `candidate_stage_changed` event (shared with the calling console).
@@ -758,11 +862,12 @@ router.post('/:id/screening', authenticate, requireSection('candidates', 'edit')
         const hasCv = truthy(row.has_cv);
         const hasApp = truthy(row.has_application);
 
-        if (!hasCv || !hasApp) {
+        // CV gate removed (2026-06-08): a CV is no longer required to move to
+        // Screening. The candidate must still be attached to a job (you can't
+        // screen someone for nothing).
+        if (!hasApp) {
             return res.status(422).json({
-                error: !hasCv
-                    ? 'Upload a CV/resume before moving the candidate to Screening.'
-                    : 'Assign the candidate to a job before moving them to Screening.',
+                error: 'Assign the candidate to a job before moving them to Screening.',
                 code: 'screening_gate',
                 has_cv: hasCv,
                 has_application: hasApp,
@@ -813,6 +918,155 @@ router.post('/:id/screening', authenticate, requireSection('candidates', 'edit')
 
         const updated = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [id]);
         res.json({ ...normalizeCandidateRecord(updated.rows[0]), notification });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Ensure an application exists for (candidate, job).
+ *
+ * Resolves the application_id a New/Screening lead needs before an interview can
+ * be scheduled (POST /api/interviews requires one). Idempotent: reuses the
+ * existing application for that job, or creates one at 'screening'. On creation,
+ * re-derives the candidate stage and broadcasts so the lists update live.
+ */
+router.post('/:id/ensure-application', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { job_id } = req.body || {};
+        if (!job_id) return res.status(400).json({ error: 'job_id is required' });
+
+        const candRes = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        const jobRes = await query(adaptQuery('SELECT id FROM jobs WHERE id = $1'), [job_id]);
+        if (jobRes.rows.length === 0) return res.status(400).json({ error: 'Invalid job_id' });
+
+        const newAppId = generateUUID();
+        let created = false;
+        if (isMySQL) {
+            await query(
+                "INSERT INTO applications (id, candidate_id, job_id, status) VALUES (?, ?, ?, 'screening') ON DUPLICATE KEY UPDATE job_id = VALUES(job_id)",
+                [newAppId, id, job_id]
+            );
+        } else {
+            const ins = await query(
+                "INSERT INTO applications (id, candidate_id, job_id, status) VALUES ($1, $2, $3, 'screening') ON CONFLICT (candidate_id, job_id) DO NOTHING RETURNING id",
+                [newAppId, id, job_id]
+            );
+            created = ins.rows.length > 0;
+        }
+        const appRes = await query(
+            adaptQuery('SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1'),
+            [id, job_id]
+        );
+        const applicationId = appRes.rows[0]?.id || null;
+
+        if (created) {
+            try { await syncCandidateStage(id); } catch (_e) { /* best-effort */ }
+            try { emitApplicationChanged({ candidate_id: id }); } catch (_e) { /* best-effort */ }
+        }
+        return res.json({ application_id: applicationId, created });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Certify a candidate and (by default) notify them.
+ *
+ * Surface-agnostic: called from the Messages call-log "Certified" popup AND the
+ * CV Manager review modal's "Certify & notify" button. Cascades the candidate to
+ * `certified` (setCandidateStage → applications + re-derive + socket) and sends
+ * the WhatsApp `certified` message via the chatbot (which also logs the outbound
+ * communications row). The plain status dropdowns must NOT call this — they stay
+ * message-less; only the explicit certify action sends.
+ */
+router.post('/:id/certify', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const {
+            certification_notes,
+            translate_notes,
+            job_id,
+            role_title,
+            send_message = true,
+            channels = ['whatsapp'],
+        } = req.body || {};
+
+        const candRes = await query(adaptQuery('SELECT id, name, phone FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        // If a specific job was named, make sure an application exists for it so
+        // the certified status attaches to that role (idempotent upsert).
+        if (job_id) {
+            const jobRes = await query(adaptQuery('SELECT id FROM jobs WHERE id = $1'), [job_id]);
+            if (jobRes.rows.length === 0) return res.status(400).json({ error: 'Invalid job_id' });
+            const newAppId = generateUUID();
+            if (isMySQL) {
+                await query(
+                    "INSERT INTO applications (id, candidate_id, job_id, status) VALUES (?, ?, ?, 'screening') ON DUPLICATE KEY UPDATE job_id = VALUES(job_id)",
+                    [newAppId, id, job_id]
+                );
+            } else {
+                await query(
+                    "INSERT INTO applications (id, candidate_id, job_id, status) VALUES ($1, $2, $3, 'screening') ON CONFLICT (candidate_id, job_id) DO NOTHING",
+                    [newAppId, id, job_id]
+                );
+            }
+        }
+
+        // Cascade to certified (updates non-terminal applications + re-derives
+        // candidate.status + emits candidate_stage_changed).
+        const { updatedApplications } = await setCandidateStage(id, 'certified');
+
+        // Resolve a job title for the message body.
+        let jobTitle = role_title && String(role_title).trim() ? String(role_title).trim() : '';
+        if (!jobTitle) {
+            try {
+                const jt = await query(
+                    adaptQuery(`
+                        SELECT j.title FROM applications a
+                        JOIN jobs j ON a.job_id = j.id
+                        WHERE a.candidate_id = $1 AND a.status NOT IN ('rejected','transferred','merged')
+                        ORDER BY COALESCE(a.updated_at, a.applied_at) DESC LIMIT 1
+                    `),
+                    [id]
+                );
+                if (jt.rows.length && jt.rows[0].title) jobTitle = jt.rows[0].title;
+            } catch (e) {
+                logger.warn(`Certify: job title lookup failed for ${id}: ${e.message}`);
+            }
+        }
+        if (!jobTitle) jobTitle = 'your applied position';
+
+        let notification = null;
+        if (send_message !== false) {
+            const chans = Array.isArray(channels) ? channels : ['whatsapp'];
+            try {
+                notification = await notifications.sendCertificationNotification(
+                    id, jobTitle, certification_notes || '', chans, translate_notes === true
+                );
+            } catch (e) {
+                logger.error(`Certify notification failed for ${id}: ${e.message}`);
+                notification = { success: [], failed: [{ channel: 'all', error: e.message }] };
+            }
+        }
+
+        // Record in the engagement timeline as a "certify" action (not a call).
+        const sentOk = notification?.success?.some?.((s) => s.channel === 'whatsapp');
+        const remark = send_message === false
+            ? `Certified for ${jobTitle}`
+            : `Certified for ${jobTitle} — ${sentOk ? 'message sent' : 'message not delivered'}`;
+        await logAgentAction({ candidateId: id, agentId: req.user.id, actionType: 'certify', remark, jobId: job_id || null });
+
+        const fresh = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [id]);
+        return res.json({
+            candidate_status: 'certified',
+            candidate: fresh.rows[0],
+            updated_applications: updatedApplications,
+            notification,
+        });
     } catch (error) {
         next(error);
     }

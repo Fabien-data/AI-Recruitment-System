@@ -209,6 +209,53 @@ class MetaWhatsAppClient:
             )
             return err
     
+    async def send_media_by_link(
+        self,
+        to_number: str,
+        media_type: str,
+        link: str,
+        caption: Optional[str] = None,
+        filename: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Send a media message (image/document/audio/video) by public link.
+
+        Used by the agent-message path so an agent's media reply goes out on the
+        chatbot's WhatsApp identity (the working token), not the backend's.
+        Returns the Meta API response, or a classified error dict on failure.
+        """
+        url = f"{self.base_url}/{self.phone_number_id}/messages"
+        headers = self._whatsapp_headers()
+
+        mtype = (media_type or "document").lower()
+        if mtype not in ("image", "document", "audio", "video"):
+            mtype = "document"
+        media_obj = {"link": link}
+        # Caption is supported on image/video/document; audio takes none.
+        if caption and mtype in ("image", "video", "document"):
+            media_obj["caption"] = str(caption)
+        if mtype == "document" and filename:
+            media_obj["filename"] = filename
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": mtype,
+            mtype: media_obj,
+        }
+        binary_data = self._json_bytes(payload)
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=binary_data, headers=headers, timeout=20.0)
+                response.raise_for_status()
+                result = response.json()
+                logger.info(f"Media ({mtype}) sent to {to_number}: {result.get('messages', [{}])[0].get('id', 'unknown')}")
+                return result
+        except httpx.HTTPError as e:
+            err = _classify_meta_error(e)
+            logger.error(f"Failed to send media to {to_number}: code={err.get('code')} reason={err.get('reason')}")
+            return err
+
     async def send_template_message(
         self,
         to_number: str,

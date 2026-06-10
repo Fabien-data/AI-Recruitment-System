@@ -1,6 +1,6 @@
-// Phase 0 (UPGRADES.md #5) — the CV eligibility gate on manual assignment.
-// POST /api/applications must 422 (screening_gate) when the candidate has no CV,
-// and create a 'screening' application when a CV is on file.
+// CV gate REMOVED (user decision 2026-06-08). POST /api/applications now creates
+// a 'screening' application regardless of whether a CV is on file — staff can
+// assign agency-imported candidates whose CVs are offline.
 
 const express = require('express');
 const request = require('supertest');
@@ -49,20 +49,24 @@ function createApp() {
     return app;
 }
 
-describe('POST /api/applications — CV eligibility gate (#5)', () => {
+describe('POST /api/applications — CV gate removed (#5 reversed)', () => {
     let app;
     beforeEach(() => { app = createApp(); jest.clearAllMocks(); });
 
-    test('422 screening_gate when the candidate has no CV', async () => {
-        candidateHasCv.mockResolvedValueOnce(false);
+    test('creates a screening application even when the candidate has NO CV (gate removed)', async () => {
+        candidateHasCv.mockResolvedValue(false); // even if consulted, must not block
+        query
+            .mockResolvedValueOnce({ rows: [{ id: 'c1', status: 'new', parsed_data: null }] }) // candidate
+            .mockResolvedValueOnce({ rows: [{ id: 'j1', requirements: {}, project_title: 'P' }] }) // job
+            .mockResolvedValueOnce({ rows: [{ id: 'app-uuid', candidate_id: 'c1', job_id: 'j1', status: 'screening' }] }); // insert RETURNING
         const res = await request(app)
             .post('/api/applications')
             .send({ candidate_id: 'c1', job_id: 'j1' });
-        expect(res.status).toBe(422);
-        expect(res.body.code).toBe('screening_gate');
-        expect(res.body.has_cv).toBe(false);
-        // It must NOT have tried to insert an application.
-        expect(query).not.toHaveBeenCalled();
+        expect(res.status).toBe(201);
+        expect(res.body.status).toBe('screening');
+        // No 422 — the application was created despite the missing CV.
+        const insertCall = query.mock.calls.find(([sql]) => /INSERT INTO applications/i.test(sql));
+        expect(insertCall).toBeTruthy();
     });
 
     test("creates a 'screening' application when a CV is on file", async () => {

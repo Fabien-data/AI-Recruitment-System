@@ -37,6 +37,14 @@ jest.mock('../src/services/whatsapp', () => ({
     sendTemplateMessage: jest.fn(),
 }));
 
+// Agent WhatsApp sends now route through the chatbot (it owns the working Meta
+// token); the backend's own whatsapp.js is no longer used for agent sends.
+jest.mock('../src/services/chatbotNotifier', () => ({
+    sendAgentMessage: jest.fn(),
+    pushCandidateStatus: jest.fn(),
+    mapType: (t) => t,
+}));
+
 jest.mock('../src/services/gmail', () => ({
     isConnected: jest.fn(),
     sendEmail: jest.fn(),
@@ -46,6 +54,7 @@ jest.mock('../src/services/gmail', () => ({
 const { query } = require('../src/config/database');
 const { uploadToGCS } = require('../src/utils/gcs-upload');
 const whatsappService = require('../src/services/whatsapp');
+const chatbotNotifier = require('../src/services/chatbotNotifier');
 const gmailService = require('../src/services/gmail');
 const communicationsRouter = require('../src/routes/communications');
 
@@ -215,9 +224,9 @@ describe('Communications routes', () => {
 
     // ── POST /send — WhatsApp only ───────────────────────────────────────────
 
-    test('POST /send whatsapp-only delivers text and returns simulated:false', async () => {
+    test('POST /send whatsapp-only routes through the chatbot and returns simulated:false', async () => {
         query.mockResolvedValueOnce({ rows: [{ id: 'cand-1', name: 'Ali', phone: '94771234567', whatsapp_phone: '94771234567', email: 'ali@example.com' }] });
-        whatsappService.sendTextMessage.mockResolvedValueOnce({ messages: [{ id: 'wamid.001' }] });
+        chatbotNotifier.sendAgentMessage.mockResolvedValueOnce({ ok: true, messageId: 'wamid.001' });
         query.mockResolvedValueOnce({ rowCount: 1 }); // insertCommunicationMessage
         query.mockResolvedValueOnce({ rowCount: 1 }); // clear intervention
 
@@ -228,12 +237,14 @@ describe('Communications routes', () => {
 
         expect(res.body.simulated).toBe(false);
         expect(res.body.whatsapp_message_id).toBe('wamid.001');
-        expect(whatsappService.sendTextMessage).toHaveBeenCalledWith('94771234567', 'Hello from agent');
+        // Sent on the chatbot's token, NOT the backend's expired one.
+        expect(chatbotNotifier.sendAgentMessage).toHaveBeenCalledWith(expect.objectContaining({ phone: '94771234567', message: 'Hello from agent', messageType: 'text' }));
+        expect(whatsappService.sendTextMessage).not.toHaveBeenCalled();
     });
 
-    test('POST /send whatsapp returns simulated:true when WhatsApp API throws', async () => {
+    test('POST /send whatsapp returns simulated:true when the candidate is out of the 24h window', async () => {
         query.mockResolvedValueOnce({ rows: [{ id: 'cand-1', name: 'Ali', phone: '94771234567', whatsapp_phone: '94771234567', email: null }] });
-        whatsappService.sendTextMessage.mockRejectedValueOnce(new Error('Outside 24h window'));
+        chatbotNotifier.sendAgentMessage.mockResolvedValueOnce({ ok: false, error: 'Outside 24h window', reason: 'out_of_window' });
         query.mockResolvedValueOnce({ rowCount: 1 }); // insert
         query.mockResolvedValueOnce({ rowCount: 1 }); // clear
 
@@ -305,7 +316,7 @@ describe('Communications routes', () => {
 
     test('POST /send channels=whatsapp,email dispatches to both and reports per-channel', async () => {
         query.mockResolvedValueOnce({ rows: [{ id: 'cand-4', name: 'Nimal', phone: '94779999999', whatsapp_phone: '94779999999', email: 'nimal@example.com' }] });
-        whatsappService.sendTextMessage.mockResolvedValueOnce({ messages: [{ id: 'wamid.002' }] });
+        chatbotNotifier.sendAgentMessage.mockResolvedValueOnce({ ok: true, messageId: 'wamid.002' });
         gmailService.isConnected.mockResolvedValueOnce(true);
         gmailService.sendEmail.mockResolvedValueOnce(true);
         query.mockResolvedValueOnce({ rowCount: 1 });
@@ -320,7 +331,7 @@ describe('Communications routes', () => {
         expect(res.body.channel_results.whatsapp.simulated).toBe(false);
         expect(res.body.channel_results.email.simulated).toBe(false);
         expect(res.body.simulated).toBe(false);
-        expect(whatsappService.sendTextMessage).toHaveBeenCalledTimes(1);
+        expect(chatbotNotifier.sendAgentMessage).toHaveBeenCalledTimes(1);
         expect(gmailService.sendEmail).toHaveBeenCalledTimes(1);
     });
 

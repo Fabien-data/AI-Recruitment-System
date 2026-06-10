@@ -187,9 +187,12 @@ export const CANDIDATE_STAGE_FILTER_OPTIONS = [
   { value: 'future_pool', label: 'Future Pool' },
 ]
 
-// Messages workspace status buckets (mutually exclusive tabs) — the pipeline 4
-// plus Future Pool. Shared so pages don't redefine this locally.
+// Messages workspace status buckets (mutually exclusive tabs). "All chats"
+// (value '') is the default and sends NO status filter — the backend then
+// returns every conversation. Followed by the pipeline 4 + Future Pool. Shared
+// so pages don't redefine this locally.
 export const CANDIDATE_STATUS_BUCKETS = [
+  { value: '', label: 'All chats' },
   { value: 'new', label: 'New' },
   { value: 'screening', label: 'Screening' },
   { value: 'certified', label: 'Certified' },

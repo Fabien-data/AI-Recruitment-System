@@ -338,7 +338,20 @@ router.post('/', authenticate, requireSection('jobs', 'create'), authorize('admi
             required_fields_schema,
         } = req.body;
 
-        if (!title || !category || !requirements) {
+        // Status: default 'active' for manual create. Only allow values from the
+        // user-facing set + pending_review (for the AI review-queue Save action).
+        const requestedStatus = String(req.body.status || 'active').toLowerCase();
+        const status = VALID_STATUSES.has(requestedStatus) ? requestedStatus : 'active';
+
+        // Inline / future roles are lightweight placeholders created from the
+        // Messages assign/transfer picker (or a "future project"): only a title +
+        // project are required — category/requirements default so it's still a
+        // real, assignable job (Kanban/shortlist/counts key off project_id/job_id).
+        const isInline = req.body.inline === true || status === 'future';
+        const effCategory = category || (isInline ? 'General' : null);
+        const effRequirements = requirements || (isInline ? {} : null);
+
+        if (!title || !effCategory || !effRequirements) {
             return res.status(400).json({ error: 'Title, category, and requirements are required' });
         }
         if (!project_id) {
@@ -349,11 +362,6 @@ router.post('/', authenticate, requireSection('jobs', 'create'), authorize('admi
         if (projectResult.rows.length === 0) {
             return res.status(404).json({ error: 'Project not found' });
         }
-
-        // Status: default 'active' for manual create. Only allow values from the
-        // user-facing set + pending_review (for the AI review-queue Save action).
-        const requestedStatus = String(req.body.status || 'active').toLowerCase();
-        const status = VALID_STATUSES.has(requestedStatus) ? requestedStatus : 'active';
 
         // Urgency: validated and used to derive is_urgent (deprecated column).
         const urgency_level = VALID_URGENCY.has(req.body.urgency_level) ? req.body.urgency_level : 'normal';
@@ -381,9 +389,9 @@ router.post('/', authenticate, requireSection('jobs', 'create'), authorize('admi
              ) RETURNING *`,
             [
                 title,
-                category,
+                effCategory,
                 description,
-                JSON.stringify(requirements),
+                JSON.stringify(effRequirements),
                 JSON.stringify(wiggle_room || {}),
                 positions_available || 1,
                 salary_range,

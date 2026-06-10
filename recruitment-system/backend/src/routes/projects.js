@@ -355,7 +355,22 @@ router.post('/', authenticate, requireSection('projects', 'create'), authorize('
 
         const normalized = normalizeProjectPayload(req.body);
 
-        if (!title || !client_name || normalized.industry_types.length === 0 || !normalized.countries || normalized.countries.length === 0) {
+        // A "future project" is a pipeline project an agent can park candidates in
+        // before it's officially active (shows in the transfer/assign pickers).
+        // Future projects can be created lightweight (just a name) straight from
+        // the Messages picker — the client/industry/country details get filled in
+        // later when the project goes active, so default them here.
+        const isFuture = req.body.is_future === true;
+        const effClientName = client_name || (isFuture ? 'Pipeline (future)' : null);
+        const effIndustryTypes = normalized.industry_types.length
+            ? normalized.industry_types
+            : (isFuture ? ['general'] : []);
+        const effCountries = (normalized.countries && normalized.countries.length)
+            ? normalized.countries
+            : (isFuture ? ['Unspecified'] : []);
+        const effIndustryType = effIndustryTypes[0] || normalized.industry_type || '';
+
+        if (!title || !effClientName || effIndustryTypes.length === 0 || effCountries.length === 0) {
             return res.status(400).json({ error: 'Title, client name, at least one industry, and at least one country are required' });
         }
 
@@ -367,24 +382,26 @@ router.post('/', authenticate, requireSection('projects', 'create'), authorize('
         const endDate = emptyToNull(end_date);
 
         const userId = req.user.id;
-        const industryTypesJson = JSON.stringify(normalized.industry_types);
+        const industryTypesJson = JSON.stringify(effIndustryTypes);
+        const countriesJson = JSON.stringify(effCountries);
 
         if (isMySQL) {
             const id = generateUUID();
             await query(
                 `INSERT INTO projects (id, title, client_name, industry_type, industry_types, description, countries, status, priority,
                  total_positions, start_date, interview_date, end_date, benefits, salary_info, contact_info,
-                 requirements, metadata, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 requirements, metadata, is_future, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
-                    id, title, client_name, normalized.industry_type, industryTypesJson, description,
-                    JSON.stringify(normalized.countries), status, priority, total_positions,
+                    id, title, effClientName, effIndustryType, industryTypesJson, description,
+                    countriesJson, status, priority, total_positions,
                     startDate, interviewDate, endDate,
                     JSON.stringify(benefits || {}),
                     JSON.stringify(normalized.salary_info),
                     JSON.stringify(normalized.contact_info),
                     JSON.stringify(requirements || {}),
                     JSON.stringify(metadata || {}),
+                    isFuture,
                     userId
                 ]
             );
@@ -403,18 +420,19 @@ router.post('/', authenticate, requireSection('projects', 'create'), authorize('
             const result = await query(
                 `INSERT INTO projects (title, client_name, industry_type, industry_types, description, countries, status, priority,
                  total_positions, start_date, interview_date, end_date, benefits, salary_info, contact_info,
-                 requirements, metadata, created_by)
-                 VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18)
+                 requirements, metadata, is_future, created_by)
+                 VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18, $19)
                  RETURNING *`,
                 [
-                    title, client_name, normalized.industry_type, industryTypesJson, description,
-                    JSON.stringify(normalized.countries), status, priority, total_positions,
+                    title, effClientName, effIndustryType, industryTypesJson, description,
+                    countriesJson, status, priority, total_positions,
                     startDate, interviewDate, endDate,
                     JSON.stringify(benefits || {}),
                     JSON.stringify(normalized.salary_info),
                     JSON.stringify(normalized.contact_info),
                     JSON.stringify(requirements || {}),
                     JSON.stringify(metadata || {}),
+                    isFuture,
                     userId
                 ]
             );
@@ -480,7 +498,7 @@ router.put('/:id', authenticate, requireSection('projects', 'edit'), authorize('
             'title', 'client_name', 'industry_type', 'industry_types', 'description', 'countries',
             'status', 'priority', 'total_positions', 'filled_positions',
             'start_date', 'interview_date', 'end_date', 'benefits',
-            'salary_info', 'contact_info', 'requirements', 'metadata'
+            'salary_info', 'contact_info', 'requirements', 'metadata', 'is_future'
         ];
 
         const setClause = [];

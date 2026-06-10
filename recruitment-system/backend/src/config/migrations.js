@@ -731,6 +731,17 @@ async function applyMigrations() {
         await safeAlter(sql, label);
     }
 
+    // ── Migration 037: interview outcome (passed / failed / pending_review) ────
+    // Structured hiring decision per interview (distinct from the 1–5 rating +
+    // free-text feedback). NOTE: on prod interview_schedules may be postgres-
+    // owned, so this ALTER can be rejected ("must be owner") — logged WARN; the
+    // routes degrade gracefully (interviewHasOutcomeColumn gate). Run
+    // scripts/fix-interview-ownership.js to enable persistence.
+    await safeAlter(
+        `ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS outcome VARCHAR(20)`,
+        'interview_schedules.outcome',
+    );
+
     // ── Migration 026: job re-engagement waiting list ─────────────────────────
     // When a candidate wanted a role we had no opening for (they land in
     // general_pool with metadata.job_interest_stated), we proactively message
@@ -863,17 +874,13 @@ async function applyMigrations() {
         '032a candidates rejected → future_pool'
     );
 
-    // (b) CV is the hard gate: a candidate with no CV on file can only be New.
-    //     Pull any CV-less candidate sitting in an eligibility/pool stage back to
-    //     New. Protected terminals (merged/hired) are intentionally excluded.
-    await safeUpdate(
-        `UPDATE candidates
-            SET status = 'new'
-          WHERE status IN ('screening','certified','interview_scheduled','future_pool')
-            AND NOT (cv_uploaded IS TRUE
-                     OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`,
-        '032b CV-less candidates re-bucketed → new'
-    );
+    // (b) [REMOVED 2026-06-08] This step used to re-bucket every CV-less candidate
+    //     back to New. The CV hard-gate has been DROPPED (user decision — candidates
+    //     reflect their real application stage regardless of CV; almost all prod
+    //     candidates are agency-imported with offline CVs). Left in, this re-bucket
+    //     reverted advanced candidates to New on EVERY boot, wiping their true stage
+    //     (e.g. interview_scheduled 861 → 129). It is replaced by the self-healing
+    //     re-derivation in step (d) below.
 
     // (c) collapse application.status legacy values onto the canonical 5.
     await safeUpdate(
@@ -897,6 +904,37 @@ async function applyMigrations() {
     await safeUpdate(
         `UPDATE applications SET status = 'rejected' WHERE status = 'transferred'`,
         '032c applications transferred → rejected'
+    );
+
+    // (d) Self-healing candidate-stage re-derivation (replaces the old 032b CV
+    //     re-bucket). Sets candidate.status (+ conversation_stage) to the FURTHEST
+    //     non-rejected application stage, regardless of CV. Idempotent — only
+    //     rewrites drifted rows — and runs every boot, so candidate.status can
+    //     never fall behind the Applications page again (the recurring "counts are
+    //     wrong / Interview Scheduled too low" bug). merged/hired are terminal;
+    //     candidates with no forward application keep their status (future_pool
+    //     parking preserved). This is the permanent form of the manual backfill.
+    await safeUpdate(
+        `UPDATE candidates c
+            SET status = v.s, conversation_stage = v.s, updated_at = NOW()
+           FROM (
+                 SELECT a.candidate_id,
+                        MAX(CASE
+                              WHEN a.status IN ('interview_scheduled','interviewed','selected','placed') THEN 3
+                              WHEN a.status IN ('certified','pre_screened') THEN 2
+                              WHEN a.status IN ('screening','applied','auto_assigned','reviewing') THEN 1
+                              ELSE 0 END) AS rnk
+                   FROM applications a
+                  GROUP BY a.candidate_id
+                ) r,
+                LATERAL (SELECT (CASE r.rnk WHEN 3 THEN 'interview_scheduled'
+                                            WHEN 2 THEN 'certified'
+                                            WHEN 1 THEN 'screening' END) AS s) v
+          WHERE c.id = r.candidate_id
+            AND r.rnk > 0
+            AND c.status NOT IN ('merged','hired')
+            AND c.status IS DISTINCT FROM v.s`,
+        '032d candidate.status re-derived from furthest application'
     );
 
     // NOTE: conversation_stage is intentionally NOT mass-mirrored here. It is no
@@ -1037,6 +1075,31 @@ async function applyMigrations() {
     for (const [sql, label] of reachabilityCols) {
         await safeAlter(sql, label);
     }
+
+    // ── Migration 040: call_logs.action_type ─────────────────────────────────
+    // Distinguish a genuine phone CALL from an agent ACTION (assign / certify /
+    // schedule interview / follow-up / not-interested / note). Before this every
+    // action was logged with a call `outcome`, so "calls logged" was inflated and
+    // the engagement log read as if every action was a call. NULL = legacy row
+    // (treated as 'call' for display). Indexed for the per-agent rollup.
+    await safeAlter(
+        `ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS action_type VARCHAR(24)`,
+        '040 call_logs.action_type'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_call_logs_agent_action ON call_logs(agent_id, action_type, called_at DESC)`,
+        '040 idx_call_logs_agent_action'
+    );
+
+    // ── Migration 039: future projects ────────────────────────────────────────
+    // A "future project" is a pipeline project an agent can transfer/assign a
+    // candidate into before it's officially active. Lightweight inline roles
+    // created under it use jobs.status='draft' (no extra column needed). Online-
+    // safe: ADD COLUMN ... DEFAULT FALSE is metadata-only on Postgres 11+.
+    await safeAlter(
+        `ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_future BOOLEAN NOT NULL DEFAULT FALSE`,
+        '039 projects.is_future'
+    );
 
     logger.info('✅ Startup migrations complete.');
 }

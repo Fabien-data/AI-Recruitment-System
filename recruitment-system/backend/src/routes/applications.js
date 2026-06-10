@@ -10,23 +10,45 @@ const { syncJobAsync } = require('./chatbot-sync');
 const {
     syncCandidateStage,
     setCandidateStage,
-    candidateHasCv,
     normalizeApplicationStatus,
     APPLICATION_STATUS_SET,
     emitApplicationChanged,
 } = require('../services/candidate-stage');
 const logger = require('../utils/logger');
+const {
+    buildConversationFilters,
+    buildCandidateStatusCountsSql,
+    shapeCountsRow,
+} = require('../services/conversation-counts');
 
-// Canonical 422 used by every CV eligibility gate (UPGRADES.md #5). A candidate
-// with no CV on file can never be assigned / advanced past New.
-function screeningGate(res, extra = {}) {
-    return res.status(422).json({
-        error: 'Upload a CV/resume before assigning the candidate to a job.',
-        code: 'screening_gate',
-        has_cv: false,
-        ...extra,
-    });
-}
+// CV is no longer a hard eligibility gate (user decision 2026-06-08): staff can
+// assign and advance any candidate regardless of whether a CV is on file (almost
+// all candidates are agency-imported with offline CVs). The old screeningGate()
+// 422 helper has been removed along with its call sites.
+
+// Candidate-level per-status totals — the SAME canonical counts the Messages tabs
+// show, so the Applications page's "Candidates by stage" strip reads identically
+// to the Conversations panel. Reuses the shared conversation-counts builder (same
+// population gate + same bucketing) so the two surfaces can never drift. Defined
+// before the `/:id` routes so the literal path isn't shadowed.
+router.get('/status-totals', authenticate, requireSection('applications', 'view'), async (req, res, next) => {
+    try {
+        const params = [];
+        const addParam = (value) => { params.push(value); return isMySQL ? '?' : `$${params.length}`; };
+        const filters = buildConversationFilters({
+            query: { project_id: req.query.project_id },
+            userId: req.user.id,
+            addParam,
+            includeStatusBucket: false,
+        });
+        const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+        const sql = buildCandidateStatusCountsSql({ whereClause, includeHired: true });
+        const result = await query(sql, params);
+        res.json(shapeCountsRow(result.rows[0], { includeHired: true }));
+    } catch (error) {
+        next(error);
+    }
+});
 
 /**
  * Get all applications with filters
@@ -59,6 +81,13 @@ router.get('/', authenticate, requireSection('applications', 'view'), async (req
         if (status) {
             whereClause += isMySQL ? ' AND a.status = ?' : ` AND a.status = $${params.length + 1}`;
             params.push(status);
+        } else if (!candidate_id) {
+            // Default list view: hide closed (rejected) applications. Moving a
+            // candidate to Future Pool rejects their application, which should drop
+            // it out of the active Applications list. Still reachable via the
+            // "Rejected" status filter, and a candidate-scoped query (candidate_id)
+            // keeps the full history.
+            whereClause += " AND a.status <> 'rejected'";
         }
         if (project_id) {
             whereClause += isMySQL ? ' AND j.project_id = ?' : ` AND j.project_id = $${params.length + 1}`;
@@ -158,11 +187,8 @@ router.post('/', authenticate, requireSection('applications', 'create'), async (
             return res.status(400).json({ error: 'Candidate ID and Job ID are required' });
         }
 
-        // CV is the hard eligibility gate (#5): block any manual assignment of a
-        // candidate with no CV on file — they must stay New until a CV arrives.
-        if (!(await candidateHasCv(candidate_id))) {
-            return screeningGate(res, { candidate_id });
-        }
+        // CV gate removed (2026-06-08): a candidate may be assigned to a job
+        // regardless of whether a CV is on file.
 
         const candidateResult = await query(
             adaptQuery('SELECT c.*, cv.parsed_data FROM candidates c LEFT JOIN cv_files cv ON c.id = cv.candidate_id WHERE c.id = $1 LIMIT 1'),
@@ -310,14 +336,8 @@ router.put('/:id', authenticate, requireSection('applications', 'edit'), async (
                     error: `Invalid lifecycle transition: ${currentStatus} → ${status}. Allowed next states: ${allowed.join(', ') || '(none, terminal)'}.`,
                 });
             }
-            // CV is the hard gate (#5): an application can't be ADVANCED to an
-            // eligibility stage (certified / interview_scheduled / hired) for a
-            // candidate with no CV on file. Declines (rejected) are always allowed.
-            if (status !== currentStatus
-                && ['certified', 'interview_scheduled', 'hired'].includes(status)
-                && !(await candidateHasCv(currentRes.rows[0].candidate_id))) {
-                return screeningGate(res, { candidate_id: currentRes.rows[0].candidate_id });
-            }
+            // CV gate removed (2026-06-08): an application may be advanced to any
+            // valid next stage regardless of whether a CV is on file.
         }
 
         const setClauses = [];

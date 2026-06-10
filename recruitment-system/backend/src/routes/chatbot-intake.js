@@ -23,6 +23,7 @@ const { checkForDuplicate } = require('../services/duplicate-detection');
 const { searchKnowledgeBase } = require('../services/knowledge-base');
 const multer = require('multer');
 const { normalizeIncomingCvUrl } = require('../utils/cv-url');
+const { emitStageChanged, syncCandidateStage } = require('../services/candidate-stage');
 
 // Multer for multipart/form-data CV uploads (max 20MB)
 const upload = multer({
@@ -1204,18 +1205,18 @@ router.post(
                     ]);
                 }
 
-                // CV is the hard gate (#5): only place the candidate in future_pool
-                // if a CV is on file — otherwise they stay New (awaiting CV).
+                // Route to future_pool (general pool, no job matched). CV gate
+                // removed (2026-06-08): park the candidate regardless of whether a
+                // CV is on file; only terminal states are protected.
                 const setFuturePoolSQL = isMySQL
-                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW()
-                       WHERE id = ?
-                         AND (cv_uploaded = TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`
-                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW()
-                       WHERE id = $1
-                         AND (cv_uploaded IS TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`;
+                    ? `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW()
+                       WHERE id = ? AND status NOT IN ('merged','hired')`
+                    : `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW()
+                       WHERE id = $1 AND status NOT IN ('merged','hired')`;
                 await query(setFuturePoolSQL, [candidateId]).catch(err =>
                     logger.warn(`Failed to set future_pool status for general-pool candidate ${candidateId}: ${err.message}`)
                 );
+                emitStageChanged(candidateId, 'future_pool');
 
                 logger.info(`Chatbot intake: candidate ${candidateId} routed to general_pool`);
             } else if (resolvedJobId) {
@@ -1266,17 +1267,17 @@ router.post(
             // When the chatbot marks a candidate as future_pool (requested role not available),
             // update their status so recruiters can find them in the Future Pool view.
             if (!resolvedJobId && cv_parsed_data && cv_parsed_data.future_pool) {
-                // CV gate (#5): only move New → future_pool when a CV is on file.
+                // CV gate removed (2026-06-08): move a New lead → future_pool when
+                // they asked for an unavailable role, regardless of CV on file.
                 const futurePoolSQL = isMySQL
-                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW()
-                       WHERE id = ? AND status = 'new'
-                         AND (cv_uploaded = TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`
-                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW()
-                       WHERE id = $1 AND status = 'new'
-                         AND (cv_uploaded IS TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = candidates.id))`;
+                    ? `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW()
+                       WHERE id = ? AND status = 'new'`
+                    : `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW()
+                       WHERE id = $1 AND status = 'new'`;
                 await query(futurePoolSQL, [candidateId]).catch(err =>
                     logger.warn(`Failed to set future_pool status for candidate ${candidateId}: ${err.message}`)
                 );
+                emitStageChanged(candidateId, 'future_pool');
                 logger.info(`Chatbot intake: candidate ${candidateId} set to future_pool (requested role: "${cv_parsed_data.future_pool_role || job_interest}")`);
             }
 
@@ -1699,6 +1700,10 @@ router.post('/interview-response', authenticateChatbot, async (req, res) => {
 
         if (action === 'confirm') {
             await query(adaptQuery("UPDATE interview_schedules SET status = 'confirmed' WHERE id = $1"), [iv.interview_id]);
+            // Keep the candidate's canonical stage aligned with the application
+            // (it is already interview_scheduled; this re-derives + emits live so
+            // the Conversations badge is guaranteed current).
+            syncCandidateStage(iv.candidate_id).catch(() => {});
             return res.json({ ok: true, result: 'confirmed', interview_id: iv.interview_id });
         }
 

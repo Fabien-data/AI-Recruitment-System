@@ -35,17 +35,31 @@ const fmtDur = (s) => {
   return m ? `${m}m ${sec}s` : `${sec}s`
 }
 
+// Action-aware icons/labels for the engagement timeline (call_logs.action_type).
+const ACTION_ICON = { call: '📞', assign: '📋', certify: '✅', interview: '📅', follow_up: '🔁', no_answer: '📵', not_interested: '🚫', note: '📝' }
+const ACTION_LABEL = { call: 'call', assign: 'assigned to job', certify: 'certified', interview: 'interview scheduled', follow_up: 'follow-up', no_answer: 'no answer', not_interested: 'not interested', note: 'note' }
+function feedIcon(r) {
+  if (r.action_type && ACTION_ICON[r.action_type]) return ACTION_ICON[r.action_type]
+  return r.outcome === 'answered' ? '📞' : r.outcome === 'no_answer' ? '📵' : r.outcome === 'callback' ? '🔁' : '📝'
+}
+function feedLabel(r) {
+  if (r.action_type && r.action_type !== 'call' && ACTION_LABEL[r.action_type]) return ACTION_LABEL[r.action_type]
+  return r.outcome ? String(r.outcome).replace(/_/g, ' ') : 'logged'
+}
+
 function CallStatCells({ row }) {
   const cells = [
     ['Calls', row?.calls_logged ?? 0],
-    ['Done', row?.answered ?? 0],
+    ['Screenings', row?.screenings ?? 0],
+    ['Certified', row?.certifications ?? 0],
+    ['Interviews', row?.interviews_scheduled ?? 0],
+    ['Messages', row?.messages_sent ?? 0],
     ['No answer', row?.no_answer ?? 0],
-    ['Follow-ups', row?.callbacks ?? 0],
-    ['Not interested', row?.not_interested ?? 0],
-    ['Avg dur.', fmtDur(row?.avg_duration_seconds)],
+    ['Follow-ups', row?.follow_ups ?? row?.callbacks ?? 0],
+    ['Avg call', fmtDur(row?.avg_duration_seconds)],
   ]
   return (
-    <div className="grid grid-cols-3 md:grid-cols-6 gap-2 mb-4">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
       {cells.map(([label, val]) => (
         <div key={label} className="rounded-lg border border-slate-200 dark:border-zinc-800 px-3 py-2">
           <div className="text-lg font-semibold text-slate-800 dark:text-zinc-100">{val}</div>
@@ -59,14 +73,17 @@ function CallStatCells({ row }) {
 function CallRecentFeed({ items, showAgent }) {
   if (!items || items.length === 0) return <div className="text-sm text-slate-400 dark:text-zinc-500">No activity yet.</div>
   return (
-    <ul className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+    <ul className="divide-y divide-slate-100 dark:divide-zinc-800 max-h-80 overflow-y-auto">
       {items.map((r) => (
         <li key={r.id} className="py-2 flex items-start gap-2 text-sm">
-          <span className="mt-0.5 shrink-0">{r.outcome === 'answered' ? '✅' : r.outcome === 'no_answer' ? '📵' : r.outcome === 'callback' ? '🔁' : '📝'}</span>
+          <span className="mt-0.5 shrink-0">{feedIcon(r)}</span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <Link to={`/communications?candidate=${r.candidate_id}`} className="font-medium text-slate-800 dark:text-zinc-100 hover:underline">{r.candidate_name || 'Candidate'}</Link>
-              {r.outcome && <span className="text-[11px] text-slate-500 dark:text-zinc-400">{String(r.outcome).replace(/_/g, ' ')}</span>}
+              <span className="text-[11px] text-slate-500 dark:text-zinc-400">{feedLabel(r)}</span>
+              {r.job_title && (r.action_type === 'assign' || r.action_type === 'certify' || r.action_type === 'interview') && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">{r.job_title}</span>
+              )}
               {r.disposition && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300">{String(r.disposition).replace(/_/g, ' ')}</span>}
             </div>
             {r.remark && <div className="text-xs text-slate-500 dark:text-zinc-400 truncate">{r.remark}</div>}
@@ -356,7 +373,7 @@ export default function Engagement() {
             <div className="bg-white dark:bg-zinc-900 rounded-lg border border-slate-200 dark:border-zinc-800 p-4">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-medium text-slate-800 dark:text-zinc-100 flex items-center gap-2">
-                  <Phone size={16} className="text-rose-500" /> Team call activity
+                  <Phone size={16} className="text-rose-500" /> Team activity (calls · messages · screenings · certifications · interviews)
                 </h2>
                 <select value={callDays} onChange={(e) => setCallDays(Number(e.target.value))} className="text-xs bg-white dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 border border-slate-200 dark:border-zinc-800 rounded px-2 py-1">
                   <option value={1}>Today</option>
@@ -369,19 +386,20 @@ export default function Engagement() {
               {teamActivity.isLoading ? (
                 <div className="text-sm text-slate-400 dark:text-zinc-500">Loading…</div>
               ) : perAgent.length === 0 ? (
-                <div className="text-sm text-slate-400 dark:text-zinc-500">No calls logged in this window.</div>
+                <div className="text-sm text-slate-400 dark:text-zinc-500">No activity in this window.</div>
               ) : (
                 <div className="overflow-x-auto mb-4">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-xs text-slate-500 dark:text-zinc-400 border-b border-slate-100 dark:border-zinc-800">
                         <th className="py-2 pr-3">Agent</th>
-                        <th className="py-2 pr-3">Calls</th>
-                        <th className="py-2 pr-3">Done</th>
+                        <th className="py-2 pr-3" title="Genuine phone calls logged">Calls</th>
+                        <th className="py-2 pr-3" title="Outbound messages sent">Messages</th>
+                        <th className="py-2 pr-3" title="Moved to Screening (job assigned)">Screenings</th>
+                        <th className="py-2 pr-3">Certified</th>
+                        <th className="py-2 pr-3">Interviews</th>
                         <th className="py-2 pr-3">No answer</th>
-                        <th className="py-2 pr-3">Follow-ups</th>
-                        <th className="py-2 pr-3">Not interested</th>
-                        <th className="py-2 pr-3">Avg dur.</th>
+                        <th className="py-2 pr-3" title="All non-call actions">Actions</th>
                         <th className="py-2 pr-3"></th>
                       </tr>
                     </thead>
@@ -394,11 +412,12 @@ export default function Engagement() {
                         >
                           <td className="py-2 pr-3 font-medium text-slate-800 dark:text-zinc-100">{r.agent_name}{r.agent_id === currentUser?.id ? ' (you)' : ''}</td>
                           <td className="py-2 pr-3 text-slate-600 dark:text-zinc-300">{r.calls_logged}</td>
-                          <td className="py-2 pr-3 text-emerald-700">{r.answered}</td>
+                          <td className="py-2 pr-3 text-sky-700 dark:text-sky-300">{r.messages_sent ?? 0}</td>
+                          <td className="py-2 pr-3 text-amber-700">{r.screenings ?? 0}</td>
+                          <td className="py-2 pr-3 text-emerald-700">{r.certifications ?? 0}</td>
+                          <td className="py-2 pr-3 text-indigo-700 dark:text-indigo-300">{r.interviews_scheduled ?? 0}</td>
                           <td className="py-2 pr-3 text-rose-700">{r.no_answer}</td>
-                          <td className="py-2 pr-3 text-amber-700">{r.callbacks}</td>
-                          <td className="py-2 pr-3 text-zinc-600 dark:text-zinc-300">{r.not_interested}</td>
-                          <td className="py-2 pr-3 text-slate-600 dark:text-zinc-300">{fmtDur(r.avg_duration_seconds)}</td>
+                          <td className="py-2 pr-3 text-zinc-600 dark:text-zinc-300">{r.actions_total ?? 0}</td>
                           <td className="py-2 pr-3 text-indigo-600 text-xs font-medium">{r.agent_id === focusAgentId ? 'Hide' : 'View'}</td>
                         </tr>
                       ))}

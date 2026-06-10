@@ -5,7 +5,8 @@ import {
   getApplications, getJobs, getProjects, apiClient, getInterviewers,
   previewInterviewAllocation, bulkScheduleInterviews,
   updateApplication, rejectToPool, batchCertifyApplications, batchRejectToPool,
-  getCandidate, getPendingInterviewSends, downloadUnreachableCsv,
+  getCandidate, getPendingInterviewSends, downloadUnreachableCsv, setCandidateStage,
+  getApplicationStatusTotals,
 } from '../api'
 import {
   CalendarDays, FileText, FolderKanban, Briefcase, ListFilter, Plus,
@@ -13,6 +14,7 @@ import {
   ChevronDown, ChevronRight, Send, MapPinned, X, Clock,
   Search, ArrowDownWideNarrow, ChevronsDownUp, ChevronsUpDown,
   Inbox, Check, Archive, Star, Phone, Loader2, Upload, ListChecks, RotateCcw, AlertTriangle,
+  MessageSquare,
 } from 'lucide-react'
 import { DEFAULT_INTERVIEW_MESSAGE, DEFAULT_INTERVIEW_MESSAGE_KEY } from '../constants/interviewMessage'
 import { Modal } from '../components/ui/Modal'
@@ -36,7 +38,7 @@ import { CVReviewModal } from './CVManager'
 import SavedViews from '../components/SavedViews'
 import { DocumentPreview } from '../components/documents/DocumentPreview'
 import { getDocumentCategory } from '../utils/documents'
-import { STATUS_FILTER_OPTIONS, normalizeStatus } from '../constants/lifecycle'
+import { STATUS_FILTER_OPTIONS, normalizeStatus, STATUS_LABELS, STATUS_COLORS } from '../constants/lifecycle'
 import { useRealtime } from '../hooks/useRealtime'
 
 // How many collapsed project rows to show per page of the project list.
@@ -196,6 +198,16 @@ export default function Applications() {
   const { data: projectsData } = useQuery({
     queryKey: ['projects', 'applications-filter'],
     queryFn: () => getProjects({}),
+  })
+
+  // Candidate-level per-stage totals — the SAME canonical counts the Messages
+  // tabs show (shared backend builder), so this strip reads identically to the
+  // Conversations panel. Distinct from the per-project application-row counts
+  // below: this counts *candidates* by their single canonical status.
+  const { data: stageTotals } = useQuery({
+    queryKey: ['application-status-totals', projectId || ''],
+    queryFn: () => getApplicationStatusTotals({ project_id: projectId || undefined }),
+    refetchInterval: 120000,
   })
 
   const jobs = Array.isArray(jobsData?.data) ? jobsData.data : Array.isArray(jobsData) ? jobsData : []
@@ -400,6 +412,28 @@ export default function Applications() {
           <Inbox size={15} /> Inbox
         </button>
       </div>
+
+      {/* Candidates by stage — canonical candidate-level counts, identical to the
+          Messages tabs (shared backend builder). Distinct from the per-project
+          application-row totals shown on each project card below. */}
+      {stageTotals?.by_status && (
+        <div className="mb-6">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mb-1.5">
+            Candidates by stage{projectId ? ' · this project' : ''}
+          </p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {['new', 'screening', 'certified', 'interview_scheduled', 'future_pool', 'hired'].map((s) => (
+              <span
+                key={s}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${STATUS_COLORS[s] || 'bg-zinc-50 text-zinc-700 border-zinc-200 dark:bg-zinc-800/40 dark:text-zinc-300 dark:border-zinc-700/50'}`}
+              >
+                {STATUS_LABELS[s] || s}
+                <span className="font-bold">{stageTotals.by_status[s] || 0}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {tab === 'inbox' && (
         <ApplicationsInbox projects={projects} />
@@ -809,20 +843,39 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
     onSuccess: (result) => {
       const created = result?.total_created || 0
       const skipped = result?.skipped?.length || 0
-      // Aggregate per-candidate notification results so partial failures
-      // surface as a per-channel breakdown instead of a generic success toast.
-      const aggregated = { success: [], failed: [] }
-      for (const r of result?.notifications || []) {
-        if (r?.notification?.success) aggregated.success.push(...r.notification.success)
-        if (r?.notification?.failed) aggregated.failed.push(...r.notification.failed)
-      }
-      // Split out candidates we genuinely couldn't reach on WhatsApp so the agent
-      // can call them — backed by a downloadable CSV (no application left behind).
-      const unreachable = aggregated.failed.filter((f) => f?.reason === 'no_whatsapp').length
-      if (aggregated.failed.length > 0) {
-        showNotificationToast(aggregated, `Scheduled ${created} interview${created === 1 ? '' : 's'}`)
+      // Per-reason delivery breakdown from the backend so the agent sees EXACTLY
+      // how many invites reached candidates vs. were dropped (out of window /
+      // rate-limited / not on WhatsApp) — not just "scheduled N".
+      const ds = result?.delivery_summary || {}
+      const sent = ds.sent || 0
+      const outWin = ds.out_of_window || 0
+      const rateLtd = ds.rate_limited || 0
+      const tokenExp = ds.token_expired || 0
+      const otherFail = ds.other || 0
+      const unreachable = ds.no_whatsapp || 0
+      const totalFailed = outWin + rateLtd + tokenExp + otherFail + unreachable
+
+      if (totalFailed > 0) {
+        const parts = []
+        if (sent) parts.push(`${sent} sent`)
+        if (outWin) parts.push(`${outWin} no reply in 24h`)
+        if (rateLtd) parts.push(`${rateLtd} rate-limited`)
+        if (unreachable) parts.push(`${unreachable} not on WhatsApp`)
+        if (tokenExp) parts.push(`${tokenExp} token expired`)
+        if (otherFail) parts.push(`${otherFail} failed`)
+        toast((t) => (
+          <span className="text-sm">
+            <span className="flex items-center gap-2 font-semibold text-slate-800 dark:text-zinc-100">
+              <AlertTriangle size={16} className="text-amber-500" />
+              Scheduled {created} — {parts.join(' · ')}
+            </span>
+            <span className="block mt-1 text-xs text-slate-500 dark:text-zinc-400">
+              Undelivered invites stay in the pending-send list; re-send once candidates reply (or use an approved template).
+            </span>
+          </span>
+        ), { duration: 14000 })
       } else {
-        toast.success(`Scheduled ${created} interview${created === 1 ? '' : 's'}` + (skipped ? ` (${skipped} skipped)` : ''))
+        toast.success(`Scheduled ${created} interview${created === 1 ? '' : 's'} — all invites sent` + (skipped ? ` (${skipped} skipped)` : ''))
       }
       if (unreachable > 0) {
         toast((t) => (
@@ -1267,6 +1320,21 @@ function ProjectSection({
 function RowActions({ app, isAdmin, onEdit, onTransfer, onDelete, onOpenCv }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
+  const queryClient = useQueryClient()
+
+  // Move to Future Pool right from the row: close (reject) THIS application and
+  // park the candidate in the pool. Rejecting the application drops it out of the
+  // active Applications list (the user's "remove it from Applications" ask), while
+  // setCandidateStage('future_pool') (inside reject-to-pool) parks the candidate.
+  const futurePoolMut = useMutation({
+    mutationFn: () => rejectToPool(app.id, { rejection_reason: 'Moved to Future Pool' }),
+    onSuccess: () => {
+      toast.success('Moved to Future Pool')
+      queryClient.invalidateQueries({ queryKey: ['applications'] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Could not move to Future Pool'),
+  })
 
   useEffect(() => {
     if (!open) return
@@ -1289,9 +1357,11 @@ function RowActions({ app, isAdmin, onEdit, onTransfer, onDelete, onOpenCv }) {
       {open && (
         <div className="absolute right-0 z-20 mt-1 w-48 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg py-1">
           <MenuButton icon={FileText} label="Open CV" onClick={() => { setOpen(false); onOpenCv() }} />
+          <MenuLink to={`/communications?candidate=${app.candidate_id}`} icon={MessageSquare} label="Open Chat" />
           <MenuLink to={`/candidates/${app.candidate_id}`} icon={Eye} label="View Candidate" />
           <MenuButton icon={Pencil} label="Edit Status" onClick={() => { setOpen(false); onEdit() }} />
           <MenuButton icon={ArrowRightLeft} label="Transfer" onClick={() => { setOpen(false); onTransfer() }} />
+          <MenuButton icon={Archive} label="Move to Future Pool" onClick={() => { setOpen(false); futurePoolMut.mutate() }} />
           {isAdmin && (
             <MenuButton icon={Trash2} label="Delete" tone="danger" onClick={() => { setOpen(false); onDelete() }} />
           )}

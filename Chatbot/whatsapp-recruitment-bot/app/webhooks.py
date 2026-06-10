@@ -1311,6 +1311,8 @@ def _out_of_window_template(status_key: str, payload, lang: str):
         "interview_reminder": (settings.template_interview_reminder, [first_name, job, when]),
         "interview_day_reminder": (settings.template_interview_day_reminder, [first_name, job, when]),
         "job_now_available": (settings.template_job_now_available, [first_name, job]),
+        # Agent-added candidate (never messaged in → out of window). Body: [first_name].
+        "welcome": (settings.template_welcome, [first_name]),
     }
     tmpl, params = mapping.get(status_key, (None, None))
     if not tmpl:
@@ -1403,11 +1405,22 @@ async def candidate_status_webhook(
             Candidate.phone_number == phone
         ).first()
         if not candidate:
-            logger.warning(
-                "Status webhook: no candidate found for phone %s — aborting", phone
-            )
-            db.close()
-            return {"ok": False, "reason": "candidate_not_found"}
+            if status_key == "welcome":
+                # Agent-added lead not yet in the chatbot DB — create it so the
+                # welcome can send and the candidate's first reply continues the
+                # normal bot intake flow (process_single_message handles any
+                # existing candidate). last_inbound_at stays NULL → out-of-window,
+                # so the approved welcome template is used.
+                candidate = crud.get_or_create_candidate(db, phone)
+                if payload.candidate_name and not (candidate.name or "").strip():
+                    candidate.name = payload.candidate_name
+                    db.commit()
+            else:
+                logger.warning(
+                    "Status webhook: no candidate found for phone %s — aborting", phone
+                )
+                db.close()
+                return {"ok": False, "reason": "candidate_not_found"}
         lang = "en"
         extracted = candidate.extracted_data or {}
         lang = extracted.get("language_register") or getattr(
@@ -1500,6 +1513,64 @@ async def candidate_status_webhook(
     except Exception as e:
         logger.error(f"Error sending status update to {phone}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send message: {e}")
+
+
+class AgentMessagePayload(BaseModel):
+    """An agent's free-form reply (typed in the recruitment dashboard), to be sent
+    on the chatbot's WhatsApp identity — the working token. The backend used to
+    send these on its OWN (frequently-expired) Meta token, so takeover replies
+    silently never reached the candidate."""
+    candidate_phone: str
+    message: str = ""
+    message_type: str = "text"          # text | image | document | audio | video
+    media_url: Optional[str] = None
+    filename: Optional[str] = None
+
+
+@router.post("/agent-message")
+async def agent_message_webhook(
+    payload: AgentMessagePayload,
+    x_chatbot_api_key: Optional[str] = Header(None),
+):
+    """
+    POST /webhook/agent-message
+    Send an agent-authored free-form message (text or media) to a candidate on the
+    chatbot's WhatsApp number. Returns {status:'sent', message_id} or
+    {status:'error', reason, code, detail} — the backend records that as the
+    message's delivery_status so the dashboard shows whether it actually went out.
+
+    Note: free-form messages to a candidate OUTSIDE WhatsApp's 24h window are
+    dropped by Meta (returned here as reason='out_of_window'); the agent then sees
+    "not delivered" rather than a false "sent".
+    """
+    _require_api_key_webhook(x_chatbot_api_key)
+
+    phone = (payload.candidate_phone or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="candidate_phone is required")
+
+    mtype = (payload.message_type or "text").lower()
+    try:
+        if mtype != "text" and payload.media_url:
+            result = await meta_client.send_media_by_link(
+                phone, mtype, payload.media_url,
+                caption=(payload.message or None), filename=payload.filename,
+            )
+        else:
+            result = await meta_client.send_message(phone, payload.message or "")
+
+        if "error" in result:
+            logger.warning(f"Agent message to {phone} not sent: {result.get('reason')} / {result.get('error')}")
+            return {
+                "status": "error",
+                "reason": result.get("reason") or "other",
+                "code": result.get("code"),
+                "detail": str(result.get("error")),
+            }
+        return {"status": "sent", "message_id": result.get("messages", [{}])[0].get("id")}
+    except Exception as e:
+        logger.error(f"Error sending agent message to {phone}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send agent message: {e}")
 
 
 # ─── Proactive Follow-up Sweep (Cloud Scheduler) ─────────────────────────────

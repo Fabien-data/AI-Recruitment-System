@@ -10,6 +10,7 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 const TYPE_TO_STATUS = {
+    welcome: 'welcome',
     application_complete: 'application_complete',
     job_assignment: 'job_assignment',
     certified: 'certified',
@@ -106,7 +107,53 @@ async function pushCandidateStatus({
     }
 }
 
+/**
+ * Send an agent's free-form reply (text or media) through the chatbot so it goes
+ * out on the chatbot's WhatsApp identity — the working token. The backend's own
+ * Meta token is frequently expired (the "token split-brain"), which silently
+ * dropped takeover replies. Returns { ok, messageId?, reason?, error? } and never
+ * throws, so the caller can record an honest delivery status.
+ */
+async function sendAgentMessage({ phone, message = '', messageType = 'text', mediaUrl = null, filename = null }) {
+    const base = process.env.CHATBOT_API_URL;
+    const key = process.env.CHATBOT_API_KEY;
+    if (!base || !key) {
+        return { ok: false, error: 'CHATBOT_API_URL or CHATBOT_API_KEY missing', reason: 'config' };
+    }
+    if (!phone) {
+        return { ok: false, error: 'candidate phone is empty', reason: 'no_phone' };
+    }
+
+    const payload = {
+        candidate_phone: phone,
+        message: message || '',
+        message_type: messageType || 'text',
+        media_url: mediaUrl || null,
+        filename: filename || null,
+    };
+
+    try {
+        const url = `${base.replace(/\/$/, '')}/webhook/agent-message`;
+        const resp = await axios.post(url, payload, {
+            headers: { 'x-chatbot-api-key': key, 'Content-Type': 'application/json' },
+            timeout: 20000,
+        });
+        const body = resp.data || {};
+        if (body.status === 'sent') {
+            return { ok: true, messageId: body.message_id || null };
+        }
+        const errText = body.detail || body.reason || body.status || 'chatbot did not confirm delivery';
+        logger.warn(`chatbotNotifier.sendAgentMessage: non-sent for ${phone}: ${JSON.stringify(body)}`);
+        return { ok: false, error: String(errText), reason: body.reason || null, code: body.code || null };
+    } catch (err) {
+        const detail = err.response?.data?.detail || err.response?.data || err.message;
+        logger.error(`chatbotNotifier.sendAgentMessage: POST failed for ${phone}: ${JSON.stringify(detail)}`);
+        return { ok: false, error: typeof detail === 'string' ? detail : JSON.stringify(detail), reason: null, code: null };
+    }
+}
+
 module.exports = {
     pushCandidateStatus,
+    sendAgentMessage,
     mapType,
 };

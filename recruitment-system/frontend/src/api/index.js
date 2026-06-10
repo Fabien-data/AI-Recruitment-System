@@ -39,6 +39,11 @@ export const getCandidate = (id) =>
 export const createCandidate = (data) =>
   apiClient.post('/api/candidates', data).then(res => res.data)
 
+// Create a candidate AND auto-send the welcome (appears in Messages "New" + hands
+// to the bot intake flow). Returns { candidate, welcome }.
+export const createCandidateWithWelcome = (data) =>
+  apiClient.post('/api/candidates/with-welcome', data).then(res => res.data)
+
 export const updateCandidate = (id, data) =>
   apiClient.put(`/api/candidates/${id}`, data).then(res => res.data)
 
@@ -47,6 +52,16 @@ export const updateCandidate = (id, data) =>
 // page and survives candidate-stage re-derivation.
 export const setCandidateStage = (id, stage) =>
   apiClient.put(`/api/candidates/${id}/stage`, { stage }).then(res => res.data)
+
+// Certify a candidate AND (by default) send the WhatsApp "certified" message.
+// data: { certification_notes?, translate_notes?, job_id?, role_title?, send_message?, channels? }
+export const certifyCandidate = (id, data = {}) =>
+  apiClient.post(`/api/candidates/${id}/certify`, data).then(res => res.data)
+
+// Resolve/create the application a New/Screening lead needs before scheduling an
+// interview. data: { job_id }. Returns { application_id, created }.
+export const ensureApplication = (id, data) =>
+  apiClient.post(`/api/candidates/${id}/ensure-application`, data).then(res => res.data)
 
 export const deleteCandidate = (id) =>
   apiClient.delete(`/api/candidates/${id}`).then(res => res.data)
@@ -197,6 +212,11 @@ export const getKnowledgeDocumentChunks = (id) =>
 export const getApplications = (params) =>
   apiClient.get('/api/applications', { params }).then(res => res.data)
 
+// Candidate-level per-status totals (same canonical counts as the Messages tabs)
+// for the Applications "Candidates by stage" strip. Optional { project_id }.
+export const getApplicationStatusTotals = (params) =>
+  apiClient.get('/api/applications/status-totals', { params }).then(res => res.data)
+
 export const createApplication = (data) =>
   apiClient.post('/api/applications', data).then(res => res.data)
 
@@ -320,9 +340,16 @@ export const batchCertifyApplications = (data) =>
 export const batchRejectToPool = (data) =>
   apiClient.post('/api/applications/batch-reject-to-pool', data).then(res => res.data)
 
-// Interviews
+// Interviews — list returns { data, total, limit, offset } (paginated). params:
+// { status?, project_id?, job_id?, interviewer_id?, candidate_name?,
+//   candidate_phone?, outcome?, date_from?, date_to?, limit?, offset? }
 export const getInterviews = (params) =>
   apiClient.get('/api/interviews', { params }).then(res => res.data)
+
+// Server-side interview stat aggregates (accurate across ALL rows, not just the
+// current page). Same filters as the list.
+export const getInterviewStats = (params) =>
+  apiClient.get('/api/interviews/stats', { params }).then(res => res.data)
 
 export const getUpcomingInterviews = () =>
   apiClient.get('/api/interviews/upcoming').then(res => res.data)
@@ -363,6 +390,15 @@ export const getPendingInterviewSends = (params) =>
 // Re-send the interview WhatsApp to already-scheduled interviews. body: { interview_ids }
 export const bulkNotifyInterviews = (data) =>
   apiClient.post('/api/interviews/bulk-notify', data).then(res => res.data)
+
+// Bulk status / reschedule / reassign for selected interviews.
+// body: { interview_ids, status?, scheduled_datetime?, interviewer_id?, location?, notify? }
+export const bulkUpdateInterviews = (data) =>
+  apiClient.post('/api/interviews/bulk-update', data).then(res => res.data)
+
+// Export the current filtered interview list as a CSV blob. Same params as list.
+export const exportInterviewsCsv = (params) =>
+  apiClient.get('/api/interviews/export.csv', { params, responseType: 'blob' }).then(res => res.data)
 
 // CSV of candidates we couldn't reach on WhatsApp (for manual calling).
 // Returns a Blob; callers trigger a download. params: { project_id? }

@@ -11,6 +11,24 @@ const logger = require('../utils/logger');
 
 // Notification templates for different scenarios
 const NOTIFICATION_TEMPLATES = {
+    // Sent when an agent manually adds a candidate from the Messages panel — a
+    // warm intro that opens the conversation and hands them to the bot's intake
+    // flow. The actual WhatsApp text is rendered by the chatbot (status='welcome',
+    // template if out-of-window); this copy is what gets logged to communications.
+    welcome: {
+        en: {
+            subject: '👋 Welcome to Dewan Recruitment',
+            message: `👋 Hi {name}, welcome to Dewan Recruitment — Sri Lanka's trusted overseas recruitment agency. We'd love to help you find a great job abroad. To get started, please reply here and our assistant will guide you through a few quick questions.`
+        },
+        si: {
+            subject: '👋 Dewan Recruitment වෙත සාදරයෙන් පිළිගනිමු',
+            message: `👋 ආයුබෝවන් {name}, Dewan Recruitment වෙත සාදරයෙන් පිළිගනිමු. විදේශගත හොඳ රැකියාවක් සොයා ගැනීමට අපි ඔබට උදව් කරමු. ආරම්භ කිරීමට, මෙහි පිළිතුරු දෙන්න — අපගේ සහායක ඔබට කෙටි ප්‍රශ්න කිහිපයක් අසනු ඇත.`
+        },
+        ta: {
+            subject: '👋 Dewan Recruitment-க்கு வரவேற்கிறோம்',
+            message: `👋 வணக்கம் {name}, Dewan Recruitment-க்கு வரவேற்கிறோம். வெளிநாட்டில் சிறந்த வேலையைக் கண்டுபிடிக்க உங்களுக்கு உதவ விரும்புகிறோம். தொடங்க, இங்கே பதிலளியுங்கள் — எங்கள் உதவியாளர் சில விரைவான கேள்விகளுடன் உங்களை வழிநடத்தும்.`
+        }
+    },
     // Sent when a recruiter moves a candidate New → Screening (details + CV
     // complete). Confirms the application was received and is under review.
     application_complete: {
@@ -960,13 +978,15 @@ async function sendJobAssignmentNotification(candidateId, jobTitle, channels = [
 /**
  * Send certification notification (basic - no pre-screening details)
  */
-async function sendCertificationNotification(candidateId, jobTitle, certificationNotes = '', channels = ['whatsapp']) {
+async function sendCertificationNotification(candidateId, jobTitle, certificationNotes = '', channels = ['whatsapp'], translateNotes = false) {
     return sendNotification({
         candidateId,
         type: 'certified',
         data: {
             job_title: jobTitle,
-            certification_notes: certificationNotes
+            certification_notes: certificationNotes,
+            // Opt-in translation of the cert note (off by default to save cost).
+            translate_notes: translateNotes === true,
         },
         channels
     });
@@ -1156,8 +1176,12 @@ async function logCommunication(candidateId, channel, direction, content, messag
         if (extras.error) metadata.error = extras.error;
         if (extras.reason) metadata.reason = extras.reason;
 
+        // Set sent_at explicitly (NOW()) rather than relying on a column default —
+        // the Conversations list/counts gate on `lm.sent_at IS NOT NULL`, so a
+        // logged outbound (e.g. the welcome to an agent-added candidate) must carry
+        // a timestamp or the candidate would never surface in the Messages list.
         await query(
-            adaptQuery('INSERT INTO communications (candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id) VALUES ($1, $2, $3, $4, $5, $6, $7)'),
+            adaptQuery('INSERT INTO communications (candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id, sent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())'),
             [candidateId, channel, direction, 'text', content, JSON.stringify(metadata), extras.whatsappMessageId || null]
         );
     } catch (error) {

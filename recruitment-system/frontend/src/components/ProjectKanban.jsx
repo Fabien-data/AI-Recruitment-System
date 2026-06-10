@@ -14,10 +14,10 @@ import {
   getStageLabel,
 } from '../constants/lifecycle'
 
-// The 4 droppable columns, in pipeline order. Protected/terminal statuses
-// (future_pool / merged / hired) are intentionally NOT columns — candidates in
-// those states are excluded from the board (the list view still shows them).
-const COLUMNS = CANDIDATE_PIPELINE_STATUSES
+// Droppable columns, in pipeline order, plus Future Pool so candidates can be
+// parked / lifted by drag (it's a flexible backup pool, not a terminal state).
+// merged / hired remain off-board (terminal) — the list view shows those.
+const COLUMNS = [...CANDIDATE_PIPELINE_STATUSES, 'future_pool']
 
 // Header accent per column — reuse the shared STATUS_COLORS so the board's
 // vocabulary stays in lock-step with badges everywhere else.
@@ -133,8 +133,8 @@ export default function ProjectKanban({ projectId, jobFilter }) {
 
   const candidates = Array.isArray(data) ? data : (data?.candidates || data?.data || [])
 
-  // Group into the 4 columns by normalized status; anything outside the
-  // pipeline 4 (future_pool / merged / hired / rejected / legacy) is excluded.
+  // Group into the columns by normalized status; anything outside the pipeline
+  // 4 + future_pool (merged / hired / rejected / legacy) is excluded.
   const columns = COLUMNS.reduce((acc, status) => {
     acc[status] = []
     return acc
@@ -217,7 +217,7 @@ export default function ProjectKanban({ projectId, jobFilter }) {
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
         {COLUMNS.map((status) => (
           <div key={status} className="rounded-2xl border border-zinc-200 dark:border-zinc-800 p-2 space-y-2">
             <Skeleton className="h-7 w-full rounded-lg" />
@@ -237,7 +237,7 @@ export default function ProjectKanban({ projectId, jobFilter }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3 }}
-      className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3"
+      className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3"
     >
       {COLUMNS.map((status) => (
         <KanbanColumn

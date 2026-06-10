@@ -125,21 +125,19 @@ function emitApplicationChanged(payload = {}) {
 }
 
 /**
- * Map a single application status to a candidate stage, applying the CV gate:
- * a candidate without a CV on file can be at most 'new', even if an application
- * row exists (mirrors the New→Screening hard gate).
- * @returns {('new'|'screening'|'certified'|'interview_scheduled'|null)}
+ * Map a single application status to a candidate stage.
+ *
+ * CV is NO LONGER a hard gate (user decision 2026-06-08): the candidate's
+ * canonical stage always reflects the furthest real application stage, whether
+ * or not a CV is on file. Almost all production candidates are agency-imported
+ * with physical/offline CVs — the old `!hasCv ⇒ 'new'` clamp pinned essentially
+ * everyone to "New" in the Conversations list even after they were certified or
+ * sent an interview. `hasCv` is kept in the signature for back-compat but no
+ * longer changes the result.
+ * @returns {('screening'|'certified'|'interview_scheduled'|null)}
  */
-function deriveCandidateStage(applicationStatus, hasCv) {
-    const stage = APP_STATUS_TO_STAGE[applicationStatus] || null;
-    if (!stage) return null;
-    // CV is the hard gate (#5): with no CV on file a candidate can be at most
-    // 'new', for ANY forward stage (screening / certified / interview_scheduled) —
-    // never just screening. This keeps the re-derivation consistent with the
-    // migration's CV-less re-bucket so a certified/interview app can't silently
-    // re-promote a CV-less candidate.
-    if (!hasCv) return 'new';
-    return stage;
+function deriveCandidateStage(applicationStatus, hasCv) { // eslint-disable-line no-unused-vars
+    return APP_STATUS_TO_STAGE[applicationStatus] || null;
 }
 
 // Postgres returns booleans as true/false; MySQL returns 1/0; be tolerant.
@@ -283,21 +281,18 @@ async function setCandidateStage(candidateId, stage) {
         // Re-derive candidate.status (+ conversation_stage); emits on change.
         await syncCandidateStage(candidateId);
     } else {
-        // new / future_pool, or no active applications to cascade to.
-        // CV is the hard gate (#5) for ACTIVE pipeline stages (certified /
-        // interview_scheduled) — a CV-less candidate can't sit there, so fall
-        // back to New. future_pool is EXEMPT: it's a flexible backup/talent pool
-        // a candidate can be parked in regardless of CV (decided with the user),
-        // so it's written directly even without a CV on file.
-        let finalStage = stage;
-        if (stage !== 'new' && stage !== 'future_pool' && !(await candidateHasCv(candidateId))) {
-            finalStage = 'new';
-        }
+        // new / future_pool, or no active applications to cascade to. CV is no
+        // longer a hard gate (user decision 2026-06-08): honor the chosen stage
+        // directly so a manually-set stage sticks regardless of CV. future_pool
+        // remains a flexible backup/talent pool a candidate can be parked in.
+        // NOTE: status and conversation_stage are DIFFERENT column types
+        // (text vs varchar), so they must use SEPARATE bind params — reusing $1
+        // for both makes Postgres throw "inconsistent types deduced for parameter $1".
         await query(
-            adaptQuery('UPDATE candidates SET status = $1, conversation_stage = $1, updated_at = NOW() WHERE id = $2'),
-            [finalStage, candidateId]
+            adaptQuery('UPDATE candidates SET status = $1, conversation_stage = $2, updated_at = NOW() WHERE id = $3'),
+            [stage, stage, candidateId]
         );
-        emitStageChanged(candidateId, finalStage);
+        emitStageChanged(candidateId, stage);
     }
     return { updatedApplications: updatedApps };
 }

@@ -20,7 +20,7 @@ import {
   setCandidateStage,
   apiClient,
 } from '../api'
-import { getStatusLabel, normalizeStatus, CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS } from '../constants/lifecycle'
+import { getStatusLabel, normalizeStatus, CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS, CANDIDATE_MANUAL_STATUS_OPTIONS } from '../constants/lifecycle'
 import { useSectionAccess } from '../stores/authStore'
 import { EditCandidateModal } from '../components/EditCandidateModal'
 import {
@@ -63,8 +63,9 @@ import { TableSkeleton } from '../components/ui/Skeleton'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Tabs } from '../components/ui/Tabs'
 import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
+import { CertifyDialog, ScheduleInterviewDialog } from '../components/communications/StageActionDialogs'
 import { EmptyState } from '../components/ui/EmptyState'
-import { FileSearch } from 'lucide-react'
+import { FileSearch, BadgeCheck, CalendarClock } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getDocumentCategory, resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
 import { DocumentPreview } from '../components/documents/DocumentPreview'
@@ -602,6 +603,8 @@ function OverviewTab({ candidate }) {
   const [reparsingId, setReparsingId] = useState(null)
   const [docType, setDocType] = useState('cv')
   const [editOpen, setEditOpen] = useState(false)
+  const [certifyOpen, setCertifyOpen] = useState(false)
+  const [interviewOpen, setInterviewOpen] = useState(false)
   const docFileRef = useRef(null)
   const queryClient = useQueryClient()
 
@@ -706,18 +709,28 @@ function OverviewTab({ candidate }) {
             <Badge status={candidate.status} />
             {/* Quick status change */}
             <select
-              value={CANDIDATE_STAGES.includes(normalizeStatus(candidate.status)) ? normalizeStatus(candidate.status) : ''}
+              value={CANDIDATE_MANUAL_STATUS_OPTIONS.some((o) => o.value === normalizeStatus(candidate.status)) ? normalizeStatus(candidate.status) : ''}
               onChange={(e) => { if (e.target.value) statusMutation.mutate(e.target.value) }}
               disabled={statusMutation.isPending}
               title="Change candidate status"
               className="input text-xs py-1 w-40"
             >
               <option value="" disabled>Set status…</option>
-              {CANDIDATE_STAGES.map((s) => (
-                <option key={s} value={s}>{CANDIDATE_STAGE_LABELS[s]}</option>
+              {CANDIDATE_MANUAL_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
               ))}
-              <option value="future_pool">Future Pool</option>
             </select>
+            {/* Explicit stage actions that ALSO notify the candidate. The status
+                dropdown above stays message-less by design; certifying or
+                scheduling here opens the popups that auto-send the WhatsApp. */}
+            <div className="flex gap-1.5">
+              <Button size="sm" variant="secondary" className="gap-1 text-emerald-700 dark:text-emerald-300" onClick={() => setCertifyOpen(true)}>
+                <BadgeCheck size={14} /> Certify &amp; notify
+              </Button>
+              <Button size="sm" variant="secondary" className="gap-1 text-indigo-700 dark:text-indigo-300" onClick={() => setInterviewOpen(true)}>
+                <CalendarClock size={14} /> Schedule interview
+              </Button>
+            </div>
             <Button size="sm" variant="secondary" className="gap-1" onClick={() => setEditOpen(true)}>
               <Pencil size={14} /> Edit details
             </Button>
@@ -726,6 +739,18 @@ function OverviewTab({ candidate }) {
       </div>
 
       <EditCandidateModal candidate={candidate} open={editOpen} onClose={() => setEditOpen(false)} />
+      <CertifyDialog
+        open={certifyOpen}
+        onClose={() => setCertifyOpen(false)}
+        candidateId={candidate.id}
+        candidateName={candidate.name}
+      />
+      <ScheduleInterviewDialog
+        open={interviewOpen}
+        onClose={() => setInterviewOpen(false)}
+        candidateId={candidate.id}
+        candidateName={candidate.name}
+      />
 
       {/* Details Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

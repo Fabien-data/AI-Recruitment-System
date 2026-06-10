@@ -9,7 +9,7 @@ const { authenticate } = require('../middleware/auth');
 const { requireSection } = require('../middleware/sections');
 const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
 const { resolveCvAccessUrl } = require('../utils/cv-url');
-const { syncCandidateStage, hasCvSql } = require('../services/candidate-stage');
+const { syncCandidateStage, hasCvSql, emitStageChanged } = require('../services/candidate-stage');
 const notifications = require('../services/notifications');
 const semanticMatch = require('../services/semantic-match');
 const logger = require('../utils/logger');
@@ -316,10 +316,12 @@ router.post('/candidate/:candidateId', authenticate, requireSection('application
         // (#5: future_pool = "has CV but no matching role"; no CV ⇒ stays New).
         if (assignments.length === 0 && candidateRowHasCv(candidate) && candidate.status !== 'future_pool') {
             await pool.query(
-                `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`,
+                `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW() WHERE id = $1`,
                 [candidateId]
             );
-
+            // Live-update the Conversations badge: this is a direct write that
+            // syncCandidateStage would not re-derive (no forward application).
+            emitStageChanged(candidateId, 'future_pool');
             logger.info(`Candidate ${candidateId} moved to future pool - no matching jobs`);
         }
 
@@ -435,10 +437,11 @@ router.post('/batch', authenticate, requireSection('applications', 'create'), as
                 // candidate stays New (awaiting CV), never dropped into the pool.
                 if (candidateRowHasCv(candidate)) {
                     await pool.query(
-                        `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`,
+                        `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW() WHERE id = $1`,
                         [candidate.id]
                     );
                     results.to_pool++;
+                    emitStageChanged(candidate.id, 'future_pool');
                 }
             } else {
                 await pool.query(
