@@ -97,12 +97,46 @@ def _required_fields_for(state: Dict[str, Any]) -> List[str]:
 _ACTIVE_JOBS_PROMPT_CAP = 50
 
 
-def _active_jobs_summary() -> List[Dict[str, Any]]:
-    """Return the active+advertised jobs from the in-memory cache (newest first).
+def _relevance_focus(state: Dict[str, Any], user_message: str) -> str:
+    """Lowercased haystack of what the candidate is asking for this turn — their
+    message plus any role/country already captured — used to float matching jobs
+    to the TOP of ACTIVE_JOBS (see _job_relevance)."""
+    cd = state.get("collected_data") or {}
+    parts = [user_message or "", str(cd.get("job_role") or "")]
+    cs = cd.get("countries")
+    if isinstance(cs, list):
+        parts.extend(str(x) for x in cs)
+    elif cs:
+        parts.append(str(cs))
+    return " ".join(parts).lower()
 
-    The cache is populated from /api/chatbot/jobs which only returns jobs with
-    a live ad campaign, so this is the set the bot may discuss with cold
-    candidates and suggest as alternatives.
+
+def _job_relevance(job: Dict[str, Any], focus: str) -> int:
+    """Cheap token-overlap score of a job against the candidate's stated interest.
+    Higher = better match (role words weighted over place words)."""
+    if not focus:
+        return 0
+    score = 0
+    title_cat = ((job.get("title") or "") + " " + (job.get("category") or "")).lower()
+    place = ((job.get("location") or "") + " " + " ".join(str(x) for x in (job.get("countries") or []))).lower()
+    for w in {w for w in title_cat.replace("-", " ").split() if len(w) >= 4}:
+        if w in focus:
+            score += 2
+    for w in {w for w in place.replace("-", " ").split() if len(w) >= 4}:
+        if w in focus:
+            score += 1
+    return score
+
+
+def _active_jobs_summary(focus_text: str = "") -> List[Dict[str, Any]]:
+    """Return the active jobs from the in-memory cache, MATCHES-FIRST then newest.
+
+    The cache is populated from /api/chatbot/jobs (active jobs). When the
+    candidate names a role/city (focus_text), matching jobs are floated to the
+    top so the model can't overlook a role buried at the bottom of a long list —
+    the bug where it told a candidate "no Security Officer" while two such Dubai
+    roles sat last in the list. All jobs are still included (cap 50); only the
+    ORDER changes, which is what drives the model's attention.
     """
     cache = get_job_cache() or {}
     # Show every active job the bot knows about. Ad presence is metadata
@@ -113,7 +147,7 @@ def _active_jobs_summary() -> List[Dict[str, Any]]:
         if (j.get("status") or "").lower() == "active"
     ]
     active.sort(
-        key=lambda j: j.get("created_at") or j.get("updated_at") or "",
+        key=lambda j: (_job_relevance(j, focus_text), j.get("created_at") or j.get("updated_at") or ""),
         reverse=True,
     )
     out = []
@@ -263,7 +297,10 @@ async def run_turn(
     turn_number = state["turn_counter"]
 
     required = _required_fields_for(state)
-    active_jobs = _active_jobs_summary()
+    # Float the role/place the candidate just named to the top of ACTIVE_JOBS so
+    # the model reliably sees it (fixes "we don't have Security Officer" when two
+    # such roles existed but sat at the bottom of a long, food-prep-heavy list).
+    active_jobs = _active_jobs_summary(_relevance_focus(state, user_message))
     current_job = _current_job_for(state)
     mismatch_hint = await _build_mismatch_hint(state, current_job)
 
