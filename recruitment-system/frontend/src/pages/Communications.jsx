@@ -551,22 +551,28 @@ function deliveryState(msg) {
   let meta = msg.metadata
   if (typeof meta === 'string') { try { meta = JSON.parse(meta) } catch { meta = {} } }
   meta = meta || {}
-  if (msg.read_at) return { kind: 'read' }
-  if (msg.delivered_at) return { kind: 'delivered' }
-  const status = meta.delivery_status || meta.latest_status
-  if (status === 'failed') return { kind: 'failed', reason: meta.delivery_reason || meta.reason || null }
-  if (status === 'read') return { kind: 'read' }
-  if (status === 'delivered') return { kind: 'delivered' }
+  // latest_status is the AUTHORITATIVE Meta delivery receipt (via /status-sync);
+  // it must win over the optimistic send-time delivery_status. Meta often ACCEPTS
+  // a free-form message (returns a message id, delivery_status='sent') and then
+  // FAILS final delivery when the candidate is outside the 24h window — so a
+  // failed receipt must never show as a ✓.
+  const latest = meta.latest_status
+  if (latest === 'failed' || meta.delivery_status === 'failed') {
+    return { kind: 'failed', reason: meta.delivery_reason || meta.reason || null }
+  }
+  if (msg.read_at || latest === 'read') return { kind: 'read' }
+  if (msg.delivered_at || latest === 'delivered') return { kind: 'delivered' }
   return { kind: 'sent' }
 }
 function DeliveryTick({ msg }) {
   const st = deliveryState(msg)
   if (!st) return null
   if (st.kind === 'failed') {
-    const why = DELIVERY_REASON_LABEL[st.reason] || st.reason || 'not delivered'
+    const why = DELIVERY_REASON_LABEL[st.reason] || st.reason
+      || 'WhatsApp could not deliver it — the candidate likely has not replied in 24h, so only an approved template can reach them'
     return (
       <span className="inline-flex items-center gap-0.5 text-rose-500" title={`Not delivered — ${why}`}>
-        <AlertCircle size={11} /> <span className="text-[9px] font-semibold">Not sent</span>
+        <AlertCircle size={11} /> <span className="text-[9px] font-semibold">Not delivered</span>
       </span>
     )
   }
@@ -866,6 +872,23 @@ export default function Communications() {
   useEffect(() => { selectedIdRef.current = selectedId }, [selectedId])
   useEffect(() => { chatListRef.current = chatList }, [chatList])
   useEffect(() => { if (matchedSelected) selectedCandidateRef.current = matchedSelected }, [matchedSelected])
+
+  // WhatsApp's 24-hour rule: a free-form (non-template) message is only
+  // delivered if the candidate replied within the last 24h. If their last
+  // INBOUND message is older than that (or they never replied), Meta accepts the
+  // send but fails delivery — so warn the agent BEFORE they type. Derived from
+  // the loaded transcript (inbound timestamps).
+  const lastInboundAt = useMemo(() => {
+    let max = 0
+    for (const m of transcript) {
+      if (m.direction === 'inbound' && m.sent_at) {
+        const t = new Date(m.sent_at).getTime()
+        if (t > max) max = t
+      }
+    }
+    return max || null
+  }, [transcript])
+  const outOfWindow = transcript.length > 0 && (lastInboundAt === null || (Date.now() - lastInboundAt) > 24 * 60 * 60 * 1000)
 
   // Client-side role/label filters — distinct options derived from the loaded
   // list. Project + status are filtered server-side (see active-chats query).
@@ -2113,6 +2136,15 @@ export default function Communications() {
               {sendError && (
                 <div className="flex items-center gap-2 text-xs text-red-500 mb-2">
                   <AlertCircle size={12} /> {sendError}
+                </div>
+              )}
+
+              {/* 24h-window warning: free-form WhatsApp won't reach a candidate
+                  who hasn't replied in 24h — Meta accepts then fails delivery. */}
+              {outOfWindow && sendChannel !== 'email' && (
+                <div className="flex items-start gap-2 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-lg px-2.5 py-1.5 mb-2">
+                  <AlertCircle size={13} className="mt-0.5 shrink-0" />
+                  <span>This candidate hasn’t replied in over 24h, so WhatsApp will <strong>not deliver</strong> a typed message (you’ll see “Not delivered”). Reaching them again needs an approved template, or wait for them to message first. Email still works if they have an address.</span>
                 </div>
               )}
 
