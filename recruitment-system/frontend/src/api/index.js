@@ -44,6 +44,11 @@ export const createCandidate = (data) =>
 export const createCandidateWithWelcome = (data) =>
   apiClient.post('/api/candidates/with-welcome', data).then(res => res.data)
 
+// (Re)send the welcome / re-engagement message to an EXISTING candidate from the
+// takeover panel. Returns { welcome, sent, reason }.
+export const sendCandidateWelcome = (id) =>
+  apiClient.post(`/api/candidates/${id}/send-welcome`).then(res => res.data)
+
 export const updateCandidate = (id, data) =>
   apiClient.put(`/api/candidates/${id}`, data).then(res => res.data)
 

@@ -924,6 +924,42 @@ router.post('/:id/screening', authenticate, requireSection('candidates', 'edit')
 });
 
 /**
+ * (Re)send the welcome / re-engagement message to an EXISTING candidate, from the
+ * Messages takeover panel. Routes through the chatbot (status='welcome'): in the
+ * 24h window it's free-form; outside it, the approved welcome template (if
+ * TEMPLATE_WELCOME is configured) — the only way to reopen a dormant chat. Logs
+ * the outbound communications row, so it appears in the transcript with an honest
+ * delivery tick. Does NOT reset the candidate's stage or bot state.
+ */
+router.post('/:id/send-welcome', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const candRes = await query(adaptQuery('SELECT id, name, phone FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        const cand = candRes.rows[0];
+        if (!cand.phone) return res.status(400).json({ error: 'Candidate has no phone number' });
+
+        let welcome = { success: [], failed: [] };
+        try {
+            welcome = await notifications.sendNotification({
+                candidateId: id,
+                type: 'welcome',
+                data: { name: cand.name || '' },
+                channels: ['whatsapp'],
+            });
+        } catch (e) {
+            logger.error(`send-welcome failed for ${id}: ${e.message}`);
+            welcome.failed.push({ channel: 'all', error: e.message });
+        }
+        const sent = welcome.success?.some?.((s) => s.channel === 'whatsapp');
+        const reason = welcome.failed?.[0]?.reason || null;
+        return res.json({ welcome, sent: !!sent, reason });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
  * Ensure an application exists for (candidate, job).
  *
  * Resolves the application_id a New/Screening lead needs before an interview can

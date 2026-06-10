@@ -43,6 +43,7 @@ import { DispositionSelect, dispositionClasses, dispositionLabel } from '../comp
 import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
 import { AddCandidateDialog } from '../components/communications/AddCandidateDialog'
 import { QuickReplyPicker } from '../components/communications/QuickReplyPicker'
+import toast from 'react-hot-toast'
 import { CVReviewModal } from './CVManager'
 import { CANDIDATE_STAGE_LABELS, CANDIDATE_STATUS_BUCKETS, CANDIDATE_MANUAL_STATUS_OPTIONS, STATUS_COLORS, normalizeStatus, getStageLabel } from '../constants/lifecycle'
 
@@ -889,6 +890,29 @@ export default function Communications() {
     return max || null
   }, [transcript])
   const outOfWindow = transcript.length > 0 && (lastInboundAt === null || (Date.now() - lastInboundAt) > 24 * 60 * 60 * 1000)
+
+  // Re-engage: (re)send the welcome message to the OPEN candidate. In-window it
+  // delivers as free-form; outside it, it uses the approved welcome template
+  // (TEMPLATE_WELCOME) — the only way to reopen a dormant chat. The result lands
+  // in the transcript with an honest delivery tick.
+  const reengageMut = useMutation({
+    mutationFn: () => apiFetch(`/api/candidates/${selectedId}/send-welcome`, { method: 'POST' }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['transcript'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
+      if (res?.sent) {
+        toast.success('Welcome message sent')
+      } else {
+        const why = res?.reason === 'out_of_window'
+          ? "candidate hasn't replied in 24h — an approved welcome template must be configured (TEMPLATE_WELCOME)"
+          : res?.reason === 'no_whatsapp' ? 'not a WhatsApp number'
+          : (res?.reason || 'could not be delivered')
+        toast(`Welcome not delivered — ${why}`, { icon: '⚠️', duration: 8000 })
+      }
+    },
+    onError: (e) => toast.error(e?.message || 'Failed to send welcome'),
+  })
 
   // Client-side role/label filters — distinct options derived from the loaded
   // list. Project + status are filtered server-side (see active-chats query).
@@ -2191,6 +2215,19 @@ export default function Communications() {
                     onInsert={(text) => setMessage((m) => (m ? `${m}\n${text}` : text))}
                   />
                 </div>
+                {/* Re-engage: (re)send the welcome to reopen the chat. The only
+                    way to reach a candidate who's gone quiet >24h (uses the
+                    approved template); also works in-window. */}
+                <button
+                  type="button"
+                  onClick={() => reengageMut.mutate()}
+                  disabled={!selectedId || reengageMut.isPending}
+                  className="flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-300 hover:text-emerald-800 disabled:opacity-50"
+                  title="Send the welcome / re-engagement message to this candidate (uses the approved template when they're outside WhatsApp's 24h window)"
+                >
+                  {reengageMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                  {reengageMut.isPending ? 'Sending…' : 'Send welcome'}
+                </button>
               </div>
 
               {/* Job/interview context hint */}
