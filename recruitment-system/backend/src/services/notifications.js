@@ -839,6 +839,7 @@ async function sendNotification(options) {
                                 phone: candidate.phone,
                                 name: candidate.name,
                                 type,
+                                language,
                                 jobTitle: data.job_title,
                                 interviewDate: data.interview_datetime,
                                 interviewLocation: data.interview_location,
@@ -859,10 +860,45 @@ async function sendNotification(options) {
                                     channel: 'whatsapp',
                                     phone: candidate.phone,
                                     messageId: pushResult.messageId,
+                                    via: pushResult.via || 'freeform',
                                 });
-                                await logCommunication(candidateId, 'whatsapp', 'outbound', message, type, {
+                                const sentCommId = await logCommunication(candidateId, 'whatsapp', 'outbound', message, type, {
                                     deliveryStatus: 'sent',
                                     whatsappMessageId: pushResult.messageId,
+                                    sentVia: pushResult.via === 'template' ? `template:${pushResult.template}` : undefined,
+                                });
+                                // Out-of-window send went out as a short approved template
+                                // ("reply for details"): park the full free-form text so the
+                                // candidate's reply delivers the complete message.
+                                if (pushResult.via === 'template') {
+                                    const { queuePendingMessage } = require('./pendingMessages');
+                                    await queuePendingMessage({
+                                        candidateId,
+                                        communicationId: null,
+                                        kind: 'status_full_text',
+                                        message: pushResult.fullText || message,
+                                    });
+                                }
+                            } else if (pushResult.reason === 'out_of_window') {
+                                // No approved template available and the 24h window is closed.
+                                // Don't hard-fail: park the message to auto-deliver on the
+                                // candidate's next reply, and record the row honestly as queued.
+                                const queuedCommId = await logCommunication(candidateId, 'whatsapp', 'outbound', message, type, {
+                                    deliveryStatus: 'queued',
+                                    reason: 'out_of_window_queued',
+                                });
+                                const { queuePendingMessage } = require('./pendingMessages');
+                                await queuePendingMessage({
+                                    candidateId,
+                                    communicationId: queuedCommId,
+                                    kind: 'status_full_text',
+                                    message,
+                                });
+                                results.success.push({
+                                    channel: 'whatsapp',
+                                    phone: candidate.phone,
+                                    queued: true,
+                                    reason: 'out_of_window_queued',
                                 });
                             } else {
                                 results.failed.push({
@@ -937,9 +973,16 @@ async function sendNotification(options) {
             }
         }
 
-        // Add to notification queue for retry if there are failures
-        if (results.failed.length > 0) {
-            await queueNotification(candidateId, type, channels.filter(c => results.failed.some(f => f.channel === c)), data);
+        // Add to notification queue for retry — but only for failures a blind
+        // retry can actually fix. Out-of-window now goes to pending_messages
+        // (deliver-on-reply), and no_whatsapp / token_expired would fail the
+        // same way again, double-logging a transcript row per attempt.
+        const RETRYABLE_REASONS = new Set(['rate_limited']);
+        const retryChannels = channels.filter(c => results.failed.some(f =>
+            f.channel === c && (c !== 'whatsapp' || RETRYABLE_REASONS.has(f.reason))
+        ));
+        if (retryChannels.length > 0) {
+            await queueNotification(candidateId, type, retryChannels, data);
         }
 
         return results;
@@ -1163,8 +1206,9 @@ async function sendGeneralPoolNotification(candidateId, channels = ['whatsapp'])
 }
 
 /**
- * Log communication to database.
- * extras: { deliveryStatus, whatsappMessageId, provider, error }
+ * Log communication to database. Returns the inserted row id (or null) so
+ * callers can link follow-up records (e.g. pending_messages.communication_id).
+ * extras: { deliveryStatus, whatsappMessageId, provider, error, reason, sentVia }
  */
 async function logCommunication(candidateId, channel, direction, content, messageType, extras = {}) {
     try {
@@ -1175,17 +1219,22 @@ async function logCommunication(candidateId, channel, direction, content, messag
         if (extras.provider) metadata.provider = extras.provider;
         if (extras.error) metadata.error = extras.error;
         if (extras.reason) metadata.reason = extras.reason;
+        if (extras.sentVia) metadata.sent_via = extras.sentVia;
 
+        // Explicit id so we can return it on both Postgres and MySQL.
+        const commId = require('crypto').randomUUID();
         // Set sent_at explicitly (NOW()) rather than relying on a column default —
         // the Conversations list/counts gate on `lm.sent_at IS NOT NULL`, so a
         // logged outbound (e.g. the welcome to an agent-added candidate) must carry
         // a timestamp or the candidate would never surface in the Messages list.
         await query(
-            adaptQuery('INSERT INTO communications (candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id, sent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())'),
-            [candidateId, channel, direction, 'text', content, JSON.stringify(metadata), extras.whatsappMessageId || null]
+            adaptQuery('INSERT INTO communications (id, candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id, sent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())'),
+            [commId, candidateId, channel, direction, 'text', content, JSON.stringify(metadata), extras.whatsappMessageId || null]
         );
+        return commId;
     } catch (error) {
         logger.error('Failed to log communication:', error);
+        return null;
     }
 }
 

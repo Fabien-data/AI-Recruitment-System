@@ -541,6 +541,7 @@ function LabelsEditor({ tags, onAdd, onRemove, saving, suggestions = [] }) {
 // upgraded by Meta receipts via /status-sync (delivered_at / read_at).
 const DELIVERY_REASON_LABEL = {
   out_of_window: 'no reply in 24h — needs a template',
+  out_of_window_queued: 'queued until the candidate replies',
   no_whatsapp: 'not a WhatsApp number',
   token_expired: 'WhatsApp token expired',
   rate_limited: 'rate-limited by WhatsApp',
@@ -563,6 +564,11 @@ function deliveryState(msg) {
   }
   if (msg.read_at || latest === 'read') return { kind: 'read' }
   if (msg.delivered_at || latest === 'delivered') return { kind: 'delivered' }
+  // Parked in pending_messages (candidate outside the 24h window): delivers
+  // automatically on their next reply. Receipts above win once the flush sends it.
+  if (meta.delivery_status === 'queued') {
+    return { kind: 'queued', reengage: !!meta.reengage_sent }
+  }
   return { kind: 'sent' }
 }
 function DeliveryTick({ msg }) {
@@ -574,6 +580,16 @@ function DeliveryTick({ msg }) {
     return (
       <span className="inline-flex items-center gap-0.5 text-rose-500" title={`Not delivered — ${why}`}>
         <AlertCircle size={11} /> <span className="text-[9px] font-semibold">Not delivered</span>
+      </span>
+    )
+  }
+  if (st.kind === 'queued') {
+    const why = st.reengage
+      ? 'Will deliver automatically when the candidate replies — a re-engagement template was sent to prompt them'
+      : 'Will deliver automatically when the candidate replies'
+    return (
+      <span className="inline-flex items-center gap-0.5 text-amber-500" title={why}>
+        <Clock size={11} /> <span className="text-[9px] font-semibold">Queued</span>
       </span>
     )
   }
@@ -903,6 +919,8 @@ export default function Communications() {
       queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
       if (res?.sent) {
         toast.success('Welcome message sent')
+      } else if (res?.queued) {
+        toast('Welcome queued — it will deliver automatically when the candidate replies', { icon: '⏳', duration: 6000 })
       } else {
         const why = res?.reason === 'out_of_window'
           ? "candidate hasn't replied in 24h — an approved welcome template must be configured (TEMPLATE_WELCOME)"
@@ -1132,6 +1150,21 @@ export default function Communications() {
       if (msg.message_type === 'document' || msg.message_type === 'image') {
         queryClient.invalidateQueries({ queryKey: ['candidate', msg.candidate_id] })
       }
+    })
+
+    // A queued (out-of-window) message was flushed after the candidate replied:
+    // upgrade the SAME bubble from "Queued" to ✓ sent (receipts then upgrade it
+    // further via the transcript refetch / status-sync).
+    socket.on('message_updated', (upd) => {
+      setTranscript(prev => prev.map(m =>
+        m.id === upd.id
+          ? {
+              ...m,
+              whatsapp_message_id: upd.whatsapp_message_id || m.whatsapp_message_id,
+              metadata: { ...(typeof m.metadata === 'object' && m.metadata ? m.metadata : {}), ...(upd.metadata || {}) },
+            }
+          : m
+      ))
     })
 
     socket.on('receive_message', (newMessage) => {
@@ -1564,6 +1597,7 @@ export default function Communications() {
       // (✓ sent / ⚠ not delivered) without waiting for a transcript refetch.
       const primaryCh = (result.channels && result.channels[0]) || 'whatsapp'
       const chRes = (result.channel_results && result.channel_results[primaryCh]) || {}
+      const isQueued = chRes.delivery_status === 'queued'
       const optimisticMsg = {
         id: result.id || `temp-${Date.now()}`,
         candidate_id: selectedId,
@@ -1576,8 +1610,9 @@ export default function Communications() {
         sent_at: new Date().toISOString(),
         whatsapp_message_id: result.whatsapp_message_id || null,
         metadata: {
-          delivery_status: result.simulated ? 'failed' : 'sent',
-          delivery_reason: result.simulated ? (chRes.reason || chRes.error || null) : null,
+          delivery_status: isQueued ? 'queued' : (result.simulated ? 'failed' : 'sent'),
+          delivery_reason: isQueued ? 'out_of_window_queued' : (result.simulated ? (chRes.reason || chRes.error || null) : null),
+          reengage_sent: !!chRes.reengage_sent,
         },
         _optimistic: true,
       }
@@ -1587,8 +1622,18 @@ export default function Communications() {
         return [...prev, optimisticMsg]
       })
 
-      // Warn user about any delivery failures per channel
-      if (result.simulated) {
+      // Out-of-window: the message is queued (re-engagement template sent when
+      // configured) and auto-delivers on the candidate's next reply — an info
+      // notice, NOT an error.
+      if (isQueued) {
+        toast(
+          chRes.reengage_sent
+            ? 'Candidate hasn\'t replied in 24h — a re-engagement template was sent and your message will deliver when they reply'
+            : 'Candidate hasn\'t replied in 24h — your message is queued and will deliver when they reply',
+          { icon: '⏳', duration: 6000 }
+        )
+      } else if (result.simulated) {
+        // Warn user about any delivery failures per channel
         const errors = result.delivery_errors || {}
         const parts = Object.entries(errors).map(([ch, msg]) => `${ch}: ${msg}`)
         const detail = parts.length > 0 ? ` (${parts.join('; ')})` : ''

@@ -546,16 +546,19 @@ router.post('/', authenticate, requireSection('interviews', 'create'), authorize
             notification.failed.push({ channel: 'all', error: notifErr.message });
         }
 
-        // Engagement timeline: "Interview … — invite sent / not delivered".
+        // Engagement timeline: "Interview … — invite sent / queued / not delivered".
         try {
-            const sentOk = notification.success.some(s => s.channel === 'whatsapp');
+            const waEntry = notification.success.find(s => s.channel === 'whatsapp');
+            const inviteState = waEntry
+                ? (waEntry.queued ? 'queued — delivers when the candidate replies' : 'sent')
+                : 'not delivered';
             const whenStr = notifications.formatInterviewWallClock
                 ? notifications.formatInterviewWallClock(scheduled_datetime)
                 : String(scheduled_datetime);
             await logAgentAction({
                 candidateId: candidate_id, agentId: req.user?.id, actionType: 'interview',
                 applicationId: application_id,
-                remark: `Interview for ${job_title} on ${whenStr}${location ? ` @ ${location}` : ''} — invite ${sentOk ? 'sent' : 'not delivered'}`,
+                remark: `Interview for ${job_title} on ${whenStr}${location ? ` @ ${location}` : ''} — invite ${inviteState}`,
             });
         } catch (_e) { /* best-effort */ }
 
@@ -1005,14 +1008,17 @@ router.post('/bulk-schedule', authenticate, requireSection('interviews', 'edit')
 
                 // Engagement timeline entry per candidate.
                 try {
-                    const sentOk = notification.success.some(s => s.channel === 'whatsapp');
+                    const waEntry = notification.success.find(s => s.channel === 'whatsapp');
+                    const inviteState = waEntry
+                        ? (waEntry.queued ? 'queued — delivers when the candidate replies' : 'sent')
+                        : 'not delivered';
                     const whenStr = notifications.formatInterviewWallClock
                         ? notifications.formatInterviewWallClock(apptDatetime)
                         : String(apptDatetime);
                     await logAgentAction({
                         candidateId: app.candidate_id, agentId: req.user?.id, actionType: 'interview',
                         applicationId: app.id,
-                        remark: `Interview for ${app.job_title} on ${whenStr} — invite ${sentOk ? 'sent' : 'not delivered'}`,
+                        remark: `Interview for ${app.job_title} on ${whenStr} — invite ${inviteState}`,
                     });
                 } catch (_e) { /* best-effort */ }
 
@@ -1039,10 +1045,10 @@ router.post('/bulk-schedule', authenticate, requireSection('interviews', 'edit')
         // happened: how many invites actually reached candidates vs. were dropped
         // (out_of_window / no_whatsapp / rate_limited / other), instead of a vague
         // "scheduled N". This is the difference between "done" and "silently lost".
-        const deliverySummary = { sent: 0, out_of_window: 0, no_whatsapp: 0, rate_limited: 0, token_expired: 0, other: 0 };
+        const deliverySummary = { sent: 0, queued: 0, out_of_window: 0, no_whatsapp: 0, rate_limited: 0, token_expired: 0, other: 0 };
         for (const r of notificationResults) {
-            const okWa = r.notification?.success?.some?.((s) => s.channel === 'whatsapp');
-            if (okWa) { deliverySummary.sent += 1; continue; }
+            const waEntry = r.notification?.success?.find?.((s) => s.channel === 'whatsapp');
+            if (waEntry) { deliverySummary[waEntry.queued ? 'queued' : 'sent'] += 1; continue; }
             const waFail = (r.notification?.failed || []).find((f) => f.channel === 'whatsapp' || f.channel === 'all');
             const reason = waFail?.reason || 'other';
             if (deliverySummary[reason] === undefined) deliverySummary.other += 1;

@@ -1218,6 +1218,44 @@ async function applyMigrations() {
         )
     `, '044 engagement_targets table');
 
+    // ── Migration 045: pending_messages (deliver-on-reply queue) ─────────────
+    // WhatsApp drops free-form messages outside the 24h customer-service
+    // window. Instead of hard-failing those sends, we park them here and flush
+    // them the moment the candidate next messages in (the inbound sync hook
+    // calls services/pendingMessages.flushPendingForCandidate). communication_id
+    // points at the original transcript row so the same bubble upgrades from
+    // "queued" to real delivery ticks once the flush send succeeds.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS pending_messages (
+            id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id     UUID        NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+            communication_id UUID,
+            kind             TEXT        NOT NULL DEFAULT 'agent',
+            message          TEXT        NOT NULL,
+            message_type     TEXT        DEFAULT 'text',
+            media_url        TEXT,
+            filename         TEXT,
+            status           TEXT        NOT NULL DEFAULT 'pending',
+            attempts         INT         NOT NULL DEFAULT 0,
+            created_by       UUID,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            sending_at       TIMESTAMPTZ,
+            sent_at          TIMESTAMPTZ,
+            expires_at       TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '7 days'
+        )
+    `, '045 pending_messages table');
+    // sending_at lets the flusher reclaim rows orphaned in 'sending' when the
+    // process died mid-send (a routine Cloud Run redeploy) — without it the
+    // queued message would be lost forever.
+    await safeAlter(
+        `ALTER TABLE pending_messages ADD COLUMN IF NOT EXISTS sending_at TIMESTAMPTZ`,
+        '045 pending_messages.sending_at'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_pending_messages_candidate ON pending_messages(candidate_id, status)`,
+        '045 idx_pending_messages_candidate'
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 

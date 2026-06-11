@@ -1513,6 +1513,15 @@ router.post('/send', authenticate, requireSection('communications', 'edit'), upl
                 if (sendRes.ok) {
                     channelResults[ch].whatsapp_message_id = sendRes.messageId || null;
                     channelResults[ch].delivery_status = 'sent';
+                } else if (sendRes.queued) {
+                    // Candidate is outside the 24h window: the chatbot (optionally)
+                    // sent a re-engagement template and this message is parked in
+                    // pending_messages — it auto-delivers on the candidate's next
+                    // reply. NOT a failure.
+                    channelResults[ch].delivery_status = 'queued';
+                    channelResults[ch].reason = 'out_of_window_queued';
+                    channelResults[ch].reengage_sent = !!sendRes.reengageSent;
+                    logger.info(`Agent WhatsApp send queued (out-of-window) for ${waPhone}${sendRes.reengageSent ? ' — re-engagement template sent' : ''}`);
                 } else {
                     // out_of_window means the candidate is silent >24h and free-form
                     // is dropped by Meta — surface it honestly rather than a fake "sent".
@@ -1584,7 +1593,8 @@ router.post('/send', authenticate, requireSection('communications', 'edit'), upl
             channel_results: channelResults,
             whatsapp_message_id: primaryWaId,
             delivery_status: primaryDelivery,
-            delivery_reason: primaryDelivery === 'failed' ? primaryReason : null,
+            delivery_reason: (primaryDelivery === 'failed' || primaryDelivery === 'queued') ? primaryReason : null,
+            reengage_sent: channelResults['whatsapp']?.reengage_sent || false,
             upload_mime_type: mediaFile?.mimetype || null,
             upload_original_name: mediaFile?.originalname || null,
             upload_size: mediaFile?.size || null,
@@ -1607,6 +1617,24 @@ router.post('/send', authenticate, requireSection('communications', 'edit'), upl
             // right now — unstamped messages don't count in engagement stats.
             claimSessionId: await getOpenClaimSessionId(resolvedCandidateId, req.user.id),
         });
+
+        // Out-of-window WhatsApp send: park the message so it auto-delivers on
+        // the candidate's next reply. communication_id links back to the row we
+        // just inserted, so the flush upgrades the SAME bubble from "queued" to
+        // real delivery ticks.
+        if (channelResults['whatsapp']?.delivery_status === 'queued') {
+            const { queuePendingMessage } = require('../services/pendingMessages');
+            await queuePendingMessage({
+                candidateId: resolvedCandidateId,
+                communicationId: commId,
+                kind: 'agent',
+                message: normalizedMessage,
+                messageType: mediaUrl ? finalMessageType : 'text',
+                mediaUrl: mediaUrl || null,
+                filename: mediaFile?.originalname || null,
+                createdBy: req.user.id,
+            });
+        }
 
         // Clear intervention flag now that an agent has responded.
         // Keep backward compatibility across older/newer candidate schemas.

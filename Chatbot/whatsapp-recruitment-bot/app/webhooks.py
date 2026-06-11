@@ -1252,6 +1252,9 @@ class CandidateStatusPayload(BaseModel):
     status: str  # shortlisted | interview_scheduled | hired | rejected_with_alternatives
                  # | certified | prescreening_certified | general_pool | transferred
                  # | interview_reminder | interview_day_reminder | job_now_available
+    # CRM-side preferred language (en/si/ta) — used to localise messages for
+    # candidates the chatbot auto-creates (agency imports who never messaged in).
+    language: Optional[str] = None
     job_title: str
     interview_date: Optional[str] = None
     interview_location: Optional[str] = None
@@ -1297,12 +1300,30 @@ def _require_api_key_webhook(api_key: Optional[str]) -> None:
 _PROACTIVE_TEMPLATE_LANG = {"en": "en", "si": "si", "ta": "ta", "singlish": "en", "tanglish": "en"}
 
 
+def _sanitize_template_param(text, max_len: int = 300) -> str:
+    """Make a value safe as a Meta template body parameter: Meta rejects params
+    containing newlines, tabs, or 4+ consecutive spaces (error 132000/132012),
+    so collapse all whitespace runs to single spaces and cap the length."""
+    import re as _re
+    cleaned = _re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 1].rstrip() + "…"
+    return cleaned
+
+
 def _out_of_window_template(status_key: str, payload, lang: str):
     """Return (template_name, language_code, components) when an approved template
-    is configured for this proactive status, else (None, None, None)."""
+    is configured for this proactive status, else (None, None, None).
+
+    Resolution order: a status-specific template (welcome / interview_* /
+    job_now_available) wins; otherwise the GENERIC status template
+    (TEMPLATE_STATUS_UPDATE: [first_name, one_line_summary]) covers every other
+    status, so no proactive notification is ever silently dropped out-of-window
+    once that one template is approved."""
     first_name = (payload.candidate_name or "").strip().split(" ")[0] or "there"
     job = payload.job_title or ""
     when = payload.interview_date or ""
+    lang_code = _PROACTIVE_TEMPLATE_LANG.get(lang, "en")
     mapping = {
         # Interview invite to a candidate outside the 24h window: only an approved
         # template can reach them (free-form is dropped by Meta). The template body
@@ -1315,10 +1336,28 @@ def _out_of_window_template(status_key: str, payload, lang: str):
         "welcome": (settings.template_welcome, [first_name]),
     }
     tmpl, params = mapping.get(status_key, (None, None))
+
+    if not tmpl and settings.template_status_update:
+        # Generic fallback: "update on your application: <one-line summary>".
+        from app.llm.prompt_templates import PromptTemplates
+        summary = PromptTemplates.get_status_param_summary(
+            status_key,
+            lang_code,
+            job_title=job,
+            interview_date=payload.interview_date,
+            prescreening_datetime=payload.prescreening_datetime,
+            old_job_title=payload.old_job_title,
+            new_job_title=payload.new_job_title,
+        )
+        if summary:
+            tmpl, params = settings.template_status_update, [first_name, summary]
+
     if not tmpl:
         return None, None, None
-    lang_code = _PROACTIVE_TEMPLATE_LANG.get(lang, "en")
-    components = [{"type": "body", "parameters": [{"type": "text", "text": str(p)} for p in params]}]
+    components = [{
+        "type": "body",
+        "parameters": [{"type": "text", "text": _sanitize_template_param(p)} for p in params],
+    }]
     return tmpl, lang_code, components
 
 
@@ -1396,7 +1435,12 @@ async def candidate_status_webhook(
     status_key = payload.status.lower().strip()
 
     # Look up the candidate's preferred language + last inbound time (for the
-    # 24h-window decision below).
+    # 24h-window decision below). Candidates missing from the chatbot DB are
+    # auto-created for EVERY status — agency-imported / CRM-only candidates never
+    # messaged the bot, and aborting here used to drop all their certification
+    # and interview notifications (reason=candidate_not_found). They stay
+    # out-of-window (last_inbound_at NULL) → the approved-template path is used,
+    # and their first reply runs the normal intake/conversation flow.
     last_inbound_at = None
     try:
         db = SessionLocal()
@@ -1405,32 +1449,32 @@ async def candidate_status_webhook(
             Candidate.phone_number == phone
         ).first()
         if not candidate:
-            if status_key == "welcome":
-                # Agent-added lead not yet in the chatbot DB — create it so the
-                # welcome can send and the candidate's first reply continues the
-                # normal bot intake flow (process_single_message handles any
-                # existing candidate). last_inbound_at stays NULL → out-of-window,
-                # so the approved welcome template is used.
-                candidate = crud.get_or_create_candidate(db, phone)
-                if payload.candidate_name and not (candidate.name or "").strip():
-                    candidate.name = payload.candidate_name
-                    db.commit()
-            else:
-                logger.warning(
-                    "Status webhook: no candidate found for phone %s — aborting", phone
-                )
-                db.close()
-                return {"ok": False, "reason": "candidate_not_found"}
+            candidate = crud.get_or_create_candidate(db, phone)
+            changed = False
+            if payload.candidate_name and not (candidate.name or "").strip():
+                candidate.name = payload.candidate_name
+                changed = True
+            # Carry the CRM's preferred language onto the new record so the
+            # template variant (en/si/ta) matches what the agent selected.
+            if payload.language:
+                try:
+                    from app.models import LanguagePreference
+                    candidate.language_preference = LanguagePreference(payload.language)
+                    changed = True
+                except Exception:
+                    pass
+            if changed:
+                db.commit()
         lang = "en"
         extracted = candidate.extracted_data or {}
         lang = extracted.get("language_register") or getattr(
-            candidate.language_preference, "value", "en"
-        )
+            candidate.language_preference, "value", None
+        ) or payload.language or "en"
         last_inbound_at = getattr(candidate, "last_inbound_at", None)
         db.close()
     except Exception as e:
         logger.warning(f"Could not look up language for {phone}: {e}")
-        lang = "en"
+        lang = payload.language or "en"
 
     # Translate recruiter-authored interview instructions into the candidate's
     # language so the whole invite reads in one language. Degrades to the
@@ -1507,9 +1551,15 @@ async def candidate_status_webhook(
 
         logger.info(
             f"Status update sent to {phone}: status={status_key}, lang={lang}, "
-            f"window={'in' if in_window else 'out'}"
+            f"window={'in' if in_window else 'out'}, via={'template:' + tmpl if tmpl else 'freeform'}"
         )
-        return {"status": "sent", "message_id": result.get("messages", [{}])[0].get("id")}
+        response = {"status": "sent", "message_id": result.get("messages", [{}])[0].get("id")}
+        if tmpl:
+            # Template (short teaser) went out instead of the rich free-form text.
+            # Hand the rendered full text back so the backend can queue it to
+            # auto-deliver when the candidate replies and the window opens.
+            response.update({"via": "template", "template": tmpl, "full_text": message})
+        return response
     except Exception as e:
         logger.error(f"Error sending status update to {phone}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send message: {e}")
@@ -1527,6 +1577,15 @@ class AgentMessagePayload(BaseModel):
     filename: Optional[str] = None
 
 
+# Transcript copy for the re-engagement template (mirrors the approved
+# `dewan_reengage` body) so the agent sees what the candidate received.
+_REENGAGE_TRANSCRIPT = {
+    "en": "Hi {name}, our recruitment team has an update about your job application and a message waiting for you. Please reply to this message to receive it.",
+    "si": "ආයුබෝවන් {name}, ඔබේ රැකියා අයදුම්පත ගැන යාවත්කාලීනයක් සහ ඔබ වෙනුවෙන් පණිවිඩයක් අපේ කණ්ඩායම සතුව ඇත. එය ලබා ගැනීමට මෙම පණිවිඩයට පිළිතුරු දෙන්න.",
+    "ta": "வணக்கம் {name}, உங்கள் வேலை விண்ணப்பம் குறித்த புதுப்பிப்பும் உங்களுக்காக ஒரு செய்தியும் எங்கள் குழுவிடம் உள்ளது. அதைப் பெற இந்த செய்திக்கு பதிலளியுங்கள்.",
+}
+
+
 @router.post("/agent-message")
 async def agent_message_webhook(
     payload: AgentMessagePayload,
@@ -1535,13 +1594,16 @@ async def agent_message_webhook(
     """
     POST /webhook/agent-message
     Send an agent-authored free-form message (text or media) to a candidate on the
-    chatbot's WhatsApp number. Returns {status:'sent', message_id} or
+    chatbot's WhatsApp number. Returns {status:'sent', message_id},
+    {status:'queued', reason:'out_of_window', reengage_message_id} or
     {status:'error', reason, code, detail} — the backend records that as the
     message's delivery_status so the dashboard shows whether it actually went out.
 
-    Note: free-form messages to a candidate OUTSIDE WhatsApp's 24h window are
-    dropped by Meta (returned here as reason='out_of_window'); the agent then sees
-    "not delivered" rather than a false "sent".
+    24h window: free-form messages to a candidate outside WhatsApp's customer-
+    service window are dropped by Meta. Instead of failing, we (optionally) send
+    the approved re-engagement template (TEMPLATE_REENGAGE) and return 'queued' —
+    the backend parks the actual message in pending_messages and auto-delivers it
+    the moment the candidate replies.
     """
     _require_api_key_webhook(x_chatbot_api_key)
 
@@ -1549,17 +1611,92 @@ async def agent_message_webhook(
     if not phone:
         raise HTTPException(status_code=400, detail="candidate_phone is required")
 
-    mtype = (payload.message_type or "text").lower()
+    # 24h-window pre-check from our own inbound history. A candidate missing
+    # from the chatbot DB has never messaged in → definitively out-of-window.
+    # If the lookup itself fails, fail OPEN (attempt the send, as before).
+    in_window = False
+    lang = "en"
+    first_name = "there"
     try:
+        db = SessionLocal()
+        cand = crud.get_candidate_by_phone(db, phone)
+        if cand:
+            from app.services.followup_service import candidate_lang
+            lang = candidate_lang(cand)
+            if (cand.name or "").strip():
+                first_name = cand.name.strip().split(" ")[0]
+            last_inbound = getattr(cand, "last_inbound_at", None)
+            if last_inbound is not None:
+                from datetime import datetime as _dt, timedelta as _td
+                in_window = (_dt.utcnow() - last_inbound) < _td(hours=24)
+        db.close()
+    except Exception as e:
+        logger.warning(f"agent-message window lookup failed for {phone}: {e}")
+        in_window = True
+
+    mtype = (payload.message_type or "text").lower()
+
+    async def _send_freeform():
         if mtype != "text" and payload.media_url:
-            result = await meta_client.send_media_by_link(
+            return await meta_client.send_media_by_link(
                 phone, mtype, payload.media_url,
                 caption=(payload.message or None), filename=payload.filename,
             )
-        else:
-            result = await meta_client.send_message(phone, payload.message or "")
+        return await meta_client.send_message(phone, payload.message or "")
 
+    try:
+        if not in_window:
+            reengage_id = None
+            if settings.template_reengage:
+                lang_code = _PROACTIVE_TEMPLATE_LANG.get(lang, "en")
+                components = [{
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": _sanitize_template_param(first_name)}],
+                }]
+                tres = await meta_client.send_template_message(
+                    phone, settings.template_reengage, language_code=lang_code, components=components
+                )
+                if "error" in tres:
+                    reason = tres.get("reason")
+                    if reason in ("no_whatsapp", "token_expired"):
+                        # Queueing is pointless when the number can never receive —
+                        # surface the hard failure to the agent.
+                        return {"status": "error", "reason": reason, "code": tres.get("code"), "detail": str(tres.get("error"))}
+                    logger.warning(f"Re-engage template send failed for {phone}: {tres} — queueing the message anyway")
+                else:
+                    reengage_id = tres.get("messages", [{}])[0].get("id")
+                    # Show the re-engage teaser in the transcript with its own ticks.
+                    body = (_REENGAGE_TRANSCRIPT.get(lang_code) or _REENGAGE_TRANSCRIPT["en"]).format(name=first_name)
+                    await _sync_chat_message(
+                        phone, "outbound", body,
+                        language=lang_code, chatbot_state="agent_reengage",
+                        whatsapp_message_id=reengage_id or "",
+                    )
+            else:
+                # No re-engage template approved yet: attempt free-form anyway
+                # (our window data could be stale); queue only when Meta itself
+                # confirms the window is closed.
+                result = await _send_freeform()
+                if "error" not in result:
+                    return {"status": "sent", "message_id": result.get("messages", [{}])[0].get("id")}
+                if result.get("reason") != "out_of_window":
+                    logger.warning(f"Agent message to {phone} not sent: {result.get('reason')} / {result.get('error')}")
+                    return {
+                        "status": "error",
+                        "reason": result.get("reason") or "other",
+                        "code": result.get("code"),
+                        "detail": str(result.get("error")),
+                    }
+            logger.info(f"Agent message for {phone} queued (out-of-window){' — re-engagement template sent' if reengage_id else ''}")
+            return {"status": "queued", "reason": "out_of_window", "reengage_message_id": reengage_id}
+
+        result = await _send_freeform()
         if "error" in result:
+            if result.get("reason") == "out_of_window":
+                # Our window data said open but Meta disagreed (clock edge) —
+                # queue rather than fail; it flushes on the next reply.
+                logger.info(f"Agent message for {phone} queued (Meta reported out_of_window)")
+                return {"status": "queued", "reason": "out_of_window", "reengage_message_id": None}
             logger.warning(f"Agent message to {phone} not sent: {result.get('reason')} / {result.get('error')}")
             return {
                 "status": "error",

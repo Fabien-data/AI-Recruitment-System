@@ -1663,6 +1663,18 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
             logger.debug(`sync-message: WebSocket emit skipped — ${wsErr.message}`);
         }
 
+        // The candidate just messaged in → the 24h window is open. Flush any
+        // messages that were queued while they were out-of-window (agent
+        // replies, full status texts behind a template teaser). Fire-and-forget.
+        if (direction === 'inbound' && candidateId) {
+            const { flushPendingForCandidate } = require('../services/pendingMessages');
+            setImmediate(() => {
+                flushPendingForCandidate(candidateId, normalizedPhone).catch((err) =>
+                    logger.error(`sync-message: pending flush failed for ${candidateId}: ${err.message}`)
+                );
+            });
+        }
+
         return res.status(201).json({ id: commId, candidate_id: candidateId, conversation_stage: conversationStage });
     } catch (error) {
         const errorDetail = error?.message || (typeof error === 'string' ? error : JSON.stringify(error));

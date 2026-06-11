@@ -951,9 +951,11 @@ router.post('/:id/send-welcome', authenticate, requireSection('communications', 
             logger.error(`send-welcome failed for ${id}: ${e.message}`);
             welcome.failed.push({ channel: 'all', error: e.message });
         }
-        const sent = welcome.success?.some?.((s) => s.channel === 'whatsapp');
+        const waEntry = welcome.success?.find?.((s) => s.channel === 'whatsapp');
         const reason = welcome.failed?.[0]?.reason || null;
-        return res.json({ welcome, sent: !!sent, reason });
+        // `queued` = parked in pending_messages (out-of-window, no template yet);
+        // it will auto-deliver on the candidate's next reply.
+        return res.json({ welcome, sent: !!waEntry && !waEntry.queued, queued: !!waEntry?.queued, reason });
     } catch (error) {
         next(error);
     }

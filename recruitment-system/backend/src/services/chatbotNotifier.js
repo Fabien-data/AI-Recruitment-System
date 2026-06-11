@@ -39,6 +39,7 @@ async function pushCandidateStatus({
     phone,
     name,
     type,
+    language,
     jobTitle,
     interviewDate,
     interviewLocation,
@@ -66,6 +67,9 @@ async function pushCandidateStatus({
         candidate_phone: phone,
         candidate_name: name || '',
         status,
+        // CRM-side preferred language so the chatbot can localise even for
+        // candidates it auto-creates (agency imports who never messaged the bot).
+        language: language || null,
         job_title: jobTitle || newJobTitle || '',
         interview_date: interviewDate || null,
         interview_location: interviewLocation || null,
@@ -91,7 +95,17 @@ async function pushCandidateStatus({
 
         const body = resp.data || {};
         if (body.status === 'sent') {
-            return { ok: true, messageId: body.message_id || null };
+            // `via`/`template`/`full_text` are set when the chatbot delivered an
+            // approved template instead of free-form (out-of-window): full_text
+            // is the rendered free-form message the caller can queue to deliver
+            // on the candidate's next reply.
+            return {
+                ok: true,
+                messageId: body.message_id || null,
+                via: body.via || 'freeform',
+                template: body.template || null,
+                fullText: body.full_text || null,
+            };
         }
         // Chatbot responded but did not confirm a send (skipped / candidate_not_found / error).
         // `reason` is the coarse, structured classification (no_whatsapp / out_of_window /
@@ -141,6 +155,18 @@ async function sendAgentMessage({ phone, message = '', messageType = 'text', med
         const body = resp.data || {};
         if (body.status === 'sent') {
             return { ok: true, messageId: body.message_id || null };
+        }
+        if (body.status === 'queued') {
+            // Candidate is outside the 24h window: the chatbot (optionally) sent
+            // a re-engagement template and the actual message should be parked in
+            // pending_messages to auto-deliver on the candidate's next reply.
+            return {
+                ok: false,
+                queued: true,
+                reason: body.reason || 'out_of_window',
+                reengageSent: !!body.reengage_message_id,
+                reengageMessageId: body.reengage_message_id || null,
+            };
         }
         const errText = body.detail || body.reason || body.status || 'chatbot did not confirm delivery';
         logger.warn(`chatbotNotifier.sendAgentMessage: non-sent for ${phone}: ${JSON.stringify(body)}`);

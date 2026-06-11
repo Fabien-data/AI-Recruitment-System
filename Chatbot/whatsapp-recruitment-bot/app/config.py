@@ -127,6 +127,19 @@ class Settings(BaseSettings):
     # Empty = free-form only (delivers only if the candidate is already in-window;
     # otherwise reported out_of_window). Set TEMPLATE_WELCOME=… once approved.
     template_welcome: str = ""
+    # GENERIC status-update template — the out-of-window fallback for every
+    # proactive status that has no specific template above (certified,
+    # application_complete, job_assignment, shortlisted, hired, general_pool,
+    # rejected_with_alternatives, prescreening_certified, interview_rescheduled,
+    # interview_cancelled, transferred). Body params: [first_name, one_line_summary].
+    # The full free-form text is queued backend-side and auto-delivers when the
+    # candidate replies to the template.
+    template_status_update: str = ""
+    # Agent-takeover re-engagement template — sent when an agent writes to a
+    # candidate outside the 24h window. Body param: [first_name] ("we have an
+    # update / a message waiting — reply to receive it"). The agent's actual
+    # message is queued backend-side and auto-delivers on the candidate's reply.
+    template_reengage: str = ""
     # Apology + onboarding-restart template for candidates wrongly told a role
     # was unavailable, re-engaged OUTSIDE the 24h window. In-window remediation
     # uses free-form text (see scripts/remediate_ad_declines.py); this is only

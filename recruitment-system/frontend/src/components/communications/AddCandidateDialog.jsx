@@ -43,8 +43,10 @@ export function AddCandidateDialog({ open, onClose, onCreated }) {
       queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
       queryClient.invalidateQueries({ queryKey: ['candidates'] })
       const w = res?.welcome || {}
-      const sent = Array.isArray(w.success) && w.success.some((s) => s.channel === 'whatsapp')
-      if (sent) {
+      const waEntry = Array.isArray(w.success) ? w.success.find((s) => s.channel === 'whatsapp') : null
+      if (waEntry?.queued) {
+        toast('Candidate added — welcome queued; it will deliver automatically when they reply', { icon: '⏳' })
+      } else if (waEntry) {
         toast.success('Candidate added — welcome sent')
       } else {
         const reason = Array.isArray(w.failed) && w.failed[0]?.reason
@@ -58,7 +60,13 @@ export function AddCandidateDialog({ open, onClose, onCreated }) {
       onCreated?.(res?.candidate)
       onClose()
     },
-    onError: (err) => toast.error(err?.response?.data?.error || 'Failed to add candidate'),
+    onError: (err) => {
+      if (err?.response?.status === 403) {
+        toast.error("You don't have permission to add candidates — ask an admin to grant Candidates → Create.")
+        return
+      }
+      toast.error(err?.response?.data?.error || 'Failed to add candidate')
+    },
   })
 
   const canSubmit = form.name.trim() && form.phone.trim() && !mut.isPending

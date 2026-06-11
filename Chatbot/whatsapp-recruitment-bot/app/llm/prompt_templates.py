@@ -1596,6 +1596,124 @@ Question:"""
         "tanglish": "Hello {name}! 📌 Unga *{job_title}* interview *{interview_date}*{location_text} ku schedule panniyirukku.\n\n{interview_notes}",
     }
 
+    # One-line summaries used as {{2}} of the GENERIC out-of-window status
+    # template (TEMPLATE_STATUS_UPDATE). Meta forbids newlines/tabs/4+ spaces in
+    # template parameters, so these are deliberately compact single-liners; the
+    # full free-form status text is queued backend-side and auto-delivers when
+    # the candidate replies to the template. Languages match the template
+    # variants registered in Meta (en/si/ta — singlish/tanglish resolve to en).
+    STATUS_PARAM_SUMMARY = {
+        "welcome": {
+            "en": "Welcome to Dewan Consultants — reply to this message to start your job application.",
+            "si": "Dewan Consultants වෙත සාදරයෙන් පිළිගනිමු — ඔබේ රැකියා අයදුම්පත ආරම්භ කිරීමට මෙම පණිවිඩයට පිළිතුරු දෙන්න.",
+            "ta": "Dewan Consultants-க்கு வரவேற்கிறோம் — உங்கள் வேலை விண்ணப்பத்தைத் தொடங்க இந்த செய்திக்கு பதிலளியுங்கள்.",
+        },
+        "application_complete": {
+            "en": "We received your full application for the {job_title} position — our team is reviewing your profile.",
+            "si": "{job_title} සඳහා ඔබේ සම්පූර්ණ අයදුම්පත අපට ලැබුණා — අපේ කණ්ඩායම ඔබේ පැතිකඩ සමාලෝචනය කරමින් සිටී.",
+            "ta": "{job_title} பதவிக்கான உங்கள் முழு விண்ணப்பத்தைப் பெற்றோம் — எங்கள் குழு உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்கிறது.",
+        },
+        "job_assignment": {
+            "en": "You have been selected for the {job_title} position — our team will review and certify your profile next.",
+            "si": "{job_title} සඳහා ඔබව තෝරාගෙන ඇත — අපේ කණ්ඩායම ඔබේ පැතිකඩ සමාලෝචනය කර සහතික කරයි.",
+            "ta": "{job_title} பதவிக்கு நீங்கள் தேர்வு செய்யப்பட்டுள்ளீர்கள் — எங்கள் குழு உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்து சான்றளிக்கும்.",
+        },
+        "shortlisted": {
+            "en": "Your application for the {job_title} position has been shortlisted — we will be in touch with next steps.",
+            "si": "{job_title} සඳහා ඔබේ අයදුම්පත කෙටි ලැයිස්තුගත වී ඇත — ඉදිරි පියවර ගැන අපි දන්වන්නෙමු.",
+            "ta": "{job_title} பதவிக்கான உங்கள் விண்ணப்பம் குறுகிய பட்டியலில் சேர்க்கப்பட்டுள்ளது — அடுத்த படிகள் பற்றி தொடர்பு கொள்வோம்.",
+        },
+        "certified": {
+            "en": "You have been certified for the {job_title} position — our team will contact you with next steps.",
+            "si": "ඔබව {job_title} තනතුර සඳහා සහතික කර ඇත — ඉදිරි පියවර ගැන අපේ කණ්ඩායම සම්බන්ධ වෙයි.",
+            "ta": "{job_title} பதவிக்கு நீங்கள் சான்றளிக்கப்பட்டுள்ளீர்கள் — அடுத்த படிகள் பற்றி எங்கள் குழு தொடர்பு கொள்ளும்.",
+        },
+        "prescreening_certified": {
+            "en": "You have been certified for the {job_title} position — your pre-screening is on {prescreening_datetime}.",
+            "si": "ඔබව {job_title} තනතුර සඳහා සහතික කර ඇත — ඔබේ පෙර-පරීක්ෂාව {prescreening_datetime} දිනට නියමිතයි.",
+            "ta": "{job_title} பதவிக்கு நீங்கள் சான்றளிக்கப்பட்டுள்ளீர்கள் — உங்கள் முன்-தேர்வு {prescreening_datetime} அன்று நடைபெறும்.",
+        },
+        "hired": {
+            "en": "Congratulations — you have been selected for the {job_title} position! Our HR team will contact you with your offer details.",
+            "si": "සුභ පැතුම් — {job_title} තනතුරට ඔබව තෝරාගෙන ඇත! අපේ HR කණ්ඩායම ඔබව සම්බන්ධ කරගනී.",
+            "ta": "வாழ்த்துக்கள் — {job_title} பதவிக்கு நீங்கள் தேர்வு செய்யப்பட்டுள்ளீர்கள்! எங்கள் HR குழு உங்களைத் தொடர்பு கொள்ளும்.",
+        },
+        "rejected_with_alternatives": {
+            "en": "Your application for the {job_title} position was not successful this time, but we have other opportunities that may suit you.",
+            "si": "{job_title} සඳහා මෙවර ඔබේ අයදුම්පත සාර්ථක නොවුණා, නමුත් ඔබට ගැලපෙන වෙනත් අවස්ථා අප සතුව ඇත.",
+            "ta": "{job_title} பதவிக்கான உங்கள் விண்ணப்பம் இந்த முறை வெற்றி பெறவில்லை, ஆனால் உங்களுக்குப் பொருந்தும் வேறு வாய்ப்புகள் உள்ளன.",
+        },
+        "general_pool": {
+            "en": "We don't have a matching position right now, but you are in our talent pool — we will reach out when a suitable opening appears.",
+            "si": "දැනට ගැලපෙන තනතුරක් නැත, නමුත් ඔබ අපේ දක්ෂතා කණ්ඩායමේ සිටී — සුදුසු අවස්ථාවක් ලැබුණු විට අපි සම්බන්ධ වෙමු.",
+            "ta": "தற்போது பொருந்தும் பதவி இல்லை, ஆனால் நீங்கள் எங்கள் திறமைக் குழுவில் உள்ளீர்கள் — பொருத்தமான வாய்ப்பு வந்ததும் தொடர்பு கொள்வோம்.",
+        },
+        "transferred": {
+            "en": "Your application has been transferred from {old_job_title} to {new_job_title} — our team will be in touch with next steps.",
+            "si": "ඔබේ අයදුම්පත {old_job_title} සිට {new_job_title} වෙත මාරු කර ඇත — ඉදිරි පියවර ගැන අපේ කණ්ඩායම දන්වයි.",
+            "ta": "உங்கள் விண்ணப்பம் {old_job_title} இலிருந்து {new_job_title} க்கு மாற்றப்பட்டுள்ளது — அடுத்த படிகள் பற்றி எங்கள் குழு தொடர்பு கொள்ளும்.",
+        },
+        "interview_scheduled": {
+            "en": "Your interview for the {job_title} position is scheduled for {interview_date}.",
+            "si": "{job_title} සඳහා ඔබේ සම්මුඛ පරීක්ෂණය {interview_date} දිනට නියමිතයි.",
+            "ta": "{job_title} பதவிக்கான உங்கள் நேர்காணல் {interview_date} அன்று திட்டமிடப்பட்டுள்ளது.",
+        },
+        "interview_reminder": {
+            "en": "Reminder — your interview for the {job_title} position is on {interview_date}.",
+            "si": "මතක් කිරීමක් — {job_title} සඳහා ඔබේ සම්මුඛ පරීක්ෂණය {interview_date} දිනට නියමිතයි.",
+            "ta": "நினைவூட்டல் — {job_title} பதவிக்கான உங்கள் நேர்காணல் {interview_date} அன்று நடைபெறும்.",
+        },
+        "interview_day_reminder": {
+            "en": "Today is your interview for the {job_title} position — {interview_date}. Please arrive 15 minutes early.",
+            "si": "අද ඔබේ {job_title} සම්මුඛ පරීක්ෂණය — {interview_date}. මිනිත්තු 15කට පෙර පැමිණෙන්න.",
+            "ta": "இன்று உங்கள் {job_title} நேர்காணல் — {interview_date}. 15 நிமிடங்கள் முன்னதாக வாருங்கள்.",
+        },
+        "interview_rescheduled": {
+            "en": "Your interview for the {job_title} position has been rescheduled to {interview_date}.",
+            "si": "{job_title} සඳහා ඔබේ සම්මුඛ පරීක්ෂණය {interview_date} දිනට නැවත නියම කර ඇත.",
+            "ta": "{job_title} பதவிக்கான உங்கள் நேர்காணல் {interview_date} க்கு மறுதிட்டமிடப்பட்டுள்ளது.",
+        },
+        "interview_cancelled": {
+            "en": "Your interview for the {job_title} position has been cancelled — our team will contact you about next steps.",
+            "si": "{job_title} සඳහා ඔබේ සම්මුඛ පරීක්ෂණය අවලංගු කර ඇත — ඊළඟ පියවර ගැන අපේ කණ්ඩායම සම්බන්ධ වෙයි.",
+            "ta": "{job_title} பதவிக்கான உங்கள் நேர்காணல் ரத்து செய்யப்பட்டுள்ளது — அடுத்த படிகள் பற்றி எங்கள் குழு தொடர்பு கொள்ளும்.",
+        },
+        "job_now_available": {
+            "en": "A {job_title} opening matching your interest is now available — reply YES to apply.",
+            "si": "ඔබ විමසූ {job_title} රැකියාවට ගැලපෙන පුරප්පාඩුවක් දැන් තිබේ — අයදුම් කිරීමට YES ලෙස පිළිතුරු දෙන්න.",
+            "ta": "உங்கள் விருப்பத்துக்கு பொருந்தும் {job_title} வாய்ப்பு இப்போது உள்ளது — விண்ணப்பிக்க YES என்று பதிலளியுங்கள்.",
+        },
+    }
+
+    @classmethod
+    def get_status_param_summary(
+        cls,
+        status: str,
+        lang_code: str,
+        job_title: str = "",
+        interview_date: Optional[str] = None,
+        prescreening_datetime: Optional[str] = None,
+        old_job_title: Optional[str] = None,
+        new_job_title: Optional[str] = None,
+    ) -> Optional[str]:
+        """One-line, template-parameter-safe summary of a status update, in the
+        language of the Meta template variant (en/si/ta). None if the status has
+        no summary (caller then falls back to free-form)."""
+        per_status = cls.STATUS_PARAM_SUMMARY.get(status)
+        if not per_status:
+            return None
+        template = per_status.get(lang_code) or per_status.get("en", "")
+        try:
+            return template.format(
+                job_title=job_title or "",
+                interview_date=interview_date or "TBD",
+                prescreening_datetime=prescreening_datetime or "TBD",
+                old_job_title=old_job_title or "",
+                new_job_title=new_job_title or job_title or "",
+            )
+        except Exception:
+            return None
+
     @classmethod
     def get_status_update_message(
         cls,
