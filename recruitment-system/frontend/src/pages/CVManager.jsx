@@ -608,20 +608,28 @@ function OverviewTab({ candidate }) {
   const docFileRef = useRef(null)
   const queryClient = useQueryClient()
 
-  // Quick status change from the overview header. Writes the chosen stage
-  // THROUGH to the candidate's active applications (the source of truth) so it
-  // reflects on the Applications page and isn't clobbered by the server-side
-  // candidate-stage re-derivation.
+  // Quick status change from the overview header. Status changes are NOT silent
+  // (user decision 2026-06-11): the candidate is notified of the new stage.
+  // certified / interview route to the dialogs (which carry notes / a date and
+  // notify with full context); the rest send the matching message via notify=true.
   const statusMutation = useMutation({
-    mutationFn: (status) => setCandidateStage(candidate.id, status),
-    onSuccess: () => {
+    mutationFn: (status) => setCandidateStage(candidate.id, status, true),
+    onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
       queryClient.invalidateQueries({ queryKey: ['candidates'] })
       queryClient.invalidateQueries({ queryKey: ['applications'] })
-      toast.success('Status updated')
+      const waOk = res?.notification?.success?.some?.((s) => s.channel === 'whatsapp')
+      toast.success(waOk ? 'Status updated — candidate notified' : 'Status updated')
     },
     onError: (e) => toast.error(e?.response?.data?.error || 'Failed to update status'),
   })
+
+  const onStatusSelect = (value) => {
+    if (!value) return
+    if (value === 'certified') { setCertifyOpen(true); return }
+    if (value === 'interview_scheduled') { setInterviewOpen(true); return }
+    statusMutation.mutate(value)
+  }
 
   const uploadDocMutation = useMutation({
     mutationFn: ({ file, doc_type }) => uploadCandidateDocument(candidate.id, file, doc_type),
@@ -710,9 +718,9 @@ function OverviewTab({ candidate }) {
             {/* Quick status change */}
             <select
               value={CANDIDATE_MANUAL_STATUS_OPTIONS.some((o) => o.value === normalizeStatus(candidate.status)) ? normalizeStatus(candidate.status) : ''}
-              onChange={(e) => { if (e.target.value) statusMutation.mutate(e.target.value) }}
+              onChange={(e) => onStatusSelect(e.target.value)}
               disabled={statusMutation.isPending}
-              title="Change candidate status"
+              title="Change candidate status (notifies the candidate)"
               className="input text-xs py-1 w-40"
             >
               <option value="" disabled>Set status…</option>
@@ -720,9 +728,8 @@ function OverviewTab({ candidate }) {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
-            {/* Explicit stage actions that ALSO notify the candidate. The status
-                dropdown above stays message-less by design; certifying or
-                scheduling here opens the popups that auto-send the WhatsApp. */}
+            {/* Certify / Schedule also notify with full context (notes / date).
+                Changing status in the dropdown above now notifies too. */}
             <div className="flex gap-1.5">
               <Button size="sm" variant="secondary" className="gap-1 text-emerald-700 dark:text-emerald-300" onClick={() => setCertifyOpen(true)}>
                 <BadgeCheck size={14} /> Certify &amp; notify

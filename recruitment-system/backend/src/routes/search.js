@@ -31,8 +31,8 @@ router.get('/', authenticate, async (req, res, next) => {
             const params = digits ? [like, `%${digits}%`] : [like];
             const r = await query(adaptQuery(`
                 SELECT id, name, phone, status, photo_url FROM candidates
-                WHERE name ILIKE $1 OR phone ILIKE $1 OR email ILIKE $1
-                  ${digits ? "OR regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') LIKE $2" : ''}
+                WHERE removed_at IS NULL AND (name ILIKE $1 OR phone ILIKE $1 OR email ILIKE $1
+                  ${digits ? "OR regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') LIKE $2" : ''})
                 ORDER BY updated_at DESC NULLS LAST
                 LIMIT 8
             `), params);

@@ -24,17 +24,23 @@ const asArray = (raw) =>
 
 // Project → job picker reused by both dialogs.
 function ProjectJobSelect({ projId, setProjId, jobId, setJobId, required, jobLabel = 'Role' }) {
-  const { data: projectsRaw } = useQuery({
+  // refetchOnMount:'always' so every dialog open re-checks (cheap) instead of
+  // showing a stale/empty cached result; retry covers a transient blip so the
+  // dropdown doesn't silently sit empty for the 5-min staleTime window.
+  const { data: projectsRaw, isLoading: projectsLoading, isError: projectsError, refetch: refetchProjects } = useQuery({
     queryKey: ['stage-dlg-projects'],
-    queryFn: () => getProjects({ limit: 200 }),
-    staleTime: 5 * 60 * 1000,
+    queryFn: () => getProjects({ limit: 500 }),
+    staleTime: 60 * 1000,
+    refetchOnMount: 'always',
+    retry: 2,
   })
   const projects = useMemo(() => asArray(projectsRaw), [projectsRaw])
 
-  const { data: jobsRaw } = useQuery({
+  const { data: jobsRaw, isLoading: jobsLoading } = useQuery({
     queryKey: ['stage-dlg-jobs', projId],
     queryFn: () => getProjectJobs(projId),
     enabled: !!projId,
+    retry: 2,
   })
   const jobs = useMemo(() => asArray(jobsRaw), [jobsRaw])
 
@@ -47,11 +53,22 @@ function ProjectJobSelect({ projId, setProjId, jobId, setJobId, required, jobLab
         <select
           value={projId}
           onChange={(e) => { setProjId(e.target.value); setJobId('') }}
-          className="input w-full text-sm"
+          disabled={projectsLoading}
+          className="input w-full text-sm disabled:opacity-50"
         >
-          <option value="">Select project…</option>
+          <option value="">
+            {projectsLoading ? 'Loading projects…' : projectsError ? 'Could not load projects' : 'Select project…'}
+          </option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.title || p.name || 'Untitled project'}</option>)}
         </select>
+        {projectsError && (
+          <button type="button" onClick={() => refetchProjects()} className="mt-1 text-[11px] text-primary-600 hover:underline">
+            Retry loading projects
+          </button>
+        )}
+        {!projectsLoading && !projectsError && projects.length === 0 && (
+          <p className="mt-1 text-[11px] text-zinc-400">No projects found.</p>
+        )}
       </div>
       <div>
         <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
@@ -60,10 +77,10 @@ function ProjectJobSelect({ projId, setProjId, jobId, setJobId, required, jobLab
         <select
           value={jobId}
           onChange={(e) => setJobId(e.target.value)}
-          disabled={!projId}
+          disabled={!projId || jobsLoading}
           className="input w-full text-sm disabled:opacity-50"
         >
-          <option value="">{projId ? 'Select role…' : 'Pick a project first'}</option>
+          <option value="">{!projId ? 'Pick a project first' : jobsLoading ? 'Loading roles…' : 'Select role…'}</option>
           {jobs.map((j) => <option key={j.id} value={j.id}>{j.title || 'Untitled role'}</option>)}
         </select>
       </div>

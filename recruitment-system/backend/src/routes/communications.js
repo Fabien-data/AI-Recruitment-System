@@ -1355,6 +1355,31 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
             appliedStatus = 'future_pool';
         }
 
+        // Status changes are NOT silent (user decision 2026-06-11): a Done →
+        // Screening advance notifies the candidate their application is received
+        // and under review. (Certify / Interview Done paths go through their own
+        // dialogs, which notify with full context.)
+        if (appliedStatus === 'screening') {
+            try {
+                const notifications = require('../services/notifications');
+                let jobTitle = '';
+                try {
+                    const appRes = await query(
+                        adaptQuery(`SELECT j.title FROM applications a JOIN jobs j ON a.job_id = j.id
+                                    WHERE a.candidate_id = $1 ORDER BY a.applied_at DESC LIMIT 1`),
+                        [candidate_id]
+                    );
+                    jobTitle = appRes.rows[0]?.title || '';
+                } catch (_e) { /* best-effort */ }
+                await notifications.sendNotification({
+                    candidateId: candidate_id, type: 'application_complete',
+                    data: { job_title: jobTitle }, channels: ['whatsapp'],
+                });
+            } catch (e) {
+                logger.warn(`call-log assign notify failed for ${candidate_id}: ${e.message}`);
+            }
+        }
+
         // Advance → resolve pending follow-ups; decline → cancel them.
         if (appliedStatus && appliedStatus !== 'future_pool') {
             await query(adaptQuery(`UPDATE candidate_tasks SET status = 'done', completed_at = NOW()

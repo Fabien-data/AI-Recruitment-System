@@ -105,6 +105,10 @@ function buildConversationFilters({ query, userId, addParam, includeStatusBucket
     // Applied to the list AND every count so badges == rows.
     filters.push(`lm.sent_at IS NOT NULL`);
 
+    // Reject & remove: a soft-removed candidate is hidden from every list/count
+    // (and from search), regardless of tab/filter.
+    filters.push(`ca.removed_at IS NULL`);
+
     return filters;
 }
 

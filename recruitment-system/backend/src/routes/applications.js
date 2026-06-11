@@ -68,7 +68,8 @@ router.get('/', authenticate, requireSection('applications', 'view'), async (req
             limit,
         } = req.query;
         const params = [];
-        let whereClause = ' WHERE 1=1';
+        // Hide applications of soft-removed candidates ("Reject & remove").
+        let whereClause = ' WHERE 1=1 AND c.removed_at IS NULL';
 
         if (job_id) {
             whereClause += isMySQL ? ' AND a.job_id = ?' : ` AND a.job_id = $${params.length + 1}`;
@@ -159,7 +160,7 @@ router.get('/', authenticate, requireSection('applications', 'view'), async (req
         const countSql = `SELECT COUNT(*) AS total
                           FROM applications a
                           JOIN jobs j ON a.job_id = j.id
-                          ${search ? 'JOIN candidates c ON a.candidate_id = c.id' : ''}
+                          JOIN candidates c ON a.candidate_id = c.id
                           ${whereClause}`;
         const countResult = await query(countSql, params);
         const total = parseInt(countResult.rows?.[0]?.total, 10) || 0;

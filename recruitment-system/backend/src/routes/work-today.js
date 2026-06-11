@@ -74,6 +74,7 @@ const pipelineSummary = async () => {
         SELECT c.status, COUNT(*)::int AS n
         FROM candidates c
         WHERE c.status IN ('new','screening','certified','interview_scheduled','future_pool')
+          AND c.removed_at IS NULL
         GROUP BY c.status
     `);
     return r.reduce((acc, x) => { acc[x.status] = x.n; return acc; }, {});
@@ -97,6 +98,7 @@ router.get('/work-today', authenticate, requireSection('dashboard', 'view'), asy
                     SELECT c.id, c.name, c.phone, c.status, c.last_interaction
                     FROM candidates c
                     WHERE (COALESCE(c.requires_human, FALSE) = TRUE OR COALESCE(c.is_human_handoff, FALSE) = TRUE)
+                      AND c.removed_at IS NULL
                     ORDER BY c.last_interaction DESC NULLS LAST
                     LIMIT 15
                 `),

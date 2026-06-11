@@ -106,13 +106,18 @@ router.get('/', authenticate, requireSection('candidates', 'view'), async (req, 
             date_to,
             sort_by,
             sort_order,
+            removed,
         } = req.query;
 
         const offset = (page - 1) * limit;
 
         const params = [];
         // Table alias `c` so we can join latest application info below.
-        let whereClause = ' WHERE 1=1';
+        // Soft-removed candidates ("Reject & remove") are hidden by default;
+        // ?removed=only surfaces them so an admin can review/restore.
+        let whereClause = String(removed) === 'only'
+            ? ' WHERE 1=1 AND c.removed_at IS NOT NULL'
+            : ' WHERE 1=1 AND c.removed_at IS NULL';
 
         if (status) {
             whereClause += isMySQL ? ' AND c.status = ?' : ` AND c.status = $${params.length + 1}`;
@@ -779,10 +784,20 @@ const VALID_CANDIDATE_STAGES = new Set([
     'new', 'screening', 'certified', 'interview_scheduled', 'future_pool',
 ]);
 
+// Stage → candidate notification type for `notify` status changes. certified
+// and interview_scheduled are intentionally absent: those carry notes / a date
+// and must go through the Certify / Schedule-interview dialogs (which notify
+// with the full context). 'new' never messages the candidate.
+const STAGE_NOTIFY_TYPE = {
+    screening: 'application_complete',
+    certified: 'certified',
+    future_pool: 'general_pool',
+};
+
 router.put('/:id/stage', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { stage } = req.body;
+        const { stage, notify } = req.body;
         if (!VALID_CANDIDATE_STAGES.has(stage)) {
             return res.status(400).json({ error: 'Invalid stage' });
         }
@@ -797,8 +812,36 @@ router.put('/:id/stage', authenticate, requireSection('candidates', 'edit'), asy
         // the live `candidate_stage_changed` event (shared with the calling console).
         const { updatedApplications: updatedApps } = await setCandidateStage(id, stage);
 
+        // Optionally notify the candidate of the new stage (user decision
+        // 2026-06-11: status changes from the kept controls should not be silent).
+        let notification = null;
+        const notifyType = STAGE_NOTIFY_TYPE[stage];
+        if (notify && notifyType) {
+            // Resolve the job title for the message from the latest application.
+            let jobTitle = '';
+            try {
+                const appRes = await query(
+                    adaptQuery(`SELECT j.title FROM applications a JOIN jobs j ON a.job_id = j.id
+                                WHERE a.candidate_id = $1 ORDER BY a.applied_at DESC LIMIT 1`),
+                    [id]
+                );
+                jobTitle = appRes.rows[0]?.title || '';
+            } catch (_e) { /* best-effort */ }
+            try {
+                notification = await notifications.sendNotification({
+                    candidateId: id,
+                    type: notifyType,
+                    data: { job_title: jobTitle },
+                    channels: ['whatsapp'],
+                });
+            } catch (e) {
+                logger.error(`stage notify failed for ${id} (${notifyType}): ${e.message}`);
+                notification = { success: [], failed: [{ channel: 'all', error: e.message }] };
+            }
+        }
+
         const fresh = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [id]);
-        return res.json({ success: true, candidate: fresh.rows[0], updated_applications: updatedApps });
+        return res.json({ success: true, candidate: fresh.rows[0], updated_applications: updatedApps, notification });
     } catch (error) {
         next(error);
     }
@@ -956,6 +999,82 @@ router.post('/:id/send-welcome', authenticate, requireSection('communications', 
         // `queued` = parked in pending_messages (out-of-window, no template yet);
         // it will auto-deliver on the candidate's next reply.
         return res.json({ welcome, sent: !!waEntry && !waEntry.queued, queued: !!waEntry?.queued, reason });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * "Reject & remove" — hide a candidate from every list while KEEPING the row
+ * for records/audit (reversible). Stronger than 'Not interested' (future_pool,
+ * which stays re-engageable). Rejects active applications, cancels pending
+ * tasks, and releases any claim so the candidate fully drops out of the working
+ * views. Gated at candidates:edit (destructive).
+ */
+router.post('/:id/remove', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body || {};
+        const candRes = await query(adaptQuery('SELECT id, name FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        await query(
+            adaptQuery(`UPDATE candidates
+                        SET removed_at = NOW(), removed_by = $2, removed_reason = $3,
+                            claimed_by = NULL, claimed_at = NULL, updated_at = NOW()
+                        WHERE id = $1`),
+            [id, req.user.id, reason || null]
+        );
+        // Close out active applications + any pending follow-up tasks.
+        await query(
+            adaptQuery(`UPDATE applications
+                        SET status = 'rejected',
+                            rejection_reason = COALESCE($2, rejection_reason),
+                            updated_at = NOW()
+                        WHERE candidate_id = $1 AND status NOT IN ('rejected','hired')`),
+            [id, reason || 'Removed from system']
+        ).catch(() => {});
+        await query(
+            adaptQuery(`UPDATE candidate_tasks SET status = 'cancelled'
+                        WHERE candidate_id = $1 AND status = 'pending'`),
+            [id]
+        ).catch(() => {});
+
+        try {
+            await logAgentAction({
+                candidateId: id, agentId: req.user?.id, actionType: 'not_interested',
+                remark: `Rejected & removed from system${reason ? ` — ${reason}` : ''}`,
+            });
+        } catch (_e) { /* best-effort */ }
+
+        // Tell the live lists to drop this candidate.
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('candidate_removed', { candidate_id: id, ts: new Date().toISOString() });
+        } catch (_e) { /* best-effort */ }
+
+        return res.json({ ok: true, removed: true });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Restore a soft-removed candidate (undo "Reject & remove"). Clears removed_at;
+ * status/applications are left as-is for the agent to re-triage.
+ */
+router.post('/:id/restore', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const r = await query(
+            adaptQuery(`UPDATE candidates
+                        SET removed_at = NULL, removed_by = NULL, removed_reason = NULL, updated_at = NOW()
+                        WHERE id = $1 RETURNING id`),
+            [id]
+        );
+        if (r.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        return res.json({ ok: true, restored: true });
     } catch (error) {
         next(error);
     }

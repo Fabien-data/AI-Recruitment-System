@@ -533,6 +533,7 @@ router.get('/job/:jobId/candidates', authenticate, requireSection('candidates', 
                 LIMIT 1
             ) cv ON true
             WHERE a.job_id = $1
+              AND c.removed_at IS NULL
               AND ${hasCvSql('c')}
         `;
 
@@ -638,7 +639,7 @@ router.get('/pool', authenticate, requireSection('general_pool', 'view'), async 
                 ORDER BY is_primary DESC NULLS LAST, uploaded_at DESC
                 LIMIT 1
              ) cv ON true
-             WHERE c.status = 'future_pool'
+             WHERE c.status = 'future_pool' AND c.removed_at IS NULL
                ${cvFilter}
              ORDER BY COALESCE(c.whatsapp_unreachable, FALSE) ASC, c.updated_at DESC
              LIMIT $1 OFFSET $2`,
@@ -646,7 +647,7 @@ router.get('/pool', authenticate, requireSection('general_pool', 'view'), async 
         );
 
         const countResult = await pool.query(
-            `SELECT COUNT(*) FROM candidates c WHERE c.status = 'future_pool' ${cvFilter}`
+            `SELECT COUNT(*) FROM candidates c WHERE c.status = 'future_pool' AND c.removed_at IS NULL ${cvFilter}`
         );
 
         // Expose a browser-openable cv_url + cv_filename so the pool modal can

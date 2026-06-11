@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Phone, PhoneOff, Loader2, Plus, RotateCcw, Check, X, Briefcase, AlertCircle, BadgeCheck, CalendarClock } from 'lucide-react'
+import { Phone, PhoneOff, Loader2, Plus, RotateCcw, Check, X, Briefcase, AlertCircle, BadgeCheck, CalendarClock, Trash2 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 import { useAuthStore } from '../../stores/authStore'
@@ -76,8 +76,13 @@ const logHead = (l) => {
   return { label: l.outcome ? outcomeLabel(l.outcome) : 'Logged', cls: 'text-zinc-700 dark:text-zinc-200' }
 }
 
-export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, defaultProjectId = '', defaultJobId = '', claimedByMe = false, onReleaseClaim, releasePending = false }) {
+export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, defaultProjectId = '', defaultJobId = '', claimedByMe = false, onReleaseClaim, releasePending = false, onRemoved }) {
   const queryClient = useQueryClient()
+  // "Reject & remove" is destructive — gate it on candidates:edit (admins pass).
+  const authUser = useAuthStore((s) => s.user)
+  const authPerms = useAuthStore((s) => s.sectionPermissions) || []
+  const canRemove = authUser?.role === 'admin'
+    || !!authPerms.find((p) => p.section_key === 'candidates')?.can_edit
   const [outcome, setOutcome] = useState('')
   const [remark, setRemark] = useState('')
   const [open, setOpen] = useState(false)            // detailed "Log call" form
@@ -104,9 +109,11 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
 
   const { data: projects = [] } = useQuery({
     queryKey: ['cr-projects'],
-    queryFn: () => apiFetch('/api/projects?limit=200').then((r) => (Array.isArray(r) ? r : (r?.data || r?.projects || []))),
+    queryFn: () => apiFetch('/api/projects?limit=500').then((r) => (Array.isArray(r) ? r : (r?.data || r?.projects || []))),
     enabled: panel === 'assign',
-    staleTime: 5 * 60 * 1000,
+    staleTime: 60 * 1000,
+    refetchOnMount: 'always',
+    retry: 2,
   })
   const { data: jobs = [] } = useQuery({
     queryKey: ['cr-jobs', projId],
@@ -163,6 +170,24 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
   const submitNotInterested = () => addMut.mutate({
     outcome: 'not_interested', set_candidate_status: 'rejected',
     reason: reason || 'Not interested', remark: panelNote.trim() || undefined,
+  })
+
+  // "Reject & remove" — hide the candidate from the system entirely (reversible
+  // by an admin). Stronger than "Not interested" (Future Pool, re-engageable).
+  const removeMut = useMutation({
+    mutationFn: () => apiFetch(`/api/candidates/${candidateId}/remove`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: (reason || panelNote.trim() || undefined) }),
+    }),
+    onSuccess: () => {
+      closePanels()
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['engagement'] })
+      onRemoved?.()
+    },
+    onError: (err) => setActionError(err?.message || 'Could not remove the candidate.'),
   })
   const submitAssign = () => {
     if (!jobId) return
@@ -246,6 +271,23 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
           <CalendarClock size={12} /> Interview
         </button>
       </div>
+
+      {/* Reject & remove — hide the candidate from the system (reversible by an
+          admin). Distinct from "Not interested" (Future Pool). candidates:edit only. */}
+      {canRemove && (
+        <button
+          type="button"
+          disabled={addMut.isPending || removeMut.isPending}
+          onClick={() => togglePanel('remove')}
+          title="Reject & remove this candidate from the system"
+          className={clsx(
+            'w-full inline-flex items-center justify-center gap-1 text-[11px] font-medium px-1.5 py-1.5 rounded-lg border bg-white dark:bg-zinc-900 disabled:opacity-50 transition-colors border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30 mb-2',
+            panel === 'remove' && 'ring-2 ring-rose-400'
+          )}
+        >
+          <Trash2 size={12} /> Reject &amp; remove
+        </button>
+      )}
 
       <CertifyDialog
         open={certifyOpen}
@@ -359,6 +401,35 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
               className="text-[11px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
             >
               {addMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />} Mark not interested
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Reject & remove — confirm + optional reason. Hides the candidate from
+          every list (reversible by an admin). */}
+      {panel === 'remove' && (
+        <div className="mb-3 space-y-2 p-2 rounded-lg border border-rose-200 dark:border-rose-900/50 bg-rose-50/60 dark:bg-rose-950/20">
+          <p className="text-[11px] text-rose-800 dark:text-rose-300 flex items-start gap-1.5">
+            <Trash2 size={13} className="mt-0.5 shrink-0" />
+            <span>Remove <strong>{candidateName || 'this candidate'}</strong> from the system? They&apos;ll disappear from all lists and their applications are rejected. An admin can restore them later.</span>
+          </p>
+          <input
+            type="text"
+            value={panelNote}
+            onChange={(e) => setPanelNote(e.target.value)}
+            placeholder="Reason (optional)…"
+            className="w-full px-2 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-400"
+          />
+          <div className="flex items-center justify-end gap-2">
+            <button type="button" onClick={closePanels} className="text-[11px] text-zinc-500 hover:text-zinc-700">Cancel</button>
+            <button
+              type="button"
+              disabled={removeMut.isPending}
+              onClick={() => removeMut.mutate()}
+              className="text-[11px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+            >
+              {removeMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Remove from system
             </button>
           </div>
         </div>

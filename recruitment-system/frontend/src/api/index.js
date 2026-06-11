@@ -55,8 +55,8 @@ export const updateCandidate = (id, data) =>
 // Set the candidate's pipeline stage — writes through to the candidate's active
 // applications (the source of truth) so the change reflects on the Applications
 // page and survives candidate-stage re-derivation.
-export const setCandidateStage = (id, stage) =>
-  apiClient.put(`/api/candidates/${id}/stage`, { stage }).then(res => res.data)
+export const setCandidateStage = (id, stage, notify = false) =>
+  apiClient.put(`/api/candidates/${id}/stage`, { stage, notify }).then(res => res.data)
 
 // Certify a candidate AND (by default) send the WhatsApp "certified" message.
 // data: { certification_notes?, translate_notes?, job_id?, role_title?, send_message?, channels? }

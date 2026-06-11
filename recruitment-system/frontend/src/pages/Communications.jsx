@@ -1152,6 +1152,12 @@ export default function Communications() {
       }
     })
 
+    // A candidate was "Rejected & removed" — drop them from every open list.
+    socket.on('candidate_removed', ({ candidate_id }) => {
+      setChatList((prev) => prev.filter((c) => c.candidate_id !== candidate_id))
+      setSelectedId((cur) => (cur === candidate_id ? null : cur))
+    })
+
     // A queued (out-of-window) message was flushed after the candidate replied:
     // upgrade the SAME bubble from "Queued" to ✓ sent (receipts then upgrade it
     // further via the transcript refetch / status-sync).
@@ -2066,19 +2072,9 @@ export default function Communications() {
                   <h2 className="font-semibold text-zinc-900 dark:text-zinc-50 text-sm">{getCandidateDisplayName(selectedCandidate)}</h2>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <StageBadge status={selectedCandidate?.candidate_status} />
-                    {/* Quick-change stage (incl. Future Pool) without leaving Messages. */}
-                    <select
-                      value={normalizeStatus(String(selectedCandidate?.candidate_status || '').toLowerCase()) || ''}
-                      onChange={(e) => selectedId && e.target.value && stageMut.mutate({ id: selectedId, stage: e.target.value })}
-                      disabled={stageMut.isPending}
-                      title="Change stage"
-                      className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary-400 cursor-pointer"
-                    >
-                      <option value="" disabled>Set stage…</option>
-                      {CANDIDATE_MANUAL_STATUS_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
+                    {/* Status changes live in the side profile panel (call-log
+                        quick actions, which notify the candidate) — not here, to
+                        avoid a silent change in the chat header. */}
                     <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', getPipelineStageClasses(selectedCandidate?.pipeline_stage))}>
                       {getPipelineStageLabel(selectedCandidate?.pipeline_stage)}
                     </span>
@@ -2496,6 +2492,12 @@ export default function Communications() {
               claimedByMe={selectedCandidate?.claimed_by === currentUser?.id}
               releasePending={unclaimMut.isPending}
               onReleaseClaim={() => unclaimMut.mutate({ id: selectedId, reason: 'interview_scheduled' })}
+              onRemoved={() => {
+                // Candidate is hidden now — drop it from the list and close the chat.
+                setChatList((prev) => prev.filter((c) => c.candidate_id !== selectedId))
+                setSelectedId(null)
+                toast.success('Candidate removed from the system')
+              }}
             />
           </div>
 
