@@ -22,6 +22,7 @@ const VIEW_ONLY = { can_view: true, can_create: false, can_edit: false, can_dele
 const NONE      = { can_view: false, can_create: false, can_edit: false, can_delete: false };
 // CRUD shorthands for the mandatory matrix below.
 const V    = VIEW_ONLY;                                                        // view
+const VC   = { can_view: true, can_create: true,  can_edit: false, can_delete: false }; // view + create
 const VE   = { can_view: true, can_create: false, can_edit: true,  can_delete: false }; // view + edit
 const VCE  = { can_view: true, can_create: true,  can_edit: true,  can_delete: false }; // view + create + edit
 const VCED = ALL_PERMS;                                                        // full CRUD
@@ -46,9 +47,11 @@ const UNIVERSAL_SECTIONS = ['dashboard'];
  *
  * admin = full CRUD everywhere (handled by the bypass; listed for completeness).
  * sourcing_department = full operations except the admin panel (locked decision).
- * project_handler = pipeline ops, jobs view-only, no delete.
- * marketing_agent = onboard-from-chat: jobs view-only, candidates view, cv_manager
- *                   + marketing_hub full, communications view+edit.
+ * project_handler = pipeline ops, jobs view-only, no delete; candidates
+ *                   view+create+edit (create powers Add-candidate in Messages).
+ * marketing_agent = onboard-from-chat: jobs view-only, candidates view+create
+ *                   (Add-candidate from the Messages panel is their core flow),
+ *                   cv_manager + marketing_hub full, communications view+edit.
  */
 const ROLE_BASELINE = {
     admin: {
@@ -57,12 +60,12 @@ const ROLE_BASELINE = {
         marketing_hub: VCED, analytics: VCED, general_pool: VCED, knowledge_base: VCED,
     },
     project_handler: {
-        dashboard: V, projects: VCE, applications: VE, candidates: VE,
+        dashboard: V, projects: VCE, applications: VE, candidates: VCE,
         cv_manager: VCE, communications: VE, interviews: VCE, jobs: V,
         marketing_hub: NONE, analytics: V, general_pool: V, knowledge_base: NONE,
     },
     marketing_agent: {
-        dashboard: V, projects: NONE, applications: NONE, candidates: V,
+        dashboard: V, projects: NONE, applications: NONE, candidates: VC,
         cv_manager: VCE, communications: VE, interviews: NONE, jobs: V,
         marketing_hub: VCE, analytics: NONE, general_pool: NONE, knowledge_base: NONE,
     },

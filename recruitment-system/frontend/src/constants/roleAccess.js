@@ -6,6 +6,7 @@
 
 const ALL  = { can_view: true,  can_create: true,  can_edit: true,  can_delete: true }
 const V    = { can_view: true,  can_create: false, can_edit: false, can_delete: false }
+const VC   = { can_view: true,  can_create: true,  can_edit: false, can_delete: false }
 const VE   = { can_view: true,  can_create: false, can_edit: true,  can_delete: false }
 const VCE  = { can_view: true,  can_create: true,  can_edit: true,  can_delete: false }
 const NONE = { can_view: false, can_create: false, can_edit: false, can_delete: false }
@@ -23,12 +24,12 @@ export const ROLE_BASELINE = {
     marketing_hub: ALL, analytics: ALL, general_pool: ALL, knowledge_base: ALL,
   },
   project_handler: {
-    dashboard: V, projects: VCE, applications: VE, candidates: VE,
+    dashboard: V, projects: VCE, applications: VE, candidates: VCE,
     cv_manager: VCE, communications: VE, interviews: VCE, jobs: V,
     marketing_hub: NONE, analytics: V, general_pool: V, knowledge_base: NONE,
   },
   marketing_agent: {
-    dashboard: V, projects: NONE, applications: NONE, candidates: V,
+    dashboard: V, projects: NONE, applications: NONE, candidates: VC,
     cv_manager: VCE, communications: VE, interviews: NONE, jobs: V,
     marketing_hub: VCE, analytics: NONE, general_pool: NONE, knowledge_base: NONE,
   },
