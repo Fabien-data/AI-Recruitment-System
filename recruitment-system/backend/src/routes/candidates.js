@@ -574,7 +574,7 @@ router.post('/with-welcome', authenticate, requireSection('candidates', 'create'
         } else {
             const r = await query(
                 `INSERT INTO candidates (name, phone, email, source, preferred_language, notes, metadata, status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new')
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'new')
                  RETURNING *`,
                 [name, normalizedPhone, email, source, preferred_language, notes, metadataPayload]
             );
