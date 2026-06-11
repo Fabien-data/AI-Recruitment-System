@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../config/database');
 const { generateToken, authenticate, JWT_SECRET } = require('../middleware/auth');
 const { loadPerms } = require('../middleware/sections');
+const { insertAuditRow } = require('../utils/audit-writer');
 const logger = require('../utils/logger');
 
 function getIp(req) {
@@ -17,16 +18,21 @@ function getIp(req) {
 }
 
 async function recordAudit({ userId, sessionId, action, sectionKey = null, changes = null, ip = null, userAgent = null }) {
-    try {
-        await pool.query(
-            `INSERT INTO audit_logs
-                (user_id, action, entity_type, entity_id, changes, ip_address, user_agent, session_id, section_key)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-            [userId, action, 'session', null, changes ? JSON.stringify(changes) : null, ip, userAgent, sessionId, sectionKey]
-        );
-    } catch (err) {
-        logger.warn(`auth audit write failed (${action}):`, err.message);
-    }
+    // Tolerant writer: falls back to the legacy column set when the prod
+    // audit_logs table is missing the Migration 021 columns, so login/logout
+    // rows are never silently lost.
+    await insertAuditRow({
+        userId,
+        sessionId,
+        action,
+        entityType: 'session',
+        sectionKey,
+        changes,
+        ip,
+        userAgent,
+    }).catch((err) => {
+        logger.warn(`auth audit write failed (${action}):`, err?.message);
+    });
 }
 
 /**

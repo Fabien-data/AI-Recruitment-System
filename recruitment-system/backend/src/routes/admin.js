@@ -25,6 +25,7 @@ const { pool } = require('../config/database');
 const { authenticate, authorize, ROLES } = require('../middleware/auth');
 const { loadPerms } = require('../middleware/sections');
 const { computeUserKpi } = require('../services/kpi');
+const { insertAuditRow } = require('../utils/audit-writer');
 const logger = require('../utils/logger');
 
 const ADMIN_ONLY = [authenticate, authorize(ROLES.ADMIN)];
@@ -373,20 +374,22 @@ router.put('/users/:id/permissions', ...ADMIN_ONLY, async (req, res, next) => {
                 [user.id, p.section_key, !!p.can_view, !!p.can_create, !!p.can_edit, !!p.can_delete]
             );
         }
-        // Audit the change so it shows up in activity feeds.
-        await client.query(
-            `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, changes, ip_address, user_agent, session_id, section_key)
-             VALUES ($1, 'update', 'user_permissions', $2, $3, $4, $5, $6, 'dashboard')`,
-            [
-                req.user.id,
-                user.id,
-                JSON.stringify({ target_user_id: user.id, permissions }),
-                req.ip || null,
-                req.headers['user-agent'] || null,
-                req.user.session_id || null,
-            ]
-        );
         await client.query('COMMIT');
+
+        // Audit the change so it shows up in activity feeds — AFTER commit and
+        // fire-and-forget: the permissions save must never fail because of the
+        // audit_logs schema (prod was 500ing on the missing session_id column).
+        insertAuditRow({
+            userId: req.user.id,
+            sessionId: req.user.session_id || null,
+            action: 'update',
+            entityType: 'user_permissions',
+            entityId: user.id,
+            sectionKey: 'dashboard',
+            changes: { target_user_id: user.id, permissions },
+            ip: req.ip || null,
+            userAgent: req.headers['user-agent'] || null,
+        }).catch(() => {});
 
         const effective = await loadPerms(user.id, user.role);
         res.json({ user, permissions: effective });
