@@ -1452,21 +1452,23 @@ async def candidate_status_webhook(
         ).first()
         if not candidate:
             candidate = crud.get_or_create_candidate(db, phone)
-            changed = False
             if payload.candidate_name and not (candidate.name or "").strip():
                 candidate.name = payload.candidate_name
-                changed = True
             # Carry the CRM's preferred language onto the new record so the
             # template variant (en/si/ta) matches what the agent selected.
             if payload.language:
                 try:
                     from app.models import LanguagePreference
                     candidate.language_preference = LanguagePreference(payload.language)
-                    changed = True
                 except Exception:
                     pass
-            if changed:
-                db.commit()
+            # CRITICAL: a proactively-created candidate has NEVER messaged in, so
+            # they are OUTSIDE the 24h window. The Candidate model defaults
+            # last_inbound_at to now() on insert — clear it so the window check
+            # below picks the approved-template path (not free-form, which Meta
+            # drops). It's re-stamped to now() by _touch_inbound on their reply.
+            candidate.last_inbound_at = None
+            db.commit()
         lang = "en"
         extracted = candidate.extracted_data or {}
         lang = extracted.get("language_register") or getattr(
