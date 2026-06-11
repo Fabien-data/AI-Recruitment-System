@@ -932,6 +932,28 @@ export default function Communications() {
     onError: (e) => toast.error(e?.message || 'Failed to send welcome'),
   })
 
+  // Re-engage: send the dedicated re-engagement nudge to the OPEN candidate.
+  // In-window it's a friendly free-form check-in; outside the 24h window it's the
+  // approved dewan_reengage template that prompts the candidate to reply.
+  const reengageNudgeMut = useMutation({
+    mutationFn: () => apiFetch(`/api/candidates/${selectedId}/reengage`, { method: 'POST' }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['transcript'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
+      if (res?.sent) {
+        toast.success('Re-engagement message sent')
+      } else if (res?.queued) {
+        toast('Re-engagement queued — it will deliver when the candidate replies', { icon: '⏳', duration: 6000 })
+      } else {
+        const why = res?.reason === 'no_whatsapp' ? 'not a WhatsApp number'
+          : (res?.reason || 'could not be delivered')
+        toast(`Re-engagement not delivered — ${why}`, { icon: '⚠️', duration: 8000 })
+      }
+    },
+    onError: (e) => toast.error(e?.message || 'Failed to send re-engagement'),
+  })
+
   // Client-side role/label filters — distinct options derived from the loaded
   // list. Project + status are filtered server-side (see active-chats query).
   const jobOptions = [...new Set(chatList.map(c => c.effective_job_title || c.latest_job_title).filter(Boolean))].sort()
@@ -2262,18 +2284,28 @@ export default function Communications() {
                     onInsert={(text) => setMessage((m) => (m ? `${m}\n${text}` : text))}
                   />
                 </div>
-                {/* Re-engage: (re)send the welcome to reopen the chat. The only
-                    way to reach a candidate who's gone quiet >24h (uses the
-                    approved template); also works in-window. */}
+                {/* Manual sends that work in OR out of WhatsApp's 24h window
+                    (out-of-window uses the approved template). Welcome = warm
+                    intro / restart; Re-engage = nudge a dormant chat to reply. */}
                 <button
                   type="button"
                   onClick={() => reengageMut.mutate()}
                   disabled={!selectedId || reengageMut.isPending}
                   className="flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-300 hover:text-emerald-800 disabled:opacity-50"
-                  title="Send the welcome / re-engagement message to this candidate (uses the approved template when they're outside WhatsApp's 24h window)"
+                  title="Send the welcome message to this candidate (uses the approved dewan_welcome template when they're outside WhatsApp's 24h window)"
                 >
                   {reengageMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                   {reengageMut.isPending ? 'Sending…' : 'Send welcome'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => reengageNudgeMut.mutate()}
+                  disabled={!selectedId || reengageNudgeMut.isPending}
+                  className="flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 hover:text-amber-800 disabled:opacity-50"
+                  title="Send a re-engagement nudge to this candidate (uses the approved dewan_reengage template when they're outside WhatsApp's 24h window)"
+                >
+                  {reengageNudgeMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                  {reengageNudgeMut.isPending ? 'Sending…' : 'Send re-engage'}
                 </button>
               </div>
 

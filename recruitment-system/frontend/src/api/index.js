@@ -49,6 +49,11 @@ export const createCandidateWithWelcome = (data) =>
 export const sendCandidateWelcome = (id) =>
   apiClient.post(`/api/candidates/${id}/send-welcome`).then(res => res.data)
 
+// Manual re-engagement nudge: in-window = friendly check-in, out-of-window =
+// approved dewan_reengage template. Returns { result, sent, queued, reason }.
+export const sendCandidateReengage = (id) =>
+  apiClient.post(`/api/candidates/${id}/reengage`).then(res => res.data)
+
 export const updateCandidate = (id, data) =>
   apiClient.put(`/api/candidates/${id}`, data).then(res => res.data)
 

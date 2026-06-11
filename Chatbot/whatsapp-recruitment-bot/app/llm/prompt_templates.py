@@ -1467,6 +1467,16 @@ Question:"""
         # Agent manually added this candidate from the Messages panel — a warm
         # first-touch that opens the conversation and hands them to the bot intake
         # (their first reply runs the normal intake flow). No job_title needed.
+        # Manual "Send re-engagement" nudge for a dormant chat. In-window this
+        # friendly check-in goes out free-form; out-of-window the approved
+        # dewan_reengage template is used (see _out_of_window_template).
+        "reengage": {
+            "en": "👋 Hi {name}, just checking in about your application with Dewan Consultants — are you still interested? Reply here and we'll continue where we left off. 🙂",
+            "si": "👋 ආයුබෝවන් {name}, Dewan Consultants සමඟ ඔබේ අයදුම්පත ගැන විමසීමට — ඔබ තවමත් උනන්දුද? මෙහි පිළිතුරු දෙන්න, අපි නැවතුණු තැනින් ඉදිරියට යමු. 🙂",
+            "ta": "👋 வணக்கம் {name}, Dewan Consultants உடனான உங்கள் விண்ணப்பம் குறித்து விசாரிக்க — நீங்கள் இன்னும் ஆர்வமாக உள்ளீர்களா? இங்கே பதிலளியுங்கள், நிறுத்திய இடத்திலிருந்து தொடர்வோம். 🙂",
+            "singlish": "👋 Hi {name}, oyage Dewan Consultants application eka gana check karanna — oya thama interest da? Methana reply karanna, api nawaththuna thanin issarahata yamu. 🙂",
+            "tanglish": "👋 Hi {name}, unga Dewan Consultants application gurinchi check panna — neenga innum interest-a? Inga reply pannunga, nirthina idathurundu thodarvom. 🙂",
+        },
         "welcome": {
             "en": "👋 Hi {name}! Welcome to Dewan Consultants — Sri Lanka's trusted overseas recruitment agency. We'd love to help you find a great job abroad. To get started, just reply here and I'll ask you a few quick questions. 🙂",
             "si": "👋 ආයුබෝවන් {name}! Dewan Consultants වෙත සාදරයෙන් පිළිගනිමු — විදේශ රැකියා සඳහා ශ්‍රී ලංකාවේ විශ්වාසනීය ආයතනය. විදේශගත හොඳ රැකියාවක් සොයා ගැනීමට අපි ඔබට උදව් කරමු. ආරම්භ කිරීමට, මෙහි පිළිතුරු දෙන්න — මම ඔබට කෙටි ප්‍රශ්න කිහිපයක් අසන්නම්. 🙂",

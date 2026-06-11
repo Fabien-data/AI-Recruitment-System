@@ -1005,6 +1005,41 @@ router.post('/:id/send-welcome', authenticate, requireSection('communications', 
 });
 
 /**
+ * Manual "Send re-engagement" to an EXISTING candidate, from the Messages panel.
+ * Routes through the chatbot (status='reengage'): in the 24h window it's a
+ * friendly free-form check-in; outside it, the approved dewan_reengage template
+ * (the nudge that prompts the candidate to reply and reopen the chat). Mirrors
+ * send-welcome — does NOT change the candidate's stage or bot state.
+ */
+router.post('/:id/reengage', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const candRes = await query(adaptQuery('SELECT id, name, phone FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        const cand = candRes.rows[0];
+        if (!cand.phone) return res.status(400).json({ error: 'Candidate has no phone number' });
+
+        let result = { success: [], failed: [] };
+        try {
+            result = await notifications.sendNotification({
+                candidateId: id,
+                type: 'reengage',
+                data: { name: cand.name || '' },
+                channels: ['whatsapp'],
+            });
+        } catch (e) {
+            logger.error(`reengage failed for ${id}: ${e.message}`);
+            result.failed.push({ channel: 'all', error: e.message });
+        }
+        const waEntry = result.success?.find?.((s) => s.channel === 'whatsapp');
+        const reason = result.failed?.[0]?.reason || null;
+        return res.json({ result, sent: !!waEntry && !waEntry.queued, queued: !!waEntry?.queued, reason });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
  * "Reject & remove" — hide a candidate from every list while KEEPING the row
  * for records/audit (reversible). Stronger than 'Not interested' (future_pool,
  * which stays re-engageable). Rejects active applications, cancels pending

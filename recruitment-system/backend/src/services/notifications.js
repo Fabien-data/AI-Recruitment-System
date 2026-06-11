@@ -29,6 +29,24 @@ const NOTIFICATION_TEMPLATES = {
             message: `👋 வணக்கம் {name}, Dewan Recruitment-க்கு வரவேற்கிறோம். வெளிநாட்டில் சிறந்த வேலையைக் கண்டுபிடிக்க உங்களுக்கு உதவ விரும்புகிறோம். தொடங்க, இங்கே பதிலளியுங்கள் — எங்கள் உதவியாளர் சில விரைவான கேள்விகளுடன் உங்களை வழிநடத்தும்.`
         }
     },
+    // Manual "Send re-engagement" from the Messages panel — wakes a dormant chat.
+    // The chatbot renders the actual text (status='reengage'): in-window it's this
+    // friendly check-in; outside the 24h window it's the approved dewan_reengage
+    // template (which prompts the candidate to reply and reopen the chat).
+    reengage: {
+        en: {
+            subject: 'A message from Dewan Recruitment',
+            message: `👋 Hi {name}, just checking in about your application with Dewan Consultants — are you still interested? Reply here and we'll continue where we left off.`
+        },
+        si: {
+            subject: 'Dewan Recruitment වෙතින් පණිවිඩයක්',
+            message: `👋 ආයුබෝවන් {name}, Dewan Consultants සමඟ ඔබේ අයදුම්පත ගැන විමසීමට — ඔබ තවමත් උනන්දුද? මෙහි පිළිතුරු දෙන්න, අපි නැවතුණු තැනින් ඉදිරියට යමු.`
+        },
+        ta: {
+            subject: 'Dewan Recruitment-இலிருந்து ஒரு செய்தி',
+            message: `👋 வணக்கம் {name}, Dewan Consultants உடனான உங்கள் விண்ணப்பம் குறித்து விசாரிக்க — நீங்கள் இன்னும் ஆர்வமாக உள்ளீர்களா? இங்கே பதிலளியுங்கள், நிறுத்திய இடத்திலிருந்து தொடர்வோம்.`
+        }
+    },
     // Sent when a recruiter moves a candidate New → Screening (details + CV
     // complete). Confirms the application was received and is under review.
     application_complete: {

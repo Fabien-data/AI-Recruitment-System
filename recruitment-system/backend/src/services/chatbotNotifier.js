@@ -25,6 +25,7 @@ const TYPE_TO_STATUS = {
     general_pool: 'general_pool',
     transfer: 'transferred',
     job_now_available: 'job_now_available',
+    reengage: 'reengage',
 };
 
 function mapType(type) {

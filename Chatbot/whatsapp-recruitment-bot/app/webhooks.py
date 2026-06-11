@@ -1334,6 +1334,8 @@ def _out_of_window_template(status_key: str, payload, lang: str):
         "job_now_available": (settings.template_job_now_available, [first_name, job]),
         # Agent-added candidate (never messaged in → out of window). Body: [first_name].
         "welcome": (settings.template_welcome, [first_name]),
+        # Manual re-engagement nudge for a dormant chat. Body: [first_name].
+        "reengage": (settings.template_reengage, [first_name]),
     }
     tmpl, params = mapping.get(status_key, (None, None))
 
