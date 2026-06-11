@@ -1522,13 +1522,16 @@ async def candidate_status_webhook(
     # is configured for this status; otherwise free-form (which Meta drops out of
     # window — same as before templates were wired, so no regression).
     try:
-        in_window = True
+        # last_inbound_at is None ⇒ the candidate has NEVER messaged in ⇒ OUTSIDE
+        # the 24h window ⇒ template path. (Defaulting to in-window here was the
+        # bug that sent free-form to agent-added candidates, which Meta drops.)
+        in_window = False
         if last_inbound_at is not None:
             try:
                 from datetime import datetime as _dt, timedelta as _td
                 in_window = (_dt.utcnow() - last_inbound_at) < _td(hours=24)
             except Exception:
-                in_window = True
+                in_window = False
 
         tmpl = None
         if not in_window:
