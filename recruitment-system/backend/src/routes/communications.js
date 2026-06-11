@@ -26,6 +26,7 @@ const { normalizePhone } = require('../utils/phone');
 const logger = require('../utils/logger');
 const { uploadToGCS } = require('../utils/gcs-upload');
 const { setCandidateStage, emitStageChanged } = require('../services/candidate-stage');
+const { openClaimSession, closeClaimSession, getOpenClaimSessionId } = require('../services/claim-sessions');
 const {
     EFF_PROJECT_ID_EXPR,
     PIPELINE_STAGE_EXPR,
@@ -113,14 +114,15 @@ async function insertCommunicationMessage({
     metadataValue,
     callRecordingUrl,
     whatsappMessageId,
+    claimSessionId,
 }) {
     try {
         await query(
             adaptQuery(`INSERT INTO communications
                 (id, candidate_id, channel, direction, message_type, content,
                  attachments, metadata, call_recording_url,
-                 sent_by, sender_type, sender_name, whatsapp_message_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`),
+                 sent_by, sender_type, sender_name, whatsapp_message_id, claim_session_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`),
             [
                 id,
                 candidateId,
@@ -135,6 +137,7 @@ async function insertCommunicationMessage({
                 senderType || null,
                 senderName || null,
                 whatsappMessageId || null,
+                claimSessionId || null,
             ]
         );
     } catch (err) {
@@ -1112,6 +1115,9 @@ router.post('/candidate/:candidate_id/claim', authenticate, requireSection('comm
             [req.user.id, candidate_id]
         );
         if (upd.rowCount === 0) return res.status(404).json({ error: 'Candidate not found' });
+        // Audit window (migration 041): closes any previous holder's session as
+        // 'reassigned' — claim transfer stays allowed, but it's recorded.
+        await openClaimSession(candidate_id, req.user.id);
 
         try {
             const { getIO } = require('../utils/websocket');
@@ -1141,6 +1147,13 @@ router.post('/candidate/:candidate_id/unclaim', authenticate, requireSection('co
             adaptQuery(`UPDATE candidates SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW() WHERE id = $1`),
             [candidate_id]
         );
+        // Close the audit window. 'interview_scheduled' comes from the
+        // release-after-interview prompt; an admin releasing someone else's
+        // claim is recorded as 'admin'.
+        const requestedReason = ['manual', 'interview_scheduled'].includes(req.body?.reason) ? req.body.reason : 'manual';
+        const reason = (cur.rows[0].claimed_by && cur.rows[0].claimed_by !== req.user.id && req.user.role === 'admin')
+            ? 'admin' : requestedReason;
+        await closeClaimSession(candidate_id, { releasedBy: req.user.id, reason });
 
         try {
             const { getIO } = require('../utils/websocket');
@@ -1224,8 +1237,34 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
             return res.status(400).json({ error: 'A job must be selected to move a candidate to Screening', code: 'job_required' });
         }
 
-        const cand = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [candidate_id]);
+        const cand = await query(adaptQuery('SELECT id, claimed_by FROM candidates WHERE id = $1'), [candidate_id]);
         if (cand.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        // Claim-aware credit: a log only counts toward the agent's engagement
+        // stats while they hold the claim. Logging on an UNCLAIMED chat
+        // auto-claims it (agents shouldn't lose credit for forgetting the
+        // Claim button); a chat claimed by someone ELSE is never stolen — the
+        // log saves with a NULL stamp and counts toward no one.
+        let claimSessionId = null;
+        const currentClaimer = cand.rows[0].claimed_by;
+        if (!currentClaimer) {
+            claimSessionId = await openClaimSession(candidate_id, req.user.id);
+            if (claimSessionId) {
+                await query(
+                    adaptQuery(`UPDATE candidates SET claimed_by = $1, claimed_at = NOW(), updated_at = NOW() WHERE id = $2`),
+                    [req.user.id, candidate_id]
+                );
+                try {
+                    const { getIO } = require('../utils/websocket');
+                    const io = getIO();
+                    if (io) io.emit('claim_changed', { candidate_id, claimed_by: req.user.id, claimer_name: req.user.full_name || req.user.email, ts: new Date().toISOString() });
+                } catch (wsErr) {
+                    logger.debug(`auto-claim WS emit skipped: ${wsErr.message}`);
+                }
+            }
+        } else if (currentClaimer === req.user.id) {
+            claimSessionId = await getOpenClaimSessionId(candidate_id, req.user.id);
+        }
 
         // New→Screening: attach the candidate to the chosen job (idempotent, mirrors
         // applications.js) so the assignment is recorded even if the CV gate blocks.
@@ -1265,9 +1304,9 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
 
         const id = generateUUID();
         await query(
-            adaptQuery(`INSERT INTO call_logs (id, candidate_id, agent_id, outcome, disposition, remark, duration_seconds, job_id, application_id, reason, action_type)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`),
-            [id, candidate_id, req.user.id, outcome, disposition, remark, durationSeconds, jobId, applicationId, reason, actionType]
+            adaptQuery(`INSERT INTO call_logs (id, candidate_id, agent_id, outcome, disposition, remark, duration_seconds, job_id, application_id, reason, action_type, claim_session_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`),
+            [id, candidate_id, req.user.id, outcome, disposition, remark, durationSeconds, jobId, applicationId, reason, actionType, claimSessionId]
         );
 
         // Logging a call counts as agent contact; carry disposition through. The
@@ -1555,6 +1594,9 @@ router.post('/send', authenticate, requireSection('communications', 'edit'), upl
             metadataValue,
             callRecordingUrl: finalMessageType === 'audio' ? mediaUrl : null,
             whatsappMessageId: primaryWaId,
+            // Claim-aware credit: stamped only if this agent holds the claim
+            // right now — unstamped messages don't count in engagement stats.
+            claimSessionId: await getOpenClaimSessionId(resolvedCandidateId, req.user.id),
         });
 
         // Clear intervention flag now that an agent has responded.
@@ -1696,6 +1738,7 @@ router.post('/send-bulk', authenticate, requireSection('communications', 'edit')
                     attachmentsValue: [],
                     metadataValue: JSON.stringify({ source: 'bulk_send' }),
                     callRecordingUrl: null,
+                    claimSessionId: await getOpenClaimSessionId(candidateId, req.user.id),
                 });
                 results.success.push({ candidate_id: candidateId, name: candidate.name });
             } catch (err) {

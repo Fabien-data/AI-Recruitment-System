@@ -589,6 +589,18 @@ export const getDailyDigest = () =>
 export const getAgentCallActivity = (params) =>
   apiClient.get('/api/engagement/call-logs', { params }).then(res => res.data)
 
+// Personal scorecard: current + previous window stats (trend deltas) + leftover
+// claimed chats. Admins may pass agent_id for the team drill-down.
+export const getMyScorecard = (params) =>
+  apiClient.get('/api/engagement/my-scorecard', { params }).then(res => res.data)
+
+// Admin → agent engagement nudge (persisted notification + live socket ping)
+export const nudgeUser = (data) =>
+  apiClient.post('/api/engagement/nudge', data).then(res => res.data)
+
+export const markNotificationsRead = (data) =>
+  apiClient.post('/api/notifications/mark-read', data).then(res => res.data)
+
 export const getCandidateTimeline = (id) =>
   apiClient.get(`/api/engagement/candidates/${id}/timeline`).then(res => res.data)
 

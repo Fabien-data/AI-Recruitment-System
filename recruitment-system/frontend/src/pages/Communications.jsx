@@ -14,7 +14,7 @@
  *   - agent_typing     → typing indicator in transcript
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams, Link } from 'react-router-dom'
 import { io } from 'socket.io-client'
@@ -221,7 +221,7 @@ const setDispositionApi = (id, disposition) => apiFetch(`/api/communications/can
   body: JSON.stringify({ disposition }),
 })
 const claimCandidate = (id) => apiFetch(`/api/communications/candidate/${id}/claim`, { method: 'POST' })
-const unclaimCandidate = (id) => apiFetch(`/api/communications/candidate/${id}/unclaim`, { method: 'POST' })
+const unclaimCandidate = (id, reason) => apiFetch(`/api/communications/candidate/${id}/unclaim`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) })
 const sendMsg = (body) => apiFetch('/api/communications/send', {
   method: 'POST',
   body: body instanceof FormData ? body : JSON.stringify(body)
@@ -1405,8 +1405,14 @@ export default function Communications() {
     },
   })
   const unclaimMut = useMutation({
-    mutationFn: (id) => unclaimCandidate(id),
-    onSuccess: (_data, id) => {
+    // Accepts a plain id, or { id, reason } so the release-after-interview
+    // banner can record WHY the claim ended (claim_sessions.release_reason).
+    mutationFn: (arg) => {
+      const { id, reason } = typeof arg === 'object' && arg !== null ? arg : { id: arg }
+      return unclaimCandidate(id, reason)
+    },
+    onSuccess: (_data, arg) => {
+      const id = typeof arg === 'object' && arg !== null ? arg.id : arg
       setChatList(prev => prev.map(c => c.candidate_id === id
         ? { ...c, claimed_by: null, claimer_name: null }
         : c))
@@ -2442,6 +2448,9 @@ export default function Communications() {
               candidateName={selectedCandidate?.display_name || selectedCandidate?.name}
               defaultProjectId={selectedCandidate?.effective_project_id || ''}
               defaultJobId={selectedCandidate?.effective_job_id || ''}
+              claimedByMe={selectedCandidate?.claimed_by === currentUser?.id}
+              releasePending={unclaimMut.isPending}
+              onReleaseClaim={() => unclaimMut.mutate({ id: selectedId, reason: 'interview_scheduled' })}
             />
           </div>
 

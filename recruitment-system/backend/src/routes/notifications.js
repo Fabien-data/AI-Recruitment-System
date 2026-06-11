@@ -82,7 +82,35 @@ router.get('/', authenticate, async (req, res, next) => {
               LIMIT 5`
         );
 
+        // 7) Persisted per-user notifications (migration 043) — admin nudges
+        //    etc. The only signal type with real read state; unlike the derived
+        //    signals above these are addressed to THIS user specifically.
+        let personal = { rows: [] };
+        try {
+            personal = await pool.query(
+                `SELECT id, type, title, body, link, created_at, read_at
+                   FROM user_notifications
+                  WHERE user_id = $1 AND created_at > NOW() - INTERVAL '14 days'
+                  ORDER BY created_at DESC
+                  LIMIT 20`,
+                [req.user.id]
+            );
+        } catch (err) {
+            logger.warn(`user_notifications fetch skipped: ${err.message}`);
+        }
+
         const items = [];
+        for (const n of personal.rows) {
+            items.push({
+                id: n.id,
+                type: n.type || 'nudge',
+                title: n.title,
+                subtitle: n.body || '',
+                link: n.link || '/engagement',
+                at: n.created_at,
+                read: !!n.read_at,
+            });
+        }
         for (const c of interventions.rows) {
             items.push({
                 type: 'intervention',
@@ -142,9 +170,40 @@ router.get('/', authenticate, async (req, res, next) => {
         // Newest first across all signal types.
         items.sort((x, y) => new Date(y.at || 0) - new Date(x.at || 0));
 
-        return res.json({ items, unread_count: items.length });
+        // Derived signals have no read state (count as before); persisted
+        // personal items only count while unread.
+        const unread = items.filter((i) => i.read !== true).length;
+        return res.json({ items, unread_count: unread });
     } catch (error) {
         logger.error('Notifications fetch error:', error);
+        return next(error);
+    }
+});
+
+// ── POST /api/notifications/mark-read ────────────────────────────────────────
+// Marks the caller's OWN persisted notifications as read ({ids:[...]} or
+// {all:true}). Derived signals have no read state and are unaffected.
+router.post('/mark-read', authenticate, async (req, res, next) => {
+    try {
+        const { ids, all } = req.body || {};
+        if (all === true) {
+            const r = await pool.query(
+                `UPDATE user_notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL`,
+                [req.user.id]
+            );
+            return res.json({ success: true, updated: r.rowCount });
+        }
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'Provide ids (array) or all: true' });
+        }
+        const r = await pool.query(
+            `UPDATE user_notifications SET read_at = NOW()
+             WHERE user_id = $1 AND read_at IS NULL AND id = ANY($2::uuid[])`,
+            [req.user.id, ids]
+        );
+        return res.json({ success: true, updated: r.rowCount });
+    } catch (error) {
+        logger.error('Notifications mark-read error:', error);
         return next(error);
     }
 });

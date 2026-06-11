@@ -76,7 +76,7 @@ const logHead = (l) => {
   return { label: l.outcome ? outcomeLabel(l.outcome) : 'Logged', cls: 'text-zinc-700 dark:text-zinc-200' }
 }
 
-export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, defaultProjectId = '', defaultJobId = '' }) {
+export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, defaultProjectId = '', defaultJobId = '', claimedByMe = false, onReleaseClaim, releasePending = false }) {
   const queryClient = useQueryClient()
   const [outcome, setOutcome] = useState('')
   const [remark, setRemark] = useState('')
@@ -89,6 +89,9 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
   const [actionError, setActionError] = useState(null)
   const [certifyOpen, setCertifyOpen] = useState(false)       // Certified popup
   const [interviewOpen, setInterviewOpen] = useState(false)   // Interview popup
+  // After scheduling an interview on a chat the agent CLAIMED, offer to release
+  // the claim (the shared-pool claim — NOT the bot-takeover release).
+  const [releasePrompt, setReleasePrompt] = useState(false)
 
   const { data: logs = [], isLoading } = useQuery({
     queryKey: ['call-logs', candidateId],
@@ -259,7 +262,37 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
         candidateName={candidateName}
         defaultProjectId={defaultProjectId}
         defaultJobId={defaultJobId}
+        onSuccess={() => { if (claimedByMe) setReleasePrompt(true) }}
       />
+
+      {/* Interview scheduled on a chat I claimed → offer to release the CLAIM
+          so the team sees it's wrapped up. Separate from the bot-takeover
+          Release button — this only frees the shared-pool claim. */}
+      {releasePrompt && claimedByMe && (
+        <div className="mb-2 p-2 rounded-lg border border-violet-200 dark:border-violet-900/50 bg-violet-50/70 dark:bg-violet-950/20">
+          <p className="text-[11px] text-violet-800 dark:text-violet-300 mb-1.5 flex items-start gap-1.5">
+            <CalendarClock size={13} className="mt-0.5 shrink-0" />
+            <span>Interview scheduled. Release your <strong>claim</strong> on this chat so the team sees it&apos;s wrapped up?</span>
+          </p>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setReleasePrompt(false)}
+              className="text-[11px] text-zinc-500 hover:text-zinc-700"
+            >
+              Keep it
+            </button>
+            <button
+              type="button"
+              disabled={releasePending}
+              onClick={() => { onReleaseClaim?.(); setReleasePrompt(false) }}
+              className="text-[11px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60"
+            >
+              {releasePending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Release claim
+            </button>
+          </div>
+        </div>
+      )}
 
       {actionError && (
         <div className="mb-2 flex items-start gap-1.5 text-[11px] text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-lg px-2 py-1.5">

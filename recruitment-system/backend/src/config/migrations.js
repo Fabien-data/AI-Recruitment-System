@@ -1101,6 +1101,108 @@ async function applyMigrations() {
         '039 projects.is_future'
     );
 
+    // ── Migration 041: claim_sessions audit table ────────────────────────────
+    // Claim/release used to only flip candidates.claimed_by/claimed_at, so a
+    // release destroyed all history and engagement stats could never tell which
+    // calls/messages happened DURING a claim. claim_sessions records every claim
+    // window (who, when, how it ended). The partial unique index is the race
+    // guard: a candidate can have at most one OPEN session at a time.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS claim_sessions (
+            id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id   UUID         NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+            agent_id       UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            claimed_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            released_at    TIMESTAMPTZ,
+            released_by    UUID         REFERENCES users(id) ON DELETE SET NULL,
+            release_reason VARCHAR(32)
+        )
+    `, '041 claim_sessions table');
+    await safeAlter(
+        `CREATE UNIQUE INDEX IF NOT EXISTS uq_claim_sessions_open ON claim_sessions(candidate_id) WHERE released_at IS NULL`,
+        '041 uq_claim_sessions_open'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_claim_sessions_agent ON claim_sessions(agent_id, claimed_at DESC)`,
+        '041 idx_claim_sessions_agent'
+    );
+    // Seed: open a session for every chat that is claimed right now, so current
+    // holders keep an unbroken window across this deploy.
+    await safeUpdate(`
+        INSERT INTO claim_sessions (candidate_id, agent_id, claimed_at)
+        SELECT c.id, c.claimed_by, COALESCE(c.claimed_at, NOW())
+        FROM candidates c
+        WHERE c.claimed_by IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM claim_sessions cs WHERE cs.candidate_id = c.id AND cs.released_at IS NULL)
+    `, '041b seed open claim_sessions');
+
+    // ── Migration 042: claim stamping on call_logs + communications ──────────
+    // Write paths stamp the open claim_session id at INSERT time, freezing "did
+    // this agent hold the claim when they did this?" — engagement stats then
+    // filter on the stamp instead of reconstructing claim windows. No FK on
+    // purpose: the id is for audit joins only, inserts stay cheap.
+    await safeAlter(
+        `ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS claim_session_id UUID`,
+        '042 call_logs.claim_session_id'
+    );
+    await safeAlter(
+        `ALTER TABLE communications ADD COLUMN IF NOT EXISTS claim_session_id UUID`,
+        '042 communications.claim_session_id'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_communications_agent_claimed ON communications(sent_by, sent_at DESC) WHERE claim_session_id IS NOT NULL`,
+        '042 idx_communications_agent_claimed'
+    );
+    // Approximate backfill (user decision 2026-06-11): credit historic work that
+    // falls inside a CURRENTLY OPEN claim window. Released claims left no trace,
+    // so anything older stays unstamped — stats are exact from this deploy on.
+    await safeUpdate(`
+        UPDATE call_logs cl SET claim_session_id = cs.id
+        FROM claim_sessions cs
+        WHERE cl.claim_session_id IS NULL
+          AND cs.released_at IS NULL
+          AND cl.candidate_id = cs.candidate_id
+          AND cl.agent_id = cs.agent_id
+          AND cl.called_at >= cs.claimed_at
+    `, '042b backfill call_logs.claim_session_id');
+    await safeUpdate(`
+        UPDATE communications cm SET claim_session_id = cs.id
+        FROM claim_sessions cs
+        WHERE cm.claim_session_id IS NULL
+          AND cs.released_at IS NULL
+          AND cm.direction = 'outbound'
+          AND cm.sender_type = 'agent'
+          AND cm.sent_by = cs.agent_id
+          AND cm.candidate_id = cs.candidate_id
+          AND cm.sent_at >= cs.claimed_at
+    `, '042b backfill communications.claim_session_id');
+
+    // ── Migration 043: user_notifications (admin → agent nudges) ─────────────
+    // First PERSISTED per-user notification store (GET /api/notifications is
+    // otherwise derived read-only signals). Powers the admin "nudge a
+    // low-engagement agent" action: row here + live socket emit to agent:{id}.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS user_notifications (
+            id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id    UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            type       VARCHAR(32)  NOT NULL DEFAULT 'nudge',
+            title      VARCHAR(200) NOT NULL,
+            body       TEXT,
+            link       TEXT,
+            created_by UUID         REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            read_at    TIMESTAMPTZ
+        )
+    `, '043 user_notifications table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_user_notifications_user ON user_notifications(user_id, created_at DESC)`,
+        '043 idx_user_notifications_user'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_user_notifications_unread ON user_notifications(user_id) WHERE read_at IS NULL`,
+        '043 idx_user_notifications_unread'
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 

@@ -24,12 +24,17 @@ const logger = require('../utils/logger');
 async function logAgentAction({ candidateId, agentId, actionType, remark = null, jobId = null, applicationId = null, outcome = null }) {
     if (!candidateId || !actionType) return null;
     try {
+        // Stamp the agent's open claim window (migration 042) so claim-aware
+        // engagement stats can attribute the action. Best-effort: no claim →
+        // NULL stamp, the action is still logged.
+        const { getOpenClaimSessionId } = require('./claim-sessions');
+        const claimSessionId = agentId ? await getOpenClaimSessionId(candidateId, agentId) : null;
         const id = generateUUID();
         await query(
             adaptQuery(`INSERT INTO call_logs
-                            (id, candidate_id, agent_id, outcome, disposition, remark, duration_seconds, job_id, application_id, reason, action_type)
-                        VALUES ($1, $2, $3, $4, NULL, $5, NULL, $6, $7, NULL, $8)`),
-            [id, candidateId, agentId || null, outcome, remark, jobId, applicationId, actionType]
+                            (id, candidate_id, agent_id, outcome, disposition, remark, duration_seconds, job_id, application_id, reason, action_type, claim_session_id)
+                        VALUES ($1, $2, $3, $4, NULL, $5, NULL, $6, $7, NULL, $8, $9)`),
+            [id, candidateId, agentId || null, outcome, remark, jobId, applicationId, actionType, claimSessionId]
         );
         return id;
     } catch (err) {

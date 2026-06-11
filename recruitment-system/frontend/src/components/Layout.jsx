@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore, useRole } from '../stores/authStore'
-import { getNotifications } from '../api'
+import { getNotifications, markNotificationsRead } from '../api'
+import { useRealtime } from '../hooks/useRealtime'
+import { notify } from './ui/Toast'
 import {
   LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell,
   FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone,
@@ -20,6 +22,7 @@ import { CommandPalette } from './CommandPalette'
 // every 60s; the red dot shows only when there's something to act on.
 function NotificationBell() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const { data } = useQuery({
     queryKey: ['notifications'],
@@ -30,6 +33,30 @@ function NotificationBell() {
   const items = data?.items || []
   const unread = data?.unread_count || 0
 
+  // Live personal notifications (admin nudges) — the backend emits
+  // `user_notification` to this user's private agent:{id} room; show it
+  // immediately as a toast and refresh the bell (60s polling is the fallback).
+  useRealtime({
+    handlers: {
+      user_notification: (p, qc) => {
+        qc.invalidateQueries({ queryKey: ['notifications'] })
+        notify.info({ title: p?.title || 'Notification', message: p?.body || '' })
+      },
+    },
+  })
+
+  // Opening the panel marks persisted items read (clears the red dot for
+  // nudges; derived signals have no read state and are untouched).
+  useEffect(() => {
+    if (!open) return
+    const ids = items.filter((n) => n.id && n.read === false).map((n) => n.id)
+    if (ids.length === 0) return
+    markNotificationsRead({ ids })
+      .then(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }))
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   const iconFor = (type) => {
     switch (type) {
       case 'intervention': return <AlertTriangle size={15} className="text-amber-500" />
@@ -37,6 +64,7 @@ function NotificationBell() {
       case 'certification': return <ShieldCheck size={15} className="text-emerald-500" />
       case 'flag': return <AlertTriangle size={15} className="text-rose-500" />
       case 'cv_stuck': return <FileText size={15} className="text-amber-500" />
+      case 'nudge': return <Megaphone size={15} className="text-violet-500" />
       default: return <FileText size={15} className="text-emerald-500" />
     }
   }
