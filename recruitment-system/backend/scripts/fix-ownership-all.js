@@ -48,15 +48,21 @@ async function main() {
     const password = process.env.PG_PASSWORD;
     const database = process.env.PG_DATABASE || 'recruitment_db';
     const appUser  = process.env.PG_APP_USER || 'recruitment_user';
+    const port     = parseInt(process.env.PG_PORT || '5432', 10);
 
     if (!host || !password) {
         console.error('Set PG_HOST and PG_PASSWORD env vars before running.');
         process.exit(1);
     }
 
+    // Through the Cloud SQL Auth Proxy the local hop is plaintext (the proxy
+    // does TLS to Cloud SQL), so disable SSL for localhost / when PG_SSL=disable.
+    const isLocal = host === '127.0.0.1' || host === 'localhost';
+    const sslDisabled = process.env.PG_SSL === 'disable' || isLocal;
+
     const client = new Client({
-        host, user, password, database, port: 5432,
-        ssl: { rejectUnauthorized: false },
+        host, user, password, database, port,
+        ssl: sslDisabled ? false : { rejectUnauthorized: false },
     });
     await client.connect();
     console.log(`Connected as ${user} to ${database} on ${host}`);
