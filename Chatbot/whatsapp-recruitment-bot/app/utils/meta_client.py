@@ -261,33 +261,39 @@ class MetaWhatsAppClient:
         to_number: str,
         template_name: str,
         language_code: str = "en",
-        components: Optional[list] = None
+        components: Optional[list] = None,
+        _allow_lang_fallback: bool = True,
     ) -> Dict[str, Any]:
         """
         Send a template message via WhatsApp API asynchronously.
         Useful for initiating conversations or sending notifications.
-        
+
         Args:
             to_number: Recipient's phone number
             template_name: Approved template name
             language_code: Template language code
             components: Template components (header, body parameters)
-            
+            _allow_lang_fallback: on Meta error 132001 (template not approved in
+                this language) retry once in English, so an approved en variant
+                still reaches Sinhala/Tamil candidates until their localized
+                variant is approved. The si/ta variant takes over automatically
+                once Meta approves it — no code change needed.
+
         Returns:
             API response as dictionary
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
-        
+
         headers = self._whatsapp_headers()
-        
+
         template = {
             "name": template_name,
             "language": {"code": language_code}
         }
-        
+
         if components:
             template["components"] = components
-        
+
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -295,7 +301,7 @@ class MetaWhatsAppClient:
             "type": "template",
             "template": template
         }
-        
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -305,13 +311,29 @@ class MetaWhatsAppClient:
                     timeout=30.0,
                 )
                 response.raise_for_status()
-                
+
                 result = response.json()
                 logger.info(f"Template message sent to {to_number}")
                 return result
 
         except httpx.HTTPError as e:
             err = _classify_meta_error(e)
+            # 132001 = template name/language pair doesn't exist or isn't approved.
+            # If we asked for a non-English variant, retry in English (which is the
+            # one we register/approve first).
+            if (
+                _allow_lang_fallback
+                and language_code != "en"
+                and str(err.get("code")) == "132001"
+            ):
+                logger.warning(
+                    f"Template {template_name} not available in '{language_code}' for "
+                    f"{to_number} — retrying in English"
+                )
+                return await self.send_template_message(
+                    to_number, template_name, language_code="en",
+                    components=components, _allow_lang_fallback=False,
+                )
             logger.error(
                 f"Failed to send template message to {to_number}: code={err.get('code')} "
                 f"reason={err.get('reason')} msg={err.get('error')!r}"
