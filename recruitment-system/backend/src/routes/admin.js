@@ -109,9 +109,9 @@ router.get('/users', ...ADMIN_ONLY, async (req, res, next) => {
 
         params.push(parseInt(limit), offset);
         const usersRes = await pool.query(
-            `SELECT id, email, full_name, role, phone, is_active, created_at, last_login_at
+            `SELECT id, email, full_name, role, phone, is_active, approved, created_at, last_login_at
              FROM users ${whereClause}
-             ORDER BY created_at DESC
+             ORDER BY approved ASC, created_at DESC
              LIMIT $${params.length - 1} OFFSET $${params.length}`,
             params
         );
@@ -202,7 +202,7 @@ router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
 router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { role, is_active, full_name, phone } = req.body;
+        const { role, is_active, full_name, phone, approved } = req.body;
 
         // Prevent admin from deactivating themselves
         if (id === req.user.id && is_active === false) {
@@ -235,6 +235,15 @@ router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
             params.push(phone);
             setClauses.push(`phone = $${params.length}`);
         }
+        // Approving a pending registration: also activate so they can log in.
+        if (approved !== undefined) {
+            params.push(approved);
+            setClauses.push(`approved = $${params.length}`);
+            if (approved === true && is_active === undefined) {
+                params.push(true);
+                setClauses.push(`is_active = $${params.length}`);
+            }
+        }
 
         if (setClauses.length === 0) {
             return res.status(400).json({ error: 'No fields to update' });
@@ -243,7 +252,7 @@ router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
         params.push(id);
         const result = await pool.query(
             `UPDATE users SET ${setClauses.join(', ')} WHERE id = $${params.length}
-             RETURNING id, email, full_name, role, phone, is_active, created_at, last_login_at`,
+             RETURNING id, email, full_name, role, phone, is_active, approved, created_at, last_login_at`,
             params
         );
 

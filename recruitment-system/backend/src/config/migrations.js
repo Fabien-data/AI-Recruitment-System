@@ -1256,6 +1256,47 @@ async function applyMigrations() {
         '045 idx_pending_messages_candidate'
     );
 
+    // ── Migration 046: users.approved (registration approval gate) ───────────
+    // Self-registration must NOT let anyone pick their own role (privilege
+    // escalation). New sign-ups are created approved=false + is_active=false and
+    // an admin approves + assigns the real role. Existing users default to true
+    // so nobody is locked out by this deploy.
+    await safeAlter(
+        `ALTER TABLE users ADD COLUMN IF NOT EXISTS approved BOOLEAN NOT NULL DEFAULT true`,
+        '046 users.approved'
+    );
+
+    // ── Migration 047: candidates soft-remove (reject & remove quick action) ──
+    // The "Reject & remove" quick action hides a candidate from every list while
+    // keeping the row for records/audit (reversible by an admin). Distinct from
+    // 'Not interested' which parks the candidate in future_pool (re-engageable).
+    await safeAlter(
+        `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ`,
+        '047 candidates.removed_at'
+    );
+    await safeAlter(
+        `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS removed_by UUID`,
+        '047 candidates.removed_by'
+    );
+    await safeAlter(
+        `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS removed_reason TEXT`,
+        '047 candidates.removed_reason'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_candidates_removed_at ON candidates(removed_at) WHERE removed_at IS NOT NULL`,
+        '047 idx_candidates_removed_at'
+    );
+
+    // ── Migration 048: new permission sections (engagement, control_tower) ────
+    // These pages existed but were gated under communications/projects, so they
+    // never appeared as their own rows in the Edit-User permission matrix.
+    await safeUpdate(`
+        INSERT INTO sections (key, name, icon, description, sort_order) VALUES
+            ('engagement',    'Engagement',    'Activity', 'Re-engagement, scorecards and agent activity', 85),
+            ('control_tower', 'Control Tower', 'Radar',    'Live recruitment ops overview',                55)
+        ON CONFLICT (key) DO NOTHING
+    `, '048 seed engagement + control_tower sections');
+
     logger.info('✅ Startup migrations complete.');
 }
 

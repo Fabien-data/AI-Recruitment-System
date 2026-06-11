@@ -26,14 +26,20 @@ export const useAuthStore = create(
         return user
       },
 
-      register: async ({ email, password, full_name, role }) => {
+      register: async ({ email, password, full_name, phone }) => {
+        // Role is assigned by an admin on approval — never sent from here.
         const data = await apiClient
-          .post('/api/auth/register', { email, password, full_name, role })
+          .post('/api/auth/register', { email, password, full_name, phone })
           .then(res => res.data)
+        // Pending approval: no token, do not authenticate. The caller routes to
+        // the login page with the "awaiting approval" message.
+        if (data?.pending || !data?.token) {
+          return data
+        }
         const { user, token } = data
         set({ user, token, isAuthenticated: true, sectionPermissions: [] })
         apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`
-        return user
+        return data
       },
 
       logout: async () => {

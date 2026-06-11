@@ -136,13 +136,11 @@ const BASE_NAV = [
 ]
 
 const FULL_NAV_EXTRAS = [
-  // Engagement is gated under the communications section (it has no dedicated
-  // catalogue section) so it surfaces for roles with Messages access.
-  { to: '/engagement', label: 'Engagement', icon: Activity, section: 'communications' },
+  { to: '/engagement', label: 'Engagement', icon: Activity, section: 'engagement' },
   { to: '/cv-manager', label: 'CV Manager', icon: FileSearch, section: 'cv_manager' },
   { to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' },
   { to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' },
-  { to: '/control-tower', label: 'Control Tower', icon: Radar, section: 'projects' },
+  { to: '/control-tower', label: 'Control Tower', icon: Radar, section: 'control_tower' },
   { to: '/knowledge-base', label: 'Knowledge Base', icon: BookOpen, section: 'knowledge_base' },
   { to: '/general-pool', label: 'Future Pool', icon: Database, section: 'general_pool' },
 ]

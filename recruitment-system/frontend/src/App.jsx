@@ -177,7 +177,7 @@ function App() {
           </RoleGuard>
         } />
         <Route path="engagement" element={
-          <RoleGuard requireSection="communications" action="view">
+          <RoleGuard requireSection="engagement" action="view">
             <RouteBoundary name="Engagement"><Engagement /></RouteBoundary>
           </RoleGuard>
         } />
@@ -187,7 +187,7 @@ function App() {
           </RoleGuard>
         } />
         <Route path="control-tower" element={
-          <RoleGuard requireSection="projects" action="view">
+          <RoleGuard requireSection="control_tower" action="view">
             <RouteBoundary name="ControlTower"><SourcingControlTower /></RouteBoundary>
           </RoleGuard>
         } />

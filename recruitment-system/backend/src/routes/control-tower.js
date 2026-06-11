@@ -15,7 +15,7 @@ const { adaptQuery } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
 const { requireSection } = require('../middleware/sections');
 
-router.get('/', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
+router.get('/', authenticate, requireSection('control_tower', 'view'), async (req, res, next) => {
     try {
         const days = String(Math.max(0, parseInt(req.query.days, 10) || 2));
 

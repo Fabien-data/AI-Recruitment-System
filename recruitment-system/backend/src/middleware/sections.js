@@ -31,7 +31,7 @@ const VCED = ALL_PERMS;                                                        /
 const SECTION_KEYS = [
     'dashboard', 'projects', 'applications', 'candidates', 'cv_manager',
     'communications', 'interviews', 'jobs', 'marketing_hub', 'analytics',
-    'general_pool', 'knowledge_base',
+    'general_pool', 'knowledge_base', 'engagement', 'control_tower',
 ];
 
 // Sections every authenticated user can at minimum see — keeps the app navigable
@@ -58,21 +58,27 @@ const ROLE_BASELINE = {
         dashboard: VCED, projects: VCED, applications: VCED, candidates: VCED,
         cv_manager: VCED, communications: VCED, interviews: VCED, jobs: VCED,
         marketing_hub: VCED, analytics: VCED, general_pool: VCED, knowledge_base: VCED,
+        engagement: VCED, control_tower: VCED,
     },
     project_handler: {
         dashboard: V, projects: VCE, applications: VE, candidates: VCE,
         cv_manager: VCE, communications: VE, interviews: VCE, jobs: V,
         marketing_hub: NONE, analytics: V, general_pool: V, knowledge_base: NONE,
+        // engagement mirrors communications (VE); control_tower is read-only ops.
+        engagement: VE, control_tower: V,
     },
     marketing_agent: {
         dashboard: V, projects: NONE, applications: NONE, candidates: VC,
         cv_manager: VCE, communications: VE, interviews: NONE, jobs: V,
         marketing_hub: VCE, analytics: NONE, general_pool: NONE, knowledge_base: NONE,
+        // engagement mirrors communications (VE); no control_tower (no projects).
+        engagement: VE, control_tower: NONE,
     },
     sourcing_department: {
         dashboard: V, projects: VCED, applications: VCED, candidates: VCED,
         cv_manager: VCED, communications: VCED, interviews: VCED, jobs: VCED,
         marketing_hub: VCED, analytics: VCED, general_pool: VCED, knowledge_base: VCED,
+        engagement: VCED, control_tower: VCED,
     },
 };
 

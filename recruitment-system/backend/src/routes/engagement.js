@@ -59,7 +59,7 @@ const PROACTIVE_TYPES = [
 // ── Stuck candidates ──────────────────────────────────────────────────────────
 // Candidates whose furthest stage is early (new/screening/certified) and who
 // have had no interaction for `days`. Returns a per-stage summary + the list.
-router.get('/stuck', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/stuck', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const days = String(Math.max(0, parseInt(req.query.days, 10) || 2));
         const stages = ['new', 'screening', 'certified'];
@@ -72,6 +72,7 @@ router.get('/stuck', authenticate, requireSection('communications', 'view'), asy
                        / 86400.0 AS days_since_contact
             FROM candidates c
             WHERE c.status = ANY($1)
+              AND c.removed_at IS NULL
               AND COALESCE(c.requires_human, FALSE) = FALSE
               AND COALESCE(c.last_interaction, c.created_at) < NOW() - ($2 || ' days')::interval
             ORDER BY COALESCE(c.last_interaction, c.created_at) ASC
@@ -81,6 +82,7 @@ router.get('/stuck', authenticate, requireSection('communications', 'view'), asy
             SELECT c.status, COUNT(*)::int AS n
             FROM candidates c
             WHERE c.status = ANY($1)
+              AND c.removed_at IS NULL
               AND COALESCE(c.requires_human, FALSE) = FALSE
               AND COALESCE(c.last_interaction, c.created_at) < NOW() - ($2 || ' days')::interval
             GROUP BY c.status
@@ -111,7 +113,7 @@ router.get('/stuck', authenticate, requireSection('communications', 'view'), asy
 // pipeline can't move (CV is the hard gate, #5). Surface them so an agent chases.
 // Pure read over recruitment_db — works regardless of the chatbot nudge engine's
 // state, so the agent list is useful even before automated nudging is switched on.
-router.get('/awaiting-cv', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/awaiting-cv', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const listSql = adaptQuery(`
             SELECT c.id, c.name, c.phone, c.status, c.agent_id,
@@ -119,6 +121,7 @@ router.get('/awaiting-cv', authenticate, requireSection('communications', 'view'
                    EXTRACT(EPOCH FROM (NOW() - c.created_at)) / 86400.0 AS days_since_created
             FROM candidates c
             WHERE c.status = 'new'
+              AND c.removed_at IS NULL
               AND NOT ${hasCvSql('c')}
             ORDER BY c.created_at DESC
             LIMIT 500
@@ -135,7 +138,7 @@ router.get('/awaiting-cv', authenticate, requireSection('communications', 'view'
 });
 
 // ── Per-candidate proactive timeline ─────────────────────────────────────────
-router.get('/candidates/:id/timeline', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/candidates/:id/timeline', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery(`
@@ -164,7 +167,7 @@ router.get('/candidates/:id/timeline', authenticate, requireSection('communicati
 });
 
 // ── Next-best-action for a single candidate ──────────────────────────────────
-router.get('/candidates/:id/next-action', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/candidates/:id/next-action', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const r = await query(
             adaptQuery(`
@@ -180,7 +183,7 @@ router.get('/candidates/:id/next-action', authenticate, requireSection('communic
 });
 
 // ── Re-engagement analytics ───────────────────────────────────────────────────
-router.get('/analytics', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/analytics', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const days = String(Math.max(1, parseInt(req.query.days, 10) || 30));
 
@@ -235,7 +238,7 @@ router.get('/analytics', authenticate, requireSection('communications', 'view'),
 // ── Bulk re-engagement campaign (#8) ─────────────────────────────────────────
 // Agent selects a cohort of candidates → nudge them all now via the chatbot.
 // Each send still respects opt-out / completion / quiet hours / the 3-nudge cap.
-router.post('/bulk-nudge', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+router.post('/bulk-nudge', authenticate, requireSection('engagement', 'edit'), async (req, res, next) => {
     try {
         const { candidate_ids } = req.body || {};
         if (!Array.isArray(candidate_ids) || candidate_ids.length === 0) {
@@ -268,7 +271,7 @@ router.post('/bulk-nudge', authenticate, requireSection('communications', 'edit'
 });
 
 // ── Daily digest snapshot (dashboard widget) ─────────────────────────────────
-router.get('/daily-digest', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/daily-digest', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const { gatherDigest } = require('../services/daily-digest');
         res.json(await gatherDigest());
@@ -280,7 +283,7 @@ router.get('/daily-digest', authenticate, requireSection('communications', 'view
 // candidates contacted, answered / no-answer / callback counts, leads, call
 // duration, remarks — plus a recent activity feed (the full end-to-end log).
 // Powers the Engagement page: each agent sees their own day; admin sees everyone.
-router.get('/call-logs', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/call-logs', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const { date_from, date_to } = req.query;
         // Non-admins only ever see their own numbers — the agent_id param is
@@ -294,22 +297,21 @@ router.get('/call-logs', authenticate, requireSection('communications', 'view'),
         if (date_to) where.push(`cl.called_at <= ${p(date_to)}`);
         const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-        // Breakdown by action_type (migration 040): a genuine phone CALL
-        // (action_type='call' or legacy NULL) vs each ACTION (assign / certify /
-        // interview / follow-up). This is what lets admins see "X calls, Y
-        // screenings, Z certifications, W interviews" per agent instead of one
-        // inflated "calls" number.
+        // EVERY logged quick action counts as a CALL (user decision 2026-06-11):
+        // No Answer, Not Interested, Done→assign/certify/interview, Callback, a
+        // bare note — each represents a call the agent made, so calls_logged is
+        // every call_logs row, claim-gated. The achievement breakdowns below
+        // (screenings / certifications / interviews / follow-ups) are counted ON
+        // TOP — a "Done → certify" is both a call AND a certification.
         // Claim-aware (migration 042): a CALL only counts while the agent held
         // the chat claim (claim_session_id stamped at insert). Unstamped calls
         // are surfaced separately as calls_unclaimed, never silently dropped.
-        // Screenings/certifications/interviews stay un-gated by design — they
-        // are verifiable pipeline outcomes (user decision 2026-06-11).
         const perAgentSql = adaptQuery(`
             SELECT cl.agent_id,
                    COALESCE(u.full_name, 'Unknown') AS agent_name,
                    COUNT(*)                                   AS entries_logged,
-                   COUNT(*) FILTER (WHERE (cl.action_type = 'call' OR cl.action_type IS NULL) AND cl.claim_session_id IS NOT NULL) AS calls_logged,
-                   COUNT(*) FILTER (WHERE (cl.action_type = 'call' OR cl.action_type IS NULL) AND cl.claim_session_id IS NULL)     AS calls_unclaimed,
+                   COUNT(*) FILTER (WHERE cl.claim_session_id IS NOT NULL) AS calls_logged,
+                   COUNT(*) FILTER (WHERE cl.claim_session_id IS NULL)     AS calls_unclaimed,
                    COUNT(*) FILTER (WHERE cl.action_type = 'assign')    AS screenings,
                    COUNT(*) FILTER (WHERE cl.action_type = 'certify')   AS certifications,
                    COUNT(*) FILTER (WHERE cl.action_type = 'interview') AS interviews_scheduled,
@@ -430,7 +432,7 @@ router.get('/call-logs', authenticate, requireSection('communications', 'view'),
 // of the same length (the frontend renders trend deltas from the pair), plus
 // their leftover claimed chats — the "go continue the work" list. Non-admins
 // are always scoped to themselves; admins may pass agent_id for the drill-down.
-router.get('/my-scorecard', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/my-scorecard', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
         const agentId = (req.user.role === 'admin' && req.query.agent_id) ? req.query.agent_id : req.user.id;
@@ -440,8 +442,8 @@ router.get('/my-scorecard', authenticate, requireSection('communications', 'view
         // the team rollup above.
         const windowAgg = async (fromExpr, toExpr) => {
             const callsSql = adaptQuery(`
-                SELECT COUNT(*) FILTER (WHERE (cl.action_type = 'call' OR cl.action_type IS NULL) AND cl.claim_session_id IS NOT NULL) AS calls_logged,
-                       COUNT(*) FILTER (WHERE (cl.action_type = 'call' OR cl.action_type IS NULL) AND cl.claim_session_id IS NULL)     AS calls_unclaimed,
+                SELECT COUNT(*) FILTER (WHERE cl.claim_session_id IS NOT NULL) AS calls_logged,
+                       COUNT(*) FILTER (WHERE cl.claim_session_id IS NULL)     AS calls_unclaimed,
                        COUNT(*) FILTER (WHERE cl.action_type = 'assign')    AS screenings,
                        COUNT(*) FILTER (WHERE cl.action_type = 'certify')   AS certifications,
                        COUNT(*) FILTER (WHERE cl.action_type = 'interview') AS interviews_scheduled,
@@ -507,7 +509,7 @@ router.get('/my-scorecard', authenticate, requireSection('communications', 'view
 // Claim-aware daily counts per agent over the window: calls, messages, pipeline
 // actions, interviews. Powers the leaderboard sparklines and the personal
 // streak/trend chart. Non-admins are forced to their own series.
-router.get('/activity-series', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/activity-series', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 14));
         const agentId = req.user.role === 'admin' ? (req.query.agent_id || null) : req.user.id;
@@ -517,7 +519,7 @@ router.get('/activity-series', authenticate, requireSection('communications', 'v
         if (agentId) { params.push(agentId); agentClause = `AND cl.agent_id = $2`; }
         const callsSql = adaptQuery(`
             SELECT cl.agent_id, DATE_TRUNC('day', cl.called_at) AS day,
-                   COUNT(*) FILTER (WHERE (cl.action_type = 'call' OR cl.action_type IS NULL) AND cl.claim_session_id IS NOT NULL) AS calls,
+                   COUNT(*) FILTER (WHERE cl.claim_session_id IS NOT NULL) AS calls,
                    COUNT(*) FILTER (WHERE cl.action_type IN ('assign','certify','interview','not_interested','follow_up','note')) AS actions,
                    COUNT(*) FILTER (WHERE cl.action_type = 'interview') AS interviews
             FROM call_logs cl
@@ -563,7 +565,7 @@ router.get('/activity-series', authenticate, requireSection('communications', 'v
 });
 
 // ── Engagement targets (admin-set daily goals) ───────────────────────────────
-router.get('/targets', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+router.get('/targets', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         if (req.user.role === 'admin') {
             const r = await query(adaptQuery(`
