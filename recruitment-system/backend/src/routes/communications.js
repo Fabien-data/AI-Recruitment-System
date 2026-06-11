@@ -1309,6 +1309,15 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
             [id, candidate_id, req.user.id, outcome, disposition, remark, durationSeconds, jobId, applicationId, reason, actionType, claimSessionId]
         );
 
+        // Live Engagement panels: lightweight ping so open scorecards refetch.
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('engagement_activity', { candidate_id, agent_id: req.user.id, action_type: actionType, ts: new Date().toISOString() });
+        } catch (wsErr) {
+            logger.debug(`engagement_activity WS emit skipped: ${wsErr.message}`);
+        }
+
         // Logging a call counts as agent contact; carry disposition through. The
         // candidate status itself is NOT written here — forward stages cascade via
         // setCandidateStage() and a decline is handled (apps rejected + future_pool)
@@ -1662,6 +1671,8 @@ router.post('/send', authenticate, requireSection('communications', 'edit'), upl
                 const chatPreview = normalizedMessage
                     || (mediaUrl ? `[${finalMessageType.toUpperCase()}]` : '');
                 io.emit('chat_activity', { candidate_id: resolvedCandidateId, last_message: chatPreview.slice(0, 80), ts: new Date().toISOString() });
+                // Live Engagement panels: agent message sent → message counts move.
+                io.emit('engagement_activity', { candidate_id: resolvedCandidateId, agent_id: req.user.id, action_type: 'message', ts: new Date().toISOString() });
             }
         } catch (wsErr) {
             logger.debug(`send WS emit skipped: ${wsErr.message}`);

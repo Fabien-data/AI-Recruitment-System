@@ -503,6 +503,108 @@ router.get('/my-scorecard', authenticate, requireSection('communications', 'view
     } catch (err) { next(err); }
 });
 
+// ── Per-day activity series (sparklines + streaks) ───────────────────────────
+// Claim-aware daily counts per agent over the window: calls, messages, pipeline
+// actions, interviews. Powers the leaderboard sparklines and the personal
+// streak/trend chart. Non-admins are forced to their own series.
+router.get('/activity-series', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+    try {
+        const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 14));
+        const agentId = req.user.role === 'admin' ? (req.query.agent_id || null) : req.user.id;
+
+        const params = [String(days)];
+        let agentClause = '';
+        if (agentId) { params.push(agentId); agentClause = `AND cl.agent_id = $2`; }
+        const callsSql = adaptQuery(`
+            SELECT cl.agent_id, DATE_TRUNC('day', cl.called_at) AS day,
+                   COUNT(*) FILTER (WHERE (cl.action_type = 'call' OR cl.action_type IS NULL) AND cl.claim_session_id IS NOT NULL) AS calls,
+                   COUNT(*) FILTER (WHERE cl.action_type IN ('assign','certify','interview','not_interested','follow_up','note')) AS actions,
+                   COUNT(*) FILTER (WHERE cl.action_type = 'interview') AS interviews
+            FROM call_logs cl
+            WHERE cl.called_at >= NOW() - ($1 || ' days')::interval ${agentClause}
+            GROUP BY cl.agent_id, DATE_TRUNC('day', cl.called_at)
+        `);
+
+        const msgParams = [String(days)];
+        let msgAgentClause = '';
+        if (agentId) { msgParams.push(agentId); msgAgentClause = `AND cm.sent_by = $2`; }
+        const msgSql = adaptQuery(`
+            SELECT cm.sent_by AS agent_id, DATE_TRUNC('day', cm.sent_at) AS day,
+                   COUNT(*) AS messages
+            FROM communications cm
+            WHERE cm.direction = 'outbound' AND cm.sender_type = 'agent'
+              AND cm.claim_session_id IS NOT NULL
+              AND cm.sent_at >= NOW() - ($1 || ' days')::interval ${msgAgentClause}
+            GROUP BY cm.sent_by, DATE_TRUNC('day', cm.sent_at)
+        `);
+
+        const [calls, msgs] = await Promise.all([query(callsSql, params), query(msgSql, msgParams)]);
+
+        // Merge into { agent_id: { 'YYYY-MM-DD': {calls,messages,actions,interviews} } }
+        const series = {};
+        const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+        for (const r of calls.rows) {
+            const a = (series[r.agent_id] ||= {});
+            a[dayKey(r.day)] = {
+                calls: Number(r.calls || 0),
+                actions: Number(r.actions || 0),
+                interviews: Number(r.interviews || 0),
+                messages: 0,
+            };
+        }
+        for (const r of msgs.rows) {
+            if (!r.agent_id) continue;
+            const a = (series[r.agent_id] ||= {});
+            const d = (a[dayKey(r.day)] ||= { calls: 0, actions: 0, interviews: 0, messages: 0 });
+            d.messages = Number(r.messages || 0);
+        }
+        res.json({ days, series });
+    } catch (err) { next(err); }
+});
+
+// ── Engagement targets (admin-set daily goals) ───────────────────────────────
+router.get('/targets', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+    try {
+        if (req.user.role === 'admin') {
+            const r = await query(adaptQuery(`
+                SELECT t.user_id, t.daily_calls, t.daily_messages, t.daily_actions, t.updated_at,
+                       u.full_name
+                FROM engagement_targets t
+                JOIN users u ON u.id = t.user_id
+            `), []);
+            return res.json({ targets: r.rows });
+        }
+        const r = await query(
+            adaptQuery('SELECT user_id, daily_calls, daily_messages, daily_actions FROM engagement_targets WHERE user_id = $1'),
+            [req.user.id]
+        );
+        res.json({ targets: r.rows });
+    } catch (err) { next(err); }
+});
+
+router.put('/targets/:user_id', authenticate, async (req, res, next) => {
+    try {
+        if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+        const { user_id } = req.params;
+        const clamp = (v) => Math.min(500, Math.max(0, parseInt(v, 10) || 0));
+        const dailyCalls = clamp(req.body?.daily_calls);
+        const dailyMessages = clamp(req.body?.daily_messages);
+        const dailyActions = clamp(req.body?.daily_actions);
+
+        const target = await query(adaptQuery('SELECT id FROM users WHERE id = $1 AND is_active = TRUE'), [user_id]);
+        if (target.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+        await query(
+            adaptQuery(`INSERT INTO engagement_targets (user_id, daily_calls, daily_messages, daily_actions, updated_by, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, NOW())
+                        ON CONFLICT (user_id) DO UPDATE
+                        SET daily_calls = $2, daily_messages = $3, daily_actions = $4, updated_by = $5, updated_at = NOW()`),
+            [user_id, dailyCalls, dailyMessages, dailyActions, req.user.id]
+        );
+        res.json({ success: true, user_id, daily_calls: dailyCalls, daily_messages: dailyMessages, daily_actions: dailyActions });
+    } catch (err) { next(err); }
+});
+
 // ── Admin → agent engagement nudge ───────────────────────────────────────────
 // Persists a user_notifications row (migration 043) and pings the agent's
 // private socket room so the nudge lands live. Throttled to one nudge per

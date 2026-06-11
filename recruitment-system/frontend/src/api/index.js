@@ -598,6 +598,17 @@ export const getMyScorecard = (params) =>
 export const nudgeUser = (data) =>
   apiClient.post('/api/engagement/nudge', data).then(res => res.data)
 
+// Per-day claim-aware activity series (sparklines, streaks)
+export const getActivitySeries = (params) =>
+  apiClient.get('/api/engagement/activity-series', { params }).then(res => res.data)
+
+// Admin-set daily goals per agent (target-progress bars)
+export const getEngagementTargets = () =>
+  apiClient.get('/api/engagement/targets').then(res => res.data)
+
+export const setEngagementTarget = (userId, data) =>
+  apiClient.put(`/api/engagement/targets/${userId}`, data).then(res => res.data)
+
 export const markNotificationsRead = (data) =>
   apiClient.post('/api/notifications/mark-read', data).then(res => res.data)
 

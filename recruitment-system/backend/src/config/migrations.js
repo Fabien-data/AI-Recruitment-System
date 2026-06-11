@@ -1203,6 +1203,21 @@ async function applyMigrations() {
         '043 idx_user_notifications_unread'
     );
 
+    // ── Migration 044: engagement_targets (per-agent daily goals) ────────────
+    // Admin-set daily expectations (calls / messages / pipeline actions) that
+    // power the target-progress bars on the Engagement scorecards — the
+    // "evaluate work against a known goal" half of the claim-aware stats.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS engagement_targets (
+            user_id        UUID         PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            daily_calls    INT          NOT NULL DEFAULT 0,
+            daily_messages INT          NOT NULL DEFAULT 0,
+            daily_actions  INT          NOT NULL DEFAULT 0,
+            updated_by     UUID         REFERENCES users(id) ON DELETE SET NULL,
+            updated_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, '044 engagement_targets table');
+
     logger.info('✅ Startup migrations complete.');
 }
 
