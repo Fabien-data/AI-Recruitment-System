@@ -78,11 +78,10 @@ const logHead = (l) => {
 
 export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, defaultProjectId = '', defaultJobId = '', claimedByMe = false, onReleaseClaim, releasePending = false, onRemoved }) {
   const queryClient = useQueryClient()
-  // "Reject & remove" is destructive — gate it on candidates:edit (admins pass).
+  // "Reject & remove" is destructive and admin-reserved — only admins see it
+  // (the backend route is also admin-only).
   const authUser = useAuthStore((s) => s.user)
-  const authPerms = useAuthStore((s) => s.sectionPermissions) || []
   const canRemove = authUser?.role === 'admin'
-    || !!authPerms.find((p) => p.section_key === 'candidates')?.can_edit
   const [outcome, setOutcome] = useState('')
   const [remark, setRemark] = useState('')
   const [open, setOpen] = useState(false)            // detailed "Log call" form

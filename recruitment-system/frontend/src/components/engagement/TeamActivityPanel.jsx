@@ -22,12 +22,15 @@ const LIVE_EVENTS = ['engagement_activity', 'claim_changed']
 const LIVE_KEYS = [['engagement', 'call-activity'], ['engagement', 'scorecard'], ['engagement', 'series']]
 
 const SORTABLE = [
-  ['score', 'Score'], ['calls_logged', 'Calls'], ['messages_sent', 'Msgs'],
-  ['screenings', 'Screened'], ['certifications', 'Certified'], ['interviews_scheduled', 'Interviews'],
+  ['calls_logged', 'Calls'], ['messages_sent', 'Msgs'],
+  ['screenings', 'Screened'], ['certifications', 'Certified'],
+  ['follow_ups', 'Follow Ups'], ['not_interested', 'Not interested'],
   ['no_answer', 'No answer'], ['open_claims', 'Claims'],
 ]
 
-const score = (r) => Number(r.calls_logged || 0) + Number(r.messages_sent || 0) + Number(r.actions_total || 0)
+// Ranking / medal metric: calls + messages (the agent's outreach volume). The
+// old composite "score" column was removed — medals now reflect this directly.
+const score = (r) => Number(r.calls_logged || 0) + Number(r.messages_sent || 0)
 
 /**
  * TeamActivityPanel — the admin's team-evaluation cockpit at the very top of
@@ -43,7 +46,7 @@ export default function TeamActivityPanel() {
   const [nudgeFor, setNudgeFor] = useState(null)
   const [nudgeMsg, setNudgeMsg] = useState('')
   const [q, setQ] = useState('')                       // agent search
-  const [sortKey, setSortKey] = useState('score')
+  const [sortKey, setSortKey] = useState('calls_logged')
   const [sortDir, setSortDir] = useState('desc')
   const [editTargets, setEditTargets] = useState(false) // inline targets editor
   const [draftTargets, setDraftTargets] = useState({})  // user_id -> {daily_calls, daily_messages}
@@ -144,8 +147,9 @@ export default function TeamActivityPanel() {
       Rank: r.rank, Agent: r.agent_name,
       Calls: r.calls_logged, 'Unclaimed calls': r.calls_unclaimed,
       Messages: r.messages_sent, Screenings: r.screenings, Certified: r.certifications,
-      Interviews: r.interviews_scheduled, 'No answer': r.no_answer, Actions: r.actions_total,
-      'Open claims': r.open_claims, Score: r.score,
+      'Follow ups': r.follow_ups, 'Not interested': r.not_interested,
+      'No answer': r.no_answer, Actions: r.actions_total,
+      'Open claims': r.open_claims,
       'Daily call target': targetsByUser[r.agent_id]?.daily_calls || '',
     })))
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
@@ -214,11 +218,12 @@ export default function TeamActivityPanel() {
         </div>
 
         {/* KPI strip with deltas vs the previous window */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mt-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mt-3">
           <KpiCard icon={Phone} label="Calls" value={Number(totals.calls_logged || 0)} prev={Number(prevTotals.calls_logged || 0)} accent="text-rose-500" />
           <KpiCard icon={MessageSquare} label="Messages" value={Number(totals.messages_sent || 0)} prev={Number(prevTotals.messages_sent || 0)} accent="text-sky-500" />
-          <KpiCard icon={CalendarDays} label="Interviews" value={Number(totals.interviews_scheduled || 0)} prev={Number(prevTotals.interviews_scheduled || 0)} accent="text-indigo-500" />
           <KpiCard icon={BadgeCheck} label="Certified" value={Number(totals.certifications || 0)} prev={Number(prevTotals.certifications || 0)} accent="text-emerald-500" />
+          <KpiCard icon={CalendarDays} label="Follow ups" value={Number(totals.follow_ups || 0)} prev={Number(prevTotals.follow_ups || 0)} accent="text-cyan-500" />
+          <KpiCard icon={X} label="Not interested" value={Number(totals.not_interested || 0)} prev={Number(prevTotals.not_interested || 0)} accent="text-zinc-500" />
           <KpiCard icon={Bookmark} label="Open claims" value={Number(totals.open_claims || 0)} accent="text-violet-500" />
         </div>
       </div>
@@ -297,7 +302,6 @@ export default function TeamActivityPanel() {
                         </div>
                       </td>
                       <td className="py-2.5 pr-3"><Sparkline data={spark} width={84} height={24} /></td>
-                      <td className="py-2.5 pr-3 font-semibold text-slate-700 dark:text-zinc-200">{r.score}</td>
                       <td className="py-2.5 pr-3 text-slate-600 dark:text-zinc-300" title={Number(r.calls_unclaimed || 0) > 0 ? `+${r.calls_unclaimed} call(s) logged without holding the claim (not counted)` : undefined}>
                         {r.calls_logged}
                         {Number(r.calls_unclaimed || 0) > 0 && <span className="text-[10px] text-slate-400 dark:text-zinc-500"> +{r.calls_unclaimed}</span>}
@@ -305,7 +309,8 @@ export default function TeamActivityPanel() {
                       <td className="py-2.5 pr-3 text-sky-700 dark:text-sky-300">{r.messages_sent ?? 0}</td>
                       <td className="py-2.5 pr-3 text-amber-700 dark:text-amber-400">{r.screenings ?? 0}</td>
                       <td className="py-2.5 pr-3 text-emerald-700 dark:text-emerald-400">{r.certifications ?? 0}</td>
-                      <td className="py-2.5 pr-3 text-indigo-700 dark:text-indigo-300">{r.interviews_scheduled ?? 0}</td>
+                      <td className="py-2.5 pr-3 text-cyan-700 dark:text-cyan-300">{r.follow_ups ?? 0}</td>
+                      <td className="py-2.5 pr-3 text-zinc-600 dark:text-zinc-400">{r.not_interested ?? 0}</td>
                       <td className="py-2.5 pr-3 text-rose-700 dark:text-rose-400">{r.no_answer}</td>
                       <td className="py-2.5 pr-3 text-violet-700 dark:text-violet-300">{r.open_claims ?? 0}</td>
                       <td className="py-2.5 pr-3 min-w-[120px]" onClick={(e) => editTargets && e.stopPropagation()}>

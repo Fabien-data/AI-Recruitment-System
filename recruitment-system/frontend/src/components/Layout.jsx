@@ -160,15 +160,18 @@ function buildNav(role, sectionPermissions = []) {
   // Step 1: role-default candidate set (same as historical behaviour)
   let items
   if (role === 'marketing_agent') {
+    // Onboard-from-chat role: candidate intake + messaging (Marketing Hub removed).
     items = [
       { to: '/', label: 'Overview', icon: LayoutDashboard, end: true, section: 'dashboard' },
-      { to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' },
+      { to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' },
+      { to: '/cv-manager', label: 'CV Manager', icon: FileSearch, section: 'cv_manager' },
+      { to: '/candidates', label: 'Candidates', icon: Users, section: 'candidates' },
+      { to: '/jobs', label: 'Jobs', icon: Briefcase, section: 'jobs' },
     ]
   } else {
     items = [...BASE_NAV]
     if (role === 'admin' || role === 'sourcing_department') {
       items.push(...FULL_NAV_EXTRAS)
-      items.push({ to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' })
     } else {
       items.push({ to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' })
       items.push({ to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' })
@@ -180,9 +183,7 @@ function buildNav(role, sectionPermissions = []) {
   // by can_view to hide everything else.
   if (role !== 'admin' && sectionPermissions.length > 0) {
     const knownToCatalogue = new Map(
-      [...BASE_NAV, ...FULL_NAV_EXTRAS,
-        { to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' },
-      ].map(it => [it.section, it])
+      [...BASE_NAV, ...FULL_NAV_EXTRAS].map(it => [it.section, it])
     )
     // Union: existing role-default items + any extra section the user has access to.
     const sectionsAllowed = new Set(

@@ -408,6 +408,8 @@ router.get('/call-logs', authenticate, requireSection('engagement', 'view'), asy
             acc.screenings += Number(r.screenings || 0);
             acc.certifications += Number(r.certifications || 0);
             acc.interviews_scheduled += Number(r.interviews_scheduled || 0);
+            acc.follow_ups += Number(r.follow_ups || 0);
+            acc.not_interested += Number(r.not_interested || 0);
             acc.actions_total += Number(r.actions_total || 0);
             acc.messages_sent += Number(r.messages_sent || 0);
             acc.remarks_made += Number(r.remarks_made || 0);
@@ -416,7 +418,7 @@ router.get('/call-logs', authenticate, requireSection('engagement', 'view'), asy
             acc.leads += Number(r.leads || 0);
             acc.open_claims += Number(r.open_claims || 0);
             return acc;
-        }, { calls_logged: 0, calls_unclaimed: 0, screenings: 0, certifications: 0, interviews_scheduled: 0, actions_total: 0, messages_sent: 0, remarks_made: 0, answered: 0, no_answer: 0, leads: 0, open_claims: 0 });
+        }, { calls_logged: 0, calls_unclaimed: 0, screenings: 0, certifications: 0, interviews_scheduled: 0, follow_ups: 0, not_interested: 0, actions_total: 0, messages_sent: 0, remarks_made: 0, answered: 0, no_answer: 0, leads: 0, open_claims: 0 });
 
         res.json({
             per_agent: perAgentRows,

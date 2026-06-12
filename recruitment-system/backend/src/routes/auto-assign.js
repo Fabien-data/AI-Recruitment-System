@@ -489,7 +489,14 @@ router.get('/job/:jobId/candidates', authenticate, requireSection('candidates', 
         // before any complex JOINs. Previous order (candidates first, job
         // second) meant a typo in a CV-files column would 500-then-look-like-
         // "job not found", which is exactly the bug we're fixing here.
-        const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+        // positions_filled is derived LIVE from hired applications (the stored
+        // jobs.positions_filled column is no longer trusted — see job-queries.js).
+        const jobResult = await pool.query(
+            `SELECT j.*,
+                    (SELECT COUNT(*)::int FROM applications a WHERE a.job_id = j.id AND a.status = 'hired') AS positions_filled_derived
+             FROM jobs j WHERE j.id = $1`,
+            [jobId]
+        );
         if (jobResult.rows.length === 0) {
             return res.status(404).json({ error: 'Job not found' });
         }
@@ -596,7 +603,7 @@ router.get('/job/:jobId/candidates', authenticate, requireSection('candidates', 
                 category: job.category,
                 status: job.status,
                 positions_available: job.positions_available,
-                positions_filled: job.positions_filled || 0,
+                positions_filled: job.positions_filled_derived ?? job.positions_filled ?? 0,
                 requirements: job.requirements
             },
             total_candidates: candidates.length,

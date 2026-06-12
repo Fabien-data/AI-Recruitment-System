@@ -1044,9 +1044,10 @@ router.post('/:id/reengage', authenticate, requireSection('communications', 'edi
  * for records/audit (reversible). Stronger than 'Not interested' (future_pool,
  * which stays re-engageable). Rejects active applications, cancels pending
  * tasks, and releases any claim so the candidate fully drops out of the working
- * views. Gated at candidates:edit (destructive).
+ * views. Admin-only — "Reject & remove" is a destructive, admin-reserved action
+ * (the Messages panel only shows the button to admins; enforce it here too).
  */
-router.post('/:id/remove', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+router.post('/:id/remove', authenticate, authorize('admin'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { reason } = req.body || {};

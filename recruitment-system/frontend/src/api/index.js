@@ -478,6 +478,16 @@ export const getUserPermissions = (userId) =>
 export const updateUserPermissions = (userId, permissions) =>
   apiClient.put(`/api/admin/users/${userId}/permissions`, { permissions }).then(res => res.data)
 
+// Reusable permission templates (presets of a full section-permission matrix).
+export const getPermissionTemplates = () =>
+  apiClient.get('/api/admin/permission-templates').then(res => res.data)
+
+export const savePermissionTemplate = ({ name, description, permissions }) =>
+  apiClient.post('/api/admin/permission-templates', { name, description, permissions }).then(res => res.data)
+
+export const deletePermissionTemplate = (id) =>
+  apiClient.delete(`/api/admin/permission-templates/${id}`).then(res => res.data)
+
 export const getUserActivity = (userId, params) =>
   apiClient.get(`/api/admin/users/${userId}/activity`, { params }).then(res => res.data)
 
@@ -492,94 +502,6 @@ export const getGlobalActivity = (params) =>
 
 export const logoutBackend = () =>
   apiClient.post('/api/auth/logout').then(res => res.data)
-
-// ── Marketing Hub ──────────────────────────────────────────────────────────
-export const getLeads = (params) =>
-  apiClient.get('/api/marketing-hub/leads', { params }).then(res => res.data)
-
-export const getLead = (id) =>
-  apiClient.get(`/api/marketing-hub/leads/${id}`).then(res => res.data)
-
-export const createLead = (data) =>
-  apiClient.post('/api/marketing-hub/leads', data).then(res => res.data)
-
-export const updateLead = (id, data) =>
-  apiClient.patch(`/api/marketing-hub/leads/${id}`, data).then(res => res.data)
-
-export const deleteLead = (id) =>
-  apiClient.delete(`/api/marketing-hub/leads/${id}`).then(res => res.data)
-
-export const uploadLeadDocument = (leadId, file, docType = 'other') => {
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('doc_type', docType)
-  return apiClient.post(`/api/marketing-hub/leads/${leadId}/documents`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  }).then(res => res.data)
-}
-
-export const deleteLeadDocument = (docId) =>
-  apiClient.delete(`/api/marketing-hub/documents/${docId}`).then(res => res.data)
-
-export const convertLead = (id, data = {}) =>
-  apiClient.post(`/api/marketing-hub/leads/${id}/convert`, data).then(res => res.data)
-
-export const searchJobsForLead = (q, limit = 10) =>
-  apiClient.get('/api/marketing-hub/job-search', { params: { q, limit } }).then(res => res.data)
-
-export const getMarketingCountries = () =>
-  apiClient.get('/api/marketing-hub/countries').then(res => res.data)
-
-export const getLeadSources = () =>
-  apiClient.get('/api/marketing-hub/lead-sources').then(res => res.data)
-
-export const getLeadFollowUps = (leadId) =>
-  apiClient.get(`/api/marketing-hub/leads/${leadId}/follow-ups`).then(res => res.data)
-
-export const createLeadFollowUp = (leadId, data) =>
-  apiClient.post(`/api/marketing-hub/leads/${leadId}/follow-ups`, data).then(res => res.data)
-
-export const updateLeadFollowUp = (id, data) =>
-  apiClient.patch(`/api/marketing-hub/follow-ups/${id}`, data).then(res => res.data)
-
-export const getDueFollowUps = () =>
-  apiClient.get('/api/marketing-hub/follow-ups/due').then(res => res.data)
-
-export const getLeadTemplates = () =>
-  apiClient.get('/api/marketing-hub/templates').then(res => res.data)
-
-export const sendLeadTemplate = (leadId, template_key, channel) =>
-  apiClient.post(`/api/marketing-hub/leads/${leadId}/send-template`, { template_key, channel }).then(res => res.data)
-
-// ── Marketing Hub Analytics ───────────────────────────────────────────────
-export const getMarketingOverview = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/overview', { params: { range } }).then(res => res.data)
-
-export const getMarketingFunnel = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/funnel', { params: { range } }).then(res => res.data)
-
-export const getMarketingBySource = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/by-source', { params: { range } }).then(res => res.data)
-
-export const getMarketingByAgent = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/by-agent', { params: { range } }).then(res => res.data)
-
-export const getMarketingTimeseries = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/timeseries', { params: { range } }).then(res => res.data)
-
-export const getMarketingCohort = (range = '90d') =>
-  apiClient.get('/api/marketing-hub/analytics/cohort', { params: { range } }).then(res => res.data)
-
-export const getMarketingTimeToStage = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/time-to-stage', { params: { range } }).then(res => res.data)
-
-export const exportMarketingLeadsCsv = async (range = '30d') => {
-  const response = await apiClient.get('/api/marketing-hub/analytics/export.csv', {
-    params: { range },
-    responseType: 'blob',
-  })
-  downloadBlobResponse(response, `marketing_leads_${range}.csv`)
-}
 
 // ── Engagement / re-engagement (stuck candidates, analytics, digest) ──────────
 export const getStuckCandidates = (params) =>

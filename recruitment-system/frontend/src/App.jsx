@@ -30,10 +30,6 @@ import Engagement from './pages/Engagement'
 import Analytics from './pages/Analytics'
 import SourcingControlTower from './pages/SourcingControlTower'
 import KnowledgeBase from './pages/KnowledgeBase'
-import MarketingHub from './pages/MarketingHub'
-import LeadIntake from './pages/LeadIntake'
-import LeadDetail from './pages/LeadDetail'
-import MarketingAnalytics from './pages/MarketingAnalytics'
 import './App.css'
 
 class ErrorBoundary extends Component {
@@ -194,26 +190,6 @@ function App() {
         <Route path="knowledge-base" element={
           <RoleGuard requireSection="knowledge_base" action="view">
             <RouteBoundary name="KnowledgeBase"><KnowledgeBase /></RouteBoundary>
-          </RoleGuard>
-        } />
-        <Route path="marketing-hub" element={
-          <RoleGuard requireSection="marketing_hub" action="view">
-            <RouteBoundary name="MarketingHub"><MarketingHub /></RouteBoundary>
-          </RoleGuard>
-        } />
-        <Route path="marketing-hub/new" element={
-          <RoleGuard requireSection="marketing_hub" action="create">
-            <RouteBoundary name="LeadIntake"><LeadIntake /></RouteBoundary>
-          </RoleGuard>
-        } />
-        <Route path="marketing-hub/analytics" element={
-          <RoleGuard allowedRoles={['admin', 'sourcing_department']} fallback={<Navigate to="/marketing-hub" replace />}>
-            <RouteBoundary name="MarketingAnalytics"><MarketingAnalytics /></RouteBoundary>
-          </RoleGuard>
-        } />
-        <Route path="marketing-hub/:id" element={
-          <RoleGuard requireSection="marketing_hub" action="view">
-            <RouteBoundary name="LeadDetail"><LeadDetail /></RouteBoundary>
           </RoleGuard>
         } />
         <Route path="admin" element={

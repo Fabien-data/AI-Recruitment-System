@@ -16,6 +16,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useSearchParams, Link } from 'react-router-dom'
 import { io } from 'socket.io-client'
 import {
@@ -25,7 +26,7 @@ import {
   Mic, Square, Trash2, Paperclip, Wand2,
   SlidersHorizontal, ChevronDown, X as XIcon,
   FileText, Download, Eye, Image as ImageIcon,
-  FolderKanban, Tag, UserPlus,
+  FolderKanban, Tag, UserPlus, List, Maximize2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { categoryColor } from '../utils/categoryColor'
@@ -134,7 +135,9 @@ const SUGGESTED_LABELS = ['Interested', 'Callback', 'CV pending', 'Strong candid
 
 const getActiveChats = ({ search, statusBucket, projectId, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus }) => {
   const params = new URLSearchParams()
-  params.set('limit', '5000')
+  // No artificial cap — the list is virtualized, so the full bucket loads in one
+  // scroll. Backend clamps to a safety ceiling.
+  params.set('limit', '20000')
   if (search) params.set('search', search)
   if (statusBucket) params.set('status', statusBucket)
   if (projectId) params.set('project_id', projectId)
@@ -709,6 +712,14 @@ export default function Communications() {
   const [contacted, setContacted] = useState(searchParams.get('contacted') || savedPrefs.contacted || '')
   const [claimed, setClaimed] = useState(searchParams.get('claimed') || savedPrefs.claimed || '')
   const [callStatus, setCallStatus] = useState(searchParams.get('call_status') || savedPrefs.callStatus || '')
+  // Compact mode collapses the secondary filter header (counts, project, filters)
+  // so the agent sees more chats at once. Persisted per-device.
+  const [compactFilters, setCompactFilters] = useState(() => {
+    try { return localStorage.getItem('comms.compactFilters') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('comms.compactFilters', compactFilters ? '1' : '0') } catch { /* ignore */ }
+  }, [compactFilters])
   const [transcriptResponseStatus, setTranscriptResponseStatus] = useState('')
   const [transcriptDateFrom, setTranscriptDateFrom] = useState('')
   const [transcriptDateTo, setTranscriptDateTo] = useState('')
@@ -963,6 +974,16 @@ export default function Communications() {
     (!tagFilter || parseTagList(c.tags).includes(tagFilter))
   )
 
+  // Virtualize the chat list so the full bucket (potentially thousands of rows)
+  // renders in one scroll without mounting every DOM node.
+  const listParentRef = useRef(null)
+  const rowVirtualizer = useVirtualizer({
+    count: visibleChats.length,
+    getScrollElement: () => listParentRef.current,
+    estimateSize: () => 92,
+    overscan: 12,
+  })
+
   useEffect(() => {
     if (!selectedCandidate) {
       setEditContactDraft({ name: '', email: '', preferred_language: 'en', notes: '' })
@@ -1056,7 +1077,12 @@ export default function Communications() {
       claimed,
       callStatus,
     }),
-    refetchInterval: 30000, // fallback poll every 30s
+    // The full bucket can be thousands of rows; sockets carry real-time updates,
+    // so this is only a safety-net poll. Keep it infrequent and let staleTime
+    // absorb re-renders / refilters / socket-reconnect invalidations so we don't
+    // re-run the heavy multi-join fetch more than ~once a minute per agent.
+    refetchInterval: 60000,
+    staleTime: 55000,
   })
 
   // Real aggregate counts for the header pills + per-tab badges (true totals,
@@ -1065,14 +1091,12 @@ export default function Communications() {
   const { data: countsData } = useQuery({
     queryKey: ['active-chats-counts', search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus],
     queryFn: () => getActiveChatsCounts({ search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus }),
-    refetchInterval: 30000,
+    refetchInterval: 60000,
+    staleTime: 55000,
   })
   const counts = countsData || {}
-  // The list is server-capped at 500 rows (DB-pool protection); the per-tab
-  // badges come from the uncapped counts endpoint. When we hit the cap the badge
-  // reads higher than the rows shown — surface that so the agent narrows by
-  // project/search instead of seeing a silent badge≠list gap.
-  const listTruncated = Array.isArray(activeChatsData) && activeChatsData.length >= 500
+  // The list is no longer capped — it loads the full bucket and renders via the
+  // virtualizer. The per-tab badges still come from the counts endpoint.
 
   useEffect(() => {
     if (!Array.isArray(activeChatsData)) return
@@ -1689,6 +1713,20 @@ export default function Communications() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                onClick={() => setCompactFilters((v) => !v)}
+                title={compactFilters ? 'Show all filters' : 'Compact filters — see more chats'}
+                aria-pressed={compactFilters}
+                className={clsx(
+                  'inline-flex items-center justify-center rounded-lg p-1.5 transition-colors',
+                  compactFilters
+                    ? 'bg-primary-600 text-white hover:bg-primary-700'
+                    : 'text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                )}
+              >
+                {compactFilters ? <Maximize2 size={13} /> : <List size={13} />}
+              </button>
+              <button
+                type="button"
                 onClick={() => setAddCandidateOpen(true)}
                 title="Add a candidate + send a welcome"
                 className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold bg-primary-600 text-white hover:bg-primary-700 transition-colors"
@@ -1719,7 +1757,7 @@ export default function Communications() {
           {/* At-a-glance counts — TRUE aggregates from the counts endpoint (the
               old pills used chatList.length, which maxed out at the 500-row cap,
               so "500 chats / 500 bot" was just the ceiling, not the real total). */}
-          {(counts.total_chats > 0 || chatList.length > 0) && (() => {
+          {!compactFilters && (counts.total_chats > 0 || chatList.length > 0) && (() => {
             const total = counts.total_chats || 0
             const bot = counts.bot_controlled || 0
             const handoff = counts.human_controlled || 0
@@ -1769,12 +1807,8 @@ export default function Communications() {
               )
             })}
           </div>
-          {listTruncated && (
-            <div className="mb-2 px-2 py-1 rounded-lg text-[10px] bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50">
-              Showing the most recent 500 — the tab counts are the true totals. Narrow by project or search to see the rest.
-            </div>
-          )}
           {/* Project scope — server-side; one agent typically works one project. */}
+          {!compactFilters && (
           <div className="mb-2 flex items-center gap-1.5">
             <FolderKanban size={14} className="text-zinc-400 dark:text-zinc-500 shrink-0" />
             <select
@@ -1789,6 +1823,7 @@ export default function Communications() {
               ))}
             </select>
           </div>
+          )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" size={16} />
             <input
@@ -1799,31 +1834,22 @@ export default function Communications() {
               className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-400 transition-all"
             />
           </div>
-          {/* Smart views — one-tap triage filters so the 5 agents can divide the
-              queue without colliding (these set the same query state the API uses). */}
+          {/* "Mine" — one-tap filter so an agent sees only the chats they hold. */}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {[
-              { key: 'oncall', label: 'On call now', active: callStatus === 'on_call', toggle: () => setCallStatus(callStatus === 'on_call' ? '' : 'on_call') },
-              { key: 'uncontacted', label: 'Uncontacted', active: contacted === 'no', toggle: () => setContacted(contacted === 'no' ? '' : 'no') },
-              { key: 'mine', label: 'Mine', active: claimed === 'me', toggle: () => setClaimed(claimed === 'me' ? '' : 'me') },
-              { key: 'escalated', label: 'Escalated', active: pipelineStage === 'pending_human_review', toggle: () => setPipelineStage(pipelineStage === 'pending_human_review' ? '' : 'pending_human_review') },
-            ].map((chip) => (
-              <button
-                key={chip.key}
-                type="button"
-                onClick={chip.toggle}
-                className={clsx(
-                  'px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors',
-                  chip.active
-                    ? 'bg-primary-600 text-white border-primary-600'
-                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800'
-                )}
-              >
-                {chip.label}
-              </button>
-            ))}
+            <button
+              type="button"
+              onClick={() => setClaimed(claimed === 'me' ? '' : 'me')}
+              className={clsx(
+                'px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors',
+                claimed === 'me'
+                  ? 'bg-primary-600 text-white border-primary-600'
+                  : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800'
+              )}
+            >
+              Mine
+            </button>
           </div>
-          {(() => {
+          {!compactFilters && (() => {
             // Status bucket + project are primary scopes shown above (not counted).
             const activeFilterCount = [pipelineStage, responseStatus, handoffState, dateFrom, dateTo, jobFilter, disposition, contacted, claimed, callStatus].filter(Boolean).length
               + (sortBy && sortBy !== 'latest_desc' ? 1 : 0)
@@ -1867,7 +1893,7 @@ export default function Communications() {
               </div>
             )
           })()}
-          {showFilters && (
+          {!compactFilters && showFilters && (
             <div className="mt-2 grid grid-cols-2 gap-2 animate-fade-in">
               <select
                 value={pipelineStage}
@@ -1944,7 +1970,7 @@ export default function Communications() {
         </div>
 
         {/* List */}
-        <div className="flex-1 overflow-y-auto scrollbar-thin">
+        <div ref={listParentRef} className="flex-1 overflow-y-auto scrollbar-thin">
           {listLoading ? (
             <div className="p-4 space-y-3">
               {[1, 2, 3, 4, 5].map(i => (
@@ -1960,10 +1986,14 @@ export default function Communications() {
               <p className="text-sm">{chatList.length === 0 ? 'No conversations yet' : 'No conversations match the filters'}</p>
             </div>
           ) : (
-            <div className="divide-y divide-slate-50">
-              {visibleChats.map((c) => (
+            <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const c = visibleChats[virtualRow.index]
+                return (
                 <div
                   key={c.candidate_id}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
                   onClick={() => { setSelectedId(c.candidate_id); setTranscript([]) }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -1974,8 +2004,9 @@ export default function Communications() {
                   }}
                   role="button"
                   tabIndex={0}
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}
                   className={clsx(
-                    'relative w-full px-4 py-3 flex items-start gap-3 text-left transition-colors cursor-pointer',
+                    'w-full px-4 py-3 flex items-start gap-3 text-left transition-colors cursor-pointer border-b border-zinc-100 dark:border-zinc-800/60',
                     selectedId === c.candidate_id
                       ? 'bg-primary-50/70 dark:bg-primary-950/30 before:content-[""] before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:rounded-r before:bg-gradient-to-b before:from-primary-500 before:to-indigo-500'
                       : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
@@ -2074,7 +2105,8 @@ export default function Communications() {
                     </div>
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>

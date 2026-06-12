@@ -33,8 +33,6 @@ const chatbotIntakeRouter = require('./routes/chatbot-intake');
 const adLinksRouter = require('./routes/ad-links');
 const chatbotContextRouter = require('./routes/chatbot-context');
 const chatbotSyncRouter = require('./routes/chatbot-sync');
-const marketingHubRouter = require('./routes/marketing-hub');
-const marketingAnalyticsRouter = require('./routes/analytics-marketing');
 const threecxWebhookRouter = require('./routes/webhooks-3cx');
 
 // Only load Supabase routes if configured
@@ -242,11 +240,6 @@ app.use('/api/knowledge-base', knowledgeBaseRouter);
 // so the chatbot can retrieve passages alongside FAQ entries.
 const knowledgeDocumentsRouter = require('./routes/knowledge-documents');
 app.use('/api/knowledge-documents', knowledgeDocumentsRouter);
-
-// Marketing Hub — analytics router must be mounted BEFORE the broader hub
-// router so the /analytics prefix wins (Express matches in declaration order).
-app.use('/api/marketing-hub/analytics', marketingAnalyticsRouter);
-app.use('/api/marketing-hub', marketingHubRouter);
 
 // Only mount Supabase routes if configured
 if (supabaseCandidatesRouter) {

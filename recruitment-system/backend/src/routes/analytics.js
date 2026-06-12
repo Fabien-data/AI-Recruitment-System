@@ -53,13 +53,21 @@ router.get('/overview', authenticate, requireSection('analytics', 'view'), async
         const calendarTo = isMySQL
             ? 'DATE_ADD(NOW(), INTERVAL 30 DAY)'
             : "NOW() + INTERVAL '30 days'";
+        // Interview times are stored as literal Asia/Colombo wall-clock, so
+        // "today's interviews" must compare against Colombo's current date, not
+        // the server's UTC CURRENT_DATE (which rolls over ~5.5h early).
+        const colomboToday = isMySQL
+            ? `DATE(CONVERT_TZ(NOW(), 'UTC', 'Asia/Colombo'))`
+            : `(NOW() AT TIME ZONE 'Asia/Colombo')::date`;
 
         const [summary, prevSummary, funnel, recent, headlineStats, urgentProjects, interviewCalendar, recruiterSnapshot] = await Promise.all([
-            // Current period
+            // Current period. "certified" counts the certified status only (it
+            // previously conflated certified + interview_scheduled + hired, which
+            // made the KPI and conversion rate read far higher than reality).
             query(adaptQuery(`
                 SELECT
                     SUM(CASE WHEN status <> 'rejected' THEN 1 ELSE 0 END) AS total_applications,
-                    SUM(CASE WHEN status IN ('certified','interview_scheduled','hired') THEN 1 ELSE 0 END) AS certified,
+                    SUM(CASE WHEN status = 'certified' THEN 1 ELSE 0 END) AS certified,
                     SUM(CASE WHEN status = 'hired' THEN 1 ELSE 0 END) AS selected,
                     COUNT(DISTINCT candidate_id) AS unique_candidates
                 FROM applications
@@ -69,7 +77,7 @@ router.get('/overview', authenticate, requireSection('analytics', 'view'), async
             query(adaptQuery(`
                 SELECT
                     SUM(CASE WHEN status <> 'rejected' THEN 1 ELSE 0 END) AS total_applications,
-                    SUM(CASE WHEN status IN ('certified','interview_scheduled','hired') THEN 1 ELSE 0 END) AS certified,
+                    SUM(CASE WHEN status = 'certified' THEN 1 ELSE 0 END) AS certified,
                     SUM(CASE WHEN status = 'hired' THEN 1 ELSE 0 END) AS selected,
                     COUNT(DISTINCT candidate_id) AS unique_candidates
                 FROM applications
@@ -88,7 +96,7 @@ router.get('/overview', authenticate, requireSection('analytics', 'view'), async
                 SELECT
                     ${weeklyBucketExpr} AS week,
                     COUNT(*) AS applications,
-                    SUM(CASE WHEN status IN ('certified','interview_scheduled','hired') THEN 1 ELSE 0 END) AS certified
+                    SUM(CASE WHEN status = 'certified' THEN 1 ELSE 0 END) AS certified
                 FROM applications
                 WHERE applied_at >= ${trendFrom}
                 GROUP BY week
@@ -102,7 +110,7 @@ router.get('/overview', authenticate, requireSection('analytics', 'view'), async
                     (SELECT COUNT(*)
                      FROM interview_schedules
                      WHERE status IN ('scheduled','confirmed')
-                       AND DATE(scheduled_datetime) = CURRENT_DATE) AS interviews_today
+                       AND DATE(scheduled_datetime) = ${colomboToday}) AS interviews_today
             `)),
             // Highest-priority projects for urgent dashboard widget
             query(adaptQuery(`
@@ -274,6 +282,7 @@ router.get('/recruiter-performance', authenticate, requireSection('analytics', '
             LEFT JOIN applications a ON a.certified_by = u.id
                 AND a.certified_at >= NOW() - INTERVAL '${days} days'
             GROUP BY u.id, u.full_name
+            HAVING COUNT(a.id) > 0
             ORDER BY total_certified DESC
         `));
 

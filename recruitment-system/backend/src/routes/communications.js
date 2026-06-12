@@ -388,14 +388,11 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
     try {
         const {
             search = '',
-            // Default to a screenful-plus rather than the whole table — this is a
-            // heavy 9-LEFT-JOIN + DISTINCT ON query and the list is scrolled from
-            // the top. HARD-capped at 500 below: the legacy client asks for 5000
-            // (~3.4 MB per poll), which — every 30s × every agent on ONE pinned
-            // instance — saturated the DB pool and cascaded into 500s. The list is
-            // sorted most-recent-first and search/filter is server-side, so 500 is
-            // ample for the working set.
-            limit = 200,
+            // `limit` is clamped to a high safety ceiling below (see safeLimit).
+            // The frontend virtualizes the chat list, so the full bucket is fetched
+            // and rendered in one scroll; the list is sorted most-recent-first and
+            // search/filter is server-side.
+            limit,
             date_from,
             date_to,
             status,
@@ -406,7 +403,11 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
             sort_by = 'latest_desc',
         } = req.query;
 
-        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500);
+        // The list is no longer artificially truncated to 500 — the frontend
+        // virtualizes the chat list, so it can render the full bucket in one
+        // scroll. Keep a high safety ceiling so a pathological request can't
+        // exhaust the DB pool.
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20000, 1), 20000);
         const params = [];
         const filters = [];
         // Effective project/job = the candidate's latest application's project/job,
@@ -541,13 +542,6 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
         `);
 
         const result = await query(sql, params);
-        // The list is HARD-capped at 500 (see safeLimit) to protect the DB pool.
-        // When we hit the cap the per-tab badge (from /counts, uncapped) will read
-        // higher than the rows returned here — signal that so the UI can show
-        // "500+ shown" instead of a silent badge≠list mismatch.
-        if (result.rows.length >= safeLimit) {
-            res.set('X-List-Truncated', 'true');
-        }
         res.json(result.rows);
     } catch (error) {
         next(error);
@@ -556,9 +550,8 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
 
 // ── GET /api/communications/active-chats/counts ───────────────────────────────
 // Real aggregate counts for the Conversations header pills + per-status tab
-// badges. Same FROM/JOIN/WHERE semantics as active-chats, but WITHOUT the 500-row
-// cap and WITHOUT the status-bucket filter — so the numbers are TRUE totals
-// (the pills used to show the returned array length, which maxed out at the cap)
+// badges. Same FROM/JOIN/WHERE semantics as active-chats, but WITHOUT any row
+// limit and WITHOUT the status-bucket filter — so the numbers are TRUE totals
 // and every per-status badge is counted regardless of which tab is active.
 router.get('/active-chats/counts', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
     try {

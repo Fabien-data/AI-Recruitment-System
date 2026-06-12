@@ -112,8 +112,6 @@ export function useRole() {
     hasFullAnalytics: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT,
     // Admin dashboard access
     hasAdminDashboard: role === ROLES.ADMIN,
-    // Marketing Hub access
-    hasMarketingHub: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT || role === ROLES.MARKETING_AGENT,
   }
 }
 

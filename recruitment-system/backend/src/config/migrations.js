@@ -534,10 +534,13 @@ async function applyMigrations() {
             ('communications', 'Communications',  'MessageSquare',   'Messaging and outreach', 80),
             ('analytics',      'Analytics',       'BarChart2',       'Reporting and KPIs', 90),
             ('knowledge_base', 'Knowledge Base',  'BookOpen',        'FAQ and documents for chatbot', 100),
-            ('marketing_hub',  'Marketing Hub',   'Megaphone',       'Lead intake and call handling', 110),
             ('general_pool',   'General Pool',    'Database',        'Unassigned candidate pool', 120)
         ON CONFLICT (key) DO NOTHING
     `, 'sections seed');
+    // NOTE: 'marketing_hub' section intentionally NOT seeded — the Marketing Hub
+    // feature was removed (Migration 051 drops the row on existing DBs). The
+    // underlying lead_* tables are kept because the 3CX call webhook writes to
+    // them (see routes/webhooks-3cx.js).
 
     // per-user, per-section CRUD permissions
     await safeAlter(`
@@ -1296,6 +1299,100 @@ async function applyMigrations() {
             ('control_tower', 'Control Tower', 'Radar',    'Live recruitment ops overview',                55)
         ON CONFLICT (key) DO NOTHING
     `, '048 seed engagement + control_tower sections');
+
+    // ── Migration 049: permission_templates (reusable section-permission presets) ──
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS permission_templates (
+            id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            name        VARCHAR(120) NOT NULL UNIQUE,
+            description TEXT,
+            permissions JSONB        NOT NULL,
+            created_by  UUID         REFERENCES users(id) ON DELETE SET NULL,
+            created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, '049 permission_templates table');
+
+    // ── Migration 050: one-shot backfill for permission OVERRIDE semantics ────
+    // effectiveSectionPerms() changed from additive (baseline OR custom) to
+    // override (custom row wins verbatim). Existing custom rows stored only the
+    // *extras* beyond baseline, so under override they'd silently DROP baseline
+    // access. Rewrite each existing custom row to its current effective value
+    // (baseline OR existing) ONCE, so the semantic flip preserves access. Guarded
+    // by a marker so a re-run can never re-inflate permissions an admin later
+    // revoked through the new full-control UI.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS migration_markers (
+            key        TEXT        PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `, 'migration_markers table');
+    try {
+        const BACKFILL_KEY = 'perm_override_backfill_v1';
+        const already = await query('SELECT 1 FROM migration_markers WHERE key = $1', [BACKFILL_KEY]);
+        if (already.rows.length === 0) {
+            const { roleDefault } = require('../middleware/sections');
+            const rowsRes = await query(`
+                SELECT usp.user_id, u.role, usp.section_key,
+                       usp.can_view, usp.can_create, usp.can_edit, usp.can_delete
+                FROM user_section_permissions usp
+                JOIN users u ON u.id = usp.user_id
+                WHERE u.role <> 'admin'
+            `, []);
+            let changed = 0;
+            for (const r of rowsRes.rows) {
+                const base = roleDefault(r.role, r.section_key);
+                const eff = {
+                    can_view:   !!base.can_view   || !!r.can_view,
+                    can_create: !!base.can_create || !!r.can_create,
+                    can_edit:   !!base.can_edit   || !!r.can_edit,
+                    can_delete: !!base.can_delete || !!r.can_delete,
+                };
+                if (eff.can_view !== r.can_view || eff.can_create !== r.can_create ||
+                    eff.can_edit !== r.can_edit || eff.can_delete !== r.can_delete) {
+                    await query(
+                        `UPDATE user_section_permissions
+                         SET can_view = $3, can_create = $4, can_edit = $5, can_delete = $6, updated_at = NOW()
+                         WHERE user_id = $1 AND section_key = $2`,
+                        [r.user_id, r.section_key, eff.can_view, eff.can_create, eff.can_edit, eff.can_delete]
+                    );
+                    changed++;
+                }
+            }
+            await query('INSERT INTO migration_markers (key) VALUES ($1) ON CONFLICT DO NOTHING', [BACKFILL_KEY]);
+            logger.info(`  migration: OK  — 050 perm override backfill (${rowsRes.rows.length} rows scanned, ${changed} rewritten)`);
+        } else {
+            logger.info('  migration: skip — 050 perm override backfill (already applied)');
+        }
+    } catch (err) {
+        logger.warn(`  migration: WARN — 050 perm override backfill: ${err.message.split('\n')[0]}`);
+    }
+
+    // ── Migration 051: remove the Marketing Hub permission section ────────────
+    // The Marketing Hub feature was removed from the app. Deleting the section
+    // row makes it disappear from the Edit-User permission matrix and the nav;
+    // the FK cascade clears any user_section_permissions rows that referenced it.
+    // The lead_* data tables are deliberately KEPT (the 3CX call webhook still
+    // writes to lead_call_events / marketing_leads).
+    await safeUpdate(
+        `DELETE FROM sections WHERE key = 'marketing_hub'`,
+        '051 remove marketing_hub section'
+    );
+
+    // ── Migration 052: unlink jobs when a project is deleted ──────────────────
+    // Deleting a project now DETACHES its jobs (project_id → NULL) instead of
+    // cascade-deleting them, so the jobs (and their applications / interviews)
+    // survive. jobs.project_id was NOT NULL with an ON DELETE RESTRICT FK
+    // (enforce_project_job_relationship.sql), which made the delete handler's
+    // `UPDATE jobs SET project_id = NULL` 500 on the not-null constraint — i.e.
+    // deleting any project that had jobs always failed. Make the column nullable
+    // and switch the FK to ON DELETE SET NULL.
+    await safeAlter(`ALTER TABLE jobs ALTER COLUMN project_id DROP NOT NULL`, '052 jobs.project_id drop NOT NULL');
+    await safeAlter(`ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_project_id_fkey`, '052 drop jobs_project_id_fkey');
+    await safeAlter(
+        `ALTER TABLE jobs ADD CONSTRAINT jobs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL`,
+        '052 re-add jobs_project_id_fkey ON DELETE SET NULL'
+    );
 
     logger.info('✅ Startup migrations complete.');
 }

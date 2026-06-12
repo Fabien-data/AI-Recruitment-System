@@ -13,7 +13,7 @@ const NONE = { can_view: false, can_create: false, can_edit: false, can_delete: 
 
 export const SECTION_KEYS = [
   'dashboard', 'projects', 'applications', 'candidates', 'cv_manager',
-  'communications', 'interviews', 'jobs', 'marketing_hub', 'analytics',
+  'communications', 'interviews', 'jobs', 'analytics',
   'general_pool', 'knowledge_base', 'engagement', 'control_tower',
 ]
 
@@ -21,25 +21,25 @@ export const ROLE_BASELINE = {
   admin: {
     dashboard: ALL, projects: ALL, applications: ALL, candidates: ALL,
     cv_manager: ALL, communications: ALL, interviews: ALL, jobs: ALL,
-    marketing_hub: ALL, analytics: ALL, general_pool: ALL, knowledge_base: ALL,
+    analytics: ALL, general_pool: ALL, knowledge_base: ALL,
     engagement: ALL, control_tower: ALL,
   },
   project_handler: {
     dashboard: V, projects: VCE, applications: VE, candidates: VCE,
     cv_manager: VCE, communications: VE, interviews: VCE, jobs: V,
-    marketing_hub: NONE, analytics: V, general_pool: V, knowledge_base: NONE,
+    analytics: V, general_pool: V, knowledge_base: NONE,
     engagement: VE, control_tower: V,
   },
   marketing_agent: {
     dashboard: V, projects: NONE, applications: NONE, candidates: VC,
     cv_manager: VCE, communications: VE, interviews: NONE, jobs: V,
-    marketing_hub: VCE, analytics: NONE, general_pool: NONE, knowledge_base: NONE,
+    analytics: NONE, general_pool: NONE, knowledge_base: NONE,
     engagement: VE, control_tower: NONE,
   },
   sourcing_department: {
     dashboard: V, projects: ALL, applications: ALL, candidates: ALL,
     cv_manager: ALL, communications: ALL, interviews: ALL, jobs: ALL,
-    marketing_hub: ALL, analytics: ALL, general_pool: ALL, knowledge_base: ALL,
+    analytics: ALL, general_pool: ALL, knowledge_base: ALL,
     engagement: ALL, control_tower: ALL,
   },
 }

@@ -30,7 +30,7 @@ const VCED = ALL_PERMS;                                                        /
 // The canonical section catalogue (matches the seeded `sections` table).
 const SECTION_KEYS = [
     'dashboard', 'projects', 'applications', 'candidates', 'cv_manager',
-    'communications', 'interviews', 'jobs', 'marketing_hub', 'analytics',
+    'communications', 'interviews', 'jobs', 'analytics',
     'general_pool', 'knowledge_base', 'engagement', 'control_tower',
 ];
 
@@ -51,33 +51,33 @@ const UNIVERSAL_SECTIONS = ['dashboard'];
  *                   view+create+edit (create powers Add-candidate in Messages).
  * marketing_agent = onboard-from-chat: jobs view-only, candidates view+create
  *                   (Add-candidate from the Messages panel is their core flow),
- *                   cv_manager + marketing_hub full, communications view+edit.
+ *                   cv_manager full, communications view+edit.
  */
 const ROLE_BASELINE = {
     admin: {
         dashboard: VCED, projects: VCED, applications: VCED, candidates: VCED,
         cv_manager: VCED, communications: VCED, interviews: VCED, jobs: VCED,
-        marketing_hub: VCED, analytics: VCED, general_pool: VCED, knowledge_base: VCED,
+        analytics: VCED, general_pool: VCED, knowledge_base: VCED,
         engagement: VCED, control_tower: VCED,
     },
     project_handler: {
         dashboard: V, projects: VCE, applications: VE, candidates: VCE,
         cv_manager: VCE, communications: VE, interviews: VCE, jobs: V,
-        marketing_hub: NONE, analytics: V, general_pool: V, knowledge_base: NONE,
+        analytics: V, general_pool: V, knowledge_base: NONE,
         // engagement mirrors communications (VE); control_tower is read-only ops.
         engagement: VE, control_tower: V,
     },
     marketing_agent: {
         dashboard: V, projects: NONE, applications: NONE, candidates: VC,
         cv_manager: VCE, communications: VE, interviews: NONE, jobs: V,
-        marketing_hub: VCE, analytics: NONE, general_pool: NONE, knowledge_base: NONE,
+        analytics: NONE, general_pool: NONE, knowledge_base: NONE,
         // engagement mirrors communications (VE); no control_tower (no projects).
         engagement: VE, control_tower: NONE,
     },
     sourcing_department: {
         dashboard: V, projects: VCED, applications: VCED, candidates: VCED,
         cv_manager: VCED, communications: VCED, interviews: VCED, jobs: VCED,
-        marketing_hub: VCED, analytics: VCED, general_pool: VCED, knowledge_base: VCED,
+        analytics: VCED, general_pool: VCED, knowledge_base: VCED,
         engagement: VCED, control_tower: VCED,
     },
 };
@@ -100,18 +100,26 @@ function roleDefault(role, sectionKey) {
 }
 
 /**
- * Effective permission = mandatory baseline OR per-user custom grant. Custom rows
- * can only ADD access on top of the baseline; they can never drop below it.
+ * Effective permission = the per-user OVERRIDE when a custom row exists for the
+ * section, otherwise the role baseline. Custom rows are now ABSOLUTE: an admin
+ * can grant ABOVE or revoke BELOW the role baseline, per section. (The previous
+ * model only ever added on top of the baseline.) Admin role always resolves to
+ * full CRUD. The dashboard stays at least viewable (universal floor) so no user
+ * is ever trapped with nowhere to land, even if its row is revoked.
  */
 function effectiveSectionPerms(role, sectionKey, customRow) {
+    if (role === 'admin') return { ...ALL_PERMS };
     const base = roleDefault(role, sectionKey);
-    if (!customRow) return base;
-    return {
-        can_view:   !!base.can_view   || !!customRow.can_view,
-        can_create: !!base.can_create || !!customRow.can_create,
-        can_edit:   !!base.can_edit   || !!customRow.can_edit,
-        can_delete: !!base.can_delete || !!customRow.can_delete,
+    const src = customRow || base; // custom row wins verbatim; else baseline
+    const eff = {
+        can_view:   !!src.can_view,
+        can_create: !!src.can_create,
+        can_edit:   !!src.can_edit,
+        can_delete: !!src.can_delete,
     };
+    // Universal floor: dashboard is always at least viewable.
+    if (UNIVERSAL_SECTIONS.includes(sectionKey)) eff.can_view = true;
+    return eff;
 }
 
 /**
@@ -132,7 +140,7 @@ async function loadPerms(userId, role) {
 
     return sectionsRes.rows.map(s => {
         const custom = customByKey.get(s.key);
-        // Effective = mandatory baseline OR custom grant (custom can only add).
+        // Effective = custom override when present, else role baseline.
         const perms = effectiveSectionPerms(role, s.key, custom);
         return {
             section_key: s.key,
@@ -170,7 +178,7 @@ function requireSection(sectionKey, action) {
                  WHERE user_id = $1 AND section_key = $2`,
                 [req.user.id, sectionKey]
             );
-            // Effective = mandatory baseline OR custom grant (custom can only add).
+            // Effective = custom override when present, else role baseline.
             const row = effectiveSectionPerms(req.user.role, sectionKey, r.rows[0]);
             if (!row || !row[`can_${action}`]) {
                 return res.status(403).json({

@@ -216,6 +216,24 @@ router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
             }
         }
 
+        // Guard: never demote or deactivate the LAST active administrator —
+        // doing so would lock everyone out of the admin panel.
+        const targetRes = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
+        if (targetRes.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        const demotingLastAdmin = targetRes.rows[0].role === ROLES.ADMIN &&
+            ((role !== undefined && role !== ROLES.ADMIN) || is_active === false);
+        if (demotingLastAdmin) {
+            const adminCount = await pool.query(
+                `SELECT COUNT(*)::int AS n FROM users WHERE role = $1 AND is_active = true`,
+                [ROLES.ADMIN]
+            );
+            if ((adminCount.rows[0]?.n || 0) <= 1) {
+                return res.status(400).json({ error: 'Cannot demote or deactivate the last active administrator' });
+            }
+        }
+
         const setClauses = [];
         const params = [];
 
@@ -274,6 +292,21 @@ router.delete('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
 
         if (id === req.user.id) {
             return res.status(400).json({ error: 'Cannot deactivate your own account' });
+        }
+
+        // Guard: never deactivate the last active administrator.
+        const targetRes = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
+        if (targetRes.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        if (targetRes.rows[0].role === ROLES.ADMIN) {
+            const adminCount = await pool.query(
+                `SELECT COUNT(*)::int AS n FROM users WHERE role = $1 AND is_active = true`,
+                [ROLES.ADMIN]
+            );
+            if ((adminCount.rows[0]?.n || 0) <= 1) {
+                return res.status(400).json({ error: 'Cannot deactivate the last active administrator' });
+            }
         }
 
         const result = await pool.query(
@@ -370,17 +403,21 @@ router.put('/users/:id/permissions', ...ADMIN_ONLY, async (req, res, next) => {
         const user = userRes.rows[0];
 
         await client.query('BEGIN');
-        // Replace strategy: delete then re-insert the supplied rows.
+        // Replace strategy: delete then re-insert the supplied rows. Under the
+        // OVERRIDE model every supplied row is stored VERBATIM — including
+        // all-false rows, which now mean "revoke this section" (previously they
+        // were dropped as equivalent to no row). The frontend sends the full
+        // matrix, so the stored set is the absolute source of truth. The
+        // dashboard view bit is always coerced on so a user is never trapped.
         await client.query('DELETE FROM user_section_permissions WHERE user_id = $1', [user.id]);
         for (const p of permissions) {
             if (!p?.section_key) continue;
-            const hasAny = VALID_PERM_KEYS.some(k => !!p[k]);
-            if (!hasAny) continue; // skip "all-false" rows — they're equivalent to NO row
+            const canView = p.section_key === 'dashboard' ? true : !!p.can_view;
             await client.query(
                 `INSERT INTO user_section_permissions
                     (user_id, section_key, can_view, can_create, can_edit, can_delete)
                  VALUES ($1, $2, $3, $4, $5, $6)`,
-                [user.id, p.section_key, !!p.can_view, !!p.can_create, !!p.can_edit, !!p.can_delete]
+                [user.id, p.section_key, canView, !!p.can_create, !!p.can_edit, !!p.can_delete]
             );
         }
         await client.query('COMMIT');
@@ -407,6 +444,73 @@ router.put('/users/:id/permissions', ...ADMIN_ONLY, async (req, res, next) => {
         next(error);
     } finally {
         client.release();
+    }
+});
+
+// ── Permission Templates ─────────────────────────────────────────────────────
+// Reusable named presets of a full section-permission matrix, so an admin can
+// save the current grid and re-apply it when creating/editing another user.
+
+router.get('/permission-templates', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const result = await pool.query(
+            `SELECT t.id, t.name, t.description, t.permissions, t.created_at,
+                    u.full_name AS created_by_name
+             FROM permission_templates t
+             LEFT JOIN users u ON u.id = t.created_by
+             ORDER BY t.name ASC`
+        );
+        res.json(result.rows);
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.post('/permission-templates', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const { name, description, permissions } = req.body || {};
+        if (!name || !String(name).trim()) {
+            return res.status(400).json({ error: 'name is required' });
+        }
+        if (!Array.isArray(permissions)) {
+            return res.status(400).json({ error: 'permissions must be an array' });
+        }
+        // Normalise to the canonical row shape so applying a template later is safe.
+        const clean = permissions
+            .filter((p) => p && p.section_key)
+            .map((p) => ({
+                section_key: p.section_key,
+                can_view: !!p.can_view,
+                can_create: !!p.can_create,
+                can_edit: !!p.can_edit,
+                can_delete: !!p.can_delete,
+            }));
+        const result = await pool.query(
+            `INSERT INTO permission_templates (name, description, permissions, created_by)
+             VALUES ($1, $2, $3::jsonb, $4)
+             ON CONFLICT (name) DO UPDATE SET
+                description = EXCLUDED.description,
+                permissions = EXCLUDED.permissions,
+                updated_at  = NOW()
+             RETURNING id, name, description, permissions, created_at`,
+            [String(name).trim(), description || null, JSON.stringify(clean), req.user.id]
+        );
+        res.status(201).json(result.rows[0]);
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.delete('/permission-templates/:id', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const result = await pool.query(
+            'DELETE FROM permission_templates WHERE id = $1 RETURNING id',
+            [req.params.id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Template not found' });
+        res.json({ message: 'Template deleted', id: result.rows[0].id });
+    } catch (error) {
+        next(error);
     }
 });
 

@@ -20,6 +20,7 @@ const PIPELINE_COLORS = {
   interview_scheduled: 'bg-orange-400',
   interviewed: 'bg-amber-500',
   selected: 'bg-green-500',
+  hired: 'bg-emerald-600',
   placed: 'bg-emerald-700',
   rejected: 'bg-red-400',
   transferred: 'bg-gray-400'
@@ -116,7 +117,10 @@ export default function Analytics() {
     await exportAnalyticsCsv({ period })
   }
 
-  const funnel = overview?.funnel || []
+  // Use the backend's canonical, ordered pipeline (screening → certified →
+  // interview_scheduled → hired → rejected) rather than the raw status grouping,
+  // which came back unordered and mixed in legacy/unknown statuses.
+  const funnel = overview?.pipeline || overview?.funnel || []
   const maxFunnelCount = Math.max(...funnel.map(f => parseInt(f.count, 10)), 1)
 
   return (
