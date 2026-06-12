@@ -177,6 +177,23 @@ export function getStageLabel(status) {
   )
 }
 
+// ── Future Pool categories ───────────────────────────────────────────────────
+// Why a candidate was parked in the Future Pool (set by the calling console's
+// "Future Pool" action; stored on candidates.future_pool_category). future_project
+// also carries a desired project name / job title / country so pooled candidates
+// are findable + assignable when that project opens.
+export const FUTURE_POOL_CATEGORY_LABELS = {
+  future_project: 'New future project',
+  overage: 'Overage (age limit)',
+  not_interested: 'Not interested (current)',
+}
+export const FUTURE_POOL_CATEGORY_OPTIONS = [
+  { value: '', label: 'All Future Pool' },
+  { value: 'future_project', label: 'New future project' },
+  { value: 'overage', label: 'Overage (age limit)' },
+  { value: 'not_interested', label: 'Not interested (current)' },
+]
+
 // Candidate-stage filter options for CV Manager / candidate lists.
 export const CANDIDATE_STAGE_FILTER_OPTIONS = [
   { value: '', label: 'All stages' },

@@ -107,6 +107,8 @@ router.get('/', authenticate, requireSection('candidates', 'view'), async (req, 
             sort_by,
             sort_order,
             removed,
+            future_pool_category,
+            future_pool_country,
         } = req.query;
 
         const offset = (page - 1) * limit;
@@ -122,6 +124,23 @@ router.get('/', authenticate, requireSection('candidates', 'view'), async (req, 
         if (status) {
             whereClause += isMySQL ? ' AND c.status = ?' : ` AND c.status = $${params.length + 1}`;
             params.push(status);
+        }
+
+        // Future Pool drill-down: narrow the pool by why a candidate was parked
+        // (future_project / overage / not_interested) and by the desired country
+        // captured for a future project — so an admin can find "future_project ·
+        // Qatar" candidates and bulk-assign them when the real project exists.
+        if (future_pool_category) {
+            whereClause += isMySQL ? ' AND c.future_pool_category = ?' : ` AND c.future_pool_category = $${params.length + 1}`;
+            params.push(String(future_pool_category).toLowerCase());
+        }
+        if (future_pool_country) {
+            // Country is free-typed both when pooling and when filtering, so match
+            // case/space-insensitively ("qatar" / "Qatar " ⇒ "Qatar").
+            whereClause += isMySQL
+                ? ' AND LOWER(TRIM(c.future_pool_country)) = ?'
+                : ` AND LOWER(TRIM(c.future_pool_country)) = $${params.length + 1}`;
+            params.push(String(future_pool_country).trim().toLowerCase());
         }
 
         if (source) {
@@ -475,7 +494,12 @@ router.post('/', authenticate, requireSection('candidates', 'create'), async (re
             return res.status(400).json({ error: 'Name and phone are required' });
         }
 
-        const normalizedPhone = normalizePhone(phone) || String(phone).trim();
+        // Reject rather than store a raw, un-normalised value — a raw "+94…"/"94…"
+        // variant slipping in is exactly what forks a candidate into two chats.
+        const normalizedPhone = normalizePhone(phone);
+        if (!normalizedPhone) {
+            return res.status(400).json({ error: 'Please enter a valid phone number, e.g. +94771234567 or 0771234567.' });
+        }
 
         const ageInput = normalizeAgeInput(age);
         if (ageInput.invalid) {
@@ -549,7 +573,12 @@ router.post('/with-welcome', authenticate, requireSection('candidates', 'create'
             return res.status(400).json({ error: 'Name and phone are required' });
         }
 
-        const normalizedPhone = normalizePhone(phone) || String(phone).trim();
+        // Reject rather than store a raw, un-normalised value — a raw "+94…"/"94…"
+        // variant slipping in is exactly what forks a candidate into two chats.
+        const normalizedPhone = normalizePhone(phone);
+        if (!normalizedPhone) {
+            return res.status(400).json({ error: 'Please enter a valid phone number, e.g. +94771234567 or 0771234567.' });
+        }
         const ageInput = normalizeAgeInput(age);
         if (ageInput.invalid) {
             return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
@@ -1077,8 +1106,11 @@ router.post('/:id/remove', authenticate, authorize('admin'), async (req, res, ne
         ).catch(() => {});
 
         try {
+            // Distinct action_type so a removal is NOT folded into the engagement
+            // "Future Pool" metric (which counts future_pool + legacy not_interested)
+            // — a removed candidate is the opposite of pooled.
             await logAgentAction({
-                candidateId: id, agentId: req.user?.id, actionType: 'not_interested',
+                candidateId: id, agentId: req.user?.id, actionType: 'removed',
                 remark: `Rejected & removed from system${reason ? ` — ${reason}` : ''}`,
             });
         } catch (_e) { /* best-effort */ }
@@ -1192,9 +1224,11 @@ router.post('/:id/certify', authenticate, requireSection('candidates', 'edit'), 
 
         // If a specific job was named, make sure an application exists for it so
         // the certified status attaches to that role (idempotent upsert).
+        let selectedJobTitle = '';
         if (job_id) {
-            const jobRes = await query(adaptQuery('SELECT id FROM jobs WHERE id = $1'), [job_id]);
+            const jobRes = await query(adaptQuery('SELECT id, title FROM jobs WHERE id = $1'), [job_id]);
             if (jobRes.rows.length === 0) return res.status(400).json({ error: 'Invalid job_id' });
+            selectedJobTitle = jobRes.rows[0].title || '';
             const newAppId = generateUUID();
             if (isMySQL) {
                 await query(
@@ -1213,8 +1247,17 @@ router.post('/:id/certify', authenticate, requireSection('candidates', 'edit'), 
         // candidate.status + emits candidate_stage_changed).
         const { updatedApplications } = await setCandidateStage(id, 'certified');
 
-        // Resolve a job title for the message body.
+        // Resolve a job title for the message body. Priority:
+        //   1. role_title — an explicit title the agent typed
+        //   2. the job the agent just picked in the Certify dialog (job_id) — this
+        //      is the role they're certifying FOR, so the message must name THIS
+        //      job. The most-recent-application fallback below is ambiguous once a
+        //      candidate has several active applications: setCandidateStage bumps
+        //      them all to the same updated_at, so ORDER BY can return an OLD role
+        //      (e.g. a previous position instead of the new AMAYA one just assigned).
+        //   3. fallback: the candidate's latest active application title
         let jobTitle = role_title && String(role_title).trim() ? String(role_title).trim() : '';
+        if (!jobTitle && selectedJobTitle) jobTitle = selectedJobTitle;
         if (!jobTitle) {
             try {
                 const jt = await query(

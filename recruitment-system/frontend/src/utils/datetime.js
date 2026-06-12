@@ -68,3 +68,36 @@ export function formatInterviewDate(value, fallback = '—') {
   if (!d) return fallback
   return d.toLocaleDateString('en-US', DATE_OPTS)
 }
+
+// ── Business-day windows (Asia/Colombo, UTC+5:30, no DST) ────────────────────
+// Engagement counts are reported per Sri-Lanka calendar day, NOT a rolling 24h
+// window and NOT the viewer's browser timezone. These return the right values to
+// hand the API as date_from / date_to so "Today" means the Colombo calendar day.
+const COLOMBO_OFFSET_MS = 5.5 * 60 * 60 * 1000
+
+/** UTC instant (ms) of the start of the Colombo calendar day containing `ts`. */
+export function startOfColomboDay(ts = Date.now()) {
+  const shifted = new Date(ts + COLOMBO_OFFSET_MS)
+  const flooredColomboMidnight = Date.UTC(
+    shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()
+  )
+  return flooredColomboMidnight - COLOMBO_OFFSET_MS
+}
+
+/** 'YYYY-MM-DD' key of the Colombo calendar day containing `ts`. */
+export function colomboDayKey(ts = Date.now()) {
+  return new Date(ts + COLOMBO_OFFSET_MS).toISOString().slice(0, 10)
+}
+
+/**
+ * ISO bounds for a window of `days` Colombo calendar days ending *today*, plus
+ * the equally-long window immediately before it (for trend deltas).
+ * Returns { from, prevFrom }: current window = [from, now), previous = [prevFrom, from).
+ */
+export function colomboDayWindow(days = 1, now = Date.now()) {
+  const start = startOfColomboDay(now) - (days - 1) * 86400000
+  return {
+    from: new Date(start).toISOString(),
+    prevFrom: new Date(start - days * 86400000).toISOString(),
+  }
+}

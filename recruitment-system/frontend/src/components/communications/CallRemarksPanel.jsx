@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Phone, PhoneOff, Loader2, Plus, RotateCcw, Check, X, Briefcase, AlertCircle, BadgeCheck, CalendarClock, Trash2 } from 'lucide-react'
+import { Phone, PhoneOff, Loader2, Plus, RotateCcw, Check, Briefcase, AlertCircle, BadgeCheck, CalendarClock, Trash2, Bookmark } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 import { useAuthStore } from '../../stores/authStore'
@@ -18,7 +18,9 @@ import { InlineCreateRole } from './InlineCreateRole'
  *   Done → <next>  → smart-advances the candidate one canonical stage. From New it
  *                    opens a Project→Job picker (assigns + logs the role); from
  *                    Screening/Certified it advances directly.
- *   Not interested → reason quick-select + optional remark, marks the lead rejected.
+ *   Future Pool    → parks the candidate (re-engageable) under one of three
+ *                    categories — new future project (project/role/country),
+ *                    overage (age limit), or not interested in current projects.
  */
 const API_BASE = import.meta.env.VITE_API_URL || ''
 async function apiFetch(path, opts = {}) {
@@ -57,6 +59,15 @@ const NEXT_STAGE = {
 }
 const NOT_INTERESTED_REASONS = ['Not interested', 'Salary too low', 'Wrong location/country', 'Already employed', 'Changed mind', 'Other']
 
+// Future Pool categories — why a candidate is parked (re-engageable). Stored on
+// candidates.future_pool_category; future_project also captures the desired
+// project/role/country so they're easy to assign when that project opens.
+const FUTURE_POOL_OPTIONS = [
+  { value: 'future_project', label: 'New future project', hint: 'For an upcoming project — capture the role & country' },
+  { value: 'overage', label: 'Overage (age limit)', hint: 'Over the age cap now — keep for future roles' },
+  { value: 'not_interested', label: 'Not interested in current projects', hint: 'Declined the current openings' },
+]
+
 // Action-aware log labels (call_logs.action_type, migration 040) so the timeline
 // reads as what the agent DID — "Assigned to job", "Certified", "Interview
 // scheduled" — instead of every entry looking like a phone call.
@@ -67,7 +78,9 @@ const ACTION_META = {
   interview: { label: 'Interview scheduled', cls: 'text-indigo-700 dark:text-indigo-300' },
   follow_up: { label: 'Follow-up set', cls: 'text-amber-700 dark:text-amber-300' },
   no_answer: { label: 'No answer', cls: 'text-rose-600 dark:text-rose-300' },
-  not_interested: { label: 'Not interested', cls: 'text-zinc-600 dark:text-zinc-300' },
+  future_pool: { label: 'Future Pool', cls: 'text-violet-700 dark:text-violet-300' },
+  not_interested: { label: 'Future Pool', cls: 'text-violet-700 dark:text-violet-300' }, // legacy rows
+  removed: { label: 'Removed', cls: 'text-rose-600 dark:text-rose-300' },
   note: { label: 'Note', cls: 'text-zinc-700 dark:text-zinc-200' },
 }
 const logHead = (l) => {
@@ -85,11 +98,16 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
   const [outcome, setOutcome] = useState('')
   const [remark, setRemark] = useState('')
   const [open, setOpen] = useState(false)            // detailed "Log call" form
-  const [panel, setPanel] = useState(null)           // 'followup'|'no_answer'|'not_interested'|'assign'
+  const [panel, setPanel] = useState(null)           // 'followup'|'no_answer'|'future_pool'|'assign'|'remove'
   const [panelNote, setPanelNote] = useState('')
   const [reason, setReason] = useState('')
   const [projId, setProjId] = useState('')
   const [jobId, setJobId] = useState('')
+  // Future Pool sub-form: category + (for a new future project) desired details.
+  const [fpCategory, setFpCategory] = useState('future_project')
+  const [fpProjectName, setFpProjectName] = useState('')
+  const [fpJobTitle, setFpJobTitle] = useState('')
+  const [fpCountry, setFpCountry] = useState('')
   const [actionError, setActionError] = useState(null)
   const [certifyOpen, setCertifyOpen] = useState(false)       // Certified popup
   const [interviewOpen, setInterviewOpen] = useState(false)   // Interview popup
@@ -120,7 +138,10 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
     enabled: panel === 'assign' && !!projId,
   })
 
-  const closePanels = () => { setPanel(null); setPanelNote(''); setReason(''); setProjId(''); setJobId(''); setActionError(null) }
+  const closePanels = () => {
+    setPanel(null); setPanelNote(''); setReason(''); setProjId(''); setJobId(''); setActionError(null)
+    setFpCategory('future_project'); setFpProjectName(''); setFpJobTitle(''); setFpCountry('')
+  }
 
   const addMut = useMutation({
     mutationFn: (body) => apiFetch(`/api/communications/candidate/${candidateId}/call-logs`, {
@@ -166,10 +187,28 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
     outcome: 'no_answer', create_followup: true, task_type: 'no_answer',
     followup_note: panelNote.trim() || 'No answer', remark: panelNote.trim() || undefined,
   })
-  const submitNotInterested = () => addMut.mutate({
-    outcome: 'not_interested', set_candidate_status: 'rejected',
-    reason: reason || 'Not interested', remark: panelNote.trim() || undefined,
-  })
+  // Future Pool — park the candidate (re-engageable) under the chosen category.
+  // future_project carries desired project/role/country tags; not_interested
+  // carries the reason quick-select; overage needs only the category (the
+  // backend derives a readable reason for the timeline). All map to future_pool.
+  const submitFuturePool = () => {
+    const body = {
+      set_candidate_status: 'future_pool',
+      future_pool_category: fpCategory,
+      remark: panelNote.trim() || undefined,
+    }
+    if (fpCategory === 'future_project') {
+      body.future_pool_project_name = fpProjectName.trim() || undefined
+      body.future_pool_job_title = fpJobTitle.trim() || undefined
+      body.future_pool_country = fpCountry.trim() || undefined
+    } else if (fpCategory === 'not_interested') {
+      body.reason = reason || 'Not interested'
+    }
+    addMut.mutate(body)
+  }
+  // A new future project needs at least one of project/role/country to be useful.
+  const futurePoolReady = fpCategory !== 'future_project'
+    || Boolean(fpProjectName.trim() || fpJobTitle.trim() || fpCountry.trim())
 
   // "Reject & remove" — hide the candidate from the system entirely (reversible
   // by an admin). Stronger than "Not interested" (Future Pool, re-engageable).
@@ -197,7 +236,7 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
     { key: 'followup', label: 'Follow-up', icon: RotateCcw, cls: 'border-amber-200 text-amber-700 hover:bg-amber-50', onClick: () => togglePanel('followup'), active: panel === 'followup' },
     { key: 'no_answer', label: 'No answer', icon: PhoneOff, cls: 'border-rose-200 text-rose-700 hover:bg-rose-50', onClick: () => togglePanel('no_answer'), active: panel === 'no_answer' },
     { key: 'done', label: next ? `Done → ${next.label}` : 'Done', icon: Check, cls: 'border-emerald-200 text-emerald-700 hover:bg-emerald-50', onClick: onDone, active: panel === 'assign', disabled: !next },
-    { key: 'not_interested', label: 'Not interested', icon: X, cls: 'border-zinc-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800', onClick: () => togglePanel('not_interested'), active: panel === 'not_interested' },
+    { key: 'future_pool', label: 'Future pool', icon: Bookmark, cls: 'border-violet-200 dark:border-violet-900/50 text-violet-700 dark:text-violet-300 hover:bg-violet-50 dark:hover:bg-violet-950/30', onClick: () => togglePanel('future_pool'), active: panel === 'future_pool' },
   ]
 
   const canSubmit = Boolean(outcome || remark.trim()) && !addMut.isPending
@@ -366,40 +405,95 @@ export function CallRemarksPanel({ candidateId, candidateStatus, candidateName, 
         </div>
       )}
 
-      {/* Not interested — structured reason + optional remark. */}
-      {panel === 'not_interested' && (
-        <div className="mb-3 space-y-2 p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/40">
-          <div className="flex flex-wrap gap-1">
-            {NOT_INTERESTED_REASONS.map((r) => (
+      {/* Future Pool — pick a category, then capture the right details so the
+          parked candidate is findable + assignable later. */}
+      {panel === 'future_pool' && (
+        <div className="mb-3 space-y-2 p-2 rounded-lg border border-violet-200 dark:border-violet-900/50 bg-violet-50/60 dark:bg-violet-950/20">
+          <p className="text-[11px] font-medium text-violet-800 dark:text-violet-300 flex items-center gap-1">
+            <Bookmark size={12} /> Move to Future Pool — pick a reason
+          </p>
+          <div className="space-y-1">
+            {FUTURE_POOL_OPTIONS.map((o) => (
               <button
-                key={r}
+                key={o.value}
                 type="button"
-                onClick={() => setReason(r)}
+                onClick={() => setFpCategory(o.value)}
                 className={clsx(
-                  'text-[10px] px-1.5 py-1 rounded-full border transition-colors',
-                  reason === r ? 'bg-rose-600 text-white border-rose-600' : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50'
+                  'w-full text-left px-2 py-1.5 rounded-lg border transition-colors',
+                  fpCategory === o.value
+                    ? 'bg-violet-600 text-white border-violet-600'
+                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800'
                 )}
               >
-                {r}
+                <span className="block text-[11px] font-medium">{o.label}</span>
+                <span className={clsx('block text-[10px]', fpCategory === o.value ? 'text-violet-100' : 'text-zinc-400 dark:text-zinc-500')}>{o.hint}</span>
               </button>
             ))}
           </div>
+
+          {/* New future project — capture the desired project / role / country. */}
+          {fpCategory === 'future_project' && (
+            <div className="space-y-1.5">
+              <input
+                type="text"
+                value={fpProjectName}
+                onChange={(e) => setFpProjectName(e.target.value)}
+                placeholder="Project name (e.g. Qatar Hypermarket 2026)"
+                className="w-full px-2 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400"
+              />
+              <input
+                type="text"
+                value={fpJobTitle}
+                onChange={(e) => setFpJobTitle(e.target.value)}
+                placeholder="Job title (e.g. Cleaner)"
+                className="w-full px-2 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400"
+              />
+              <input
+                type="text"
+                value={fpCountry}
+                onChange={(e) => setFpCountry(e.target.value)}
+                placeholder="Country (e.g. Qatar)"
+                className="w-full px-2 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400"
+              />
+            </div>
+          )}
+
+          {/* Not interested in current projects — structured reason quick-select. */}
+          {fpCategory === 'not_interested' && (
+            <div className="flex flex-wrap gap-1">
+              {NOT_INTERESTED_REASONS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setReason(r)}
+                  className={clsx(
+                    'text-[10px] px-1.5 py-1 rounded-full border transition-colors',
+                    reason === r ? 'bg-violet-600 text-white border-violet-600' : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50'
+                  )}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+          )}
+
           <textarea
             value={panelNote}
             onChange={(e) => setPanelNote(e.target.value)}
             rows={2}
-            placeholder="Optional detail (what the candidate said)…"
-            className="w-full px-2 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-400 resize-none"
+            placeholder="Optional note (what the candidate said, anything to remember)…"
+            className="w-full px-2 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none"
           />
           <div className="flex items-center justify-end gap-2">
             <button type="button" onClick={closePanels} className="text-[11px] text-zinc-500 hover:text-zinc-700">Cancel</button>
             <button
               type="button"
-              disabled={addMut.isPending}
-              onClick={submitNotInterested}
-              className="text-[11px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+              disabled={addMut.isPending || !futurePoolReady}
+              onClick={submitFuturePool}
+              title={futurePoolReady ? 'Move to Future Pool' : 'Add a project name, role or country first'}
+              className="text-[11px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60"
             >
-              {addMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />} Mark not interested
+              {addMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Bookmark size={12} />} Add to Future Pool
             </button>
           </div>
         </div>

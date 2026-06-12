@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import PendingSync
+from app.utils.phone import normalize_phone_or_raw
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class RecruitmentSyncService:
                 skills_list = [s.strip() for s in candidate.skills.split(",") if s.strip()]
 
         payload: Dict[str, Any] = {
-            "phone": candidate.phone_number,
+            "phone": normalize_phone_or_raw(candidate.phone_number),
             "name": candidate.name or "Pending AI Extraction",
             # Allow None so backend can distinguish "unknown" from "genuinely 0 years"
             "experience_years": candidate.experience_years,

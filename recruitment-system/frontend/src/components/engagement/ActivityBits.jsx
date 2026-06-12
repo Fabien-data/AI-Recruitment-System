@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { colomboDayKey } from '../../utils/datetime'
 
 /**
  * ActivityBits — shared building blocks for the Engagement activity panels
@@ -15,8 +16,8 @@ export const fmtDur = (s) => {
 }
 
 // Action-aware icons/labels for the engagement timeline (call_logs.action_type).
-export const ACTION_ICON = { call: '📞', assign: '📋', certify: '✅', interview: '📅', follow_up: '🔁', no_answer: '📵', not_interested: '🚫', note: '📝' }
-export const ACTION_LABEL = { call: 'call', assign: 'assigned to job', certify: 'certified', interview: 'interview scheduled', follow_up: 'follow-up', no_answer: 'no answer', not_interested: 'not interested', note: 'note' }
+export const ACTION_ICON = { call: '📞', assign: '📋', certify: '✅', interview: '📅', follow_up: '🔁', no_answer: '📵', future_pool: '🔖', not_interested: '🔖', removed: '🗑️', note: '📝' }
+export const ACTION_LABEL = { call: 'call', assign: 'assigned to job', certify: 'certified', interview: 'interview scheduled', follow_up: 'follow-up', no_answer: 'no answer', future_pool: 'future pool', not_interested: 'future pool', removed: 'removed from system', note: 'note' }
 export function feedIcon(r) {
   if (r.action_type && ACTION_ICON[r.action_type]) return ACTION_ICON[r.action_type]
   return r.outcome === 'answered' ? '📞' : r.outcome === 'no_answer' ? '📵' : r.outcome === 'callback' ? '🔁' : '📝'
@@ -52,6 +53,7 @@ export function CallStatCells({ row, prev }) {
     ['Messages', 'messages_sent'],
     ['No answer', 'no_answer'],
     ['Follow-ups', 'follow_ups'],
+    ['Future Pool', 'future_pool'],
   ]
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
@@ -104,10 +106,10 @@ export function CallRecentFeed({ items, showAgent }) {
 // dailyTotals turns one agent's map into an ordered array for the last N days.
 export function dailyTotals(agentSeries, days, metrics = ['calls', 'messages', 'actions']) {
   const out = []
-  const now = new Date()
+  const now = Date.now()
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 86400000)
-    const key = d.toISOString().slice(0, 10)
+    // Colombo calendar-day key — must match the server's Asia/Colombo bucketing.
+    const key = colomboDayKey(now - i * 86400000)
     const row = agentSeries?.[key]
     out.push(row ? metrics.reduce((s, m) => s + Number(row[m] || 0), 0) : 0)
   }

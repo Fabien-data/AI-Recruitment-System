@@ -23,6 +23,7 @@ const { checkForDuplicate } = require('../services/duplicate-detection');
 const { searchKnowledgeBase } = require('../services/knowledge-base');
 const multer = require('multer');
 const { normalizeIncomingCvUrl } = require('../utils/cv-url');
+const { normalizePhone: canonicalPhone, phoneVariants } = require('../utils/phone');
 const { emitStageChanged, syncCandidateStage } = require('../services/candidate-stage');
 
 // Multer for multipart/form-data CV uploads (max 20MB)
@@ -334,10 +335,7 @@ router.post('/set-profile-photo', chatbotLimiter, authenticateChatbot, async (re
             return res.status(400).json({ error: 'base64 and phone are required' });
         }
         const normalizedPhone = normalizePhone(phone);
-        const cand = await query(
-            adaptQuery('SELECT id, photo_source FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1'),
-            [normalizedPhone, normalizedPhone],
-        );
+        const cand = await findCandidateByPhone(normalizedPhone, 'id, photo_source');
         if (cand.rows.length === 0) {
             return res.status(404).json({ error: 'Candidate not found' });
         }
@@ -424,9 +422,33 @@ function validateIntakePayload(req, res, next) {
     next();
 }
 
-// ── Normalize phone to E.164-ish format ──────────────────────────────────────
+// ── Normalize phone to canonical E.164 ("+94…") ──────────────────────────────
+// Delegates to the SHARED normaliser (utils/phone.js) so this sync/intake path
+// stores & looks up phones in the SAME form as the manual "Add candidate" route.
+// The old local version only stripped spaces/dashes, leaving inbound "94…"
+// un-prefixed — which forked a second candidate row (the bug). Falls back to a
+// light strip if the number can't be normalised so we never insert null.
 function normalizePhone(phone) {
-    return phone.replace(/[\s\-()]/g, '');
+    return canonicalPhone(phone) || String(phone || '').replace(/[\s\-()]/g, '');
+}
+
+// Look up a candidate by phone, matching ANY equivalent stored form (+94…, 94…, 0…)
+// so a normalised lookup still finds rows written before normalisation (legacy
+// "94…" rows). `selectCols` is a trusted literal (never user input).
+async function findCandidateByPhone(phone, selectCols) {
+    const variants = phoneVariants(phone);
+    const vals = variants.length ? variants : [normalizePhone(phone)];
+    if (isMySQL) {
+        const ph = vals.map(() => '?').join(',');
+        return query(
+            `SELECT ${selectCols} FROM candidates WHERE phone IN (${ph}) OR whatsapp_phone IN (${ph}) LIMIT 1`,
+            [...vals, ...vals]
+        );
+    }
+    return query(
+        `SELECT ${selectCols} FROM candidates WHERE phone = ANY($1) OR whatsapp_phone = ANY($1) LIMIT 1`,
+        [vals]
+    );
 }
 
 function isDuplicateConstraintError(error) {
@@ -685,11 +707,7 @@ router.post(
         try {
             // ── Step 1: Lookup existing candidate by phone ─────────────────
             let existingCandidate = null;
-            const lookupSQL = isMySQL
-                ? 'SELECT id, name, status, metadata FROM candidates WHERE phone = ? OR whatsapp_phone = ? LIMIT 1'
-                : 'SELECT id, name, status, metadata FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1';
-
-            const lookupResult = await query(lookupSQL, [normalizedPhone, normalizedPhone]);
+            const lookupResult = await findCandidateByPhone(normalizedPhone, 'id, name, status, metadata');
             existingCandidate = lookupResult.rows.length > 0 ? lookupResult.rows[0] : null;
 
             let existingMetadata = {};
@@ -1455,13 +1473,8 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
     const conversationStage = pipeline_stage || mapConversationStage(chatbot_state, message_type, direction);
 
     try {
-        // Look up candidate by phone — needed for candidate_id FK
-        const candResult = await query(
-            isMySQL
-                ? 'SELECT id, name FROM candidates WHERE phone = ? OR whatsapp_phone = ? LIMIT 1'
-                : 'SELECT id, name FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1',
-            [normalizedPhone, normalizedPhone]
-        );
+        // Look up candidate by phone (any stored variant) — needed for candidate_id FK
+        const candResult = await findCandidateByPhone(normalizedPhone, 'id, name');
 
         let candidateId = null;
         let candidateName = null;
@@ -1496,12 +1509,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     throw insertErr;
                 }
 
-                const existingResult = await query(
-                    isMySQL
-                        ? 'SELECT id, name FROM candidates WHERE phone = ? OR whatsapp_phone = ? LIMIT 1'
-                        : 'SELECT id, name FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1',
-                    [normalizedPhone, normalizedPhone]
-                );
+                const existingResult = await findCandidateByPhone(normalizedPhone, 'id, name');
 
                 if (!existingResult.rows.length) {
                     throw insertErr;

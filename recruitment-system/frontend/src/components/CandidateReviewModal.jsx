@@ -5,8 +5,10 @@ import {
   Sparkles, AlertCircle, Loader2, User, Briefcase, FolderOpen,
 } from 'lucide-react'
 import { getCandidate, updateCandidate } from '../api'
+import { formatHeight } from '../utils/height'
 import { Badge } from './ui/Badge'
 import { Button } from './ui/Button'
+import { FuturePoolTags } from './ui/FuturePoolTags'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -186,7 +188,7 @@ export function CandidateReviewModal({ candidateId, open, onClose }) {
     ).values(),
   ]
 
-  const heightDisplay = candidate?.height_cm ? `${candidate.height_cm} cm` : null
+  const heightDisplay = formatHeight(candidate?.height_cm)
   const ageDisplay = candidate?.age ? `${candidate.age} years` : null
   const expDisplay = candidate?.experience_years ? `${candidate.experience_years} years` : null
 
@@ -305,6 +307,9 @@ export function CandidateReviewModal({ candidateId, open, onClose }) {
                     <StatCard label="Age" value={ageDisplay} />
                     <StatCard label="Experience" value={expDisplay} icon={Briefcase} />
                   </div>
+
+                  {/* Future Pool — why parked + the desired future project/role/country. */}
+                  <FuturePoolTags candidate={candidate} />
 
                   {/* Skills & Tags */}
                   {skills.length > 0 && (

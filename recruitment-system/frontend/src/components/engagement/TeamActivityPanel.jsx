@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Phone, Megaphone, Loader2, AlertTriangle, Search, Download, Target,
-  MessageSquare, CalendarDays, BadgeCheck, Bookmark, Check, X,
+  MessageSquare, CalendarDays, BadgeCheck, Bookmark, Archive, Check, X,
 } from 'lucide-react'
 import Papa from 'papaparse'
 import {
@@ -11,6 +11,7 @@ import {
 } from '../../api'
 import { useAuthStore } from '../../stores/authStore'
 import { useRealtime } from '../../hooks/useRealtime'
+import { colomboDayWindow } from '../../utils/datetime'
 import { notify } from '../ui/Toast'
 import {
   CallStatCells, CallRecentFeed, LeftoverRow,
@@ -24,7 +25,7 @@ const LIVE_KEYS = [['engagement', 'call-activity'], ['engagement', 'scorecard'],
 const SORTABLE = [
   ['calls_logged', 'Calls'], ['messages_sent', 'Msgs'],
   ['screenings', 'Screened'], ['certifications', 'Certified'],
-  ['follow_ups', 'Follow Ups'], ['not_interested', 'Not interested'],
+  ['follow_ups', 'Follow Ups'], ['future_pool', 'Future Pool'],
   ['no_answer', 'No answer'], ['open_claims', 'Claims'],
 ]
 
@@ -51,8 +52,11 @@ export default function TeamActivityPanel() {
   const [editTargets, setEditTargets] = useState(false) // inline targets editor
   const [draftTargets, setDraftTargets] = useState({})  // user_id -> {daily_calls, daily_messages}
 
-  const callFrom = () => new Date(Date.now() - callDays * 86400000).toISOString()
-  const prevFrom = () => new Date(Date.now() - 2 * callDays * 86400000).toISOString()
+  // "Today" = the Asia/Colombo calendar day (midnight→now), 7/30 = that many
+  // Colombo calendar days ending today — NOT a rolling 24h/Nx24h span. prevFrom is
+  // the equally-long window immediately before, for the KPI deltas.
+  const callFrom = () => colomboDayWindow(callDays).from
+  const prevFrom = () => colomboDayWindow(callDays).prevFrom
 
   // Live refresh whenever any agent logs a call / sends a message / claims.
   useRealtime({ events: LIVE_EVENTS, invalidateKeys: LIVE_KEYS })
@@ -145,9 +149,9 @@ export default function TeamActivityPanel() {
   const exportCsv = () => {
     const csv = Papa.unparse(rows.map((r) => ({
       Rank: r.rank, Agent: r.agent_name,
-      Calls: r.calls_logged, 'Unclaimed calls': r.calls_unclaimed,
+      Calls: r.calls_logged,
       Messages: r.messages_sent, Screenings: r.screenings, Certified: r.certifications,
-      'Follow ups': r.follow_ups, 'Not interested': r.not_interested,
+      'Follow ups': r.follow_ups, 'Future Pool': r.future_pool,
       'No answer': r.no_answer, Actions: r.actions_total,
       'Open claims': r.open_claims,
       'Daily call target': targetsByUser[r.agent_id]?.daily_calls || '',
@@ -189,7 +193,7 @@ export default function TeamActivityPanel() {
               Team activity
             </h2>
             <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
-              Claim-aware: calls &amp; messages count only while the agent holds the chat claim · updates live
+              Every call &amp; message is credited to the agent who made it · rapid clicks on one candidate count as a single call · updates live
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -223,7 +227,7 @@ export default function TeamActivityPanel() {
           <KpiCard icon={MessageSquare} label="Messages" value={Number(totals.messages_sent || 0)} prev={Number(prevTotals.messages_sent || 0)} accent="text-sky-500" />
           <KpiCard icon={BadgeCheck} label="Certified" value={Number(totals.certifications || 0)} prev={Number(prevTotals.certifications || 0)} accent="text-emerald-500" />
           <KpiCard icon={CalendarDays} label="Follow ups" value={Number(totals.follow_ups || 0)} prev={Number(prevTotals.follow_ups || 0)} accent="text-cyan-500" />
-          <KpiCard icon={X} label="Not interested" value={Number(totals.not_interested || 0)} prev={Number(prevTotals.not_interested || 0)} accent="text-zinc-500" />
+          <KpiCard icon={Archive} label="Future Pool" value={Number(totals.future_pool || 0)} prev={Number(prevTotals.future_pool || 0)} accent="text-violet-500" />
           <KpiCard icon={Bookmark} label="Open claims" value={Number(totals.open_claims || 0)} accent="text-violet-500" />
         </div>
       </div>
@@ -302,15 +306,14 @@ export default function TeamActivityPanel() {
                         </div>
                       </td>
                       <td className="py-2.5 pr-3"><Sparkline data={spark} width={84} height={24} /></td>
-                      <td className="py-2.5 pr-3 text-slate-600 dark:text-zinc-300" title={Number(r.calls_unclaimed || 0) > 0 ? `+${r.calls_unclaimed} call(s) logged without holding the claim (not counted)` : undefined}>
+                      <td className="py-2.5 pr-3 text-slate-600 dark:text-zinc-300">
                         {r.calls_logged}
-                        {Number(r.calls_unclaimed || 0) > 0 && <span className="text-[10px] text-slate-400 dark:text-zinc-500"> +{r.calls_unclaimed}</span>}
                       </td>
                       <td className="py-2.5 pr-3 text-sky-700 dark:text-sky-300">{r.messages_sent ?? 0}</td>
                       <td className="py-2.5 pr-3 text-amber-700 dark:text-amber-400">{r.screenings ?? 0}</td>
                       <td className="py-2.5 pr-3 text-emerald-700 dark:text-emerald-400">{r.certifications ?? 0}</td>
                       <td className="py-2.5 pr-3 text-cyan-700 dark:text-cyan-300">{r.follow_ups ?? 0}</td>
-                      <td className="py-2.5 pr-3 text-zinc-600 dark:text-zinc-400">{r.not_interested ?? 0}</td>
+                      <td className="py-2.5 pr-3 text-violet-700 dark:text-violet-300">{r.future_pool ?? 0}</td>
                       <td className="py-2.5 pr-3 text-rose-700 dark:text-rose-400">{r.no_answer}</td>
                       <td className="py-2.5 pr-3 text-violet-700 dark:text-violet-300">{r.open_claims ?? 0}</td>
                       <td className="py-2.5 pr-3 min-w-[120px]" onClick={(e) => editTargets && e.stopPropagation()}>

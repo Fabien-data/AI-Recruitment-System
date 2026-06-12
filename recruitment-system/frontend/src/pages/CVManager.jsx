@@ -20,7 +20,8 @@ import {
   setCandidateStage,
   apiClient,
 } from '../api'
-import { getStatusLabel, normalizeStatus, CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS, CANDIDATE_MANUAL_STATUS_OPTIONS } from '../constants/lifecycle'
+import { getStatusLabel, normalizeStatus, CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS, CANDIDATE_MANUAL_STATUS_OPTIONS, FUTURE_POOL_CATEGORY_OPTIONS } from '../constants/lifecycle'
+import { FuturePoolTags } from '../components/ui/FuturePoolTags'
 import { useSectionAccess } from '../stores/authStore'
 import { EditCandidateModal } from '../components/EditCandidateModal'
 import {
@@ -68,6 +69,7 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { FileSearch, BadgeCheck, CalendarClock } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getDocumentCategory, resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
+import { formatHeight } from '../utils/height'
 import { DocumentPreview } from '../components/documents/DocumentPreview'
 
 const DEBOUNCE_MS = 300
@@ -117,6 +119,9 @@ export default function CVManager() {
   const [search, setSearch] = useState('')
   const [selectedCandidate, setSelectedCandidate] = useState(null)
   const [statusFilter, setStatusFilter] = useState('')
+  // Future Pool drill-down (only meaningful when statusFilter === 'future_pool').
+  const [futurePoolCat, setFuturePoolCat] = useState('')
+  const [futurePoolCountry, setFuturePoolCountry] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
   const [jobFilter, setJobFilter] = useState('')
   const [projectFilter, setProjectFilter] = useState('')
@@ -148,6 +153,7 @@ export default function CVManager() {
   const clearAllFilters = () => {
     setStatusFilter(''); setSourceFilter(''); setJobFilter(''); setProjectFilter('')
     setLanguageFilter(''); setHasCvFilter(''); setDateFrom(''); setDateTo('')
+    setFuturePoolCat(''); setFuturePoolCountry('')
   }
 
   useEffect(() => {
@@ -159,7 +165,7 @@ export default function CVManager() {
   // narrower result set can leave them stranded on an empty later page).
   useEffect(() => {
     setPage(1)
-  }, [search, statusFilter, sourceFilter, jobFilter, projectFilter, languageFilter, hasCvFilter, dateFrom, dateTo])
+  }, [search, statusFilter, sourceFilter, jobFilter, projectFilter, languageFilter, hasCvFilter, dateFrom, dateTo, futurePoolCat, futurePoolCountry])
 
   const candidateIdFromQuery = searchParams.get('candidate')
 
@@ -191,6 +197,9 @@ export default function CVManager() {
     has_cv: hasCvFilter || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
+    // Future Pool drill-down only applies inside the Future Pool view.
+    future_pool_category: statusFilter === 'future_pool' ? (futurePoolCat || undefined) : undefined,
+    future_pool_country: statusFilter === 'future_pool' ? (futurePoolCountry.trim() || undefined) : undefined,
   }
 
   const { data: candidatesData, isLoading: isLoadingCandidates, refetch } = useQuery({
@@ -310,6 +319,28 @@ export default function CVManager() {
                 <option value="future_pool">Future Pool</option>
               </select>
             </div>
+            {statusFilter === 'future_pool' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Future Pool reason</label>
+                  <select className="input w-full" value={futurePoolCat} onChange={(e) => setFuturePoolCat(e.target.value)}>
+                    {FUTURE_POOL_CATEGORY_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Desired country</label>
+                  <input
+                    type="text"
+                    className="input w-full"
+                    placeholder="e.g. Qatar"
+                    value={futurePoolCountry}
+                    onChange={(e) => setFuturePoolCountry(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Source</label>
               <select
@@ -443,6 +474,7 @@ export default function CVManager() {
                     </td>
                     <td className="py-4 px-4">
                       <Badge status={candidate.status} />
+                      <FuturePoolTags candidate={candidate} className="mt-1.5 max-w-[220px]" />
                     </td>
                     <td className="py-4 px-4">
                       <Button
@@ -762,7 +794,7 @@ function OverviewTab({ candidate }) {
       {/* Details Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <DetailCard label="Source"     value={candidate.source} icon={Database}    tone="indigo" />
-        <DetailCard label="Height"     value={metadata.height_cm ? `${metadata.height_cm} cm` : 'N/A'} icon={Star} tone="emerald" />
+        <DetailCard label="Height"     value={formatHeight(metadata.height_cm) || 'N/A'} icon={Star} tone="emerald" />
         <DetailCard label="Age"        value={(candidate.age || metadata.age) ? `${candidate.age || metadata.age} years` : 'N/A'} icon={User} tone="amber" />
         <DetailCard label="Experience" value={(candidate.experience_years || metadata.experience_years) ? `${candidate.experience_years || metadata.experience_years} years` : 'N/A'} icon={Briefcase} tone="purple" />
       </div>

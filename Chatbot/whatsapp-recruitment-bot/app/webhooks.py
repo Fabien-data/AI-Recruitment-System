@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from app.database import SessionLocal
 from app import crud
+from app.utils.phone import normalize_phone_or_raw
 from app.utils.meta_client import meta_client
 from app.core.message_router import message_router
 from app.services.voice_service import voice_service
@@ -663,7 +664,12 @@ async def process_single_message(message: dict, contacts: list, db):
             return "I’m here to help — could you send that once more? I’ll continue from where we left off."
 
     message_id   = message.get("id")
-    from_number  = message.get("from")
+    # Meta delivers wa_id WITHOUT a leading "+" (e.g. "94775774171"). Normalise to
+    # canonical E.164 ("+94775774171") at the single inbound entry point so every
+    # downstream use — _touch_inbound, keyword commands, get_or_create_candidate,
+    # outbound sends and backend sync — keys on the SAME string the agent-added
+    # candidate was stored with. This is what keeps inbound on the one canonical chat.
+    from_number  = normalize_phone_or_raw(message.get("from"))
     message_type = message.get("type")
 
     # Captured during media branches so the agent panel can show a readable
@@ -1433,7 +1439,9 @@ async def candidate_status_webhook(
     """
     _require_api_key_webhook(x_chatbot_api_key)
 
-    phone = payload.candidate_phone
+    # Normalise so the lookup/auto-create keys on the same canonical form the
+    # inbound path uses — otherwise a "+94..." from the backend forks a second row.
+    phone = normalize_phone_or_raw(payload.candidate_phone)
     status_key = payload.status.lower().strip()
 
     # Look up the candidate's preferred language + last inbound time (for the
@@ -1446,10 +1454,7 @@ async def candidate_status_webhook(
     last_inbound_at = None
     try:
         db = SessionLocal()
-        from app.models import Candidate
-        candidate = db.query(Candidate).filter(
-            Candidate.phone_number == phone
-        ).first()
+        candidate = crud.get_candidate_by_phone(db, phone)
         if not candidate:
             candidate = crud.get_or_create_candidate(db, phone)
             if payload.candidate_name and not (candidate.name or "").strip():

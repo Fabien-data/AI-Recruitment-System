@@ -36,4 +36,26 @@ function normalizePhone(raw) {
     return null;
 }
 
-module.exports = { normalizePhone };
+/**
+ * Every equivalent STORED form of a number, most-canonical first, so a lookup
+ * still matches rows written before normalisation existed:
+ *   +94775774171  (E.164, canonical)
+ *   94775774171   (no leading +, e.g. legacy wa_id-derived rows)
+ *   0775774171    (Sri Lanka local form)
+ * Derived from the NORMALISED number so a normalised "+94…" lookup still finds a
+ * legacy "94…"/"0…" row. Returns [] when the input can't be normalised.
+ */
+function phoneVariants(raw) {
+    const out = [];
+    const add = (v) => { if (v && !out.includes(v)) out.push(v); };
+    const norm = normalizePhone(raw);
+    if (norm) {
+        add(norm);
+        add(norm.replace(/^\+/, ''));
+        if (norm.startsWith('+94') && norm.length === 12) add('0' + norm.slice(3));
+    }
+    if (raw != null && String(raw).trim()) add(String(raw).trim());
+    return out;
+}
+
+module.exports = { normalizePhone, phoneVariants };

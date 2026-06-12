@@ -20,6 +20,7 @@ from app.schemas import (
     ConversationCreate,
     ApplicationCreate, ApplicationUpdate
 )
+from app.utils.phone import normalize_phone, normalize_phone_or_raw, phone_variants
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,31 @@ logger = logging.getLogger(__name__)
 # ============= Candidate CRUD =============
 
 def get_candidate_by_phone(db: Session, phone_number: str) -> Optional[Candidate]:
-    """Get candidate by phone number."""
-    return db.query(Candidate).filter(
-        Candidate.phone_number == phone_number
-    ).first()
+    """Get candidate by phone number, matching on the normalised (E.164) form.
+
+    During the transition window the DB can hold BOTH a legacy ``94...`` row (old
+    Meta-inbound) and a canonical ``+94...`` row (agent "Add candidate"). We match
+    either form but always PREFER the canonical ``+`` row so inbound messages
+    continue on the agent-added chat — the one the recruiter is looking at.
+    """
+    if not phone_number:
+        return None
+
+    lookups = phone_variants(phone_number)
+    normalized = lookups[0] if lookups else normalize_phone_or_raw(phone_number)
+
+    rows = db.query(Candidate).filter(
+        Candidate.phone_number.in_(lookups)
+    ).all()
+
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+
+    # Legacy split (+94 vs 94 vs 0…): prefer the canonical E.164 row, then lowest id.
+    rows.sort(key=lambda c: (c.phone_number != normalized, c.id))
+    return rows[0]
 
 
 def get_candidate_by_id(db: Session, candidate_id: int) -> Optional[Candidate]:
@@ -39,9 +61,10 @@ def get_candidate_by_id(db: Session, candidate_id: int) -> Optional[Candidate]:
 
 
 def create_candidate(db: Session, candidate: CandidateCreate) -> Candidate:
-    """Create a new candidate."""
+    """Create a new candidate. Phone is stored in canonical E.164 form so it can
+    never diverge (``94...`` vs ``+94...``) from the agent-added / backend rows."""
     db_candidate = Candidate(
-        phone_number=candidate.phone_number,
+        phone_number=normalize_phone_or_raw(candidate.phone_number),
         name=candidate.name,
         email=candidate.email,
         highest_qualification=candidate.highest_qualification,
@@ -77,19 +100,22 @@ def update_candidate(
 
 
 def get_or_create_candidate(db: Session, phone_number: str) -> Candidate:
-    """Get existing candidate or create new one."""
-    candidate = get_candidate_by_phone(db, phone_number)
+    """Get existing candidate or create new one. Lookup and creation both key on
+    the normalised (E.164) phone so the same person can never fork into two rows."""
+    normalized = normalize_phone_or_raw(phone_number)
+
+    candidate = get_candidate_by_phone(db, normalized)
     if candidate:
         return candidate
 
     try:
         return create_candidate(
             db,
-            CandidateCreate(phone_number=phone_number)
+            CandidateCreate(phone_number=normalized)
         )
     except IntegrityError:
         db.rollback()
-        candidate = get_candidate_by_phone(db, phone_number)
+        candidate = get_candidate_by_phone(db, normalized)
         if candidate:
             return candidate
         raise

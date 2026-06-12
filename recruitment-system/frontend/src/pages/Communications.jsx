@@ -32,6 +32,7 @@ import { clsx } from 'clsx'
 import { categoryColor } from '../utils/categoryColor'
 import { format, formatDistanceToNow } from 'date-fns'
 import { formatInterviewLong, formatInterviewDateTime } from '../utils/datetime'
+import { formatHeight } from '../utils/height'
 import { Button } from '../components/ui/Button'
 import { Skeleton } from '../components/ui/Skeleton'
 import { Modal } from '../components/ui/Modal'
@@ -2641,7 +2642,7 @@ export default function Communications() {
               meta = meta || {}
               const rows = [
                 ['Age', (candidateDetail.age || meta.age) ? `${candidateDetail.age || meta.age} yrs` : null],
-                ['Height', meta.height_cm ? `${meta.height_cm} cm` : null],
+                ['Height', formatHeight(meta.height_cm)],
                 ['Experience', (candidateDetail.experience_years || meta.experience_years) ? `${candidateDetail.experience_years || meta.experience_years} yrs` : null],
                 ['Country', meta.destination_country || meta.country || null],
                 ['Licenses', Array.isArray(meta.licenses) ? (meta.licenses.filter(Boolean).join(', ') || null) : (meta.licenses || null)],

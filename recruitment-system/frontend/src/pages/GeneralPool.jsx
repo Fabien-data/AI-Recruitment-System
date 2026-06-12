@@ -34,6 +34,7 @@ import { Pagination } from '../components/ui/Pagination'
 import { apiClient, getJobs, createApplication, getCandidateJobMatches } from '../api'
 import { useSectionAccess } from '../stores/authStore'
 import { resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
+import { formatHeight } from '../utils/height'
 import { DocumentPreview } from '../components/documents/DocumentPreview'
 import toast from 'react-hot-toast'
 
@@ -389,7 +390,7 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                         </div>
                         <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
                             <p className="text-xs text-zinc-500 dark:text-zinc-400 uppercase">Height</p>
-                            <p className="font-semibold text-zinc-900 dark:text-zinc-50">{metadata.height_cm ? `${metadata.height_cm} cm` : 'N/A'}</p>
+                            <p className="font-semibold text-zinc-900 dark:text-zinc-50">{formatHeight(metadata.height_cm) || 'N/A'}</p>
                         </div>
                         <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
                             <p className="text-xs text-zinc-500 dark:text-zinc-400 uppercase">Age</p>

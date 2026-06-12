@@ -24,6 +24,32 @@ const { requireSection } = require('../middleware/sections');
 const { hasCvSql } = require('../services/candidate-stage');
 const logger = require('../utils/logger');
 
+// ── Smart call de-dup ────────────────────────────────────────────────────────
+// A single phone call usually produces SEVERAL call_logs rows — the agent clicks
+// "answered", sets a disposition, maybe certifies, adds a note — all within a
+// minute or two. Those rapid clicks are ONE call, not many. We don't drop the
+// rows (each action/achievement is still recorded); instead the `calls` metric
+// counts distinct call SESSIONS: consecutive rows for the same (agent, candidate)
+// collapse into one unless separated by more than CALL_SESSION_GAP. Trigger a
+// button again after the gap and it correctly counts as a new call.
+// Tunable without a code change via CALL_SESSION_GAP_MINUTES (default 30 min).
+const CALL_SESSION_GAP_MINUTES = Math.max(1, Number(process.env.CALL_SESSION_GAP_MINUTES) || 30);
+const CALL_SESSION_GAP = `${CALL_SESSION_GAP_MINUTES} minutes`;
+
+/**
+ * SQL `1/0` flag: 1 when this call_logs row STARTS a new call session (first row
+ * for the (agent, candidate) partition, or more than CALL_SESSION_GAP after the
+ * previous one). SUM() it to count de-duplicated calls. Pass the window's
+ * PARTITION BY columns — single-agent queries can partition by candidate alone.
+ *   isCallStartSql('cl', 'cl.agent_id, cl.candidate_id')
+ */
+function isCallStartSql(alias = 'cl', partitionBy = `${alias}.agent_id, ${alias}.candidate_id`) {
+    const lag = `LAG(${alias}.called_at) OVER (PARTITION BY ${partitionBy} ORDER BY ${alias}.called_at)`;
+    return `CASE WHEN ${lag} IS NULL
+                   OR ${alias}.called_at - ${lag} > INTERVAL '${CALL_SESSION_GAP}'
+                 THEN 1 ELSE 0 END`;
+}
+
 /**
  * Next-best-action recommendation for a stalled candidate. Deterministic rules
  * over the candidate's stage/signals — the single highest-impact step an agent
@@ -300,49 +326,64 @@ router.get('/call-logs', authenticate, requireSection('engagement', 'view'), asy
         // EVERY logged quick action counts as a CALL (user decision 2026-06-11):
         // No Answer, Not Interested, Done→assign/certify/interview, Callback, a
         // bare note — each represents a call the agent made, so calls_logged is
-        // every call_logs row, claim-gated. The achievement breakdowns below
-        // (screenings / certifications / interviews / follow-ups) are counted ON
-        // TOP — a "Done → certify" is both a call AND a certification.
-        // Claim-aware (migration 042): a CALL only counts while the agent held
-        // the chat claim (claim_session_id stamped at insert). Unstamped calls
-        // are surfaced separately as calls_unclaimed, never silently dropped.
+        // every call_logs row. The achievement breakdowns below (screenings /
+        // certifications / interviews / follow-ups) are counted ON TOP — a
+        // "Done → certify" is both a call AND a certification.
+        // Attribution (user decision 2026-06-12): a call is credited to the agent
+        // who LOGGED it (cl.agent_id) regardless of who holds the chat claim. The
+        // previous claim-gating left calls logged on someone else's claimed chat
+        // counting for no one and made sub-totals exceed the Calls column.
+        // claim_session_id is still stamped for audit — it just isn't filtered on.
+        // `calls_logged` counts de-duplicated call SESSIONS (rapid clicks on the
+        // same candidate = one call); the action breakdowns below still count each
+        // individual click. The CTE stamps a 1/0 session-start flag per row, the
+        // outer query SUMs it. Inner alias stays `cl` so `whereClause` binds; the
+        // CTE is re-aliased `cl` outside so the FILTER expressions are unchanged.
         const perAgentSql = adaptQuery(`
+            WITH sessions AS (
+                SELECT cl.agent_id, cl.candidate_id, cl.called_at, cl.action_type,
+                       cl.outcome, cl.disposition, cl.remark, cl.duration_seconds,
+                       ${isCallStartSql('cl')} AS is_call_start
+                FROM call_logs cl
+                ${whereClause}
+            )
             SELECT cl.agent_id,
                    COALESCE(u.full_name, 'Unknown') AS agent_name,
                    COUNT(*)                                   AS entries_logged,
-                   COUNT(*) FILTER (WHERE cl.claim_session_id IS NOT NULL) AS calls_logged,
-                   COUNT(*) FILTER (WHERE cl.claim_session_id IS NULL)     AS calls_unclaimed,
+                   COALESCE(SUM(cl.is_call_start), 0)         AS calls_logged,
                    COUNT(*) FILTER (WHERE cl.action_type = 'assign')    AS screenings,
                    COUNT(*) FILTER (WHERE cl.action_type = 'certify')   AS certifications,
                    COUNT(*) FILTER (WHERE cl.action_type = 'interview') AS interviews_scheduled,
                    COUNT(*) FILTER (WHERE cl.action_type = 'follow_up') AS follow_ups,
-                   COUNT(*) FILTER (WHERE cl.action_type IN ('assign','certify','interview','not_interested','follow_up','note')) AS actions_total,
+                   COUNT(*) FILTER (WHERE cl.action_type IN ('assign','certify','interview','future_pool','not_interested','removed','follow_up','note')) AS actions_total,
                    COUNT(DISTINCT cl.candidate_id)            AS candidates_contacted,
                    COUNT(*) FILTER (WHERE cl.remark IS NOT NULL AND cl.remark <> '') AS remarks_made,
                    COUNT(*) FILTER (WHERE cl.outcome = 'answered')       AS answered,
                    COUNT(*) FILTER (WHERE cl.outcome = 'no_answer')      AS no_answer,
                    COUNT(*) FILTER (WHERE cl.outcome = 'callback')       AS callbacks,
-                   COUNT(*) FILTER (WHERE cl.action_type = 'not_interested' OR cl.outcome = 'not_interested') AS not_interested,
+                   -- Future Pool moves: the new action_type plus the legacy
+                   -- 'not_interested' rows (which were always future_pool moves).
+                   COUNT(*) FILTER (WHERE cl.action_type IN ('future_pool','not_interested') OR cl.outcome = 'not_interested') AS future_pool,
                    COUNT(DISTINCT cl.candidate_id) FILTER (WHERE cl.disposition IN ('interested','qualified')) AS leads,
                    COALESCE(SUM(cl.duration_seconds), 0)      AS total_duration_seconds,
                    ROUND(AVG(cl.duration_seconds) FILTER (WHERE cl.duration_seconds IS NOT NULL))::int AS avg_duration_seconds,
                    MAX(cl.called_at)                          AS last_activity_at
-            FROM call_logs cl
+            FROM sessions cl
             LEFT JOIN users u ON u.id = cl.agent_id
-            ${whereClause}
             GROUP BY cl.agent_id, u.full_name
             ORDER BY entries_logged DESC
         `);
 
-        // Outbound messages each agent sent WHILE HOLDING THE CLAIM (stamped at
-        // send time). sender_type='agent' also excludes system takeover/release
-        // rows that previously inflated the count.
+        // Outbound messages each agent sent, credited to sent_by. sender_type='agent'
+        // excludes system takeover/release rows that previously inflated the count.
+        // Claim-gating dropped (2026-06-12): a reply counts even if the agent never
+        // pressed Claim — sending a message doesn't auto-claim like logging a call
+        // does, so gating here silently dropped almost every message.
         const msgParams = [];
         const msgWhere = [
             `cm.direction = 'outbound'`,
             `cm.sent_by IS NOT NULL`,
             `cm.sender_type = 'agent'`,
-            `cm.claim_session_id IS NOT NULL`,
         ];
         const mp = (v) => { msgParams.push(v); return `$${msgParams.length}`; };
         if (agent_id) msgWhere.push(`cm.sent_by = ${mp(agent_id)}`);
@@ -404,12 +445,11 @@ router.get('/call-logs', authenticate, requireSection('engagement', 'view'), asy
 
         const totals = perAgentRows.reduce((acc, r) => {
             acc.calls_logged += Number(r.calls_logged || 0);
-            acc.calls_unclaimed += Number(r.calls_unclaimed || 0);
             acc.screenings += Number(r.screenings || 0);
             acc.certifications += Number(r.certifications || 0);
             acc.interviews_scheduled += Number(r.interviews_scheduled || 0);
             acc.follow_ups += Number(r.follow_ups || 0);
-            acc.not_interested += Number(r.not_interested || 0);
+            acc.future_pool += Number(r.future_pool || 0);
             acc.actions_total += Number(r.actions_total || 0);
             acc.messages_sent += Number(r.messages_sent || 0);
             acc.remarks_made += Number(r.remarks_made || 0);
@@ -418,7 +458,7 @@ router.get('/call-logs', authenticate, requireSection('engagement', 'view'), asy
             acc.leads += Number(r.leads || 0);
             acc.open_claims += Number(r.open_claims || 0);
             return acc;
-        }, { calls_logged: 0, calls_unclaimed: 0, screenings: 0, certifications: 0, interviews_scheduled: 0, follow_ups: 0, not_interested: 0, actions_total: 0, messages_sent: 0, remarks_made: 0, answered: 0, no_answer: 0, leads: 0, open_claims: 0 });
+        }, { calls_logged: 0, screenings: 0, certifications: 0, interviews_scheduled: 0, follow_ups: 0, future_pool: 0, actions_total: 0, messages_sent: 0, remarks_made: 0, answered: 0, no_answer: 0, leads: 0, open_claims: 0 });
 
         res.json({
             per_agent: perAgentRows,
@@ -439,30 +479,36 @@ router.get('/my-scorecard', authenticate, requireSection('engagement', 'view'), 
         const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
         const agentId = (req.user.role === 'admin' && req.query.agent_id) ? req.query.agent_id : req.user.id;
 
-        // Aggregate one window [from, to). Calls/messages claim-gated (042);
-        // screenings/certifications/interviews counted as-is — same policy as
-        // the team rollup above.
+        // Aggregate one window [from, to). Every call/message is credited to the
+        // agent who logged/sent it (no claim-gating, 2026-06-12) — same policy as
+        // the team rollup above, so this drill-down matches the team table row.
         const windowAgg = async (fromExpr, toExpr) => {
             const callsSql = adaptQuery(`
-                SELECT COUNT(*) FILTER (WHERE cl.claim_session_id IS NOT NULL) AS calls_logged,
-                       COUNT(*) FILTER (WHERE cl.claim_session_id IS NULL)     AS calls_unclaimed,
-                       COUNT(*) FILTER (WHERE cl.action_type = 'assign')    AS screenings,
-                       COUNT(*) FILTER (WHERE cl.action_type = 'certify')   AS certifications,
-                       COUNT(*) FILTER (WHERE cl.action_type = 'interview') AS interviews_scheduled,
-                       COUNT(*) FILTER (WHERE cl.action_type = 'follow_up') AS follow_ups,
-                       COUNT(*) FILTER (WHERE cl.action_type IN ('assign','certify','interview','not_interested','follow_up','note')) AS actions_total,
-                       COUNT(*) FILTER (WHERE cl.outcome = 'answered')  AS answered,
-                       COUNT(*) FILTER (WHERE cl.outcome = 'no_answer') AS no_answer,
-                       COUNT(DISTINCT cl.candidate_id) AS candidates_contacted,
-                       ROUND(AVG(cl.duration_seconds) FILTER (WHERE cl.duration_seconds IS NOT NULL))::int AS avg_duration_seconds
-                FROM call_logs cl
-                WHERE cl.agent_id = $1 AND cl.called_at >= ${fromExpr} AND cl.called_at < ${toExpr}
+                WITH sessions AS (
+                    SELECT cl.candidate_id, cl.called_at, cl.action_type, cl.outcome,
+                           cl.duration_seconds,
+                           ${isCallStartSql('cl', 'cl.candidate_id')} AS is_call_start
+                    FROM call_logs cl
+                    WHERE cl.agent_id = $1 AND cl.called_at >= ${fromExpr} AND cl.called_at < ${toExpr}
+                )
+                SELECT COALESCE(SUM(is_call_start), 0)                AS calls_logged,
+                       COUNT(*) FILTER (WHERE action_type = 'assign')    AS screenings,
+                       COUNT(*) FILTER (WHERE action_type = 'certify')   AS certifications,
+                       COUNT(*) FILTER (WHERE action_type = 'interview') AS interviews_scheduled,
+                       COUNT(*) FILTER (WHERE action_type = 'follow_up') AS follow_ups,
+                       COUNT(*) FILTER (WHERE action_type IN ('future_pool','not_interested') OR outcome = 'not_interested') AS future_pool,
+                       COUNT(*) FILTER (WHERE action_type IN ('assign','certify','interview','future_pool','not_interested','removed','follow_up','note')) AS actions_total,
+                       COUNT(*) FILTER (WHERE outcome = 'answered')  AS answered,
+                       COUNT(*) FILTER (WHERE outcome = 'no_answer') AS no_answer,
+                       COUNT(DISTINCT candidate_id) AS candidates_contacted,
+                       ROUND(AVG(duration_seconds) FILTER (WHERE duration_seconds IS NOT NULL))::int AS avg_duration_seconds
+                FROM sessions
             `);
             const msgSql = adaptQuery(`
                 SELECT COUNT(*) AS messages_sent
                 FROM communications cm
                 WHERE cm.sent_by = $1 AND cm.direction = 'outbound'
-                  AND cm.sender_type = 'agent' AND cm.claim_session_id IS NOT NULL
+                  AND cm.sender_type = 'agent'
                   AND cm.sent_at >= ${fromExpr} AND cm.sent_at < ${toExpr}
             `);
             const [calls, msgs] = await Promise.all([
@@ -472,10 +518,14 @@ router.get('/my-scorecard', authenticate, requireSection('engagement', 'view'), 
             return { ...calls.rows[0], messages_sent: Number(msgs.rows[0]?.messages_sent || 0) };
         };
 
-        const d = String(days);
+        // Windows are Colombo (Asia/Colombo, UTC+5:30) CALENDAR days, not rolling
+        // 24h spans: "Today" (days=1) = midnight→now in Sri Lanka. colMidnight is
+        // the UTC instant of today's Colombo midnight; each window is `days`
+        // calendar days ending today, previous is the equally-long span before it.
+        const colMidnight = `(date_trunc('day', (NOW() AT TIME ZONE 'Asia/Colombo')) AT TIME ZONE 'Asia/Colombo')`;
         const [current, previous, leftovers] = await Promise.all([
-            windowAgg(`NOW() - INTERVAL '${d} days'`, `NOW() + INTERVAL '1 minute'`),
-            windowAgg(`NOW() - INTERVAL '${2 * days} days'`, `NOW() - INTERVAL '${d} days'`),
+            windowAgg(`${colMidnight} - INTERVAL '${days - 1} days'`, `NOW() + INTERVAL '1 minute'`),
+            windowAgg(`${colMidnight} - INTERVAL '${2 * days - 1} days'`, `${colMidnight} - INTERVAL '${days - 1} days'`),
             query(
                 adaptQuery(`
                     SELECT c.id, c.name, c.phone, c.status, c.claimed_at, c.last_interaction,
@@ -508,9 +558,10 @@ router.get('/my-scorecard', authenticate, requireSection('engagement', 'view'), 
 });
 
 // ── Per-day activity series (sparklines + streaks) ───────────────────────────
-// Claim-aware daily counts per agent over the window: calls, messages, pipeline
-// actions, interviews. Powers the leaderboard sparklines and the personal
-// streak/trend chart. Non-admins are forced to their own series.
+// Daily counts per agent over the window: de-duplicated calls, messages, pipeline
+// actions, interviews. Days are bucketed by Asia/Colombo calendar date so the
+// sparkline/streak align with the "Today" the rest of the panel shows. Non-admins
+// are forced to their own series.
 router.get('/activity-series', authenticate, requireSection('engagement', 'view'), async (req, res, next) => {
     try {
         const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 14));
@@ -519,27 +570,35 @@ router.get('/activity-series', authenticate, requireSection('engagement', 'view'
         const params = [String(days)];
         let agentClause = '';
         if (agentId) { params.push(agentId); agentClause = `AND cl.agent_id = $2`; }
+        // Sessionize first (CTE), then bucket the session-START rows by Colombo day.
         const callsSql = adaptQuery(`
-            SELECT cl.agent_id, DATE_TRUNC('day', cl.called_at) AS day,
-                   COUNT(*) FILTER (WHERE cl.claim_session_id IS NOT NULL) AS calls,
-                   COUNT(*) FILTER (WHERE cl.action_type IN ('assign','certify','interview','not_interested','follow_up','note')) AS actions,
-                   COUNT(*) FILTER (WHERE cl.action_type = 'interview') AS interviews
-            FROM call_logs cl
-            WHERE cl.called_at >= NOW() - ($1 || ' days')::interval ${agentClause}
-            GROUP BY cl.agent_id, DATE_TRUNC('day', cl.called_at)
+            WITH sessions AS (
+                SELECT cl.agent_id,
+                       to_char(cl.called_at AT TIME ZONE 'Asia/Colombo', 'YYYY-MM-DD') AS day,
+                       cl.action_type,
+                       ${isCallStartSql('cl')} AS is_call_start
+                FROM call_logs cl
+                WHERE cl.called_at >= NOW() - ($1 || ' days')::interval ${agentClause}
+            )
+            SELECT agent_id, day,
+                   COALESCE(SUM(is_call_start), 0) AS calls,
+                   COUNT(*) FILTER (WHERE action_type IN ('assign','certify','interview','future_pool','not_interested','removed','follow_up','note')) AS actions,
+                   COUNT(*) FILTER (WHERE action_type = 'interview') AS interviews
+            FROM sessions
+            GROUP BY agent_id, day
         `);
 
         const msgParams = [String(days)];
         let msgAgentClause = '';
         if (agentId) { msgParams.push(agentId); msgAgentClause = `AND cm.sent_by = $2`; }
         const msgSql = adaptQuery(`
-            SELECT cm.sent_by AS agent_id, DATE_TRUNC('day', cm.sent_at) AS day,
+            SELECT cm.sent_by AS agent_id,
+                   to_char(cm.sent_at AT TIME ZONE 'Asia/Colombo', 'YYYY-MM-DD') AS day,
                    COUNT(*) AS messages
             FROM communications cm
             WHERE cm.direction = 'outbound' AND cm.sender_type = 'agent'
-              AND cm.claim_session_id IS NOT NULL
               AND cm.sent_at >= NOW() - ($1 || ' days')::interval ${msgAgentClause}
-            GROUP BY cm.sent_by, DATE_TRUNC('day', cm.sent_at)
+            GROUP BY cm.sent_by, to_char(cm.sent_at AT TIME ZONE 'Asia/Colombo', 'YYYY-MM-DD')
         `);
 
         const [calls, msgs] = await Promise.all([query(callsSql, params), query(msgSql, msgParams)]);

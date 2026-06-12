@@ -53,6 +53,9 @@ const CALL_OUTCOMES = ['answered', 'no_answer', 'busy', 'callback', 'wrong_numbe
 const FORWARD_STAGE_TARGETS = ['screening', 'certified', 'interview_scheduled'];
 const CALL_STATUS_TARGETS = [...FORWARD_STAGE_TARGETS, 'future_pool', 'rejected'];
 const isDeclineStatus = (s) => s === 'future_pool' || s === 'rejected';
+// Future Pool sub-categories (the "Not interested" decline became a structured
+// Future Pool action). future_project also carries desired project/role/country.
+const FUTURE_POOL_CATEGORIES = ['future_project', 'overage', 'not_interested'];
 // Follow-up task types an agent action may open (no_answer powers the Engagement catch-up list).
 const FOLLOWUP_TASK_TYPES = ['callback', 'no_answer'];
 
@@ -1206,6 +1209,15 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
         const setStatus = req.body?.set_candidate_status ? String(req.body.set_candidate_status).trim().toLowerCase() : null;
         const reason = req.body?.reason ? String(req.body.reason).trim().slice(0, 48) : null;
         const jobId = req.body?.job_id ? String(req.body.job_id).trim() : null;
+        // Future Pool categorization (only meaningful on a decline). future_project
+        // carries the desired-but-not-yet-created project/role/country as tags.
+        const fpCategory = FUTURE_POOL_CATEGORIES.includes(String(req.body?.future_pool_category || '').toLowerCase())
+            ? String(req.body.future_pool_category).toLowerCase()
+            : null;
+        const fpProjectName = req.body?.future_pool_project_name ? String(req.body.future_pool_project_name).trim().slice(0, 160) : null;
+        const fpJobTitle = req.body?.future_pool_job_title ? String(req.body.future_pool_job_title).trim().slice(0, 160) : null;
+        const fpCountry = req.body?.future_pool_country ? String(req.body.future_pool_country).trim().slice(0, 100) : null;
+        const fpNote = req.body?.future_pool_note ? String(req.body.future_pool_note).trim() : null;
         const createFollowup = req.body?.create_followup === true;
         const followupNote = req.body?.followup_note ? String(req.body.followup_note).trim() : null;
         const taskType = FOLLOWUP_TASK_TYPES.includes(String(req.body?.task_type || '').toLowerCase())
@@ -1214,8 +1226,8 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
         const durRaw = req.body?.duration_seconds;
         const durationSeconds = Number.isFinite(Number(durRaw)) && durRaw !== null && durRaw !== '' ? parseInt(durRaw, 10) : null;
 
-        if (!outcome && !remark && !disposition) {
-            return res.status(400).json({ error: 'Provide at least an outcome, remark, or disposition' });
+        if (!outcome && !remark && !disposition && !setStatus) {
+            return res.status(400).json({ error: 'Provide at least an outcome, remark, disposition, or status change' });
         }
         if (outcome && !CALL_OUTCOMES.includes(outcome)) {
             return res.status(400).json({ error: 'Invalid outcome', allowed: CALL_OUTCOMES });
@@ -1290,16 +1302,32 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
         if (setStatus === 'screening' && jobId) actionType = 'assign';
         else if (setStatus === 'certified') actionType = 'certify';
         else if (setStatus === 'interview_scheduled') actionType = 'interview';
-        else if (isDeclineStatus(setStatus)) actionType = 'not_interested';
+        else if (isDeclineStatus(setStatus)) actionType = 'future_pool';
         else if (createFollowup && taskType === 'no_answer') actionType = 'no_answer';
         else if (createFollowup && taskType === 'callback') actionType = 'follow_up';
         else if (outcome === 'note') actionType = 'note';
+
+        // Short summary stored on call_logs.reason (the timeline badge). For a
+        // Future Pool decline, derive it from the category when the client didn't
+        // send an explicit reason: future_project → "Future: <role> · <country>",
+        // overage → "Overage (age limit)", not_interested → the chosen reason.
+        let logReason = reason;
+        if (isDeclineStatus(setStatus) && !logReason) {
+            if (fpCategory === 'future_project') {
+                logReason = `Future: ${[fpJobTitle, fpCountry].filter(Boolean).join(' · ') || fpProjectName || 'new project'}`;
+            } else if (fpCategory === 'overage') {
+                logReason = 'Overage (age limit)';
+            } else {
+                logReason = 'Not interested';
+            }
+        }
+        if (logReason) logReason = logReason.slice(0, 48);
 
         const id = generateUUID();
         await query(
             adaptQuery(`INSERT INTO call_logs (id, candidate_id, agent_id, outcome, disposition, remark, duration_seconds, job_id, application_id, reason, action_type, claim_session_id)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`),
-            [id, candidate_id, req.user.id, outcome, disposition, remark, durationSeconds, jobId, applicationId, reason, actionType, claimSessionId]
+            [id, candidate_id, req.user.id, outcome, disposition, remark, durationSeconds, jobId, applicationId, logReason, actionType, claimSessionId]
         );
 
         // Live Engagement panels: lightweight ping so open scorecards refetch.
@@ -1342,10 +1370,38 @@ router.post('/candidate/:candidate_id/call-logs', authenticate, requireSection('
             await query(
                 adaptQuery(`UPDATE applications SET status = 'rejected', rejection_reason = COALESCE($2, rejection_reason), updated_at = NOW()
                             WHERE candidate_id = $1 AND status NOT IN ('rejected','hired')`),
-                [candidate_id, reason]
+                [candidate_id, logReason]
             );
             await setCandidateStage(candidate_id, 'future_pool');
             appliedStatus = 'future_pool';
+
+            // Record WHY the candidate was pooled (Future Pool category) so they're
+            // findable + assignable later. Default to 'not_interested' for legacy
+            // clients that send no category. Only future_project keeps the desired
+            // project/role/country tags; other categories clear them so re-pooling
+            // overwrites cleanly.
+            const category = fpCategory || 'not_interested';
+            const isFutureProject = category === 'future_project';
+            await query(
+                adaptQuery(`UPDATE candidates
+                            SET future_pool_category = $2,
+                                future_pool_project_name = $3,
+                                future_pool_job_title = $4,
+                                future_pool_country = $5,
+                                future_pool_note = $6,
+                                future_pool_at = NOW(),
+                                future_pool_by = $7,
+                                updated_at = NOW()
+                            WHERE id = $1`),
+                [
+                    candidate_id, category,
+                    isFutureProject ? fpProjectName : null,
+                    isFutureProject ? fpJobTitle : null,
+                    isFutureProject ? fpCountry : null,
+                    fpNote || remark || null,
+                    req.user.id,
+                ]
+            );
         }
 
         // Status changes are NOT silent (user decision 2026-06-11): a Done →

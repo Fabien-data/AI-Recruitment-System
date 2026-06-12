@@ -8,6 +8,7 @@ import {
 } from '../../api'
 import { useAuthStore } from '../../stores/authStore'
 import { useRealtime } from '../../hooks/useRealtime'
+import { colomboDayWindow, colomboDayKey } from '../../utils/datetime'
 import {
   CallStatCells, CallRecentFeed, LeftoverRow,
   Sparkline, ProgressRing, dailyTotals, streakFrom,
@@ -30,7 +31,8 @@ export default function PersonalScorecard() {
   const currentUser = useAuthStore((s) => s.user)
   const [days, setDays] = useState(7)
   const [tab, setTab] = useState('claims')
-  const callFrom = () => new Date(Date.now() - days * 86400000).toISOString()
+  // Colombo calendar-day window (Today = midnight→now), matching the team panel.
+  const callFrom = () => colomboDayWindow(days).from
 
   useRealtime({ events: LIVE_EVENTS, invalidateKeys: LIVE_KEYS })
 
@@ -70,7 +72,7 @@ export default function PersonalScorecard() {
   const mySeries = seriesQ.data?.series?.[currentUser?.id] || {}
   const myTarget = (targetsQ.data?.targets || [])[0] || {}
 
-  const todayKey = new Date().toISOString().slice(0, 10)
+  const todayKey = colomboDayKey()
   const today = mySeries[todayKey] || { calls: 0, messages: 0, actions: 0, interviews: 0 }
   const spark = useMemo(() => dailyTotals(mySeries, SPARK_DAYS), [mySeries])
   const streak = streakFrom(spark)
@@ -154,7 +156,7 @@ export default function PersonalScorecard() {
 
       <div className="p-4">
         <p className="text-[11px] text-slate-400 dark:text-zinc-500 mb-2">
-          Claim-aware: calls &amp; messages count once you&apos;ve claimed the chat.
+          Every call &amp; message you make is counted · rapid clicks on one candidate count as a single call.
         </p>
         <CallStatCells row={cur} prev={prev} />
 

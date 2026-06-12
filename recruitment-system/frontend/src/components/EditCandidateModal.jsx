@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Modal } from './ui/Modal'
 import { Input } from './ui/Input'
+import { HeightInput } from './ui/HeightInput'
 import { Button } from './ui/Button'
 import { updateCandidate } from '../api'
 import { CANDIDATE_MANUAL_STATUS_OPTIONS } from '../constants/lifecycle'
@@ -183,14 +184,11 @@ export function EditCandidateModal({ candidate, open, onClose }) {
             onChange={(e) => setForm((f) => ({ ...f, age: e.target.value }))}
             placeholder="—"
           />
-          <Input
-            label="Height (cm)"
-            type="number"
-            min="1"
-            max="300"
-            value={form.height_cm}
-            onChange={(e) => setForm((f) => ({ ...f, height_cm: e.target.value }))}
-            placeholder="—"
+          <HeightInput
+            key={candidate?.id}
+            label="Height"
+            valueCm={form.height_cm}
+            onChange={(cm) => setForm((f) => ({ ...f, height_cm: cm }))}
           />
           <Input
             label="Experience (years)"

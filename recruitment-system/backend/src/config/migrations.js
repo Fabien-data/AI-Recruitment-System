@@ -1394,6 +1394,29 @@ async function applyMigrations() {
         '052 re-add jobs_project_id_fkey ON DELETE SET NULL'
     );
 
+    // ── Migration 053: structured Future Pool categorization on candidates ────
+    // The calling console's "Not interested" quick action became a structured
+    // "Future Pool" action with three categories: future_project (a desired but
+    // not-yet-created project — captures project name / job title / country),
+    // overage (over the age limit, kept for future roles) and not_interested
+    // (declined current projects). All three still move the candidate to the
+    // canonical future_pool status (apps rejected, re-engageable); these columns
+    // record WHY so pooled candidates are findable + assignable later. The decline
+    // call log is now action_type = 'future_pool' (no new call_logs column — the
+    // existing reason VARCHAR(48) holds a short summary).
+    for (const [sql, label] of [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_category     VARCHAR(32)`,  '053 candidates.future_pool_category'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_project_name VARCHAR(160)`, '053 candidates.future_pool_project_name'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_job_title    VARCHAR(160)`, '053 candidates.future_pool_job_title'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_country      VARCHAR(100)`, '053 candidates.future_pool_country'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_note         TEXT`,         '053 candidates.future_pool_note'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_at           TIMESTAMPTZ`,  '053 candidates.future_pool_at'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_by           UUID`,         '053 candidates.future_pool_by'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_future_pool_category ON candidates(future_pool_category) WHERE future_pool_category IS NOT NULL`, '053 idx_candidates_future_pool_category'],
+    ]) {
+        await safeAlter(sql, label);
+    }
+
     logger.info('✅ Startup migrations complete.');
 }
 
