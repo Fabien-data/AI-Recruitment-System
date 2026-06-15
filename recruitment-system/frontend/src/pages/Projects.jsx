@@ -368,8 +368,10 @@ export default function Projects() {
                   ? JSON.parse(project.countries)
                   : project.countries
                 const filled = project.filled_positions || 0
+                const certified = project.certified_count || 0
                 const total = project.total_positions || 0
                 const pct = total > 0 ? Math.min(100, Math.round((filled / total) * 100)) : 0
+                const certPct = total > 0 ? Math.min(100, Math.round((certified / total) * 100)) : 0
                 const barTone = pct >= 100 ? 'from-emerald-500 to-emerald-600' : pct >= 60 ? 'from-amber-400 to-amber-500' : 'from-primary-500 to-primary-600'
                 const accent =
                   project.status === 'active' ? 'emerald'
@@ -442,14 +444,25 @@ export default function Projects() {
                     </Table.Td>
                     <Table.Td><Badge status={project.status} /></Table.Td>
                     <Table.Td><Badge status={project.priority} /></Table.Td>
-                    <Table.Td align="right" className="min-w-[140px]">
-                      <div className="flex flex-col items-end gap-1">
-                        <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{filled} / {total || 0}</span>
-                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
-                          <div
-                            className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
-                            style={{ width: `${pct}%` }}
-                          />
+                    <Table.Td align="right" className="min-w-[150px]">
+                      <div className="flex flex-col items-end gap-1.5">
+                        <div className="w-full flex flex-col items-end gap-0.5">
+                          <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Certified <span className="font-semibold text-zinc-700 dark:text-zinc-200 tabular-nums">{certified} / {total || 0}</span></span>
+                          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-violet-500 to-violet-600 transition-all duration-500"
+                              style={{ width: `${certPct}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div className="w-full flex flex-col items-end gap-0.5">
+                          <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Placed <span className="font-semibold text-zinc-700 dark:text-zinc-200 tabular-nums">{filled} / {total || 0}</span></span>
+                          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                            <div
+                              className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
                         </div>
                       </div>
                     </Table.Td>

@@ -84,7 +84,11 @@ router.get('/overview', authenticate, requireSection('analytics', 'view'), async
                 WHERE applied_at >= ${prevFrom}
                   AND applied_at < ${prevTo}
             `)),
-            // Pipeline funnel (all time)
+            // Pipeline funnel (all time). NOTE: this and the summary/trend blocks
+            // above are deliberately APPLICATION-ROW counts (a funnel/throughput
+            // metric counts applications, not candidates). Do NOT "unify" these to
+            // COUNT(DISTINCT candidate_id) — only the per-project pipeline widgets
+            // (urgent_projects, control-tower, projects.js) are candidate-centric.
             query(adaptQuery(`
                 SELECT status, COUNT(*) AS count
                 FROM applications
@@ -122,8 +126,8 @@ router.get('/overview', authenticate, requireSection('analytics', 'view'), async
                     p.priority,
                     p.interview_date,
                     COUNT(DISTINCT j.id) AS total_jobs,
-                    COUNT(DISTINCT a.id) AS total_applications,
-                    COUNT(DISTINCT CASE WHEN a.status IN ('certified','interview_scheduled') THEN a.id END) AS active_pipeline
+                    COUNT(DISTINCT a.candidate_id) AS total_applications,
+                    COUNT(DISTINCT CASE WHEN a.status IN ('certified','interview_scheduled') THEN a.candidate_id END) AS active_pipeline
                 FROM projects p
                 LEFT JOIN jobs j ON j.project_id = p.id
                 LEFT JOIN applications a ON a.job_id = j.id

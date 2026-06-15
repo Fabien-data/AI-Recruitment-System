@@ -43,6 +43,7 @@ import { JobDrawer } from '../components/communications/JobDrawer'
 import { CallPresenceToggle } from '../components/communications/CallPresenceToggle'
 import { DispositionSelect, dispositionClasses, dispositionLabel } from '../components/communications/DispositionSelect'
 import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
+import { ClickToCall } from '../components/ClickToCall'
 import { AddCandidateDialog } from '../components/communications/AddCandidateDialog'
 import { QuickReplyPicker } from '../components/communications/QuickReplyPicker'
 import toast from 'react-hot-toast'
@@ -134,7 +135,7 @@ const RESPONSE_OPTIONS = [
 // Dynamic queue tags are appended at the call site; already-applied ones hidden.
 const SUGGESTED_LABELS = ['Interested', 'Callback', 'CV pending', 'Strong candidate', 'Not reachable', 'Wrong number']
 
-const getActiveChats = ({ search, statusBucket, projectId, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus }) => {
+const getActiveChats = ({ search, statusBucket, projectId, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, claimedUserId, callStatus }) => {
   const params = new URLSearchParams()
   // No artificial cap — the list is virtualized, so the full bucket loads in one
   // scroll. Backend clamps to a safety ceiling.
@@ -151,6 +152,7 @@ const getActiveChats = ({ search, statusBucket, projectId, pipelineStage, handof
   if (disposition) params.set('disposition', disposition)
   if (contacted) params.set('contacted', contacted)
   if (claimed) params.set('claimed', claimed)
+  if (claimedUserId) params.set('claimed_by', claimedUserId)
   if (callStatus) params.set('call_status', callStatus)
   return apiFetch(`/api/communications/active-chats?${params.toString()}`)
 }
@@ -158,7 +160,7 @@ const getActiveChats = ({ search, statusBucket, projectId, pipelineStage, handof
 // Real aggregate counts (header pills + per-tab badges). Deliberately omits the
 // status bucket — the endpoint returns every bucket's count so each tab shows
 // its own total regardless of which tab is active.
-const getActiveChatsCounts = ({ search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus }) => {
+const getActiveChatsCounts = ({ search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, claimedUserId, callStatus }) => {
   const params = new URLSearchParams()
   if (search) params.set('search', search)
   if (projectId) params.set('project_id', projectId)
@@ -170,9 +172,18 @@ const getActiveChatsCounts = ({ search, projectId, pipelineStage, handoffState, 
   if (disposition) params.set('disposition', disposition)
   if (contacted) params.set('contacted', contacted)
   if (claimed) params.set('claimed', claimed)
+  if (claimedUserId) params.set('claimed_by', claimedUserId)
   if (callStatus) params.set('call_status', callStatus)
   return apiFetch(`/api/communications/active-chats/counts?${params.toString()}`)
 }
+
+// Active users for the admin "Claimed by <user>" filter + transfer picker.
+const getActiveUsers = () =>
+  apiFetch('/api/admin/users').then((r) => (Array.isArray(r) ? r : (r?.data || r?.users || []))).catch(() => [])
+
+// Admin-only: transfer a claimed chat to another agent.
+const transferCandidate = (id, toUserId) =>
+  apiFetch(`/api/communications/candidate/${id}/transfer`, { method: 'POST', body: JSON.stringify({ to_user_id: toUserId }) })
 
 // Server-side project list for the conversations filter dropdown.
 const getProjectsForFilter = () =>
@@ -688,6 +699,8 @@ export default function Communications() {
   if (savedPrefsRef.current === undefined) savedPrefsRef.current = loadCommsPrefs()
   const savedPrefs = savedPrefsRef.current
   const [selectedId, setSelectedId] = useState(null)
+  // Inbound 3CX call ringing for a candidate routed to this agent (screen-pop).
+  const [incomingCall, setIncomingCall] = useState(null)
   const [addCandidateOpen, setAddCandidateOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState(searchParams.get('q') || savedPrefs.search || '')
@@ -712,6 +725,8 @@ export default function Communications() {
   const [disposition, setDispositionFilter] = useState(searchParams.get('disposition') || savedPrefs.disposition || '')
   const [contacted, setContacted] = useState(searchParams.get('contacted') || savedPrefs.contacted || '')
   const [claimed, setClaimed] = useState(searchParams.get('claimed') || savedPrefs.claimed || '')
+  // Admin-only "Claimed by <user>" filter (like Mine, but for any chosen agent).
+  const [claimedUserId, setClaimedUserId] = useState(searchParams.get('claimed_by') || '')
   const [callStatus, setCallStatus] = useState(searchParams.get('call_status') || savedPrefs.callStatus || '')
   // Compact mode collapses the secondary filter header (counts, project, filters)
   // so the agent sees more chats at once. Persisted per-device.
@@ -747,6 +762,7 @@ export default function Communications() {
   const fileInputRef = useRef(null)
   const queryClient = useQueryClient()
   const currentUser = useAuthStore((s) => s.user)
+  const isAdmin = currentUser?.role === 'admin'
   const [cvModalOpen, setCvModalOpen] = useState(false)
   // Refs used by the takeover/disposition fix so the selected chat survives a
   // list refetch even when an active filter would exclude it.
@@ -1062,7 +1078,7 @@ export default function Communications() {
 
   // ── Fetch active chat list ─────────────────────────────────────────────────
   const { data: activeChatsData, isLoading: listLoading } = useQuery({
-    queryKey: ['active-chats', search, statusBucket, projectId, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus],
+    queryKey: ['active-chats', search, statusBucket, projectId, pipelineStage, handoffState, sortBy, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, claimedUserId, callStatus],
     queryFn: () => getActiveChats({
       search,
       statusBucket,
@@ -1076,28 +1092,43 @@ export default function Communications() {
       disposition,
       contacted,
       claimed,
+      claimedUserId,
       callStatus,
     }),
     // The full bucket can be thousands of rows; sockets carry real-time updates,
-    // so this is only a safety-net poll. Keep it infrequent and let staleTime
-    // absorb re-renders / refilters / socket-reconnect invalidations so we don't
-    // re-run the heavy multi-join fetch more than ~once a minute per agent.
+    // so this is only a safety-net poll. keepPreviousData (placeholderData) keeps
+    // the LAST list rendered while a refilter/remount refetches — no blank panel
+    // on every revisit. gcTime keeps the cache warm across navigation so coming
+    // back to Messages shows instantly, then revalidates after staleTime.
+    placeholderData: (prev) => prev,
     refetchInterval: 60000,
-    staleTime: 55000,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
   })
 
   // Real aggregate counts for the header pills + per-tab badges (true totals,
   // not the capped list length). Status bucket is intentionally NOT in the key —
   // switching tabs doesn't refetch; the endpoint already returns all buckets.
   const { data: countsData } = useQuery({
-    queryKey: ['active-chats-counts', search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus],
-    queryFn: () => getActiveChatsCounts({ search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, callStatus }),
+    queryKey: ['active-chats-counts', search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, claimedUserId, callStatus],
+    queryFn: () => getActiveChatsCounts({ search, projectId, pipelineStage, handoffState, responseStatus, dateFrom, dateTo, disposition, contacted, claimed, claimedUserId, callStatus }),
+    placeholderData: (prev) => prev,
     refetchInterval: 60000,
-    staleTime: 55000,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
   })
   const counts = countsData || {}
   // The list is no longer capped — it loads the full bucket and renders via the
   // virtualizer. The per-tab badges still come from the counts endpoint.
+
+  // Admin-only: active users for the "Claimed by <user>" filter + transfer picker.
+  const { data: activeUsersData } = useQuery({
+    queryKey: ['active-users-for-claims'],
+    queryFn: getActiveUsers,
+    enabled: isAdmin,
+    staleTime: 5 * 60 * 1000,
+  })
+  const activeUsers = Array.isArray(activeUsersData) ? activeUsersData : []
 
   useEffect(() => {
     if (!Array.isArray(activeChatsData)) return
@@ -1162,7 +1193,12 @@ export default function Communications() {
       // list and the open transcript. (The 30s poll heals the list eventually,
       // but the open transcript would otherwise stay stale until manual refresh.)
       if (hasConnected) {
-        queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+        // Mark the (heavy) list stale WITHOUT forcing an immediate network refetch —
+        // a network blip / Cloud Run churn no longer triggers the 20k-row mega-query
+        // on every reconnect. Live socket events patch the list; the poll + staleTime
+        // heal anything missed. The open transcript is cheap, so refetch it eagerly.
+        queryClient.invalidateQueries({ queryKey: ['active-chats'], refetchType: 'none' })
+        queryClient.invalidateQueries({ queryKey: ['active-chats-counts'], refetchType: 'none' })
         queryClient.invalidateQueries({ queryKey: ['transcript'] })
       }
       hasConnected = true
@@ -1366,6 +1402,24 @@ export default function Communications() {
       setAgentTyping(is_typing ? agent_name : null)
     })
 
+    // A 3CX call was auto-logged for a candidate (PBX call-journaling webhook).
+    // Refresh the open chat's call-log timeline + the list row's last-activity
+    // and the engagement scorecards, reusing the same keys the manual flow uses.
+    socket.on('call_logged', (d) => {
+      if (!d?.candidate_id) return
+      queryClient.invalidateQueries({ queryKey: ['call-logs', d.candidate_id] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+      queryClient.invalidateQueries({ queryKey: ['engagement'] })
+    })
+
+    // Inbound 3CX call ringing, routed to this agent — screen-pop: open the
+    // candidate's chat and raise a transient banner.
+    socket.on('incoming_call', (d) => {
+      if (!d?.candidate_id) return
+      setIncomingCall({ candidate_id: d.candidate_id, name: d.candidate_name, number: d.caller_number })
+      setSelectedId(d.candidate_id)
+    })
+
     return () => socket.disconnect()
   }, []) // eslint-disable-line
 
@@ -1376,6 +1430,13 @@ export default function Communications() {
     if (selectedId) socket.emit('join_candidate', selectedId)
     return () => { if (selectedId) socket.emit('leave_candidate', selectedId) }
   }, [selectedId])
+
+  // Auto-dismiss the incoming-call banner after a short while.
+  useEffect(() => {
+    if (!incomingCall) return
+    const t = setTimeout(() => setIncomingCall(null), 12000)
+    return () => clearTimeout(t)
+  }, [incomingCall])
 
   // ── Heartbeat my active calls so the server TTL sweep never reaps them ──────
   const myCallKey = chatList
@@ -1488,6 +1549,9 @@ export default function Communications() {
       setChatList(prev => prev.map(c => c.candidate_id === id
         ? { ...c, claimed_by: currentUser?.id, claimer_name: currentUser?.full_name || 'You' }
         : c))
+      // Claimed chats leave the default All/New lists — re-derive list + counts.
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
     },
   })
   const unclaimMut = useMutation({
@@ -1502,7 +1566,23 @@ export default function Communications() {
       setChatList(prev => prev.map(c => c.candidate_id === id
         ? { ...c, claimed_by: null, claimer_name: null }
         : c))
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
     },
+    onError: (err) => toast.error(err?.message || 'Only an admin can release a claimed chat'),
+  })
+  // Admin-only: reassign a claimed chat to another agent.
+  const transferMut = useMutation({
+    mutationFn: ({ id, toUserId }) => transferCandidate(id, toUserId),
+    onSuccess: (data, { id }) => {
+      setChatList(prev => prev.map(c => c.candidate_id === id
+        ? { ...c, claimed_by: data?.claimed_by, claimer_name: data?.claimer_name }
+        : c))
+      queryClient.invalidateQueries({ queryKey: ['active-chats'] })
+      queryClient.invalidateQueries({ queryKey: ['active-chats-counts'] })
+      toast.success('Chat transferred')
+    },
+    onError: (err) => toast.error(err?.message || 'Transfer failed'),
   })
 
   const identityMut = useMutation({
@@ -1703,6 +1783,26 @@ export default function Communications() {
   return (
     <div className="flex h-full bg-zinc-50 dark:bg-zinc-900/60 overflow-hidden rounded-2xl border border-zinc-200/60 dark:border-zinc-800/60">
 
+      {/* Inbound 3CX call screen-pop banner */}
+      {incomingCall && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-emerald-600 text-white shadow-lg ring-1 ring-emerald-700/40 animate-pulse">
+          <Phone size={16} className="shrink-0" />
+          <div className="text-sm">
+            <span className="font-semibold">Incoming call</span>
+            {incomingCall.name ? <> — {incomingCall.name}</> : null}
+            {incomingCall.number ? <span className="opacity-80"> · {incomingCall.number}</span> : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => setIncomingCall(null)}
+            className="ml-1 rounded-full p-1 hover:bg-emerald-700/60"
+            aria-label="Dismiss"
+          >
+            <XIcon size={14} />
+          </button>
+        </div>
+      )}
+
       {/* ── Left: Chat list ─────────────────────────────────────────────────── */}
       <div className="w-80 shrink-0 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col">
         {/* Header */}
@@ -1835,11 +1935,13 @@ export default function Communications() {
               className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-400 transition-all"
             />
           </div>
-          {/* "Mine" — one-tap filter so an agent sees only the chats they hold. */}
+          {/* "Mine" — one-tap filter so an agent sees only the chats they hold.
+              Admins also get a "Claimed by <user>" picker for any agent's chats.
+              The two scopes are mutually exclusive. */}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setClaimed(claimed === 'me' ? '' : 'me')}
+              onClick={() => { setClaimedUserId(''); setClaimed(claimed === 'me' ? '' : 'me') }}
               className={clsx(
                 'px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors',
                 claimed === 'me'
@@ -1849,6 +1951,24 @@ export default function Communications() {
             >
               Mine
             </button>
+            {isAdmin && (
+              <select
+                value={claimedUserId}
+                onChange={(e) => { setClaimed(''); setClaimedUserId(e.target.value) }}
+                className={clsx(
+                  'px-2 py-1 rounded-full text-[11px] font-semibold border transition-colors',
+                  claimedUserId
+                    ? 'bg-primary-600 text-white border-primary-600'
+                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
+                )}
+                title="Show chats claimed by a specific agent"
+              >
+                <option value="">Claimed by…</option>
+                {activeUsers.map((u) => (
+                  <option key={u.id} value={u.id}>{u.full_name || u.email}</option>
+                ))}
+              </select>
+            )}
           </div>
           {!compactFilters && (() => {
             // Status bucket + project are primary scopes shown above (not counted).
@@ -1884,6 +2004,7 @@ export default function Communications() {
                       setDispositionFilter('')
                       setContacted('')
                       setClaimed('')
+                      setClaimedUserId('')
                       setCallStatus('')
                     }}
                     className="inline-flex items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
@@ -2140,6 +2261,9 @@ export default function Communications() {
                   </div>
                   <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
                     <span className="flex items-center gap-1"><Phone size={11} /> {selectedCandidate?.phone || selectedCandidate?.whatsapp_phone}</span>
+                    {(selectedCandidate?.phone || selectedCandidate?.whatsapp_phone) && (
+                      <ClickToCall phone={selectedCandidate?.phone || selectedCandidate?.whatsapp_phone} variant="icon" className="w-6 h-6" />
+                    )}
                     {selectedCandidate?.last_chatbot_state && (
                       <span className="flex items-center gap-1 text-zinc-400 dark:text-zinc-500">
                         <ChevronRight size={11} /> {selectedCandidate.last_chatbot_state.replace(/_/g, ' ')}
@@ -2476,6 +2600,9 @@ export default function Communications() {
             </div>
             <div className="mt-3 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
               <Phone size={12} className="shrink-0" /> {selectedCandidate.phone || selectedCandidate.whatsapp_phone || '—'}
+              {(selectedCandidate.phone || selectedCandidate.whatsapp_phone) && (
+                <ClickToCall phone={selectedCandidate.phone || selectedCandidate.whatsapp_phone} variant="inline" className="ml-2" />
+              )}
             </div>
             <div className="mt-3 flex items-center gap-2">
               {/* Opens the full CV review/edit flow as a modal over the chat —
@@ -2511,20 +2638,39 @@ export default function Communications() {
             <p className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3">Activity</p>
             <div>
               {selectedCandidate.claimed_by ? (
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-violet-700 dark:text-violet-300 inline-flex items-center gap-1 min-w-0">
-                    <UserCheck size={12} className="shrink-0" />
-                    <span className="truncate">{selectedCandidate.claimed_by === currentUser?.id ? 'Claimed by you' : `Claimed by ${selectedCandidate.claimer_name || 'an agent'}`}</span>
-                  </span>
-                  {selectedCandidate.claimed_by === currentUser?.id && (
-                    <button
-                      type="button"
-                      onClick={() => unclaimMut.mutate(selectedId)}
-                      disabled={unclaimMut.isPending}
-                      className="text-[11px] text-zinc-500 hover:text-rose-600 underline underline-offset-2 shrink-0"
-                    >
-                      Release
-                    </button>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-violet-700 dark:text-violet-300 inline-flex items-center gap-1 min-w-0">
+                      <UserCheck size={12} className="shrink-0" />
+                      <span className="truncate">{selectedCandidate.claimed_by === currentUser?.id ? 'Claimed by you' : `Claimed by ${selectedCandidate.claimer_name || 'an agent'}`}</span>
+                    </span>
+                    {/* Only admins can release a claimed chat (then transfer or release). */}
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => unclaimMut.mutate(selectedId)}
+                        disabled={unclaimMut.isPending}
+                        className="text-[11px] text-zinc-500 hover:text-rose-600 underline underline-offset-2 shrink-0"
+                      >
+                        Release
+                      </button>
+                    )}
+                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-zinc-400 shrink-0">Transfer to</span>
+                      <select
+                        className="input text-[11px] py-1 flex-1"
+                        value=""
+                        onChange={(e) => { if (e.target.value) transferMut.mutate({ id: selectedId, toUserId: e.target.value }) }}
+                        disabled={transferMut.isPending}
+                      >
+                        <option value="">Select agent…</option>
+                        {activeUsers.filter((u) => u.id !== selectedCandidate.claimed_by).map((u) => (
+                          <option key={u.id} value={u.id}>{u.full_name || u.email}</option>
+                        ))}
+                      </select>
+                    </div>
                   )}
                 </div>
               ) : (
@@ -2556,7 +2702,7 @@ export default function Communications() {
               defaultJobId={selectedCandidate?.effective_job_id || ''}
               claimedByMe={selectedCandidate?.claimed_by === currentUser?.id}
               releasePending={unclaimMut.isPending}
-              onReleaseClaim={() => unclaimMut.mutate({ id: selectedId, reason: 'interview_scheduled' })}
+              onReleaseClaim={isAdmin ? (() => unclaimMut.mutate({ id: selectedId, reason: 'interview_scheduled' })) : undefined}
               onRemoved={() => {
                 // Candidate is hidden now — drop it from the list and close the chat.
                 setChatList((prev) => prev.filter((c) => c.candidate_id !== selectedId))

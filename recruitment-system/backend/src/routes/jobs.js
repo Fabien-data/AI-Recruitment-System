@@ -6,7 +6,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { requireSection } = require('../middleware/sections');
 const { syncJobAsync, syncJobDeleteAsync, syncProjectAsync } = require('./chatbot-sync');
 const { processJobFlyer, extractJobFlyer } = require('../services/auto-ingest');
-const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT, JOB_COUNTS_JOIN, JOB_COUNTS_SELECT } = require('../utils/job-queries');
+const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT, CERTIFIED_JOIN, CERTIFIED_SELECT, JOB_COUNTS_JOIN, JOB_COUNTS_SELECT } = require('../utils/job-queries');
 const { resolveCountry } = require('../utils/countries');
 const { notifyWaitlistForJob } = require('../services/job-waitlist');
 const logger = require('../utils/logger');
@@ -259,11 +259,12 @@ router.get('/', authenticate, requireSection('jobs', 'view'), async (req, res, n
         params.push(limit, offset);
 
         const sql = `
-            SELECT j.*, ${POSITIONS_FILLED_SELECT}, ${JOB_COUNTS_SELECT},
+            SELECT j.*, ${POSITIONS_FILLED_SELECT}, ${CERTIFIED_SELECT}, ${JOB_COUNTS_SELECT},
                    p.title AS project_title, p.client_name AS project_client
             FROM jobs j
             LEFT JOIN projects p ON j.project_id = p.id
             ${POSITIONS_FILLED_JOIN}
+            ${CERTIFIED_JOIN}
             ${JOB_COUNTS_JOIN}
             WHERE ${where.join(' AND ')}
             ORDER BY ${orderBy}
@@ -282,11 +283,12 @@ router.get('/:id', authenticate, requireSection('jobs', 'view'), async (req, res
         const { id } = req.params;
 
         const result = await pool.query(
-            `SELECT j.*, ${POSITIONS_FILLED_SELECT}, ${JOB_COUNTS_SELECT},
+            `SELECT j.*, ${POSITIONS_FILLED_SELECT}, ${CERTIFIED_SELECT}, ${JOB_COUNTS_SELECT},
                     p.title AS project_title, p.client_name AS project_client
              FROM jobs j
              LEFT JOIN projects p ON j.project_id = p.id
              ${POSITIONS_FILLED_JOIN}
+             ${CERTIFIED_JOIN}
              ${JOB_COUNTS_JOIN}
              WHERE j.id = $1`,
             [id]

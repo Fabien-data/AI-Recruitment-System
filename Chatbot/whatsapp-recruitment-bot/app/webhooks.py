@@ -971,18 +971,27 @@ async def process_single_message(message: dict, contacts: list, db):
         interactive_type = interactive_data.get("type")
 
         if interactive_type == "button_reply":
-            text_body = interactive_data["button_reply"]["id"] # Extract hidden ID
+            _btn = interactive_data.get("button_reply", {}) or {}
+            text_body = _btn.get("id", "")  # Extract hidden ID
+            _btn_title = _btn.get("title", "")
             logger.info(
-                f"🔘 Button reply from {from_number}: id={text_body!r} "
-                f"→ routing as: {text_body!r}"
+                f"🔘 Button reply from {from_number}: id={text_body!r} title={_btn_title!r}"
             )
-            # Interview action buttons — handle directly, skip orchestration.
-            if text_body in _INTERVIEW_BUTTON_IDS:
+            # Reschedule-slot / can't-make-job picks — self-describing ids, handle first.
+            if text_body.startswith("rs|") or text_body.startswith("cmapply|") or text_body == "cmno":
                 try:
-                    if await _handle_interview_button(db, from_number, text_body):
+                    if await _handle_interview_followup(db, from_number, text_body):
+                        return
+                except Exception as fe:
+                    logger.warning(f"interview follow-up handling failed for {from_number}: {fe}")
+            # Interview action: in-window button id OR out-of-window template title.
+            _iv_action = _BUTTON_ACTION.get(text_body) or _title_to_interview_action(_btn_title)
+            if _iv_action:
+                try:
+                    if await _handle_interview_action(db, from_number, _iv_action):
                         return
                 except Exception as ib_err:
-                    logger.warning(f"interview button handling failed for {from_number}: {ib_err}")
+                    logger.warning(f"interview action handling failed for {from_number}: {ib_err}")
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
@@ -995,6 +1004,13 @@ async def process_single_message(message: dict, contacts: list, db):
             logger.info(
                 f"📋 List reply from {from_number}: id={text_body!r}"
             )
+            # Reschedule-slot / can't-make-job picks come back as list selections.
+            if text_body.startswith("rs|") or text_body.startswith("cmapply|") or text_body == "cmno":
+                try:
+                    if await _handle_interview_followup(db, from_number, text_body):
+                        return
+                except Exception as fe:
+                    logger.warning(f"interview follow-up (list) handling failed for {from_number}: {fe}")
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
@@ -1330,11 +1346,22 @@ def _out_of_window_template(status_key: str, payload, lang: str):
     job = payload.job_title or ""
     when = payload.interview_date or ""
     lang_code = _PROACTIVE_TEMPLATE_LANG.get(lang, "en")
+    # Prefer the rich INVITE template (with Confirm/Reschedule/Can't-make-it
+    # quick-reply buttons that work out-of-window). Its 6 params are non-empty by
+    # construction (Meta rejects empty samples). Falls back to the buttonless
+    # interview_scheduled template when the invite isn't configured yet.
+    if settings.template_interview_invite:
+        _loc = (getattr(payload, "interview_location", None) or "as advised")
+        _bring = (getattr(payload, "what_to_bring", None) or "your original documents")
+        _dress = (getattr(payload, "dress_code", None) or "smart casual")
+        _interview_entry = (settings.template_interview_invite, [first_name, job, when, _loc, _bring, _dress])
+    else:
+        _interview_entry = (settings.template_interview_scheduled, [first_name, job, when])
     mapping = {
         # Interview invite to a candidate outside the 24h window: only an approved
         # template can reach them (free-form is dropped by Meta). The template body
         # carries name/job/date; full venue details follow in-window once they reply.
-        "interview_scheduled": (settings.template_interview_scheduled, [first_name, job, when]),
+        "interview_scheduled": _interview_entry,
         "interview_reminder": (settings.template_interview_reminder, [first_name, job, when]),
         "interview_day_reminder": (settings.template_interview_day_reminder, [first_name, job, when]),
         "job_now_available": (settings.template_job_now_available, [first_name, job]),
@@ -1372,6 +1399,79 @@ def _out_of_window_template(status_key: str, payload, lang: str):
 # Interview action buttons (attached to in-window interview_scheduled messages).
 _INTERVIEW_BUTTON_IDS = {"iv_confirm", "iv_reschedule", "iv_cantmake"}
 _BUTTON_ACTION = {"iv_confirm": "confirm", "iv_reschedule": "reschedule", "iv_cantmake": "cant_make"}
+
+
+def _title_to_interview_action(title: str):
+    """Map an inbound quick-reply button TITLE to confirm/reschedule/cant_make.
+
+    Template quick-reply taps return the button TEXT (not our iv_* ids), and a
+    si/ta variant may fall back to the EN template — so we keyword-match across
+    en/si/ta. Resilient to emoji prefixes and wording variations.
+    """
+    t = (title or "").strip().lower()
+    if not t:
+        return None
+    if "reschedul" in t or "වෙනස" in t or "மாற்ற" in t or "மாற்று" in t:
+        return "reschedule"
+    if ("can't" in t or "cant" in t or "cannot" in t or "can not" in t
+            or "බැහැ" in t or "முடியா" in t):
+        return "cant_make"
+    if "confirm" in t or "තහවුර" in t or "உறுதி" in t:
+        return "confirm"
+    return None
+
+
+async def _post_recruitment_api(path: str, body: dict) -> dict:
+    """POST JSON to the recruitment backend (chatbot-authenticated). Returns the
+    parsed JSON dict, or {} on any failure (never raises)."""
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(
+                f"{settings.recruitment_api_url}{path}",
+                headers={"x-chatbot-api-key": settings.chatbot_api_key or ""},
+                json=body,
+            )
+            try:
+                return resp.json() or {}
+            except Exception:
+                return {}
+    except Exception as e:
+        logger.warning(f"recruitment API POST {path} failed: {e}")
+        return {}
+
+
+# Localized copy for the bot-driven reschedule / can't-make flows.
+_RESCHEDULE_INTRO = {
+    "en": "No problem 🔁 — here are the next available interview times. Tap one to rebook:",
+    "si": "කරදරයක් නෑ 🔁 — මෙන්න ඊළඟට තිබෙන සම්මුඛ පරීක්ෂණ වේලාවන්. නැවත වෙන්කරවා ගැනීමට එකක් තෝරන්න:",
+    "ta": "பரவாயில்லை 🔁 — அடுத்த நேர்காணல் நேரங்கள் இதோ. மீண்டும் பதிவு செய்ய ஒன்றைத் தட்டவும்:",
+}
+_RESCHEDULE_DONE = {
+    "en": "Done ✅ — your interview is rebooked to {when}. See you there!",
+    "si": "හරි ✅ — ඔබේ සම්මුඛ පරීක්ෂණය {when} දිනට නැවත වෙන්කර ඇත. එතන හමුවෙමු!",
+    "ta": "முடிந்தது ✅ — உங்கள் நேர்காணல் {when}-க்கு மீண்டும் பதிவு செய்யப்பட்டது. அங்கே சந்திப்போம்!",
+}
+_RESCHEDULE_TAKEN = {
+    "en": "Sorry, that time was just taken. Please reply 'reschedule' to see fresh times.",
+    "si": "සමාවන්න, ඒ වේලාව දැන් වෙන් වී ඇත. නව වේලාවන් බැලීමට 'reschedule' කියා පිළිතුරු දෙන්න.",
+    "ta": "மன்னிக்கவும், அந்த நேரம் இப்போது எடுக்கப்பட்டது. புதிய நேரங்களைப் பார்க்க 'reschedule' என பதிலளியுங்கள்.",
+}
+_CANTMAKE_INTRO = {
+    "en": "No problem 🙏 — here are other openings that may suit you. Tap to apply, or choose 'Not interested':",
+    "si": "කරදරයක් නෑ 🙏 — ඔබට ගැලපෙන වෙනත් රැකියා මෙන්න. අයදුම් කිරීමට තෝරන්න, නැතහොත් 'Not interested' තෝරන්න:",
+    "ta": "பரவாயில்லை 🙏 — உங்களுக்கு பொருந்தும் வேறு வேலைகள் இதோ. விண்ணப்பிக்க தட்டவும், அல்லது 'Not interested' தேர்வு செய்யவும்:",
+}
+_CANTMAKE_APPLIED = {
+    "en": "Great ✅ — we've started your application. Our team will be in touch!",
+    "si": "හොඳයි ✅ — ඔබේ අයදුම්පත අපි ආරම්භ කළා. අපේ කණ්ඩායම සම්බන්ධ වෙයි!",
+    "ta": "நன்று ✅ — உங்கள் விண்ணப்பத்தைத் தொடங்கிவிட்டோம். எங்கள் குழு தொடர்பு கொள்ளும்!",
+}
+_CANTMAKE_NOTED = {
+    "en": "Thanks for letting us know 🙏 — we'll keep you in mind for future roles.",
+    "si": "දැනුම් දීමට ස්තුතියි 🙏 — අනාගත රැකියා සඳහා ඔබව මතක තබා ගනිමු.",
+    "ta": "தெரிவித்ததற்கு நன்றி 🙏 — எதிர்கால வேலைகளுக்கு உங்களை மனதில் வைத்திருப்போம்.",
+}
+_NOT_INTERESTED_ROW = {"en": "Not interested", "si": "කැමති නැහැ", "ta": "ஆர்வம் இல்லை"}
 _INTERVIEW_BUTTONS = {
     "en": [{"id": "iv_confirm", "title": "✅ Confirm"}, {"id": "iv_reschedule", "title": "🔁 Reschedule"}, {"id": "iv_cantmake", "title": "❌ Can't make it"}],
     "si": [{"id": "iv_confirm", "title": "✅ තහවුරුයි"}, {"id": "iv_reschedule", "title": "🔁 වෙනස් කරන්න"}, {"id": "iv_cantmake", "title": "❌ බැහැ"}],
@@ -1404,27 +1504,118 @@ _INTERVIEW_ACK = {
 }
 
 
-async def _handle_interview_button(db, phone: str, button_id: str) -> bool:
-    """Handle an interview action button tap: tell the backend + ack the candidate."""
-    action = _BUTTON_ACTION.get(button_id)
-    if not action:
+async def _handle_interview_action(db, phone: str, action: str) -> bool:
+    """Handle an interview action (confirm / reschedule / cant_make), whether the
+    candidate tapped an in-window interactive button OR an out-of-window template
+    quick-reply. confirm just acks; reschedule offers bookable slots; cant_make
+    offers alternative jobs. Returns True when handled (skip orchestration)."""
+    if action not in ("confirm", "reschedule", "cant_make"):
         return False
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"{settings.recruitment_api_url}/api/chatbot/interview-response",
-                headers={"x-chatbot-api-key": settings.chatbot_api_key or ""},
-                json={"phone": phone, "action": action},
-            )
-    except Exception as e:
-        logger.warning(f"interview-response POST failed for {phone}: {e}")
     cand = crud.get_candidate_by_phone(db, phone)
     from app.services.followup_service import candidate_lang
     lang = candidate_lang(cand) if cand else "en"
-    ack = _INTERVIEW_ACK.get(action, {}).get(lang) or _INTERVIEW_ACK.get(action, {}).get("en", "Thank you!")
-    await meta_client.send_message(phone, ack)
-    logger.info(f"🎬 Interview button '{action}' handled for {phone}")
+
+    # Always record the action on the backend (sets status=confirmed for confirm;
+    # creates the agent task + alert for reschedule/cant_make as a safety net).
+    await _post_recruitment_api("/api/chatbot/interview-response", {"phone": phone, "action": action})
+
+    if action == "confirm":
+        ack = _INTERVIEW_ACK["confirm"].get(lang) or _INTERVIEW_ACK["confirm"]["en"]
+        await meta_client.send_message(phone, ack)
+        logger.info(f"🎬 Interview confirm handled for {phone}")
+        return True
+
+    if action == "reschedule":
+        slotres = await _post_recruitment_api("/api/chatbot/interview-slots", {"phone": phone})
+        slots = (slotres or {}).get("slots") or []
+        if slots:
+            rows = []
+            for s in slots[:10]:
+                rows.append({
+                    "id": str(s.get("slot_id", ""))[:200],
+                    "title": _compact_slot_title(s.get("datetime", "")) or (s.get("label", "")[:24]),
+                    "description": str(s.get("label", ""))[:72],
+                })
+            intro = _RESCHEDULE_INTRO.get(lang) or _RESCHEDULE_INTRO["en"]
+            await meta_client.send_interactive_list(
+                phone, text=intro, button_text="Pick a time",
+                sections=[{"title": "Available times", "rows": rows}],
+            )
+        else:
+            ack = _INTERVIEW_ACK["reschedule"].get(lang) or _INTERVIEW_ACK["reschedule"]["en"]
+            await meta_client.send_message(phone, ack)
+        logger.info(f"🎬 Interview reschedule handled for {phone} ({len(slots)} slots)")
+        return True
+
+    # cant_make → offer alternative open jobs.
+    jobres = await _post_recruitment_api("/api/chatbot/interview-cant-make-jobs", {"phone": phone})
+    jobs = (jobres or {}).get("jobs") or []
+    if jobs:
+        rows = [{"id": f"cmapply|{j.get('job_id')}", "title": str(j.get("label", j.get("title", "")))[:24],
+                 "description": str(j.get("label", ""))[:72]} for j in jobs[:9]]
+        rows.append({"id": "cmno", "title": (_NOT_INTERESTED_ROW.get(lang) or _NOT_INTERESTED_ROW["en"])[:24]})
+        intro = _CANTMAKE_INTRO.get(lang) or _CANTMAKE_INTRO["en"]
+        await meta_client.send_interactive_list(
+            phone, text=intro, button_text="View jobs",
+            sections=[{"title": "Open roles", "rows": rows}],
+        )
+    else:
+        ack = _INTERVIEW_ACK["cant_make"].get(lang) or _INTERVIEW_ACK["cant_make"]["en"]
+        await meta_client.send_message(phone, ack)
+    logger.info(f"🎬 Interview cant_make handled for {phone} ({len(jobs)} jobs)")
     return True
+
+
+def _compact_slot_title(dt: str) -> str:
+    """'2026-06-15T10:00' → 'Mon 15 Jun 10:00' (≤24 chars for list rows)."""
+    try:
+        from datetime import datetime
+        d = datetime.strptime(str(dt), "%Y-%m-%dT%H:%M")
+        return d.strftime("%a %d %b %H:%M")
+    except Exception:
+        return ""
+
+
+async def _handle_interview_followup(db, phone: str, reply_id: str) -> bool:
+    """Route a reschedule-slot pick ('rs|<iv>|<dt>') or a can't-make choice
+    ('cmapply|<job_id>' / 'cmno') to the backend. Self-describing ids, so no stored
+    state needed. Returns True when handled (skip orchestration)."""
+    rid = reply_id or ""
+    cand = crud.get_candidate_by_phone(db, phone)
+    from app.services.followup_service import candidate_lang
+    lang = candidate_lang(cand) if cand else "en"
+
+    if rid.startswith("rs|"):
+        parts = rid.split("|", 2)
+        if len(parts) == 3:
+            interview_id, datetime_str = parts[1], parts[2]
+            res = await _post_recruitment_api(
+                "/api/chatbot/interview-reschedule-pick",
+                {"phone": phone, "interview_id": interview_id, "datetime": datetime_str},
+            )
+            if res.get("ok"):
+                when = res.get("label") or datetime_str
+                msg = (_RESCHEDULE_DONE.get(lang) or _RESCHEDULE_DONE["en"]).format(when=when)
+            else:
+                msg = _RESCHEDULE_TAKEN.get(lang) or _RESCHEDULE_TAKEN["en"]
+            await meta_client.send_message(phone, msg)
+            return True
+        return False
+
+    if rid.startswith("cmapply|") or rid == "cmno":
+        if rid == "cmno":
+            await _post_recruitment_api("/api/chatbot/interview-cant-make-apply", {"phone": phone, "action": "not_interested"})
+            await meta_client.send_message(phone, _CANTMAKE_NOTED.get(lang) or _CANTMAKE_NOTED["en"])
+        else:
+            job_id = rid.split("|", 1)[1]
+            await _post_recruitment_api(
+                "/api/chatbot/interview-cant-make-apply",
+                {"phone": phone, "action": "apply", "job_id": job_id},
+            )
+            await meta_client.send_message(phone, _CANTMAKE_APPLIED.get(lang) or _CANTMAKE_APPLIED["en"])
+        return True
+
+    return False
 
 
 @router.post("/candidate-status")

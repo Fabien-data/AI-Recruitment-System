@@ -4,7 +4,8 @@ import {
   X, Phone, Mail, Globe, FileText, Download, Eye,
   Sparkles, AlertCircle, Loader2, User, Briefcase, FolderOpen,
 } from 'lucide-react'
-import { getCandidate, updateCandidate } from '../api'
+import { getCandidate, updateCandidate, createApplication } from '../api'
+import ProjectJobSelector from './applications/ProjectJobSelector'
 import { formatHeight } from '../utils/height'
 import { Badge } from './ui/Badge'
 import { Button } from './ui/Button'
@@ -170,6 +171,19 @@ export function CandidateReviewModal({ candidateId, open, onClose }) {
       toast.success('Notes saved')
     },
     onError: () => toast.error('Failed to save notes'),
+  })
+
+  const [assignJob, setAssignJob] = useState(null)
+  const assignMutation = useMutation({
+    mutationFn: (jobId) => createApplication({ candidate_id: candidateId, job_id: jobId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidateId] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['applications'] })
+      setAssignJob(null)
+      toast.success('Candidate assigned to project!')
+    },
+    onError: (err) => toast.error('Failed to assign: ' + (err?.message || 'unknown error')),
   })
 
   if (!open) return null
@@ -677,13 +691,30 @@ export function CandidateReviewModal({ candidateId, open, onClose }) {
 
               {/* ── ASSIGN PROJECT TAB ────────────────────────────────── */}
               {activeTab === 'Assign Project' && (
-                <div className="px-6 py-5">
-                  <p className="text-sm text-gray-500 italic">
-                    Use the Applications section to assign this candidate to a job within a project.
+                <div className="px-6 py-5 space-y-4">
+                  <p className="text-sm text-gray-500">
+                    Pick a project, then a job within it, to assign {candidate?.name || 'this candidate'}.
                   </p>
-                  <div className="mt-4">
+                  <ProjectJobSelector
+                    excludeJobIds={applications.map((a) => a.job_id)}
+                    onChange={setAssignJob}
+                  />
+                  {assignJob && (
+                    <div className="rounded-lg border border-gray-200 dark:border-zinc-800 p-3 text-sm">
+                      <span className="font-medium text-gray-900 dark:text-gray-100">{assignJob.title}</span>
+                      {assignJob.category && <span className="text-gray-500"> · {assignJob.category}</span>}
+                    </div>
+                  )}
+                  <div className="flex justify-end gap-2">
                     <Button variant="secondary" onClick={() => window.open(`/candidates/${candidateId}`, '_blank')}>
                       Open Full Profile
+                    </Button>
+                    <Button
+                      onClick={() => assignJob && assignMutation.mutate(assignJob.id)}
+                      loading={assignMutation.isPending}
+                      disabled={!assignJob}
+                    >
+                      Assign
                     </Button>
                   </div>
                 </div>

@@ -20,19 +20,22 @@ router.get('/', authenticate, requireSection('control_tower', 'view'), async (re
         const days = String(Math.max(0, parseInt(req.query.days, 10) || 2));
 
         // Per-project pipeline counts (canonical application statuses).
+        // Candidate-centric (COUNT(DISTINCT candidate_id)) so a candidate applying
+        // to two jobs in the same project counts ONCE — keeps these numbers identical
+        // to projects.js, conversation-counts.js and analytics.
         const projectsSql = adaptQuery(`
             SELECT p.id, p.title, p.status,
-                   COUNT(DISTINCT j.id)                                                      AS job_count,
-                   COUNT(DISTINCT a.id)                                                      AS total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status='screening'           THEN a.id END)    AS screening_count,
-                   COUNT(DISTINCT CASE WHEN a.status='certified'           THEN a.id END)    AS certified_count,
-                   COUNT(DISTINCT CASE WHEN a.status='interview_scheduled' THEN a.id END)    AS interview_count,
-                   COUNT(DISTINCT CASE WHEN a.status='hired'               THEN a.id END)    AS hired_count
+                   COUNT(DISTINCT j.id)                                                                AS job_count,
+                   COUNT(DISTINCT a.candidate_id)                                                      AS total_applications,
+                   COUNT(DISTINCT CASE WHEN a.status='screening'           THEN a.candidate_id END)    AS screening_count,
+                   COUNT(DISTINCT CASE WHEN a.status='certified'           THEN a.candidate_id END)    AS certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status='interview_scheduled' THEN a.candidate_id END)    AS interview_count,
+                   COUNT(DISTINCT CASE WHEN a.status='hired'               THEN a.candidate_id END)    AS hired_count
             FROM projects p
             LEFT JOIN jobs j         ON j.project_id = p.id
             LEFT JOIN applications a  ON a.job_id = j.id
             GROUP BY p.id, p.title, p.status
-            ORDER BY COUNT(DISTINCT a.id) DESC, p.title ASC
+            ORDER BY COUNT(DISTINCT a.candidate_id) DESC, p.title ASC
         `);
 
         // Stuck candidates per project (idle > N days, early pipeline, no human flag).

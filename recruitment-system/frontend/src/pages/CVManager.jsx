@@ -64,6 +64,7 @@ import { TableSkeleton } from '../components/ui/Skeleton'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Tabs } from '../components/ui/Tabs'
 import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
+import ProjectJobSelector from '../components/applications/ProjectJobSelector'
 import { CertifyDialog, ScheduleInterviewDialog } from '../components/communications/StageActionDialogs'
 import { EmptyState } from '../components/ui/EmptyState'
 import { FileSearch, BadgeCheck, CalendarClock } from 'lucide-react'
@@ -1983,139 +1984,79 @@ function TransferModal({ appId, onClose }) {
   )
 }
 
-function AllocateTab({ candidate, jobs, existingApplications }) {
+function AllocateTab({ candidate, existingApplications }) {
   const queryClient = useQueryClient()
-  const appliedJobIds = existingApplications.map(a => a.job_id)
-  const [selectedCategory, setSelectedCategory] = useState('')
+  const appliedJobIds = (existingApplications || []).map(a => a.job_id)
+  const [selectedJob, setSelectedJob] = useState(null)
 
   const allocateMutation = useMutation({
     mutationFn: (jobId) => createApplication({ candidate_id: candidate.id, job_id: jobId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['applications'] })
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
       toast.success('Candidate assigned to project!')
+      setSelectedJob(null)
     },
     onError: (error) => {
-      toast.error('Failed to assign: ' + error.message)
+      toast.error('Failed to assign: ' + (error?.message || 'unknown error'))
     }
   })
 
-  const availableJobs = jobs.filter(job => !appliedJobIds.includes(job.id))
-  const filteredJobs = selectedCategory
-    ? availableJobs.filter(job => job.category === selectedCategory)
-    : availableJobs
-
-  const categories = [...new Set(jobs.map(j => j.category))]
+  const remaining = selectedJob
+    ? Math.max(0, (selectedJob.positions_available || 0) - (selectedJob.positions_filled || 0))
+    : 0
+  const isFull = selectedJob && (selectedJob.positions_available || 0) > 0 && remaining === 0
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          Assign {candidate.name} to a Project
-        </h3>
-        <select
-          className="input text-sm py-1"
-          value={selectedCategory}
-          onChange={(e) => setSelectedCategory(e.target.value)}
-        >
-          <option value="">All Categories</option>
-          {categories.map(cat => (
-            <option key={cat} value={cat}>{cat}</option>
-          ))}
-        </select>
-      </div>
+      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+        Assign {candidate.name} to a Project
+      </h3>
 
-      {filteredJobs.length === 0 ? (
-        <EmptyState
-          icon={Building}
-          tone="indigo"
-          title={availableJobs.length === 0 ? 'Already assigned everywhere' : 'No projects in this category'}
-          description={availableJobs.length === 0
-            ? 'This candidate is already linked to every available project.'
-            : 'Try a different category or clear the filter.'}
-          compact
-        />
-      ) : (
-        <div className="space-y-3 max-h-[420px] overflow-y-auto scrollbar-thin pr-2 -mr-2">
-          {filteredJobs.map(job => {
-            const remaining = Math.max(0, (job.positions_available || 0) - (job.positions_filled || 0))
-            const total = job.positions_available || 0
-            const filledPct = total > 0 ? Math.min(100, Math.round(((job.positions_filled || 0) / total) * 100)) : 0
-            const remainingTone = remaining === 0 ? 'rose' : remaining <= 2 ? 'amber' : 'emerald'
-            const remainingClass = {
-              emerald: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200 ring-emerald-200 dark:ring-emerald-900',
-              amber:   'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200 ring-amber-200 dark:ring-amber-900',
-              rose:    'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-200 ring-rose-200 dark:ring-rose-900',
-            }[remainingTone]
-            return (
-              <div
-                key={job.id}
-                className="relative rounded-2xl border border-zinc-200 dark:border-zinc-800 p-4 transition-all hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md bg-white dark:bg-zinc-900 before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r before:bg-gradient-to-b before:from-indigo-500 before:to-purple-500"
-              >
-                <div className="flex justify-between items-start gap-3 mb-3 pl-2">
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold shrink-0 ring-2 ring-white dark:ring-zinc-900 shadow-sm">
-                      {job.title?.charAt(0)?.toUpperCase() || 'J'}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{job.title}</h4>
-                      <div className="flex flex-wrap gap-2 mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                        {job.category && (
-                          <span className="inline-flex items-center gap-1">
-                            <Briefcase size={11} /> {job.category}
-                          </span>
-                        )}
-                        {job.location && (
-                          <span className="inline-flex items-center gap-1">
-                            <MapPin size={11} /> {job.location}
-                          </span>
-                        )}
-                        {job.salary_range && (
-                          <span className="inline-flex items-center gap-1">
-                            <DollarSign size={11} /> {job.salary_range}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`text-xs font-semibold px-2 py-1 rounded-full ring-1 ring-inset whitespace-nowrap shrink-0 ${remainingClass}`}>
-                    {remaining} open
-                  </span>
-                </div>
+      {/* Cascading: pick a Project first, then a Job within it. */}
+      <ProjectJobSelector excludeJobIds={appliedJobIds} onChange={setSelectedJob} />
 
-                {/* Positions progress */}
-                <div className="pl-2 mb-3">
-                  <div className="flex items-baseline justify-between mb-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Positions filled</span>
-                    <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{job.positions_filled || 0} / {total}</span>
-                  </div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500"
-                      style={{ width: `${filledPct}%` }}
-                    />
-                  </div>
-                </div>
-
-                {job.description && (
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-3 line-clamp-2 pl-2">{job.description}</p>
+      {selectedJob && (
+        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 p-4 bg-white dark:bg-zinc-900">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{selectedJob.title}</h4>
+              <div className="flex flex-wrap gap-2 mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                {selectedJob.category && (
+                  <span className="inline-flex items-center gap-1"><Briefcase size={11} /> {selectedJob.category}</span>
                 )}
-
-                <div className="flex justify-end pl-2">
-                  <Button
-                    size="sm"
-                    onClick={() => allocateMutation.mutate(job.id)}
-                    loading={allocateMutation.isPending}
-                    disabled={remaining === 0}
-                    className="gap-1"
-                  >
-                    <CheckCircle size={14} /> Assign
-                  </Button>
-                </div>
+                {selectedJob.location && (
+                  <span className="inline-flex items-center gap-1"><MapPin size={11} /> {selectedJob.location}</span>
+                )}
               </div>
-            )
-          })}
+            </div>
+            {(selectedJob.positions_available || 0) > 0 && (
+              <span className={`text-xs font-semibold px-2 py-1 rounded-full ring-1 ring-inset whitespace-nowrap shrink-0 ${
+                remaining === 0
+                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-200 ring-rose-200 dark:ring-rose-900'
+                  : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200 ring-emerald-200 dark:ring-emerald-900'
+              }`}>
+                {remaining} open
+              </span>
+            )}
+          </div>
+          {selectedJob.description && (
+            <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 line-clamp-2">{selectedJob.description}</p>
+          )}
         </div>
       )}
+
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          onClick={() => selectedJob && allocateMutation.mutate(selectedJob.id)}
+          loading={allocateMutation.isPending}
+          disabled={!selectedJob || isFull}
+          className="gap-1"
+        >
+          <CheckCircle size={14} /> Assign
+        </Button>
+      </div>
     </div>
   )
 }

@@ -286,6 +286,27 @@ export default function BulkImport() {
     downloadBlob(rowsToCsvBlob(lines, ['row', 'name', 'phone', 'email', 'outcome', 'reason']), 'bulk-import-skipped.csv')
   }
 
+  // Candidates who were imported but the welcome template did NOT reach (no
+  // WhatsApp). Only meaningful when sends ran (whatsapp_unreachable is a boolean,
+  // not null). Export so the team can call them to collect a WhatsApp number.
+  const noWhatsappRows = (results?.commitResults || []).filter((r) => r.status === 'created' && r.whatsapp_unreachable === true)
+  const sendsRan = (results?.commitResults || []).some((r) => r.whatsapp_unreachable !== null && r.whatsapp_unreachable !== undefined)
+  const downloadNoWhatsapp = () => {
+    const rowByIndex = new Map(canonicalRows.map((r) => [r._index, r]))
+    const lines = noWhatsappRows.map((r) => {
+      const src = rowByIndex.get(r.row_index) || {}
+      return {
+        row: r.row_index + 2,
+        name: r.name || src.name || '',
+        phone: r.phone || src.phone || '',
+        email: r.email || src.email || '',
+        reason: r.welcome_reason || 'no_whatsapp',
+      }
+    })
+    if (!lines.length) { toast('No no-WhatsApp candidates 🎉'); return }
+    downloadBlob(rowsToCsvBlob(lines, ['row', 'name', 'phone', 'email', 'reason']), 'bulk-import-no-whatsapp.csv')
+  }
+
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-5xl mx-auto">
@@ -517,6 +538,11 @@ export default function BulkImport() {
 
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={downloadReport}><Download size={14} /> Download skipped/errors CSV</Button>
+            {sendsRan && (
+              <Button variant="secondary" onClick={downloadNoWhatsapp}>
+                <FileWarning size={14} /> No-WhatsApp list ({noWhatsappRows.length})
+              </Button>
+            )}
             <Link to={`/applications?project_id=${projectId}&status=certified`}>
               <Button><Users size={14} /> Go schedule interviews</Button>
             </Link>

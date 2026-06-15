@@ -443,11 +443,12 @@ export default function ProjectDetail() {
       </motion.div>
 
       {/* Top stats grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
         <OverviewStatCard icon={Briefcase} label="Total Jobs" value={stats.total_jobs || 0} tone="blue" />
         <OverviewStatCard icon={Users} label="Candidates" value={stats.unique_candidates || 0} tone="purple" />
         <OverviewStatCard icon={FileText} label="Applications" value={stats.total_applications || 0} tone="amber" />
         <OverviewStatCard icon={Calendar} label="Interviews" value={stats.interviews_count || 0} tone="indigo" />
+        <OverviewStatCard icon={Award} label="Certified" value={stats.certified_count || 0} tone="purple" />
         <OverviewStatCard icon={Award} label="Hired" value={stats.placed_count || stats.selected_count || 0} tone="emerald" />
       </div>
 
@@ -583,8 +584,10 @@ export default function ProjectDetail() {
               <div className="space-y-3">
                 {project.jobs.map((job) => {
                   const filled = Number(job.positions_filled) || 0
+                  const certified = Number(job.certified_count) || 0
                   const total = Number(job.positions_available) || 1
                   const pct = Math.min(100, Math.round((filled / Math.max(1, total)) * 100))
+                  const certPct = Math.min(100, Math.round((certified / Math.max(1, total)) * 100))
                   const bar = pct >= 100 ? 'from-emerald-500 to-emerald-600' : pct >= 60 ? 'from-amber-400 to-amber-500' : 'from-primary-500 to-primary-600'
                   return (
                     <Link
@@ -601,15 +604,32 @@ export default function ProjectDetail() {
                           <Briefcase size={14} /> {job.category}
                         </span>
                         <span>{job.candidate_count || 0} candidates</span>
-                        <span className="ml-auto text-xs tabular-nums font-semibold text-zinc-700 dark:text-zinc-200">
-                          {filled} / {total} filled
-                        </span>
                       </div>
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
-                        <div
-                          className={`h-full rounded-full bg-gradient-to-r ${bar} transition-all duration-500`}
-                          style={{ width: `${pct}%` }}
-                        />
+                      <div className="space-y-1.5">
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] mb-0.5">
+                            <span className="text-zinc-500 dark:text-zinc-400">Certified</span>
+                            <span className="tabular-nums font-semibold text-zinc-700 dark:text-zinc-200">{certified} / {total}</span>
+                          </div>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-violet-500 to-violet-600 transition-all duration-500"
+                              style={{ width: `${certPct}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] mb-0.5">
+                            <span className="text-zinc-500 dark:text-zinc-400">Placed</span>
+                            <span className="tabular-nums font-semibold text-zinc-700 dark:text-zinc-200">{filled} / {total}</span>
+                          </div>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                            <div
+                              className={`h-full rounded-full bg-gradient-to-r ${bar} transition-all duration-500`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     </Link>
                   )

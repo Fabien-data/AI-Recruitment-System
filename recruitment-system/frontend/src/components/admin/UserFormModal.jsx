@@ -41,7 +41,7 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
   const isEdit = mode === 'edit' && !!user
 
   const [form, setForm] = useState({
-    full_name: '', email: '', password: '', phone: '',
+    full_name: '', email: '', password: '', phone: '', pbx_extension: '',
     role: 'project_handler',
   })
   const [permissions, setPermissions] = useState([])
@@ -62,11 +62,12 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
         email:     user.email || '',
         password:  '', // never pre-fill — leave blank to keep existing
         phone:     user.phone || '',
+        pbx_extension: user.pbx_extension || '',
         role:      user.role || 'project_handler',
       })
       setFormError(null)
     } else {
-      setForm({ full_name: '', email: '', password: '', phone: '', role: 'project_handler' })
+      setForm({ full_name: '', email: '', password: '', phone: '', pbx_extension: '', role: 'project_handler' })
       // Pre-check the mandatory baseline for the default role (UPGRADES.md #2).
       setPermissions(baselineRows('project_handler'))
       setFormError(null)
@@ -140,6 +141,7 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
       const updates = {}
       if (form.full_name !== user.full_name)  updates.full_name = form.full_name
       if (form.phone !== (user.phone || ''))  updates.phone = form.phone
+      if (form.pbx_extension !== (user.pbx_extension || '')) updates.pbx_extension = form.pbx_extension
       if (form.role !== user.role)            updates.role = form.role
       if (Object.keys(updates).length > 0) {
         await updateAdminUser(user.id, updates)
@@ -175,6 +177,7 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
       email:     form.email,
       password:  form.password,
       phone:     form.phone || null,
+      pbx_extension: form.pbx_extension || null,
       role:      form.role,
     }
     // Send the full matrix verbatim (override model). Admin ignores it.
@@ -233,6 +236,13 @@ export default function UserFormModal({ open, onClose, mode = 'create', user = n
               name="phone"
               value={form.phone}
               onChange={(e) => setForm(p => ({ ...p, phone: e.target.value }))}
+            />
+            <Input
+              label="3CX extension (optional)"
+              name="pbx_extension"
+              value={form.pbx_extension}
+              onChange={(e) => setForm(p => ({ ...p, pbx_extension: e.target.value }))}
+              placeholder="e.g. 101"
             />
           </div>
         </section>

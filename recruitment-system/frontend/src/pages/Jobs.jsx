@@ -642,8 +642,10 @@ function JobStat({ icon: Icon, label, value, tone }) {
 function JobCard({ job, isAdmin, index = 0, onEdit, onDelete, onSchedule }) {
   const navigate = useNavigate()
   const filled = job.positions_filled ?? 0
+  const certified = job.certified_count ?? 0
   const available = job.positions_available ?? 1
   const pct = Math.min(100, Math.round((filled / Math.max(1, available)) * 100))
+  const certPct = Math.min(100, Math.round((certified / Math.max(1, available)) * 100))
   const barTone = pct >= 100
     ? 'from-emerald-500 to-emerald-600'
     : pct >= 60
@@ -720,16 +722,31 @@ function JobCard({ job, isAdmin, index = 0, onEdit, onDelete, onSchedule }) {
           <DomainPill domain={job.domain} />
         </div>
 
-        <div>
-          <div className="flex items-center justify-between text-xs mb-1">
-            <span className="text-zinc-500 dark:text-zinc-400">Positions filled</span>
-            <span className="font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">{filled} / {available}</span>
+        {/* Two progress bars: Certified (passed screening) and Placed (hired). */}
+        <div className="space-y-2">
+          <div>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="text-zinc-500 dark:text-zinc-400">Certified</span>
+              <span className="font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">{certified} / {available}</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-violet-500 to-violet-600 transition-all duration-500"
+                style={{ width: `${certPct}%` }}
+              />
+            </div>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
-            <div
-              className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
-              style={{ width: `${pct}%` }}
-            />
+          <div>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="text-zinc-500 dark:text-zinc-400">Placed</span>
+              <span className="font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">{filled} / {available}</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+              <div
+                className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
           </div>
         </div>
 

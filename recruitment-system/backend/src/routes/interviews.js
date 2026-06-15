@@ -25,6 +25,8 @@ const {
     DEFAULT_SLOT_MINUTES,
 } = require('../services/interview-scheduler');
 const logger = require('../utils/logger');
+// Shared with the bulk-import welcome pass so the no-WhatsApp flag is set identically.
+const { applyWhatsappReachability } = require('../utils/whatsapp-reachability');
 
 // Upper bound for a single bulk request. The per-item loops below are sequential
 // and fault-isolated (one failure never aborts the batch), so the real constraint
@@ -32,33 +34,6 @@ const logger = require('../utils/logger');
 // selections in sequential chunks. This ceiling is a safety backstop, not the old
 // hard "100 per time" limit the user hit.
 const BULK_MAX = 1000;
-
-// Update a candidate's WhatsApp reachability flag from a send result. A confirmed
-// WhatsApp delivery clears the flag; a genuine "not a WhatsApp user" sets it (so the
-// candidate sinks to the bottom of lists and lands in the call-list CSV). Transient
-// reasons (out_of_window / rate_limited) leave the flag untouched. Defensive: the
-// columns are added by migration; any error (e.g. missing column) is swallowed so a
-// send never fails on bookkeeping.
-async function applyWhatsappReachability(candidateId, notification) {
-    if (!candidateId || !notification) return;
-    try {
-        const okWhatsapp = (notification.success || []).some((s) => s.channel === 'whatsapp');
-        const noWhatsapp = (notification.failed || []).find((f) => f.channel === 'whatsapp' && f.reason === 'no_whatsapp');
-        if (okWhatsapp) {
-            await query(
-                adaptQuery('UPDATE candidates SET whatsapp_unreachable = FALSE, whatsapp_last_error = NULL, whatsapp_checked_at = NOW() WHERE id = $1'),
-                [candidateId]
-            );
-        } else if (noWhatsapp) {
-            await query(
-                adaptQuery('UPDATE candidates SET whatsapp_unreachable = TRUE, whatsapp_last_error = $2, whatsapp_checked_at = NOW() WHERE id = $1'),
-                [candidateId, String(noWhatsapp.error || 'Not a WhatsApp number').slice(0, 500)]
-            );
-        }
-    } catch (err) {
-        logger.debug(`whatsapp reachability update skipped for ${candidateId}: ${err.message}`);
-    }
-}
 
 // Roles permitted to schedule / run interviews. Marketing agents source leads
 // but must NOT schedule or notify interviews (B010); the UI hides the action
@@ -194,6 +169,7 @@ router.get('/stats', authenticate, requireSection('interviews', 'view'), async (
                 COUNT(*) FILTER (WHERE iv.status = 'completed') AS completed,
                 COUNT(*) FILTER (WHERE iv.status = 'cancelled') AS cancelled,
                 COUNT(*) FILTER (WHERE iv.status = 'no_show') AS no_show,
+                COUNT(*) FILTER (WHERE iv.status = 'confirmed') AS confirmed,
                 COUNT(*) FILTER (WHERE iv.status IN ('scheduled','confirmed')) AS upcoming,
                 COUNT(*) FILTER (WHERE iv.status IN ('scheduled','confirmed') AND iv.scheduled_datetime < NOW()) AS overdue
             FROM interview_schedules iv
@@ -220,13 +196,37 @@ router.get('/stats', authenticate, requireSection('interviews', 'view'), async (
               ) ${psProject}
         `, psParams);
 
+        // Candidate-driven WhatsApp button outcomes: how many tapped Reschedule or
+        // Can't-make-it (open agent tasks). Project-scoped to match the cards.
+        // Degrades to 0 if candidate_tasks is unavailable (never breaks the stats).
+        let reschedule_requested = 0, cant_make = 0;
+        try {
+            const ctParams = [];
+            let ctProject = '';
+            if (req.query.project_id) { ctParams.push(req.query.project_id); ctProject = `AND j.project_id = $${ctParams.length}`; }
+            const ctRes = await query(`
+                SELECT
+                    COUNT(*) FILTER (WHERE t.task_type = 'reschedule_interview') AS reschedule_requested,
+                    COUNT(*) FILTER (WHERE t.task_type = 'interview_cant_make')   AS cant_make
+                FROM candidate_tasks t
+                JOIN applications a ON t.application_id = a.id
+                JOIN jobs j ON a.job_id = j.id
+                WHERE t.status = 'pending'
+                  AND t.task_type IN ('reschedule_interview','interview_cant_make') ${ctProject}
+            `, ctParams);
+            reschedule_requested = parseInt(ctRes.rows[0]?.reschedule_requested, 10) || 0;
+            cant_make = parseInt(ctRes.rows[0]?.cant_make, 10) || 0;
+        } catch (ctErr) { logger.debug(`interviews/stats: candidate_tasks counts skipped — ${ctErr.message}`); }
+
         const s = statsRes.rows[0] || {};
         const n = (v) => parseInt(v, 10) || 0;
         res.json({
             total: n(s.total), today: n(s.today), this_week: n(s.this_week),
             completed: n(s.completed), cancelled: n(s.cancelled), no_show: n(s.no_show),
+            confirmed: n(s.confirmed),
             upcoming: n(s.upcoming), overdue: n(s.overdue),
             pending_send: n(psRes.rows[0] && psRes.rows[0].pending_send),
+            reschedule_requested, cant_make,
         });
     } catch (err) { next(err); }
 });

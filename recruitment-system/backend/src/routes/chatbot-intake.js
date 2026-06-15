@@ -25,6 +25,9 @@ const multer = require('multer');
 const { normalizeIncomingCvUrl } = require('../utils/cv-url');
 const { normalizePhone: canonicalPhone, phoneVariants } = require('../utils/phone');
 const { emitStageChanged, syncCandidateStage } = require('../services/candidate-stage');
+const { allocateInterviewSlots } = require('../services/interview-scheduler');
+const notifications = require('../services/notifications');
+const { logAgentAction } = require('../services/activity-log');
 
 // Multer for multipart/form-data CV uploads (max 20MB)
 const upload = multer({
@@ -835,6 +838,17 @@ router.post(
                 }
             }
 
+            // A separate CALLABLE number (non-WhatsApp / landline / family member) the
+            // candidate or bot provides — stored in the dedicated candidates.contact_phone
+            // column (migration 057) so recruiters see "WhatsApp Number" vs "Call Number"
+            // distinctly. We still keep metadata.phone_alternative above for back-compat.
+            const callableContactPhone = firstDefined(
+                parsed.contact_phone, topLevel.contact_phone,
+                parsed.call_number, topLevel.call_number,
+                parsed.alternative_phone, topLevel.alternative_phone,
+                parsed.phone_alternative, topLevel.phone_alternative,
+            );
+
             const mergedMetadata = { ...existingMetadata, ...metadataUpdates };
             // Produce a valid JSON value (never the string "null")
             const metadataJson = Object.keys(mergedMetadata).length > 0
@@ -948,6 +962,19 @@ router.post(
                 ]);
 
                 logger.info(`Chatbot intake: CREATED candidate ${candidateId} (${normalizedPhone})`);
+            }
+
+            // Persist the callable (non-WhatsApp) number into its dedicated column.
+            // Best-effort: a missing column on a not-yet-migrated DB just no-ops here.
+            if (callableContactPhone) {
+                try {
+                    await query(
+                        adaptQuery('UPDATE candidates SET contact_phone = $1, updated_at = NOW() WHERE id = $2'),
+                        [canonicalPhone(callableContactPhone) || String(callableContactPhone).trim(), candidateId]
+                    );
+                } catch (cpErr) {
+                    logger.debug(`Chatbot intake: contact_phone update skipped for ${candidateId} — ${cpErr.message}`);
+                }
             }
 
             // ── Step 3: Create CV + additional document records ─────────────
@@ -1748,6 +1775,255 @@ router.post('/interview-response', authenticateChatbot, async (req, res) => {
         });
     } catch (err) {
         logger.error(`interview-response error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Helper: load a candidate's nearest upcoming interview + its project interview_config.
+async function findUpcomingInterview(phone) {
+    const r = await query(adaptQuery(`
+        SELECT c.id AS candidate_id, c.name, c.agent_id,
+               iv.id AS interview_id, iv.application_id, iv.scheduled_datetime, iv.interviewer_id,
+               a.job_id, j.title AS job_title, j.project_id,
+               p.interview_config
+        FROM candidates c
+        JOIN applications a ON a.candidate_id = c.id
+        JOIN interview_schedules iv ON iv.application_id = a.id
+        JOIN jobs j ON a.job_id = j.id
+        LEFT JOIN projects p ON p.id = j.project_id
+        WHERE (c.phone = $1 OR c.whatsapp_phone = $1)
+          AND iv.status IN ('scheduled', 'confirmed')
+        ORDER BY iv.scheduled_datetime ASC
+        LIMIT 1
+    `), [phone]);
+    return r.rows[0] || null;
+}
+
+// ── POST /api/chatbot/interview-slots ─────────────────────────────────────────
+// Candidate tapped "Reschedule": compute the next available slots from the
+// project's interview_config + the already-booked interview_schedules, so the bot
+// can offer them as an interactive list. Returns [{slot_id, datetime, label}].
+router.post('/interview-slots', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone } = req.body || {};
+        if (!phone) return res.status(400).json({ error: 'phone is required' });
+        const iv = await findUpcomingInterview(phone);
+        if (!iv) return res.json({ ok: false, reason: 'no_upcoming_interview', slots: [] });
+
+        const cfg = iv.interview_config || {};
+        // Seed already-booked counts per day (single null lane) so full days are skipped.
+        const booked = await query(adaptQuery(`
+            SELECT to_char(s.scheduled_datetime, 'YYYY-MM-DD') AS d, COUNT(*)::int AS n
+            FROM interview_schedules s
+            JOIN applications a ON s.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+              AND s.scheduled_datetime >= NOW()
+            GROUP BY 1
+        `), [iv.project_id]);
+        const existingByInterviewerDay = { null: {} };
+        for (const row of booked.rows) existingByInterviewerDay.null[row.d] = parseInt(row.n, 10) || 0;
+
+        // Start from tomorrow in Asia/Colombo (interview times are literal wall-clock).
+        const sd = await query(`SELECT ((NOW() AT TIME ZONE 'Asia/Colombo')::date + 1)::text AS start_date`, []);
+        const startDate = sd.rows[0].start_date;
+
+        const SLOT_COUNT = 6;
+        const alloc = allocateInterviewSlots({
+            applications: Array.from({ length: SLOT_COUNT }, (_, i) => `rs${i}`),
+            startDate,
+            perDayLimit: parseInt(cfg.per_day_limit, 10) || undefined,
+            slotMinutes: parseInt(cfg.slot_minutes, 10) || undefined,
+            workdayStartHour: cfg.workday_start_hour != null ? Number(cfg.workday_start_hour) : undefined,
+            workdayEndHour: cfg.workday_end_hour != null ? Number(cfg.workday_end_hour) : undefined,
+            workingDays: Array.isArray(cfg.working_days) && cfg.working_days.length ? cfg.working_days.map(Number) : undefined,
+            skipDates: Array.isArray(cfg.skip_dates) ? cfg.skip_dates : undefined,
+            existingByInterviewerDay,
+        });
+
+        const slots = alloc.assignments.map((s) => ({
+            slot_id: `rs|${iv.interview_id}|${s.scheduled_datetime}`,
+            datetime: s.scheduled_datetime,
+            label: notifications.formatInterviewWallClock(s.scheduled_datetime),
+        }));
+        return res.json({ ok: true, interview_id: iv.interview_id, slots });
+    } catch (err) {
+        logger.error(`interview-slots error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/chatbot/interview-reschedule-pick ───────────────────────────────
+// Candidate picked one of the offered slots: re-validate it's still free, rebook
+// the interview, complete the reschedule task, notify the team, live-emit.
+router.post('/interview-reschedule-pick', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone, interview_id, datetime } = req.body || {};
+        if (!phone || !interview_id || !datetime) {
+            return res.status(400).json({ error: 'phone, interview_id and datetime are required' });
+        }
+        const ivRes = await query(adaptQuery(`
+            SELECT iv.id, iv.application_id, iv.scheduled_datetime, iv.interviewer_id,
+                   a.candidate_id, a.job_id, j.project_id, j.title AS job_title
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE iv.id = $1
+        `), [interview_id]);
+        if (ivRes.rows.length === 0) return res.json({ ok: false, reason: 'interview_not_found' });
+        const iv = ivRes.rows[0];
+
+        // Re-validate the chosen slot is still free for this project (a second
+        // candidate may have taken it since it was offered).
+        const clash = await query(adaptQuery(`
+            SELECT 1 FROM interview_schedules s
+            JOIN applications a ON s.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+              AND s.scheduled_datetime = $2 AND s.id <> $3
+            LIMIT 1
+        `), [iv.project_id, datetime, interview_id]);
+        if (clash.rows.length > 0) return res.json({ ok: false, reason: 'slot_taken' });
+
+        // Rebook + reset reminder cadence (best-effort on the cadence columns which
+        // are postgres-owned on prod). reschedule_count/rescheduled_from are 058 cols.
+        await query(adaptQuery(`
+            UPDATE interview_schedules
+            SET scheduled_datetime = $1, status = 'scheduled',
+                rescheduled_from_datetime = scheduled_datetime,
+                reschedule_count = COALESCE(reschedule_count, 0) + 1,
+                reminder_sent_at = NULL
+            WHERE id = $2
+        `), [datetime, interview_id]).catch(async () => {
+            // Fallback if the 058 columns are missing (ownership): just move the time.
+            await query(adaptQuery(`UPDATE interview_schedules SET scheduled_datetime = $1, status = 'scheduled', reminder_sent_at = NULL WHERE id = $2`), [datetime, interview_id]);
+        });
+        await query(adaptQuery('UPDATE applications SET interview_datetime = $1, updated_at = NOW() WHERE id = $2'), [datetime, iv.application_id]).catch(() => {});
+
+        // Resolve the pending reschedule task.
+        await query(adaptQuery(`
+            UPDATE candidate_tasks SET status = 'completed', completed_at = NOW()
+            WHERE application_id = $1 AND task_type = 'reschedule_interview' AND status = 'pending'
+        `), [iv.application_id]).catch(() => {});
+
+        syncCandidateStage(iv.candidate_id).catch(() => {});
+        const when = notifications.formatInterviewWallClock(datetime);
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('candidate_stage_changed', { candidate_id: iv.candidate_id, status: 'interview_scheduled', ts: new Date().toISOString() });
+        } catch (_) { /* best-effort */ }
+        recruiterAlert('human_handoff', {
+            candidatePhone: phone,
+            lastMessage: `Candidate RESCHEDULED their ${iv.job_title} interview to ${when}.`,
+        }).catch(() => {});
+
+        return res.json({ ok: true, new_datetime: datetime, label: when });
+    } catch (err) {
+        logger.error(`interview-reschedule-pick error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/chatbot/interview-cant-make-jobs ────────────────────────────────
+// Candidate tapped "Can't make it": offer up to 5 currently-open jobs (their own
+// project(s) first), excluding jobs they already applied to, for the bot to render
+// with Apply / Not-interested.
+router.post('/interview-cant-make-jobs', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone } = req.body || {};
+        if (!phone) return res.status(400).json({ error: 'phone is required' });
+        const c = await query(adaptQuery('SELECT id FROM candidates WHERE phone = $1 OR whatsapp_phone = $1 LIMIT 1'), [phone]);
+        if (c.rows.length === 0) return res.json({ ok: false, reason: 'candidate_not_found', jobs: [] });
+        const candidateId = c.rows[0].id;
+
+        const r = await query(adaptQuery(`
+            SELECT j.id AS job_id, j.title, j.country, p.title AS project_title,
+                   CASE WHEN j.project_id IN (
+                       SELECT j2.project_id FROM applications a2 JOIN jobs j2 ON j2.id = a2.job_id
+                       WHERE a2.candidate_id = $1 AND a2.status <> 'rejected'
+                   ) THEN 0 ELSE 1 END AS own_project_rank
+            FROM jobs j
+            LEFT JOIN projects p ON p.id = j.project_id
+            WHERE j.status = 'active'
+              AND COALESCE(j.positions_available, 0) > (
+                  SELECT COUNT(DISTINCT a3.candidate_id) FROM applications a3
+                  WHERE a3.job_id = j.id AND a3.status = 'hired'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM applications a4 WHERE a4.candidate_id = $1 AND a4.job_id = j.id
+              )
+            ORDER BY own_project_rank ASC, j.created_at DESC
+            LIMIT 5
+        `), [candidateId]);
+
+        const jobs = r.rows.map((row) => ({
+            job_id: row.job_id,
+            title: row.title,
+            label: `${row.title}${row.country ? ' — ' + row.country : ''}`,
+        }));
+        return res.json({ ok: true, jobs });
+    } catch (err) {
+        logger.error(`interview-cant-make-jobs error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/chatbot/interview-cant-make-apply ───────────────────────────────
+// Candidate chose Apply (to an alternative job) or Not-interested after declining
+// the interview. apply → create application (ON CONFLICT no-op) + remark; not
+// interested → future_pool + remark. Both resolve the pending cant-make task.
+router.post('/interview-cant-make-apply', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone, job_id, action } = req.body || {};
+        if (!phone || !['apply', 'not_interested'].includes(action)) {
+            return res.status(400).json({ error: 'phone and a valid action (apply|not_interested) are required' });
+        }
+        const c = await query(adaptQuery('SELECT id FROM candidates WHERE phone = $1 OR whatsapp_phone = $1 LIMIT 1'), [phone]);
+        if (c.rows.length === 0) return res.json({ ok: false, reason: 'candidate_not_found' });
+        const candidateId = c.rows[0].id;
+
+        if (action === 'apply') {
+            if (!job_id) return res.status(400).json({ error: 'job_id is required to apply' });
+            const jr = await query(adaptQuery('SELECT title FROM jobs WHERE id = $1'), [job_id]);
+            const jobTitle = jr.rows[0]?.title || 'a role';
+            // UNIQUE(candidate_id, job_id) stays per the locked decision — no-op on dup.
+            await query(adaptQuery(`
+                INSERT INTO applications (id, candidate_id, job_id, status, applied_at)
+                VALUES ($1, $2, $3, 'screening', NOW())
+                ON CONFLICT (candidate_id, job_id) DO NOTHING
+            `), [generateUUID(), candidateId, job_id]);
+            await logAgentAction({
+                candidateId, agentId: null, actionType: 'note', jobId: job_id,
+                remark: `Candidate could not attend their interview and applied to ${jobTitle} instead (via WhatsApp).`,
+            }).catch(() => {});
+            syncCandidateStage(candidateId).catch(() => {});
+        } else {
+            // Not interested → park in future_pool (reuse migration-053 columns).
+            await query(adaptQuery(`
+                UPDATE candidates
+                SET status = 'future_pool', conversation_stage = 'future_pool',
+                    future_pool_category = 'not_interested',
+                    future_pool_note = 'Declined interview and not interested in current openings (via WhatsApp).',
+                    future_pool_at = NOW(), updated_at = NOW()
+                WHERE id = $1 AND status NOT IN ('merged','hired')
+            `), [candidateId]).catch(() => {});
+            await logAgentAction({
+                candidateId, agentId: null, actionType: 'note',
+                remark: 'Candidate could not attend their interview and is not interested in other current openings (via WhatsApp).',
+            }).catch(() => {});
+            emitStageChanged(candidateId, 'future_pool');
+        }
+
+        // Resolve the pending cant-make task either way.
+        await query(adaptQuery(`
+            UPDATE candidate_tasks SET status = 'completed', completed_at = NOW()
+            WHERE candidate_id = $1 AND task_type = 'interview_cant_make' AND status = 'pending'
+        `), [candidateId]).catch(() => {});
+
+        return res.json({ ok: true, result: action });
+    } catch (err) {
+        logger.error(`interview-cant-make-apply error: ${err.message}`);
         res.status(500).json({ error: err.message });
     }
 });

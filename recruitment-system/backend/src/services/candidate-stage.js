@@ -176,12 +176,57 @@ async function candidateHasCv(candidateId) {
 }
 
 /**
+ * Keep candidates.cross_project_flagged + the "Multiple projects" tag in sync.
+ * A candidate is flagged when they have live (non-rejected) applications across
+ * 2+ DISTINCT projects — the calling console surfaces the tag as a chat chip so
+ * an agent knows a candidate is in play for more than one client (the user's
+ * "add a remark for those chats" requirement; same-project multi-job applicants
+ * are grouped in the Applications UI, NOT flagged here). Idempotent + never
+ * throws (fire-and-forget contract). Postgres array semantics (tags is TEXT[]).
+ * @param {string} candidateId
+ */
+async function refreshCrossProjectFlag(candidateId) {
+    if (!candidateId) return;
+    try {
+        // Single statement: compute "in 2+ distinct live-application projects" in a
+        // subquery, then set the boolean AND add/remove the "Multiple projects" tag
+        // accordingly. Idempotent. Postgres array ops (candidates.tags is TEXT[]).
+        await query(
+            adaptQuery(`
+                UPDATE candidates c SET
+                    cross_project_flagged = sub.flagged,
+                    tags = CASE
+                        WHEN sub.flagged AND NOT ('Multiple projects' = ANY(COALESCE(c.tags, '{}')))
+                            THEN array_append(COALESCE(c.tags, '{}'), 'Multiple projects')
+                        WHEN NOT sub.flagged
+                            THEN array_remove(COALESCE(c.tags, '{}'), 'Multiple projects')
+                        ELSE c.tags
+                    END
+                FROM (
+                    SELECT (COUNT(DISTINCT j.project_id) >= 2) AS flagged
+                    FROM applications a JOIN jobs j ON j.id = a.job_id
+                    WHERE a.candidate_id = $1 AND a.status <> 'rejected' AND j.project_id IS NOT NULL
+                ) sub
+                WHERE c.id = $1
+            `),
+            [candidateId]
+        );
+    } catch (err) {
+        logger.warn(`candidate-stage: refreshCrossProjectFlag failed for ${candidateId}: ${err.message}`);
+    }
+}
+
+/**
  * Recompute candidates.status (+ conversation_stage) from the candidate's
  * furthest-along application. Fire-and-forget: logs and swallows all errors.
  * @param {string} candidateId
  */
 async function syncCandidateStage(candidateId) {
     if (!candidateId) return;
+    // Keep the cross-project flag/tag current on EVERY application-status write —
+    // runs regardless of whether the canonical stage itself changes below (a 2nd
+    // application in a different project at the same stage still flips the flag).
+    await refreshCrossProjectFlag(candidateId);
     try {
         const candRes = await query(
             adaptQuery(`
@@ -310,6 +355,7 @@ module.exports = {
     normalizeApplicationStatus,
     deriveCandidateStage,
     syncCandidateStage,
+    refreshCrossProjectFlag,
     setCandidateStage,
     emitStageChanged,
     emitApplicationChanged,

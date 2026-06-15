@@ -45,12 +45,13 @@ const CANDIDATE_STATUS_BUCKETS = new Set(['new', 'screening', 'certified', 'inte
  * @param {*}        opts.userId             - req.user.id (for claimed=me)
  * @param {Function} opts.addParam           - (value) => placeholder string; pushes to the caller's params array
  * @param {boolean}  opts.includeStatusBucket- apply the single-bucket status filter (true for the list, false for counts which fan out per bucket)
+ * @param {boolean}  opts.isAdmin            - the requester is an admin (enables the per-user `claimed_by` filter)
  * @returns {string[]} filter clauses (AND-joined by the caller)
  *
  * A search is a GLOBAL lookup — it bypasses the status-bucket + project scope so
  * the candidate is found no matter which tab/project is selected.
  */
-function buildConversationFilters({ query, userId, addParam, includeStatusBucket }) {
+function buildConversationFilters({ query, userId, addParam, includeStatusBucket, isAdmin = false }) {
     const filters = [];
     const {
         search = '',
@@ -90,8 +91,20 @@ function buildConversationFilters({ query, userId, addParam, includeStatusBucket
     if (query.call_status === 'on_call') filters.push(`ca.call_status = 'on_call'`);
     if (query.contacted === 'yes') filters.push(`ca.last_contacted_at IS NOT NULL`);
     else if (query.contacted === 'no') filters.push(`ca.last_contacted_at IS NULL`);
-    if (query.claimed === 'me') filters.push(`ca.claimed_by = ${addParam(userId)}`);
-    else if (query.claimed === 'unassigned') filters.push(`ca.claimed_by IS NULL`);
+    // Claim scope. The DEFAULT (no `claimed` param) HIDES claimed chats from the
+    // All/New lists for everyone — a claimed chat lives under its owner's "Mine"
+    // and, for admins, the per-user "Claimed by <user>" filter. Search stays a
+    // GLOBAL lookup, so the default-hide is skipped while searching (a claimed
+    // candidate must still be findable by name/phone).
+    if (query.claimed === 'me') {
+        filters.push(`ca.claimed_by = ${addParam(userId)}`);
+    } else if (query.claimed === 'unassigned') {
+        filters.push(`ca.claimed_by IS NULL`);
+    } else if (isAdmin && query.claimed_by) {
+        filters.push(`ca.claimed_by = ${addParam(query.claimed_by)}`);
+    } else if (!isSearch) {
+        filters.push(`ca.claimed_by IS NULL`);
+    }
 
     if (date_from) filters.push(`lm.sent_at >= ${addParam(date_from)}`);
     if (date_to) filters.push(`lm.sent_at <= ${addParam(date_to)}`);
@@ -141,20 +154,27 @@ function buildCandidateStatusCountsSql({ whereClause = '', includeHired = false 
             ${statusCount('future_pool', 'st_future_pool')}${includeHired ? `,
             ${statusCount('hired', 'st_hired')}` : ''}
         FROM candidates ca
-        LEFT JOIN (
-            SELECT DISTINCT ON (candidate_id)
-                candidate_id, direction, read_at, delivered_at, sent_at
-            FROM communications
-            WHERE channel = 'whatsapp'
-            ORDER BY candidate_id, sent_at DESC
-        ) lm ON lm.candidate_id = ca.id
-        LEFT JOIN (
-            SELECT DISTINCT ON (a.candidate_id)
-                a.candidate_id, a.status AS application_status, j.project_id AS project_id
+        -- Latest WhatsApp message per candidate. LATERAL + LIMIT 1 backed by
+        -- idx_communications_wa_cand_sentat (migration 056) = one index seek per
+        -- candidate instead of a full-table DISTINCT ON scan+sort (the dominant
+        -- cost of the Messages list). Must stay byte-identical to the list query.
+        LEFT JOIN LATERAL (
+            SELECT c2.direction, c2.read_at, c2.delivered_at, c2.sent_at
+            FROM communications c2
+            WHERE c2.candidate_id = ca.id AND c2.channel = 'whatsapp'
+            ORDER BY c2.sent_at DESC
+            LIMIT 1
+        ) lm ON TRUE
+        -- Latest application per candidate (drives project scope + pipeline stage).
+        -- LATERAL + LIMIT 1 backed by idx_applications_cand_updated (migration 056).
+        LEFT JOIN LATERAL (
+            SELECT a.status AS application_status, j.project_id AS project_id
             FROM applications a
             LEFT JOIN jobs j ON j.id = a.job_id
-            ORDER BY a.candidate_id, COALESCE(a.updated_at, a.applied_at) DESC
-        ) la ON la.candidate_id = ca.id
+            WHERE a.candidate_id = ca.id
+            ORDER BY COALESCE(a.updated_at, a.applied_at) DESC
+            LIMIT 1
+        ) la ON TRUE
         LEFT JOIN (
             SELECT t.ad_ref, t.project_id FROM ad_tracking t
         ) adt ON adt.ad_ref = ca.ad_ref

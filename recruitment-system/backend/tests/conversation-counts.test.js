@@ -73,8 +73,10 @@ describe('buildCandidateStatusCountsSql', () => {
 
     test('counts over the same FROM/JOIN population as the list (lm gate join present)', () => {
         expect(sql).toContain('FROM candidates ca');
-        expect(sql).toContain("WHERE channel = 'whatsapp'");
-        expect(sql).toContain('LEFT JOIN');
+        // The latest-message lateral filters whatsapp messages (alias c2 after the
+        // DISTINCT-ON → LATERAL rewrite for the indexed top-1-per-candidate lookup).
+        expect(sql).toContain("c2.channel = 'whatsapp'");
+        expect(sql).toContain('LEFT JOIN LATERAL');
     });
 });
 

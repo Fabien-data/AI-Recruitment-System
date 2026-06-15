@@ -36,6 +36,7 @@ const ENGLISH_OPTIONS = [
 const EMPTY_FORM = {
   name: '',
   phone: '',
+  contact_phone: '',
   email: '',
   age: '',
   height_cm: '',
@@ -89,6 +90,7 @@ export function EditCandidateModal({ candidate, open, onClose }) {
       setForm({
         name: candidate.name || '',
         phone: candidate.phone || '',
+        contact_phone: candidate.contact_phone || '',
         email: candidate.email || '',
         age: candidate.age ?? meta.age ?? '',
         height_cm: candidate.height_cm ?? meta.height_cm ?? '',
@@ -128,6 +130,7 @@ export function EditCandidateModal({ candidate, open, onClose }) {
     const payload = {
       name: form.name.trim(),
       phone: form.phone.trim(),
+      contact_phone: form.contact_phone?.trim() || null,
       email: form.email?.trim() || null,
       source: form.source,
       status: form.status,
@@ -162,11 +165,17 @@ export function EditCandidateModal({ candidate, open, onClose }) {
             placeholder="Full name"
           />
           <Input
-            label="Phone"
+            label="WhatsApp Number"
             required
             value={form.phone}
             onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
             placeholder="+94 77 123 4567"
+          />
+          <Input
+            label="Call Number"
+            value={form.contact_phone}
+            onChange={(e) => setForm((f) => ({ ...f, contact_phone: e.target.value }))}
+            placeholder="Landline or alternate mobile (optional)"
           />
           <Input
             label="Email"

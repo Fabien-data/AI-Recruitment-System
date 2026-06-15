@@ -109,7 +109,7 @@ router.get('/users', ...ADMIN_ONLY, async (req, res, next) => {
 
         params.push(parseInt(limit), offset);
         const usersRes = await pool.query(
-            `SELECT id, email, full_name, role, phone, is_active, approved, created_at, last_login_at
+            `SELECT id, email, full_name, role, phone, pbx_extension, is_active, approved, created_at, last_login_at
              FROM users ${whereClause}
              ORDER BY approved ASC, created_at DESC
              LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -139,7 +139,7 @@ router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
     try {
         const {
             email, password, full_name, role = ROLES.PROJECT_HANDLER, phone,
-            section_permissions,
+            pbx_extension, section_permissions,
         } = req.body;
 
         if (!email || !password || !full_name) {
@@ -161,10 +161,10 @@ router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
         await client.query('BEGIN');
 
         const result = await client.query(
-            `INSERT INTO users (email, password_hash, full_name, role, phone)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING id, email, full_name, role, phone, is_active, created_at`,
-            [email, password_hash, full_name, role, phone || null]
+            `INSERT INTO users (email, password_hash, full_name, role, phone, pbx_extension)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING id, email, full_name, role, phone, pbx_extension, is_active, created_at`,
+            [email, password_hash, full_name, role, phone || null, pbx_extension ? String(pbx_extension).trim().slice(0, 20) : null]
         );
         const newUser = result.rows[0];
 
@@ -202,7 +202,7 @@ router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
 router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { role, is_active, full_name, phone, approved } = req.body;
+        const { role, is_active, full_name, phone, approved, pbx_extension } = req.body;
 
         // Prevent admin from deactivating themselves
         if (id === req.user.id && is_active === false) {
@@ -253,6 +253,11 @@ router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
             params.push(phone);
             setClauses.push(`phone = $${params.length}`);
         }
+        // 3CX extension mapping (empty string clears it). See docs/3cx-integration-plan.md.
+        if (pbx_extension !== undefined) {
+            params.push(pbx_extension ? String(pbx_extension).trim().slice(0, 20) : null);
+            setClauses.push(`pbx_extension = $${params.length}`);
+        }
         // Approving a pending registration: also activate so they can log in.
         if (approved !== undefined) {
             params.push(approved);
@@ -270,7 +275,7 @@ router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
         params.push(id);
         const result = await pool.query(
             `UPDATE users SET ${setClauses.join(', ')} WHERE id = $${params.length}
-             RETURNING id, email, full_name, role, phone, is_active, approved, created_at, last_login_at`,
+             RETURNING id, email, full_name, role, phone, pbx_extension, is_active, approved, created_at, last_login_at`,
             params
         );
 

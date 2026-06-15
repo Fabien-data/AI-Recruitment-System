@@ -32,11 +32,27 @@ approved is what makes out-of-window delivery actually work.
 | `dewan_welcome` | `TEMPLATE_WELCOME` | 1=first name |
 | `dewan_status_update` | `TEMPLATE_STATUS_UPDATE` | 1=first name, 2=one-line summary |
 | `dewan_interview_scheduled` | `TEMPLATE_INTERVIEW_SCHEDULED` | 1=first name, 2=job title, 3=date/time |
+| `dewan_interview_invite` | `TEMPLATE_INTERVIEW_INVITE` | 1=first name, 2=job title, 3=date/time, 4=location, 5=what-to-bring, 6=dress code |
 | `dewan_interview_reminder` | `TEMPLATE_INTERVIEW_REMINDER` | 1=first name, 2=job title, 3=date/time |
 | `dewan_interview_day_reminder` | `TEMPLATE_INTERVIEW_DAY_REMINDER` | 1=first name, 2=job title, 3=date/time |
+| `dewan_interview_reschedule_options` | `TEMPLATE_INTERVIEW_RESCHEDULE_OPTIONS` | 1=first name |
+| `dewan_cant_make_job_offer` | `TEMPLATE_CANT_MAKE_JOB_OFFER` | 1=first name, 2=job title |
 | `dewan_job_now_available` | `TEMPLATE_JOB_NOW_AVAILABLE` | 1=first name, 2=job title |
 | `dewan_reengage` | `TEMPLATE_REENGAGE` | 1=first name |
 | `dewan_followup_missing_info` | `FOLLOWUP_TEMPLATE_MISSING_INFO` | 1=first name, 2=missing field |
+
+> **2026-06-14 interview overhaul:** `dewan_interview_invite` is the NEW rich invite
+> with **three quick-reply buttons** (Confirm / Reschedule / Can't make it) declared
+> ON the template so they deliver **out-of-window** (the common case). When
+> `TEMPLATE_INTERVIEW_INVITE` is set, the chatbot sends it instead of the buttonless
+> `dewan_interview_scheduled`; if unset, it falls back to the old template (no
+> regression). The candidate's button taps route to the existing
+> `/api/chatbot/interview-response` → on **Reschedule** the bot offers bookable slots
+> (in-window interactive list) and rebooks on the candidate's pick; on **Can't make
+> it** the bot offers other open jobs with Apply / Not-interested. The
+> `*_reschedule_options` / `*_cant_make_job_offer` templates are only the
+> out-of-window teasers that re-open the window (the slot/job lists are sent
+> in-window as interactive messages).
 
 `dewan_status_update` is the **generic catch-all**: it covers certified,
 prescreening, application-received, shortlisted, hired, general-pool,
@@ -165,6 +181,52 @@ name, `{{2}}` = missing field. Samples: `Kasun` / `CV document`.
 - **Tamil**
   > வணக்கம் {{1}}, Dewan Consultants உடனான உங்கள் வேலை விண்ணப்பம் கிட்டத்தட்ட முடிந்துவிட்டது — உங்கள் {{2}} இன்னும் தேவை. நிறுத்திய இடத்திலிருந்து தொடர இந்த செய்திக்கு பதிலளியுங்கள்.
 
+### 9. `dewan_interview_invite` — Category: **Utility** — Buttons: 3 × Quick reply
+The rich interview invite. **Add three Quick-reply buttons** (Buttons → Quick reply,
+add three): `Confirm`, `Reschedule`, `Can't make it`. Quick-reply buttons on an
+approved template DO deliver out-of-window — this is what lets a candidate who last
+messaged weeks ago still tap Confirm/Reschedule/Can't-make-it. Params: `{{1}}`=first
+name, `{{2}}`=job title, `{{3}}`=date/time, `{{4}}`=location, `{{5}}`=what to bring,
+`{{6}}`=dress code. Samples: `Kasun` / `Electrician (Qatar)` / `Monday, June 15 at 10:00 AM` / `Dewan Office, Colombo 03` / `NIC and original certificates` / `Smart casual`.
+
+- **English** — Buttons: `Confirm` / `Reschedule` / `Can't make it`
+  > Hi {{1}}! Your interview for the {{2}} position is scheduled for {{3}} at {{4}}. Please bring {{5}}, and the dress code is {{6}}. Tap a button below to confirm, reschedule, or let us know if you cannot make it.
+- **Sinhala** — Buttons: `තහවුරු කරන්න` / `වෙනස් කරන්න` / `බැහැ`
+  > ආයුබෝවන් {{1}}! {{2}} තනතුර සඳහා ඔබේ සම්මුඛ පරීක්ෂණය {{3}} දින {{4}} ස්ථානයේ නියමිතයි. කරුණාකර {{5}} රැගෙන එන්න, ඇඳුම් රටාව {{6}}. තහවුරු කිරීමට, වෙනස් කිරීමට, හෝ පැමිණිය නොහැකි නම් පහත බොත්තමක් ඔබන්න.
+- **Tamil** — Buttons: `உறுதி` / `மாற்று` / `முடியாது`
+  > வணக்கம் {{1}}! {{2}} பதவிக்கான உங்கள் நேர்காணல் {{3}} அன்று {{4}} இல் நடைபெறும். தயவுசெய்து {{5}} கொண்டு வாருங்கள், உடை {{6}}. உறுதிப்படுத்த, மாற்ற அல்லது வர முடியாது எனத் தெரிவிக்க கீழே ஒரு பொத்தானை அழுத்துங்கள்.
+
+### 10. `dewan_interview_reschedule_options` — Category: **Utility**
+Out-of-window teaser when a candidate asked to reschedule but is outside the 24h
+window — re-opens the window so the bot can send the actual slot list in-window.
+Param: `{{1}}`=first name. Sample: `Kasun`.
+
+- **English**
+  > Hi {{1}}, we received your request to reschedule your interview. Reply to this message and we will send you the next available time slots to choose from.
+- **Sinhala**
+  > ආයුබෝවන් {{1}}, ඔබේ සම්මුඛ පරීක්ෂණය වෙනස් කිරීමේ ඉල්ලීම ලැබුණා. මෙම පණිවිඩයට පිළිතුරු දෙන්න, ඊළඟට තිබෙන වේලාවන් ඔබට එවන්නම්.
+- **Tamil**
+  > வணக்கம் {{1}}, உங்கள் நேர்காணலை மாற்றும் கோரிக்கை கிடைத்தது. இந்த செய்திக்கு பதிலளியுங்கள், அடுத்த கிடைக்கும் நேரங்களை அனுப்புகிறோம்.
+
+### 11. `dewan_cant_make_job_offer` — Category: **Marketing** — Button: Quick reply `View jobs`
+Sent when a candidate can't attend their interview — offers other openings.
+Out-of-window teaser; the per-job Apply / Not-interested list is sent in-window.
+Params: `{{1}}`=first name, `{{2}}`=job title. Samples: `Kasun` / `Welder (Saudi Arabia)`.
+
+- **English** — Button: `View jobs`
+  > Hi {{1}}, no problem about the interview. We have other openings that may suit you, including a {{2}} role. Reply to see them and apply in one tap.
+- **Sinhala** — Button: `රැකියා බලන්න`
+  > ආයුබෝවන් {{1}}, සම්මුඛ පරීක්ෂණය ගැන කරදර වෙන්න එපා. ඔබට ගැලපෙන වෙනත් රැකියා, {{2}} ඇතුළුව, තිබෙනවා. බලන්න මෙම පණිවිඩයට පිළිතුරු දෙන්න.
+- **Tamil** — Button: `வேலைகளைப் பார்`
+  > வணக்கம் {{1}}, நேர்காணல் பற்றி கவலை வேண்டாம். {{2}} உட்பட உங்களுக்கு பொருந்தும் வேறு வேலைகள் உள்ளன. பார்க்க இந்த செய்திக்கு பதிலளியுங்கள்.
+
+> **Richer `dewan_welcome` rewrite (optional, same name):** if you want a more
+> detailed welcome, resubmit `dewan_welcome` with this English body (keep the same
+> single `{{1}}`=first name param and the `Get started` quick-reply button; mirror in
+> si/ta): *Hi {{1}}! Welcome to Dewan Consultants, Sri Lanka's trusted overseas
+> recruitment partner. We help skilled workers find well-paid, verified jobs abroad
+> with full visa and travel support. Tap Get started and we'll guide you step by step.*
+
 ---
 
 ## After approval — activate (we do this)
@@ -177,11 +239,20 @@ TEMPLATE_WELCOME: "dewan_welcome"
 TEMPLATE_STATUS_UPDATE: "dewan_status_update"
 TEMPLATE_REENGAGE: "dewan_reengage"
 TEMPLATE_INTERVIEW_SCHEDULED: "dewan_interview_scheduled"
+TEMPLATE_INTERVIEW_INVITE: "dewan_interview_invite"
+TEMPLATE_INTERVIEW_RESCHEDULE_OPTIONS: "dewan_interview_reschedule_options"
+TEMPLATE_CANT_MAKE_JOB_OFFER: "dewan_cant_make_job_offer"
 TEMPLATE_INTERVIEW_REMINDER: "dewan_interview_reminder"
 TEMPLATE_INTERVIEW_DAY_REMINDER: "dewan_interview_day_reminder"
 TEMPLATE_JOB_NOW_AVAILABLE: "dewan_job_now_available"
 FOLLOWUP_TEMPLATE_MISSING_INFO: "dewan_followup_missing_info"
 ```
+
+> **Bulk-import welcome auto-send:** to make a bulk import send the welcome template
+> to every imported candidate (and flag the no-WhatsApp ones for the CSV), set
+> `BULK_IMPORT_SEND_WELCOME=true` in the **backend** env after `TEMPLATE_WELCOME` is
+> approved. Left unset, imports are silent (no welcome, no no-WhatsApp list) — safe
+> default until the template exists.
 
 Then redeploy the chatbot (web + worker) via `deploy.ps1`. No backend or frontend
 deploy is needed for this step.

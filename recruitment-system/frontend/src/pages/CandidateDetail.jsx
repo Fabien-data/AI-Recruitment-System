@@ -164,9 +164,14 @@ export default function CandidateDetail() {
             </div>
 
             <div className="flex flex-wrap items-center gap-4 text-zinc-600 dark:text-zinc-400">
-              <span className="inline-flex items-center gap-1">
+              <span className="inline-flex items-center gap-1" title="WhatsApp Number">
                 <Phone size={18} aria-hidden /> {candidate.phone || '-'}
               </span>
+              {candidate.contact_phone && (
+                <span className="inline-flex items-center gap-1" title="Call Number (non-WhatsApp)">
+                  <Phone size={18} aria-hidden className="opacity-60" /> {candidate.contact_phone}
+                </span>
+              )}
               <span className="inline-flex items-center gap-1">
                 <Mail size={18} aria-hidden /> {candidate.email || 'No email provided'}
               </span>
@@ -240,8 +245,12 @@ export default function CandidateDetail() {
             </h2>
             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div>
-                <dt className="text-zinc-500 dark:text-zinc-400">Phone number</dt>
+                <dt className="text-zinc-500 dark:text-zinc-400">WhatsApp Number</dt>
                 <dd className="font-medium text-zinc-900 dark:text-zinc-50 break-words">{candidate.phone || '-'}</dd>
+              </div>
+              <div>
+                <dt className="text-zinc-500 dark:text-zinc-400">Call Number</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50 break-words">{candidate.contact_phone || '-'}</dd>
               </div>
               <div>
                 <dt className="text-zinc-500 dark:text-zinc-400">Email</dt>

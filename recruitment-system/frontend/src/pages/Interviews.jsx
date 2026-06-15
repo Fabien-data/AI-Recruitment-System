@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import {
   getInterviews, getInterviewStats, updateInterview, deleteInterview, sendInterviewReminder,
-  getProjects, getInterviewers, bulkUpdateInterviews, exportInterviewsCsv, apiClient,
+  getProjects, getProject, updateProject, getInterviewers, bulkUpdateInterviews, exportInterviewsCsv, apiClient,
   downloadUnreachableCsv,
 } from '../api'
 import { Card } from '../components/ui/Card'
@@ -507,6 +507,9 @@ export default function Interviews() {
         ))}
       </div>
 
+      {/* Per-project interview details — injected into the bulk interview invite. */}
+      {filters.project_id && <InterviewConfigEditor projectId={filters.project_id} />}
+
       {/* Stats strip — server-side aggregates (accurate across all rows). */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
         <StatCard tone="blue"    icon={CalendarCheck} label="Today"      value={stats?.today ?? '—'} />
@@ -515,6 +518,10 @@ export default function Interviews() {
         <StatCard tone="emerald" icon={BarChart3}     label="Completed"  value={stats?.completed ?? '—'} />
         <StatCard tone="amber"   icon={Hourglass}     label="Cancelled / No-show" value={(Number(stats?.cancelled || 0) + Number(stats?.no_show || 0)) || (stats ? 0 : '—')} />
         <StatCard tone="blue"    icon={Send}          label="Pending send" value={stats?.pending_send ?? '—'} />
+        {/* Candidate-driven WhatsApp button outcomes. */}
+        <StatCard tone="emerald" icon={CheckCircle2}  label="Confirmed"    value={stats?.confirmed ?? '—'} />
+        <StatCard tone="purple"  icon={CalendarClock} label="Reschedule requested" value={stats?.reschedule_requested ?? '—'} />
+        <StatCard tone="rose"    icon={XCircle}       label="Can't make it" value={stats?.cant_make ?? '—'} />
       </div>
 
       {/* Filters */}
@@ -914,5 +921,102 @@ function IconAction({ title, icon: Icon, tone = 'blue', onClick, to }) {
     <button type="button" title={title} onClick={onClick} className={cls}>
       <Icon size={15} />
     </button>
+  )
+}
+
+// Per-project interview details (location / what-to-bring / dress code / timing).
+// Saved to projects.interview_config and injected into the bulk interview invite +
+// the candidate-driven reschedule slot allocator.
+const CONFIG_FIELDS = [
+  { key: 'location', label: 'Location', placeholder: 'e.g. Dewan Office, Colombo 03', type: 'text' },
+  { key: 'date_guidance', label: 'Date guidance', placeholder: 'e.g. Weekdays this month', type: 'text' },
+  { key: 'time_guidance', label: 'Time guidance', placeholder: 'e.g. 9:00 AM – 5:00 PM', type: 'text' },
+  { key: 'what_to_bring', label: 'What to bring', placeholder: 'e.g. NIC and original certificates', type: 'text' },
+  { key: 'dress_code', label: 'Dress code', placeholder: 'e.g. Smart casual', type: 'text' },
+  { key: 'extra_notes', label: 'Extra notes', placeholder: 'Anything else candidates should know', type: 'textarea' },
+]
+const ADVANCED_FIELDS = [
+  { key: 'slot_minutes', label: 'Slot minutes', placeholder: '30' },
+  { key: 'per_day_limit', label: 'Interviews / day', placeholder: '8' },
+  { key: 'workday_start_hour', label: 'Day start (hour)', placeholder: '9' },
+  { key: 'workday_end_hour', label: 'Day end (hour)', placeholder: '17' },
+]
+
+function InterviewConfigEditor({ projectId }) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({})
+
+  const { data: project } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: () => getProject(projectId),
+    enabled: !!projectId,
+  })
+
+  useEffect(() => {
+    setForm(project?.interview_config || {})
+  }, [project?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveMut = useMutation({
+    mutationFn: () => {
+      // Coerce the advanced numeric fields; drop empties so we store a clean blob.
+      const cfg = { ...form }
+      for (const f of ADVANCED_FIELDS) {
+        cfg[f.key] = cfg[f.key] === '' || cfg[f.key] == null ? undefined : Number(cfg[f.key])
+      }
+      return updateProject(projectId, { interview_config: cfg })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] })
+      toast.success('Interview details saved')
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Could not save interview details'),
+  })
+
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  return (
+    <Card className="mb-6">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-2 text-left"
+      >
+        <span className="inline-flex items-center gap-2 font-semibold text-zinc-900 dark:text-zinc-50">
+          <CalendarClock size={16} /> Interview details for this project
+        </span>
+        <span className="text-xs text-zinc-500">{open ? 'Hide' : 'Edit'}</span>
+      </button>
+      {open && (
+        <div className="mt-4 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {CONFIG_FIELDS.map((f) => (
+              <div key={f.key} className={f.type === 'textarea' ? 'sm:col-span-2' : ''}>
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">{f.label}</label>
+                {f.type === 'textarea' ? (
+                  <textarea className="input w-full" rows={2} placeholder={f.placeholder} value={form[f.key] || ''} onChange={(e) => set(f.key, e.target.value)} />
+                ) : (
+                  <input className="input w-full" placeholder={f.placeholder} value={form[f.key] || ''} onChange={(e) => set(f.key, e.target.value)} />
+                )}
+              </div>
+            ))}
+          </div>
+          <div>
+            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Scheduling (used by the reschedule slot picker)</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {ADVANCED_FIELDS.map((f) => (
+                <div key={f.key}>
+                  <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">{f.label}</label>
+                  <input type="number" className="input w-full" placeholder={f.placeholder} value={form[f.key] ?? ''} onChange={(e) => set(f.key, e.target.value)} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={() => saveMut.mutate()} loading={saveMut.isPending}>Save interview details</Button>
+          </div>
+        </div>
+      )}
+    </Card>
   )
 }

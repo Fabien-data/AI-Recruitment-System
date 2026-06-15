@@ -1417,6 +1417,116 @@ async function applyMigrations() {
         await safeAlter(sql, label);
     }
 
+    // ── Migration 054: 3CX call-center integration ───────────────────────────
+    // Connect the desk to a 3CX PBX (see docs/3cx-integration-plan.md).
+    //   users.pbx_extension — maps a 3CX extension to a user so the call-journaling
+    //     webhook can attribute an inbound/outbound call to the right agent.
+    //   call_logs.external_call_id — the 3CX CallID; the unique index makes the
+    //     webhook idempotent so retried/duplicate deliveries don't double-log.
+    //   call_logs.source — 'manual' (agent-typed, existing behaviour) vs '3cx'
+    //     (auto-logged from the PBX); lets the timeline badge + analytics tell
+    //     PBX calls apart without changing any existing query (DEFAULT 'manual').
+    //   call_logs.recording_url — the 3CX call-recording link, when available.
+    for (const [sql, label] of [
+        [`ALTER TABLE users ADD COLUMN IF NOT EXISTS pbx_extension VARCHAR(20)`, '054 users.pbx_extension'],
+        [`CREATE UNIQUE INDEX IF NOT EXISTS uq_users_pbx_extension ON users(pbx_extension) WHERE pbx_extension IS NOT NULL`, '054 uq_users_pbx_extension'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS external_call_id VARCHAR(128)`, '054 call_logs.external_call_id'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS source           VARCHAR(16) DEFAULT 'manual'`, '054 call_logs.source'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS recording_url    TEXT`, '054 call_logs.recording_url'],
+        [`CREATE UNIQUE INDEX IF NOT EXISTS uq_call_logs_external_call_id ON call_logs(external_call_id) WHERE external_call_id IS NOT NULL`, '054 uq_call_logs_external_call_id'],
+    ]) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 055: candidate-centric counts + cross-project flag ──────────
+    // The "positions filled" counters and the Messages-vs-Applications certified
+    // mismatch both came from counting application ROWS. We keep the per-job
+    // application rows (UNIQUE(candidate_id, job_id) stays) and instead count
+    // candidates (COUNT(DISTINCT candidate_id)) everywhere — the two supporting
+    // indexes keep those aggregates and the cross-project detection fast.
+    //   candidates.cross_project_flagged — TRUE when a candidate has live
+    //     (non-rejected) applications across 2+ DISTINCT projects. Maintained by
+    //     candidate-stage.refreshCrossProjectFlag; surfaced as a "Multiple
+    //     projects" chip via candidates.tags.
+    for (const [sql, label] of [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cross_project_flagged BOOLEAN DEFAULT FALSE`, '055 candidates.cross_project_flagged'],
+        [`CREATE INDEX IF NOT EXISTS idx_applications_candidate_status ON applications(candidate_id, status)`, '055 idx_applications_candidate_status'],
+        [`CREATE INDEX IF NOT EXISTS idx_applications_job_status ON applications(job_id, status)`, '055 idx_applications_job_status'],
+    ]) {
+        await safeAlter(sql, label);
+    }
+    // Backfill the flag for existing candidates (idempotent: WHERE excludes
+    // already-flagged rows) so the chip is correct without waiting for the next
+    // status write.
+    await safeUpdate(`
+        UPDATE candidates c SET cross_project_flagged = TRUE
+        WHERE COALESCE(c.cross_project_flagged, FALSE) = FALSE
+          AND (
+            SELECT COUNT(DISTINCT j.project_id)
+            FROM applications a JOIN jobs j ON j.id = a.job_id
+            WHERE a.candidate_id = c.id AND a.status <> 'rejected' AND j.project_id IS NOT NULL
+          ) >= 2
+    `, '055 backfill cross_project_flagged');
+    // And append the "Multiple projects" tag for those flagged rows (idempotent:
+    // the NOT ... = ANY guard means re-runs add nothing). tags is TEXT[].
+    await safeUpdate(`
+        UPDATE candidates
+        SET tags = array_append(COALESCE(tags, '{}'), 'Multiple projects')
+        WHERE cross_project_flagged = TRUE
+          AND NOT ('Multiple projects' = ANY(COALESCE(tags, '{}')))
+    `, '055 backfill Multiple projects tag');
+
+    // ── Migration 056: conversations-panel performance indexes ────────────────
+    // The /active-chats list (and the shared counts query) used DISTINCT ON
+    // subqueries that scanned communications + applications per candidate. The
+    // query is being rewritten to LEFT JOIN LATERAL ... LIMIT 1; these two
+    // indexes turn each lateral into a single index seek (10–30s → sub-second).
+    // CONCURRENTLY is safe here: applyMigrations() runs each statement via a bare
+    // pool.query (no surrounding transaction). If it ever fails it only WARNs
+    // (missing index = slow, not a crash). The COALESCE expression MUST be
+    // double-parenthesised for an expression index, and the LATERAL ORDER BY uses
+    // the identical expression so the planner picks the index.
+    await safeAlter(
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_communications_wa_cand_sentat ON communications(candidate_id, sent_at DESC) WHERE channel = 'whatsapp'`,
+        '056 idx_communications_wa_cand_sentat'
+    );
+    await safeAlter(
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_applications_cand_updated ON applications(candidate_id, (COALESCE(updated_at, applied_at)) DESC)`,
+        '056 idx_applications_cand_updated'
+    );
+
+    // ── Migration 057: separate callable phone vs WhatsApp number ─────────────
+    // candidates.phone is the canonical (WhatsApp-derived) unique key. contact_phone
+    // is a SECOND, optional number a recruiter can CALL (landline / family member)
+    // when WhatsApp doesn't reach. Nullable, no UNIQUE (it may equal phone or repeat).
+    await safeAlter(`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(32)`, '057 candidates.contact_phone');
+
+    // ── Migration 058: per-project interview config + reschedule audit ────────
+    //   projects.interview_config — JSONB blob: {location, date_guidance,
+    //     time_guidance, what_to_bring, dress_code, extra_notes, slot_minutes,
+    //     per_day_limit, workday_start_hour, workday_end_hour, working_days[],
+    //     skip_dates[]}. Injected into the interview invite + slot allocator.
+    //   interview_schedules.reschedule_count / rescheduled_from_datetime — audit of
+    //     bot-driven candidate reschedules (feeds the interview-manager counters).
+    // NOTE: interview_schedules is postgres-owned on prod — the two ALTERs below may
+    // be rejected ("must be owner") and safeAlter will only WARN; reads of these
+    // columns must degrade gracefully (see routes/interviews.js column-existence cache).
+    for (const [sql, label] of [
+        [`ALTER TABLE projects ADD COLUMN IF NOT EXISTS interview_config JSONB`, '058 projects.interview_config'],
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS reschedule_count INTEGER DEFAULT 0`, '058 interview_schedules.reschedule_count'],
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS rescheduled_from_datetime TIMESTAMP`, '058 interview_schedules.rescheduled_from_datetime'],
+    ]) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 059: claim-filter index ─────────────────────────────────────
+    // Claimed chats now leave the default All/New lists (filter claimed_by IS NULL),
+    // so a partial index on the claimed rows keeps that predicate fast.
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_candidates_claimed_by ON candidates(claimed_by) WHERE claimed_by IS NOT NULL`,
+        '059 idx_candidates_claimed_by'
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 

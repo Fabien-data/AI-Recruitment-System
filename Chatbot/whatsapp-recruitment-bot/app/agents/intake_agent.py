@@ -219,12 +219,15 @@ class IntakeAgent:
         return prompts.get(lang, prompts["en"])
 
     def phone_alternative_prompt(self, lang: str) -> str:
+        # Asks for a CALLABLE (voice) number distinct from WhatsApp — stored on the
+        # candidate's contact_phone column so recruiters can phone them if WhatsApp
+        # doesn't reach. A family member's number is acceptable.
         prompts = {
-            "en": "Is there a second phone number we can reach you on? (Family member is fine.)",
-            "si": "ඔබව සම්බන්ධ කරගැනීමට තවත් phone number එකක් තියෙනවද? (පවුලේ අයෙකුගේ එකක් වුණත් කමක් නෑ.)",
-            "ta": "உங்களைத் தொடர்புகொள்ள இன்னொரு phone number இருக்கிறதா? (குடும்ப உறுப்பினரின் number-ஆனாலும் பரவாயில்லை.)",
-            "singlish": "Oyawa contact karanna thawath phone number ekak tiyenawada? (Family member ekkenage ekak vunath kamak nehe.)",
-            "tanglish": "Ungala contact panna innoru phone number irukka? (Family member-de-anu paravailla.)",
+            "en": "What is a phone number we can CALL you on, in case WhatsApp doesn't work? (A family member's number is fine.)",
+            "si": "WhatsApp වැඩ නොකළොත්, ඔබට ඇමතුම් (call) ගැනීමට phone number එකක් දෙන්න. (පවුලේ අයෙකුගේ එකක් වුණත් කමක් නෑ.)",
+            "ta": "WhatsApp வேலை செய்யாவிட்டால், உங்களை அழைக்க (call) ஒரு phone number தரவும். (குடும்ப உறுப்பினரின் number-ஆனாலும் பரவாயில்லை.)",
+            "singlish": "WhatsApp weda nethnam, oyawa CALL karanna phone number ekak denna. (Family member ekkenage ekak vunath kamak nehe.)",
+            "tanglish": "WhatsApp velai seyyala na, ungala CALL panna oru phone number kudunga. (Family member-de number-anu paravailla.)",
         }
         return prompts.get(lang, prompts["en"])
 
@@ -415,6 +418,8 @@ class IntakeAgent:
             "passport_no": self.passport_number_prompt,
             "phone_alternative": self.phone_alternative_prompt,
             "alternative_phone": self.phone_alternative_prompt,
+            "contact_phone": self.phone_alternative_prompt,
+            "call_number": self.phone_alternative_prompt,
             "height": self.height_prompt,
             "height_cm": self.height_prompt,
             "licenses": self.licenses_prompt,

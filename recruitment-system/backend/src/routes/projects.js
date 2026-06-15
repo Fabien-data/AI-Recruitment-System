@@ -215,9 +215,9 @@ router.get('/', authenticate, requireSection('projects', 'view'), async (req, re
         const selectCols = `SELECT p.*,
                    (SELECT COUNT(DISTINCT pa.user_id) FROM project_assignments pa WHERE pa.project_id = p.id) AS team_count,
                    (SELECT COUNT(*) FROM jobs j WHERE j.project_id = p.id) AS job_count,
-                   (SELECT COUNT(*) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id AND a.status = 'hired') AS derived_filled,
-                   (SELECT COUNT(*) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id) AS total_applications,
-                   (SELECT COUNT(*) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id AND a.status = 'certified') AS certified_count,
+                   (SELECT COUNT(DISTINCT a.candidate_id) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id AND a.status = 'hired') AS derived_filled,
+                   (SELECT COUNT(DISTINCT a.candidate_id) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id) AS total_applications,
+                   (SELECT COUNT(DISTINCT a.candidate_id) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id AND a.status = 'certified') AS certified_count,
                    (SELECT COUNT(*) FROM interview_schedules s JOIN applications a ON s.application_id = a.id JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id) AS interviews_scheduled
                FROM projects p${whereClause}`;
         const listQuery = isMySQL
@@ -284,38 +284,51 @@ router.get('/:id', authenticate, requireSection('projects', 'view'), async (req,
         const teamResult = await query(teamQuery, [id]);
 
         // Get jobs linked to this project
+        // Per-job counts are candidate-centric (COUNT(DISTINCT candidate_id)) so the
+        // per-job Certified / Placed mini-bars on ProjectDetail agree with the jobs
+        // list (job-queries CERTIFIED_JOIN/POSITIONS_FILLED_JOIN) and Messages.
         const jobsQuery = isMySQL
-            ? `SELECT j.*, COUNT(a.id) as candidate_count 
-               FROM jobs j 
-               LEFT JOIN applications a ON j.id = a.job_id 
-               WHERE j.project_id = ? 
-               GROUP BY j.id 
+            ? `SELECT j.*, COUNT(a.id) as candidate_count,
+                      COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                      COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as positions_filled
+               FROM jobs j
+               LEFT JOIN applications a ON j.id = a.job_id
+               WHERE j.project_id = ?
+               GROUP BY j.id
                ORDER BY j.created_at DESC`
-            : `SELECT j.*, COUNT(a.id) as candidate_count 
-               FROM jobs j 
-               LEFT JOIN applications a ON j.id = a.job_id 
-               WHERE j.project_id = $1 
-               GROUP BY j.id 
+            : `SELECT j.*, COUNT(a.id) as candidate_count,
+                      COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                      COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as positions_filled
+               FROM jobs j
+               LEFT JOIN applications a ON j.id = a.job_id
+               WHERE j.project_id = $1
+               GROUP BY j.id
                ORDER BY j.created_at DESC`;
 
         const jobsResult = await query(jobsQuery, [id]);
 
         // Get statistics
+        // All counts candidate-centric (COUNT(DISTINCT candidate_id)) so the detail
+        // page agrees with the projects list, control tower, Messages and analytics.
         const statsQuery = isMySQL
-            ? `SELECT 
-                   COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_scheduled,
+            ? `SELECT
+                   COUNT(DISTINCT a.candidate_id) as total_applications,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as placed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.candidate_id END) as rejected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as interview_scheduled,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM applications a
                JOIN jobs j ON a.job_id = j.id
                WHERE j.project_id = ?`
-            : `SELECT 
-                   COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_scheduled,
+            : `SELECT
+                   COUNT(DISTINCT a.candidate_id) as total_applications,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as placed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.candidate_id END) as rejected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as interview_scheduled,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM applications a
                JOIN jobs j ON a.job_id = j.id
@@ -499,7 +512,7 @@ router.put('/:id', authenticate, requireSection('projects', 'edit'), authorize('
             'title', 'client_name', 'industry_type', 'industry_types', 'description', 'countries',
             'status', 'priority', 'total_positions', 'filled_positions',
             'start_date', 'interview_date', 'end_date', 'benefits',
-            'salary_info', 'contact_info', 'requirements', 'metadata', 'is_future'
+            'salary_info', 'contact_info', 'requirements', 'metadata', 'is_future', 'interview_config'
         ];
 
         const setClause = [];
@@ -515,8 +528,9 @@ router.put('/:id', authenticate, requireSection('projects', 'edit'), authorize('
                     paramCount++;
                 }
 
-                // Stringify JSON fields (industry_types joins this group post-migration).
-                if (['countries', 'industry_types', 'benefits', 'salary_info', 'contact_info', 'requirements', 'metadata'].includes(key)) {
+                // Stringify JSON fields (industry_types joins this group post-migration;
+                // interview_config holds per-project interview details for the invite).
+                if (['countries', 'industry_types', 'benefits', 'salary_info', 'contact_info', 'requirements', 'metadata', 'interview_config'].includes(key)) {
                     values.push(JSON.stringify(updates[key]));
                 } else if (['start_date', 'interview_date', 'end_date'].includes(key)) {
                     // '' would break the DATE column on update too — see emptyToNull.
@@ -836,20 +850,23 @@ router.get('/:id/stats', authenticate, requireSection('projects', 'view'), async
         // the sum of job headcounts; total_positions (the progress denominator)
         // is the admin-set project target, fetched separately so the detail page
         // matches the list's "X / target" bar.
+        // Pipeline counts are candidate-centric (COUNT(DISTINCT candidate_id)) so the
+        // detail panel agrees with the projects list, control tower, Messages and
+        // analytics. total_jobs / positions_capacity stay job-level (they ARE jobs).
         const statsBody = `SELECT
                    COUNT(DISTINCT j.id) as total_jobs,
                    COALESCE(SUM(j.positions_available), 0) as positions_capacity,
-                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.id END) as filled_positions,
-                   COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as applied_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as screening_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as certified_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as pre_screened_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interviewed_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.id END) as placed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as filled_positions,
+                   COUNT(DISTINCT a.candidate_id) as total_applications,
+                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.candidate_id END) as applied_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.candidate_id END) as screening_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as pre_screened_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as interview_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as interviewed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.candidate_id END) as rejected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as placed_count,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id

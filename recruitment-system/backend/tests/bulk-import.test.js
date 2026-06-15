@@ -68,7 +68,9 @@ describe('importApplicationBatch — cascade', () => {
 
         expect(results[0].status).toBe('created');
         expect(results[0].cv_attached).toBe(true);
-        expect(summary).toEqual({ created: 1, skipped_duplicate: 0, error: 0, cv_attached: 1 });
+        // welcome_sent / welcome_unreachable are 0 here — the post-batch welcome send
+        // is gated by BULK_IMPORT_SEND_WELCOME (unset in tests), so no sends run.
+        expect(summary).toEqual({ created: 1, skipped_duplicate: 0, error: 0, cv_attached: 1, welcome_sent: 0, welcome_unreachable: 0 });
 
         // application inserted as certified, idempotently, bypassing the HTTP gate
         const appInsert = findClientSql(/INSERT INTO applications/);

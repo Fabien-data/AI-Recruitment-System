@@ -17,6 +17,7 @@ describe('setCandidateStage', () => {
     test('certified cascades to applications then re-derives candidate.status', async () => {
         query
             .mockResolvedValueOnce({ rowCount: 1 })                                          // UPDATE applications
+            .mockResolvedValueOnce({ rowCount: 1 })                                          // sync: refreshCrossProjectFlag UPDATE
             .mockResolvedValueOnce({ rows: [{ current_status: 'screening', has_cv: true }] }) // sync: candidate select
             .mockResolvedValueOnce({ rows: [{ status: 'certified' }] })                       // sync: applications select
             .mockResolvedValueOnce({ rowCount: 1 });                                          // sync: UPDATE candidates
@@ -28,9 +29,10 @@ describe('setCandidateStage', () => {
         expect(firstSql).toContain('UPDATE applications');
         expect(firstParams[0]).toBe('certified');
 
-        const lastCall = query.mock.calls[query.mock.calls.length - 1];
-        expect(lastCall[0]).toContain('UPDATE candidates');
-        expect(lastCall[1][0]).toBe('certified');
+        // The status re-derivation is the LAST query (refreshCrossProjectFlag runs first).
+        const statusUpdate = query.mock.calls.find(([sql]) => /conversation_stage/.test(sql));
+        expect(statusUpdate).toBeTruthy();
+        expect(statusUpdate[1][0]).toBe('certified');
     });
 
     test('new is a direct candidate.status write (no application cascade)', async () => {
@@ -47,12 +49,16 @@ describe('setCandidateStage', () => {
     test('merged/hired are terminal — never overwritten by the re-derive', async () => {
         query
             .mockResolvedValueOnce({ rowCount: 1 })                                          // UPDATE applications
+            .mockResolvedValueOnce({ rowCount: 1 })                                          // sync: refreshCrossProjectFlag UPDATE
             .mockResolvedValueOnce({ rows: [{ current_status: 'hired', has_cv: true }] });   // sync: terminal → returns early
 
         const res = await setCandidateStage('cand-3', 'certified');
         expect(res.updatedApplications).toBe(1);
-        // Only the apps update + the terminal-status select ran — candidates untouched.
-        expect(query).toHaveBeenCalledTimes(2);
+        // apps update + cross-project flag + the terminal-status select ran — the
+        // candidate STATUS write is skipped (terminal).
+        expect(query).toHaveBeenCalledTimes(3);
+        const statusUpdate = query.mock.calls.find(([sql]) => /conversation_stage/.test(sql));
+        expect(statusUpdate).toBeFalsy();
     });
 
     test('future_pool is LIFTED to its forward stage once a real application appears (drift fix)', async () => {
@@ -61,16 +67,17 @@ describe('setCandidateStage', () => {
         // Messages (bucketed by candidate.status) matches Applications.
         query
             .mockResolvedValueOnce({ rowCount: 1 })                                              // UPDATE applications → certified
+            .mockResolvedValueOnce({ rowCount: 1 })                                              // sync: refreshCrossProjectFlag UPDATE
             .mockResolvedValueOnce({ rows: [{ current_status: 'future_pool', has_cv: true }] })  // sync: candidate select
             .mockResolvedValueOnce({ rows: [{ status: 'certified' }] })                          // sync: applications select
             .mockResolvedValueOnce({ rowCount: 1 });                                             // sync: UPDATE candidates → certified
 
         await setCandidateStage('cand-3', 'certified');
-        const lastCall = query.mock.calls[query.mock.calls.length - 1];
-        expect(lastCall[0]).toContain('UPDATE candidates');
-        expect(lastCall[1][0]).toBe('certified');
+        const statusUpdate = query.mock.calls.find(([sql]) => /conversation_stage/.test(sql));
+        expect(statusUpdate).toBeTruthy();
+        expect(statusUpdate[1][0]).toBe('certified');
         // The WHERE no longer excludes future_pool (only merged/hired stay terminal).
-        expect(lastCall[0]).not.toContain("'future_pool'");
+        expect(statusUpdate[0]).not.toContain("'future_pool'");
     });
 
     test('future_pool STAYS parked when there is no forward (non-rejected) application', async () => {
@@ -78,13 +85,16 @@ describe('setCandidateStage', () => {
         // must not be un-parked — preserves the flexible backup pool. (CV no longer
         // factors in; parking now persists purely on "no forward application".)
         query
+            .mockResolvedValueOnce({ rowCount: 1 })                                            // refreshCrossProjectFlag UPDATE
             .mockResolvedValueOnce({ rows: [{ current_status: 'future_pool', has_cv: false }] }) // candidate select
             .mockResolvedValueOnce({ rows: [{ status: 'rejected' }] });                          // apps select → derives null
 
         await syncCandidateStage('cand-park');
-        const issuedUpdate = query.mock.calls.some(([sql]) => /UPDATE candidates/.test(sql));
-        expect(issuedUpdate).toBe(false);
-        expect(query).toHaveBeenCalledTimes(2);
+        // No STATUS write (the candidate stays parked). The cross-project flag UPDATE
+        // is a separate, always-run statement and does NOT touch candidates.status.
+        const issuedStatusUpdate = query.mock.calls.some(([sql]) => /conversation_stage/.test(sql));
+        expect(issuedStatusUpdate).toBe(false);
+        expect(query).toHaveBeenCalledTimes(3);
     });
 
     test('a CV-less candidate IS derived to its real stage (CV gate removed)', async () => {
@@ -92,12 +102,13 @@ describe('setCandidateStage', () => {
         // screening application now reflects as screening regardless of CV.
         query
             .mockResolvedValueOnce({ rowCount: 1 })                                            // UPDATE applications → screening
+            .mockResolvedValueOnce({ rowCount: 1 })                                            // sync: refreshCrossProjectFlag UPDATE
             .mockResolvedValueOnce({ rows: [{ current_status: 'new', has_cv: false }] })       // sync: candidate select, no CV
             .mockResolvedValueOnce({ rows: [{ status: 'screening' }] })                        // sync: applications select
             .mockResolvedValueOnce({ rowCount: 1 });                                           // sync: UPDATE candidates → screening
 
         await setCandidateStage('cand-4', 'screening');
-        const candUpdate = query.mock.calls.find(([sql]) => /UPDATE candidates/.test(sql));
+        const candUpdate = query.mock.calls.find(([sql]) => /conversation_stage/.test(sql));
         expect(candUpdate).toBeTruthy();
         expect(candUpdate[1][0]).toBe('screening');
     });
@@ -105,12 +116,13 @@ describe('setCandidateStage', () => {
     test('a CV-less candidate IS derived to certified (CV gate removed)', async () => {
         query
             .mockResolvedValueOnce({ rowCount: 1 })                                            // UPDATE applications → certified
+            .mockResolvedValueOnce({ rowCount: 1 })                                            // sync: refreshCrossProjectFlag UPDATE
             .mockResolvedValueOnce({ rows: [{ current_status: 'new', has_cv: false }] })       // sync: candidate select, no CV
             .mockResolvedValueOnce({ rows: [{ status: 'certified' }] })                        // sync: applications select
             .mockResolvedValueOnce({ rowCount: 1 });                                           // sync: UPDATE candidates → certified
 
         await setCandidateStage('cand-5', 'certified');
-        const candUpdate = query.mock.calls.find(([sql]) => /UPDATE candidates/.test(sql));
+        const candUpdate = query.mock.calls.find(([sql]) => /conversation_stage/.test(sql));
         expect(candUpdate).toBeTruthy();
         expect(candUpdate[1][0]).toBe('certified');
     });

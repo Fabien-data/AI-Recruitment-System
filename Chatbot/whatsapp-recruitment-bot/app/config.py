@@ -120,6 +120,19 @@ class Settings(BaseSettings):
     template_interview_reminder: str = ""
     template_interview_day_reminder: str = ""
     template_job_now_available: str = ""
+    # Rich interview INVITE template with three quick-reply buttons (Confirm /
+    # Reschedule / Can't make it) declared ON the template, so they deliver
+    # OUT-OF-WINDOW (the common case). Body params: [first_name, job_title,
+    # date_time, location, what_to_bring, dress_code]. When empty, the
+    # interview_scheduled path falls back to template_interview_scheduled (no
+    # buttons) — so leaving this unset is a safe no-op until the template is approved.
+    template_interview_invite: str = ""
+    # Out-of-window teasers that re-open the 24h window after a candidate taps
+    # Reschedule / Can't-make-it (the actual slot/job lists are sent in-window as
+    # interactive lists). Body params: reschedule_options=[first_name];
+    # cant_make_job_offer=[first_name, job_title].
+    template_interview_reschedule_options: str = ""
+    template_cant_make_job_offer: str = ""
     # Welcome/intro template for candidates an agent ADDS manually from the
     # Messages panel. These numbers have never messaged in, so they're outside
     # the 24h window and a free-form welcome is dropped by Meta — only this

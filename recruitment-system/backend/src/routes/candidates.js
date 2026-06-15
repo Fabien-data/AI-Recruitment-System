@@ -678,7 +678,7 @@ router.put('/:id', authenticate, requireSection('candidates', 'edit'), async (re
             });
         }
 
-        const allowedFields = ['name', 'phone', 'email', 'source', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
+        const allowedFields = ['name', 'phone', 'contact_phone', 'email', 'source', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
         // Profile fields stored inside the metadata JSON (like age) rather than
         // as flat columns — avoids schema churn on the production-only DB.
         const META_KEYS = ['age', 'height_cm', 'nationality', 'country', 'licenses', 'previous_employer', 'english_level', 'english_proficiency'];
@@ -696,6 +696,11 @@ router.put('/:id', authenticate, requireSection('candidates', 'edit'), async (re
                 // Normalize phone on edit so search/dedupe stay consistent
                 if (key === 'phone' && updates[key]) {
                     values.push(normalizePhone(updates[key]) || String(updates[key]).trim());
+                } else if (key === 'contact_phone') {
+                    // Separate CALLABLE number (may be a landline) — store trimmed as
+                    // typed, normalize only as a best-effort fallback for mobiles.
+                    const v = updates[key];
+                    values.push(v ? (normalizePhone(v) || String(v).trim()) : null);
                 } else if (key === 'tags' && isMySQL && Array.isArray(updates[key])) {
                     values.push(JSON.stringify(updates[key]));
                 } else {

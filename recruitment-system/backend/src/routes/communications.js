@@ -440,6 +440,9 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
             userId: req.user.id,
             addParam,
             includeStatusBucket: true,
+            // Admins may scope by any user via ?claimed_by=<uid>; for everyone else
+            // the default hides claimed chats from All/New (they live under "Mine").
+            isAdmin: req.user.role === 'admin',
         }));
 
         const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
@@ -499,37 +502,44 @@ router.get('/active-chats', authenticate, requireSection('communications', 'view
                     ELSE 'awaiting_agent'
                 END AS response_status
             FROM candidates ca
-            LEFT JOIN (
-                SELECT DISTINCT ON (candidate_id)
-                    candidate_id,
-                    content,
-                    direction,
+            -- Latest WhatsApp message per candidate. LATERAL + LIMIT 1 backed by
+            -- idx_communications_wa_cand_sentat (migration 056) replaces a
+            -- per-candidate DISTINCT ON full scan+sort — the dominant cost behind
+            -- the Messages-panel lag. Kept byte-identical to the counts query.
+            LEFT JOIN LATERAL (
+                SELECT
+                    c2.content,
+                    c2.direction,
                     NULL AS sender_type,
                     NULL AS detected_language,
                     NULL AS chatbot_state,
-                    read_at,
-                    delivered_at,
-                    sent_at
-                FROM communications
-                WHERE channel = 'whatsapp'
-                ORDER BY candidate_id, sent_at DESC
-            ) lm ON lm.candidate_id = ca.id
-            LEFT JOIN (
-                SELECT DISTINCT ON (a.candidate_id)
-                    a.candidate_id,
+                    c2.read_at,
+                    c2.delivered_at,
+                    c2.sent_at
+                FROM communications c2
+                WHERE c2.candidate_id = ca.id AND c2.channel = 'whatsapp'
+                ORDER BY c2.sent_at DESC
+                LIMIT 1
+            ) lm ON TRUE
+            -- Latest application per candidate. LATERAL + LIMIT 1 backed by
+            -- idx_applications_cand_updated (migration 056). Aliases preserved so
+            -- the SELECT + EFF_PROJECT_ID_EXPR + PIPELINE_STAGE_EXPR don't drift.
+            LEFT JOIN LATERAL (
+                SELECT
                     a.status AS application_status,
                     a.job_id   AS job_id,
                     j.title    AS job_title,
                     j.category AS job_category,
                     j.country  AS job_country,
                     j.project_id AS project_id,
-                    p.title    AS project_title,
-                    COALESCE(a.updated_at, a.applied_at) AS last_application_at
+                    p.title    AS project_title
                 FROM applications a
                 LEFT JOIN jobs j ON j.id = a.job_id
                 LEFT JOIN projects p ON p.id = j.project_id
-                ORDER BY a.candidate_id, COALESCE(a.updated_at, a.applied_at) DESC
-            ) la ON la.candidate_id = ca.id
+                WHERE a.candidate_id = ca.id
+                ORDER BY COALESCE(a.updated_at, a.applied_at) DESC
+                LIMIT 1
+            ) la ON TRUE
             LEFT JOIN (
                 SELECT t.ad_ref, t.project_id, t.job_id, p.title AS project_title, j.title AS job_title
                 FROM ad_tracking t
@@ -569,6 +579,8 @@ router.get('/active-chats/counts', authenticate, requireSection('communications'
             userId: req.user.id,
             addParam,
             includeStatusBucket: false,
+            // Must match the list call site so the badge counts == the visible rows.
+            isAdmin: req.user.role === 'admin',
         });
         const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
@@ -1130,25 +1142,24 @@ router.post('/candidate/:candidate_id/claim', authenticate, requireSection('comm
 });
 
 // ── POST /api/communications/candidate/:id/unclaim ────────────────────────────
+// ADMIN-ONLY release. Once an agent claims a chat they hand off to an admin, who
+// then releases it to the pool (here) or transfers it (/transfer below). Agents
+// can no longer self-release — the frontend hides the Release button for them.
 router.post('/candidate/:candidate_id/unclaim', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
     try {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Only an admin can release a claimed chat' });
+        }
         const { candidate_id } = req.params;
         const cur = await query(adaptQuery('SELECT claimed_by FROM candidates WHERE id = $1'), [candidate_id]);
         if (cur.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
-        // Only the agent who claimed it (or an admin) may release the claim.
-        if (cur.rows[0].claimed_by && cur.rows[0].claimed_by !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Only the agent who claimed this candidate can release it' });
-        }
         await query(
             adaptQuery(`UPDATE candidates SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW() WHERE id = $1`),
             [candidate_id]
         );
-        // Close the audit window. 'interview_scheduled' comes from the
-        // release-after-interview prompt; an admin releasing someone else's
-        // claim is recorded as 'admin'.
-        const requestedReason = ['manual', 'interview_scheduled'].includes(req.body?.reason) ? req.body.reason : 'manual';
-        const reason = (cur.rows[0].claimed_by && cur.rows[0].claimed_by !== req.user.id && req.user.role === 'admin')
-            ? 'admin' : requestedReason;
+        // Close the audit window. Honor a specific requested reason
+        // ('interview_scheduled' from the wrap-up prompt) else record 'admin'.
+        const reason = ['manual', 'interview_scheduled'].includes(req.body?.reason) ? req.body.reason : 'admin';
         await closeClaimSession(candidate_id, { releasedBy: req.user.id, reason });
 
         try {
@@ -1160,6 +1171,54 @@ router.post('/candidate/:candidate_id/unclaim', authenticate, requireSection('co
         }
 
         return res.json({ success: true, candidate_id });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── POST /api/communications/candidate/:id/transfer ───────────────────────────
+// ADMIN-ONLY: atomically move a claim from its current holder to another active
+// user (release + reclaim in one step), recorded in claim_sessions as 'transferred'.
+router.post('/candidate/:candidate_id/transfer', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Only an admin can transfer a claimed chat' });
+        }
+        const { candidate_id } = req.params;
+        const toUserId = req.body?.to_user_id;
+        if (!toUserId) return res.status(400).json({ error: 'to_user_id is required' });
+
+        const target = await query(
+            adaptQuery('SELECT id, full_name, email FROM users WHERE id = $1 AND is_active = TRUE'),
+            [toUserId]
+        );
+        if (target.rows.length === 0) return res.status(400).json({ error: 'Target user not found or inactive' });
+        const targetName = target.rows[0].full_name || target.rows[0].email;
+
+        const cur = await query(adaptQuery('SELECT claimed_by FROM candidates WHERE id = $1'), [candidate_id]);
+        if (cur.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        const fromUserId = cur.rows[0].claimed_by || null;
+
+        await query(
+            adaptQuery(`UPDATE candidates SET claimed_by = $1, claimed_at = NOW(), updated_at = NOW() WHERE id = $2`),
+            [toUserId, candidate_id]
+        );
+        // openClaimSession closes the previous holder's window (reason 'transferred')
+        // and opens the new holder's, in one audited step.
+        await openClaimSession(candidate_id, toUserId, { releasedBy: req.user.id, reason: 'transferred' });
+
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('claim_changed', {
+                candidate_id, claimed_by: toUserId, claimer_name: targetName,
+                from_user_id: fromUserId, ts: new Date().toISOString(),
+            });
+        } catch (wsErr) {
+            logger.debug(`transfer WS emit skipped: ${wsErr.message}`);
+        }
+
+        return res.json({ success: true, candidate_id, claimed_by: toUserId, claimer_name: targetName });
     } catch (error) {
         next(error);
     }

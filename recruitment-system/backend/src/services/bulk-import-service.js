@@ -29,7 +29,15 @@ const { isMySQL } = require('../utils/query-adapter');
 const { normalizePhone } = require('../utils/phone');
 const { saveCVFile } = require('../utils/gcs-upload');
 const { normalizeApplicationStatus, syncCandidateStage } = require('./candidate-stage');
+const notifications = require('./notifications');
+const { applyWhatsappReachability } = require('../utils/whatsapp-reachability');
 const logger = require('../utils/logger');
+
+// Auto-send the welcome (+certified) WhatsApp template to imported candidates only
+// when explicitly enabled. Kept OFF until the Meta welcome template is approved and
+// its env var is set on the chatbot, so an import never silently fails to deliver
+// or floods cold numbers before the template path exists.
+const SEND_WELCOME_ON_IMPORT = process.env.BULK_IMPORT_SEND_WELCOME === 'true';
 
 const ALLOWED_LANGUAGES = new Set(['en', 'si', 'ta']);
 
@@ -566,6 +574,18 @@ async function importRow(raw, cvFile, ctx) {
     result.application_id = applicationId;
     result.cv_attached = hasCv;
     result.reason = hasCv ? null : 'cv_missing';
+    // Carry identity + job for the post-batch welcome/certified send pass and the
+    // no-WhatsApp CSV (built client-side from these fields).
+    result.name = row.name;
+    result.phone = phone;
+    result.email = email;
+    result.job_id = jobId;
+    result.job_title = (ctx.jobs.find((j) => j.id === jobId) || {}).title || null;
+    // null = sends were gated off (BULK_IMPORT_SEND_WELCOME != 'true'); the UI then
+    // hides the no-WhatsApp CSV button (no misleading "all clear" list).
+    result.welcome_sent = null;
+    result.whatsapp_unreachable = null;
+    result.welcome_reason = null;
     return result;
 }
 
@@ -612,15 +632,47 @@ async function importApplicationBatch(rawRows, files, options) {
         }
     }
 
+    // ── Post-batch welcome / certified send pass ─────────────────────────────
+    // STRICTLY OUTSIDE the per-row transaction: each send is a slow HTTP call to
+    // the chatbot, so doing it in-txn would hold DB locks and risk partial commits.
+    // Sequential + fault-isolated (one failure never aborts the pass). Gated by the
+    // env flag so it only runs once the Meta welcome template is live.
+    if (SEND_WELCOME_ON_IMPORT) {
+        for (const r of results) {
+            if (r.status !== 'created' || !r.candidate_id) continue;
+            try {
+                const welcome = await notifications.sendNotification({
+                    candidateId: r.candidate_id, type: 'welcome', channels: ['whatsapp'],
+                });
+                await applyWhatsappReachability(r.candidate_id, welcome);
+                r.welcome_sent = (welcome.success || []).some((s) => s.channel === 'whatsapp');
+                r.whatsapp_unreachable = (welcome.failed || []).some((f) => f.channel === 'whatsapp' && f.reason === 'no_whatsapp');
+                r.welcome_reason = r.welcome_sent ? null
+                    : ((welcome.failed || []).find((f) => f.channel === 'whatsapp')?.reason || 'unknown');
+                // CV-attached rows are certified (rule 3) — also tell them they're certified.
+                if (r.cv_attached) {
+                    try { await notifications.sendCertificationNotification(r.candidate_id, r.job_title || 'your role'); }
+                    catch (certErr) { logger.warn(`bulk-import: certified notify failed for ${r.candidate_id} — ${certErr.message}`); }
+                }
+            } catch (sendErr) {
+                logger.warn(`bulk-import: welcome send failed for ${r.candidate_id} — ${sendErr.message}`);
+                r.welcome_sent = false;
+                r.welcome_reason = 'send_error';
+            }
+        }
+    }
+
     const summary = results.reduce(
         (acc, r) => {
             if (r.status === 'created') acc.created++;
             else if (r.status === 'skipped_duplicate') acc.skipped_duplicate++;
             else acc.error++;
             if (r.cv_attached) acc.cv_attached++;
+            if (r.welcome_sent === true) acc.welcome_sent++;
+            if (r.whatsapp_unreachable === true) acc.welcome_unreachable++;
             return acc;
         },
-        { created: 0, skipped_duplicate: 0, error: 0, cv_attached: 0 }
+        { created: 0, skipped_duplicate: 0, error: 0, cv_attached: 0, welcome_sent: 0, welcome_unreachable: 0 }
     );
 
     return { results, summary };

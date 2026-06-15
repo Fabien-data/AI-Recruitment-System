@@ -11,7 +11,7 @@
 
 const POSITIONS_FILLED_JOIN = `
     LEFT JOIN LATERAL (
-        SELECT COUNT(*)::int AS positions_filled
+        SELECT COUNT(DISTINCT a.candidate_id)::int AS positions_filled
         FROM applications a
         WHERE a.job_id = j.id AND a.status = 'hired'
     ) pf ON TRUE
@@ -20,6 +20,25 @@ const POSITIONS_FILLED_JOIN = `
 const POSITIONS_FILLED_SELECT = `
     pf.positions_filled AS positions_filled,
     GREATEST(0, COALESCE(j.positions_available, 0) - pf.positions_filled) AS positions_remaining
+`;
+
+/**
+ * Per-job CERTIFIED count — drives the first ("Certified") progress bar on the
+ * Jobs cards / detail, alongside POSITIONS_FILLED ("Placed"). Candidate-centric
+ * (COUNT(DISTINCT candidate_id)) so it agrees with every other surface; at the
+ * job level there is at most one application per candidate (UNIQUE(candidate_id,
+ * job_id)) so DISTINCT is a no-op here, but it keeps the semantics uniform.
+ */
+const CERTIFIED_JOIN = `
+    LEFT JOIN LATERAL (
+        SELECT COUNT(DISTINCT a.candidate_id)::int AS certified_count
+        FROM applications a
+        WHERE a.job_id = j.id AND a.status = 'certified'
+    ) cf ON TRUE
+`;
+
+const CERTIFIED_SELECT = `
+    COALESCE(cf.certified_count, 0) AS certified_count
 `;
 
 /**
@@ -59,6 +78,8 @@ const JOB_COUNTS_SELECT = `
 module.exports = {
     POSITIONS_FILLED_JOIN,
     POSITIONS_FILLED_SELECT,
+    CERTIFIED_JOIN,
+    CERTIFIED_SELECT,
     JOB_COUNTS_JOIN,
     JOB_COUNTS_SELECT,
 };

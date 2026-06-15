@@ -213,6 +213,18 @@ export default function Applications() {
   const jobs = Array.isArray(jobsData?.data) ? jobsData.data : Array.isArray(jobsData) ? jobsData : []
   const projects = Array.isArray(projectsData?.data) ? projectsData.data : Array.isArray(projectsData) ? projectsData : []
 
+  // Group jobs by project so identical titles across projects don't render as
+  // confusing duplicate options — each appears under its project's <optgroup>.
+  const jobsByProject = useMemo(() => {
+    const groups = new Map()
+    for (const job of jobs) {
+      const label = job.project_title || 'No project / Unassigned'
+      if (!groups.has(label)) groups.set(label, [])
+      groups.get(label).push(job)
+    }
+    return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [jobs])
+
   const list = Array.isArray(applications?.data)
     ? applications.data
     : Array.isArray(applications)
@@ -497,8 +509,12 @@ export default function Applications() {
             aria-label="Filter by job"
           >
             <option value="">All Jobs</option>
-            {jobs.map((job) => (
-              <option key={job.id} value={job.id}>{job.title}</option>
+            {jobsByProject.map(([projectLabel, groupJobs]) => (
+              <optgroup key={projectLabel} label={projectLabel}>
+                {groupJobs.map((job) => (
+                  <option key={job.id} value={job.id}>{job.title}</option>
+                ))}
+              </optgroup>
             ))}
           </select>
 
@@ -1118,6 +1134,49 @@ function ProjectSection({
   const allSelected = ids.length > 0 && selectedCount === ids.length
   const someSelected = selectedCount > 0 && selectedCount < ids.length
 
+  // A candidate applying to two jobs in the SAME project should read as ONE entry
+  // listing both positions (not two rows) — group this project's applications by
+  // candidate. Selection stays application-id based for bulk ops.
+  const STATUS_PRIORITY = { hired: 5, interview_scheduled: 4, certified: 3, screening: 2, new: 1, future_pool: 0, rejected: -1, merged: -2 }
+  const accentFor = (status) => ({ screening: 'amber', certified: 'emerald', interview_scheduled: 'indigo', hired: 'emerald', rejected: 'rose', new: 'blue', future_pool: 'zinc', merged: 'zinc' })[normalizeStatus(status)] || 'zinc'
+  const candidateGroups = useMemo(() => {
+    const m = new Map()
+    for (const app of group.applications) {
+      const key = app.candidate_id || app.id
+      if (!m.has(key)) {
+        m.set(key, {
+          key,
+          candidate_id: app.candidate_id,
+          candidate_name: app.candidate_name,
+          candidate_phone: app.candidate_phone,
+          cross_project: Boolean(app.cross_project_flagged),
+          apps: [],
+        })
+      }
+      m.get(key).apps.push(app)
+    }
+    // Furthest-along app + latest applied date per candidate (for the header badge).
+    return Array.from(m.values()).map((g) => {
+      const furthest = g.apps.reduce((best, a) =>
+        (STATUS_PRIORITY[normalizeStatus(a.status)] ?? 0) > (STATUS_PRIORITY[normalizeStatus(best.status)] ?? 0) ? a : best, g.apps[0])
+      const latestApplied = g.apps.reduce((d, a) => {
+        const t = a.applied_at ? new Date(a.applied_at).getTime() : 0
+        return t > d ? t : d
+      }, 0)
+      return { ...g, furthest, latestApplied }
+    })
+  }, [group.applications]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Toggle every one of a candidate's applications together.
+  const toggleCandidate = (candApps) => {
+    const candIds = candApps.map((a) => a.id)
+    const allSel = candIds.every((id) => selectedIds.has(id))
+    candIds.forEach((id) => {
+      if (allSel) { if (selectedIds.has(id)) onToggleSelect(id) }
+      else { if (!selectedIds.has(id)) onToggleSelect(id) }
+    })
+  }
+
   return (
     <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
       <div className="flex items-center gap-3 px-4 sm:px-5 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-gradient-to-r from-indigo-50/60 to-transparent dark:from-indigo-950/30 rounded-t-2xl">
@@ -1170,7 +1229,8 @@ function ProjectSection({
               </span>
             )}
             <span className="inline-flex items-center gap-1 rounded-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-2.5 py-0.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              {group.applications.length} application{group.applications.length === 1 ? '' : 's'}
+              {candidateGroups.length} candidate{candidateGroups.length === 1 ? '' : 's'}
+              {group.applications.length !== candidateGroups.length ? ` · ${group.applications.length} positions` : ''}
             </span>
           </div>
         </button>
@@ -1199,51 +1259,70 @@ function ProjectSection({
               </Table.Tr>
             </Table.Head>
             <Table.Body>
-              {group.applications.map((app) => {
-                const isSelected = selectedIds.has(app.id)
-                const accent = ({ screening: 'amber', certified: 'emerald', interview_scheduled: 'indigo', hired: 'emerald', rejected: 'rose', new: 'blue', future_pool: 'zinc', merged: 'zinc' })[normalizeStatus(app.status)] || 'zinc'
+              {candidateGroups.map((cg) => {
+                const candIds = cg.apps.map((a) => a.id)
+                const isSelected = candIds.every((id) => selectedIds.has(id))
+                const accent = accentFor(cg.furthest.status)
                 return (
-                  <Table.Tr key={app.id} accent={accent}>
+                  <Table.Tr key={cg.key} accent={accent}>
                     <Table.Td>
                       <input
                         type="checkbox"
-                        aria-label={`Select ${app.candidate_name || 'application'}`}
+                        aria-label={`Select ${cg.candidate_name || 'candidate'}`}
                         className="w-4 h-4 rounded accent-primary-600 cursor-pointer"
                         checked={isSelected}
-                        onChange={() => onToggleSelect(app.id)}
+                        onChange={() => toggleCandidate(cg.apps)}
                       />
                     </Table.Td>
                     <Table.Td className="font-semibold text-zinc-900 dark:text-zinc-50 min-w-[200px]">
-                      {/* Opens the candidate's CV Manager in-place over Applications
-                          so the agent stays on the list (no navigation away). */}
-                      <button type="button" onClick={() => onOpenCv(app)} className="group inline-flex items-center gap-3 text-left" title="Open CV Manager">
+                      {/* Opens the candidate's CV Manager in-place (stays on the list). */}
+                      <button type="button" onClick={() => onOpenCv(cg.furthest)} className="group inline-flex items-center gap-3 text-left" title="Open CV Manager">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900">
-                          {app.candidate_name?.charAt(0)?.toUpperCase() || '?'}
+                          {cg.candidate_name?.charAt(0)?.toUpperCase() || '?'}
                         </div>
-                        <span className="text-sm group-hover:text-primary-600 dark:group-hover:text-primary-400 truncate">
-                          {app.candidate_name || 'Candidate'}
+                        <span className="min-w-0">
+                          <span className="block text-sm group-hover:text-primary-600 dark:group-hover:text-primary-400 truncate">
+                            {cg.candidate_name || 'Candidate'}
+                          </span>
+                          {cg.cross_project && (
+                            <span className="inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 text-[10px] font-medium mt-0.5">Multiple projects</span>
+                          )}
                         </span>
                       </button>
                     </Table.Td>
                     <Table.Td>
-                      <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
-                        <Briefcase size={13} />
-                        <span className="truncate max-w-[180px]">{app.job_title || 'Job'}</span>
-                      </Link>
+                      {/* Every position the candidate applied to in THIS project. */}
+                      <div className="flex flex-col gap-1">
+                        {cg.apps.map((app) => (
+                          <div key={app.id} className="flex items-center gap-2">
+                            <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
+                              <Briefcase size={13} />
+                              <span className="truncate max-w-[160px]">{app.job_title || 'Job'}</span>
+                            </Link>
+                            <Badge status={app.status} />
+                          </div>
+                        ))}
+                      </div>
                     </Table.Td>
-                    <Table.Td><Badge status={app.status} /></Table.Td>
+                    <Table.Td><Badge status={cg.furthest.status} /></Table.Td>
                     <Table.Td className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
-                      {app.applied_at ? new Date(app.applied_at).toLocaleDateString() : '—'}
+                      {cg.latestApplied ? new Date(cg.latestApplied).toLocaleDateString() : '—'}
                     </Table.Td>
                     <Table.Td align="right">
-                      <RowActions
-                        app={app}
-                        isAdmin={isAdmin}
-                        onEdit={() => onEdit(app)}
-                        onTransfer={() => onTransfer(app)}
-                        onDelete={() => onDelete(app)}
-                        onOpenCv={() => onOpenCv(app)}
-                      />
+                      <div className="flex flex-col items-end gap-1">
+                        {cg.apps.map((app) => (
+                          <RowActions
+                            key={app.id}
+                            app={app}
+                            label={cg.apps.length > 1 ? app.job_title : undefined}
+                            isAdmin={isAdmin}
+                            onEdit={() => onEdit(app)}
+                            onTransfer={() => onTransfer(app)}
+                            onDelete={() => onDelete(app)}
+                            onOpenCv={() => onOpenCv(app)}
+                          />
+                        ))}
+                      </div>
                     </Table.Td>
                   </Table.Tr>
                 )
@@ -1252,60 +1331,71 @@ function ProjectSection({
           </Table>
         ) : (
           <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {group.applications.map((app) => {
-              const isSelected = selectedIds.has(app.id)
-              const accent = ({ screening: 'amber', certified: 'emerald', interview_scheduled: 'indigo', hired: 'emerald', rejected: 'rose', new: 'blue', future_pool: 'zinc', merged: 'zinc' })[normalizeStatus(app.status)] || 'zinc'
+            {candidateGroups.map((cg) => {
+              const candIds = cg.apps.map((a) => a.id)
+              const isSelected = candIds.every((id) => selectedIds.has(id))
+              const accent = accentFor(cg.furthest.status)
               const stripeClass = ({ amber: 'before:bg-amber-500', emerald: 'before:bg-emerald-500', indigo: 'before:bg-indigo-500', rose: 'before:bg-rose-500', blue: 'before:bg-blue-500', zinc: 'before:bg-zinc-400' })[accent]
               return (
                 <div
-                  key={app.id}
+                  key={cg.key}
                   className={`relative p-4 rounded-2xl border bg-white dark:bg-zinc-900 transition-shadow hover:shadow-md before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r ${stripeClass} ${isSelected ? 'border-indigo-400 ring-2 ring-indigo-200 dark:ring-indigo-900/50' : 'border-zinc-100 dark:border-zinc-800'}`}
                 >
                   <div className="flex items-start gap-3 pl-2">
                     <input
                       type="checkbox"
-                      aria-label={`Select ${app.candidate_name || 'application'}`}
+                      aria-label={`Select ${cg.candidate_name || 'candidate'}`}
                       className="w-4 h-4 mt-1 rounded accent-primary-600 cursor-pointer flex-shrink-0"
                       checked={isSelected}
-                      onChange={() => onToggleSelect(app.id)}
+                      onChange={() => toggleCandidate(cg.apps)}
                     />
                     <button
                       type="button"
-                      onClick={() => onOpenCv(app)}
+                      onClick={() => onOpenCv(cg.furthest)}
                       className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ring-2 ring-white dark:ring-zinc-900"
                       title="Open CV Manager"
                     >
-                      {app.candidate_name?.charAt(0)?.toUpperCase() || '?'}
+                      {cg.candidate_name?.charAt(0)?.toUpperCase() || '?'}
                     </button>
                     <div className="min-w-0 flex-1">
-                      {/* Opens CV Manager in-place (stays on Applications). */}
-                      <button type="button" onClick={() => onOpenCv(app)} className="text-base font-semibold text-zinc-900 dark:text-zinc-50 hover:text-primary-700 dark:hover:text-primary-300 truncate block text-left w-full" title="Open CV Manager">
-                        {app.candidate_name || 'Candidate'}
+                      <button type="button" onClick={() => onOpenCv(cg.furthest)} className="text-base font-semibold text-zinc-900 dark:text-zinc-50 hover:text-primary-700 dark:hover:text-primary-300 truncate block text-left w-full" title="Open CV Manager">
+                        {cg.candidate_name || 'Candidate'}
                       </button>
                       <p className="text-xs text-zinc-500 dark:text-zinc-500 truncate mt-0.5">
-                        {app.candidate_phone || ''}
+                        {cg.candidate_phone || ''}
                       </p>
+                      {cg.cross_project && (
+                        <span className="inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 text-[10px] font-medium mt-1">Multiple projects</span>
+                      )}
                     </div>
-                    <Badge status={app.status} />
+                    <Badge status={cg.furthest.status} />
                   </div>
 
-                  <div className="mt-3 text-sm">
-                    <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
-                      <Briefcase size={13} />
-                      <span className="truncate">{app.job_title || 'Job'}</span>
-                    </Link>
+                  {/* Each position this candidate applied to in this project. */}
+                  <div className="mt-3 space-y-2">
+                    {cg.apps.map((app) => (
+                      <div key={app.id} className="flex items-center justify-between gap-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/40 px-2.5 py-1.5">
+                        <Link to={`/jobs/${app.job_id}`} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium min-w-0">
+                          <Briefcase size={13} className="flex-shrink-0" />
+                          <span className="truncate">{app.job_title || 'Job'}</span>
+                        </Link>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {cg.apps.length > 1 && <Badge status={app.status} />}
+                          <RowActions
+                            app={app}
+                            isAdmin={isAdmin}
+                            onEdit={() => onEdit(app)}
+                            onTransfer={() => onTransfer(app)}
+                            onDelete={() => onDelete(app)}
+                            onOpenCv={() => onOpenCv(app)}
+                          />
+                        </div>
+                      </div>
+                    ))}
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-500">
-                    <span>Applied {app.applied_at ? new Date(app.applied_at).toLocaleDateString() : '—'}</span>
-                    <RowActions
-                      app={app}
-                      isAdmin={isAdmin}
-                      onEdit={() => onEdit(app)}
-                      onTransfer={() => onTransfer(app)}
-                      onDelete={() => onDelete(app)}
-                      onOpenCv={() => onOpenCv(app)}
-                    />
+                  <div className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">
+                    Applied {cg.latestApplied ? new Date(cg.latestApplied).toLocaleDateString() : '—'}
                   </div>
                 </div>
               )
