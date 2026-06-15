@@ -1447,7 +1447,7 @@ function RowActions({ app, isAdmin, onEdit, onTransfer, onDelete, onOpenCv }) {
       {open && (
         <div className="absolute right-0 z-20 mt-1 w-48 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg py-1">
           <MenuButton icon={FileText} label="Open CV" onClick={() => { setOpen(false); onOpenCv() }} />
-          <MenuLink to={`/communications?candidate=${app.candidate_id}`} icon={MessageSquare} label="Open Chat" />
+          <MenuLink to={`/communications?candidate=${app.candidate_id}`} icon={MessageSquare} label="Open Chat" newTab />
           <MenuLink to={`/candidates/${app.candidate_id}`} icon={Eye} label="View Candidate" />
           <MenuButton icon={Pencil} label="Edit Status" onClick={() => { setOpen(false); onEdit() }} />
           <MenuButton icon={ArrowRightLeft} label="Transfer" onClick={() => { setOpen(false); onTransfer() }} />
@@ -1461,10 +1461,11 @@ function RowActions({ app, isAdmin, onEdit, onTransfer, onDelete, onOpenCv }) {
   )
 }
 
-function MenuLink({ to, icon: Icon, label }) {
+function MenuLink({ to, icon: Icon, label, newTab }) {
   return (
     <Link
       to={to}
+      {...(newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
       className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
     >
       <Icon size={14} /> {label}
