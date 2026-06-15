@@ -1490,8 +1490,13 @@ async function applyMigrations() {
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_communications_wa_cand_sentat ON communications(candidate_id, sent_at DESC) WHERE channel = 'whatsapp'`,
         '056 idx_communications_wa_cand_sentat'
     );
+    // Plain composite (NOT an expression index): COALESCE(updated_at, applied_at)
+    // forces a timestamp↔timestamptz cast that Postgres treats as non-IMMUTABLE, so
+    // an expression index is rejected. The candidate_id seek is what the lateral
+    // needs; ordering by applied_at DESC is a fine access path (the query's own
+    // ORDER BY COALESCE(...) still produces correct results regardless of index).
     await safeAlter(
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_applications_cand_updated ON applications(candidate_id, (COALESCE(updated_at, applied_at)) DESC)`,
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_applications_cand_updated ON applications(candidate_id, applied_at DESC)`,
         '056 idx_applications_cand_updated'
     );
 
