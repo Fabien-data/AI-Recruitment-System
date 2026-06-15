@@ -42,7 +42,10 @@ router.get('/status-totals', authenticate, requireSection('applications', 'view'
             includeStatusBucket: false,
         });
         const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-        const sql = buildCandidateStatusCountsSql({ whereClause, includeHired: true });
+        // No claim/search params here → DEFAULT claim scope: the New count excludes
+        // claimed candidates (mirrors the Messages New tab), every other stage +
+        // total include claimed so the strip reads the full pipeline (user 2026-06-15).
+        const sql = buildCandidateStatusCountsSql({ whereClause, includeHired: true, hideClaimedFromNew: true });
         const result = await query(sql, params);
         res.json(shapeCountsRow(result.rows[0], { includeHired: true }));
     } catch (error) {

@@ -54,6 +54,42 @@ describe('buildConversationFilters', () => {
         expect(filters.some((f) => f.includes('COALESCE(la.project_id, adt.project_id) = $'))).toBe(true);
         expect(addParam.params).toContain('p-123');
     });
+
+    // Default claim scope (no explicit claimed filter): claimed chats are hidden
+    // from the NEW list ONLY — All chats + every other status tab keep them
+    // (user decision 2026-06-15).
+    test("default claim scope hides claimed chats from the New list", () => {
+        const filters = buildConversationFilters({ query: { status: 'new' }, userId: 'u1', addParam: makeAddParam(), includeStatusBucket: true });
+        expect(filters).toContain('ca.claimed_by IS NULL');
+    });
+
+    test("default claim scope KEEPS claimed chats in the All-chats list (no status)", () => {
+        const filters = buildConversationFilters({ query: {}, userId: 'u1', addParam: makeAddParam(), includeStatusBucket: true });
+        expect(filters).not.toContain('ca.claimed_by IS NULL');
+    });
+
+    test("default claim scope KEEPS claimed chats in a non-New status list (e.g. certified)", () => {
+        const filters = buildConversationFilters({ query: { status: 'certified' }, userId: 'u1', addParam: makeAddParam(), includeStatusBucket: true });
+        expect(filters).not.toContain('ca.claimed_by IS NULL');
+    });
+
+    test("counts mode never adds the WHERE-level claim gate (it fans out per bucket via hideClaimedFromNew)", () => {
+        const filters = buildConversationFilters({ query: { status: 'new' }, userId: 'u1', addParam: makeAddParam(), includeStatusBucket: false });
+        expect(filters).not.toContain('ca.claimed_by IS NULL');
+    });
+
+    test("claimed='me' scopes to the user's own chats regardless of bucket", () => {
+        const addParam = makeAddParam();
+        const filters = buildConversationFilters({ query: { claimed: 'me', status: 'new' }, userId: 'u-42', addParam, includeStatusBucket: true });
+        expect(filters.some((f) => /ca\.claimed_by = \$/.test(f))).toBe(true);
+        expect(addParam.params).toContain('u-42');
+        expect(filters).not.toContain('ca.claimed_by IS NULL');
+    });
+
+    test("claimed='unassigned' scopes to unclaimed chats", () => {
+        const filters = buildConversationFilters({ query: { claimed: 'unassigned' }, userId: 'u1', addParam: makeAddParam(), includeStatusBucket: true });
+        expect(filters).toContain('ca.claimed_by IS NULL');
+    });
 });
 
 describe('buildCandidateStatusCountsSql', () => {
@@ -77,6 +113,23 @@ describe('buildCandidateStatusCountsSql', () => {
         // DISTINCT-ON → LATERAL rewrite for the indexed top-1-per-candidate lookup).
         expect(sql).toContain("c2.channel = 'whatsapp'");
         expect(sql).toContain('LEFT JOIN LATERAL');
+    });
+
+    // hideClaimedFromNew gates ONLY the New badge (user decision 2026-06-15): the
+    // New count drops claimed chats to mirror the New list, while total_chats and
+    // every other status badge keep claimed chats so the pipeline reads in full.
+    test('default (hideClaimedFromNew=false) leaves the New bucket unfiltered by claim', () => {
+        expect(sql).toMatch(/FILTER \(WHERE LOWER\(COALESCE\(ca\.status,'new'\)\) = 'new'\) AS st_new/);
+    });
+
+    test('hideClaimedFromNew=true gates only the New bucket on claimed_by IS NULL', () => {
+        const gated = buildCandidateStatusCountsSql({ whereClause: '', hideClaimedFromNew: true });
+        expect(gated).toMatch(/FILTER \(WHERE LOWER\(COALESCE\(ca\.status,'new'\)\) = 'new' AND ca\.claimed_by IS NULL\) AS st_new/);
+        // Other buckets must NOT carry the claim clause.
+        expect(gated).toMatch(/FILTER \(WHERE LOWER\(COALESCE\(ca\.status,'new'\)\) = 'screening'\) AS st_screening/);
+        expect(gated).toMatch(/FILTER \(WHERE LOWER\(COALESCE\(ca\.status,'new'\)\) = 'certified'\) AS st_certified/);
+        // total_chats keeps claimed chats too.
+        expect(gated).toContain('COUNT(*) AS total_chats');
     });
 });
 

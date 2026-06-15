@@ -91,18 +91,23 @@ function buildConversationFilters({ query, userId, addParam, includeStatusBucket
     if (query.call_status === 'on_call') filters.push(`ca.call_status = 'on_call'`);
     if (query.contacted === 'yes') filters.push(`ca.last_contacted_at IS NOT NULL`);
     else if (query.contacted === 'no') filters.push(`ca.last_contacted_at IS NULL`);
-    // Claim scope. The DEFAULT (no `claimed` param) HIDES claimed chats from the
-    // All/New lists for everyone — a claimed chat lives under its owner's "Mine"
-    // and, for admins, the per-user "Claimed by <user>" filter. Search stays a
-    // GLOBAL lookup, so the default-hide is skipped while searching (a claimed
-    // candidate must still be findable by name/phone).
+    // Claim scope. The DEFAULT (no `claimed` param) hides claimed chats from the
+    // NEW list ONLY — New is the "unclaimed leads to grab" queue. "All chats" and
+    // every other status tab KEEP their claimed chats so the full project pipeline
+    // stays visible (and so the tab badges reconcile with the Applications page —
+    // user decision 2026-06-15; claimed chats live under their owner's "Mine" and,
+    // for admins, the per-user "Claimed by <user>" filter). The matching badge math
+    // is in buildCandidateStatusCountsSql via `hideClaimedFromNew` (the counts query
+    // fans out per bucket, so it can't gate New through this single WHERE). Search
+    // stays a GLOBAL lookup, so the default-hide is skipped while searching (a
+    // claimed candidate must still be findable by name/phone).
     if (query.claimed === 'me') {
         filters.push(`ca.claimed_by = ${addParam(userId)}`);
     } else if (query.claimed === 'unassigned') {
         filters.push(`ca.claimed_by IS NULL`);
     } else if (isAdmin && query.claimed_by) {
         filters.push(`ca.claimed_by = ${addParam(query.claimed_by)}`);
-    } else if (!isSearch) {
+    } else if (!isSearch && includeStatusBucket && String(status || '').toLowerCase() === 'new') {
         filters.push(`ca.claimed_by IS NULL`);
     }
 
@@ -134,12 +139,21 @@ function buildConversationFilters({ query, userId, addParam, includeStatusBucket
  * @param {object}  opts
  * @param {string}  opts.whereClause - the full "WHERE ..." string (or '') from buildConversationFilters
  * @param {boolean} opts.includeHired - also emit the hired bucket (Applications strip wants it; Messages tabs don't)
+ * @param {boolean} opts.hideClaimedFromNew - in the DEFAULT claim scope, the New
+ *        badge counts UNCLAIMED candidates only (mirrors the New list), while
+ *        total_chats and every other bucket include claimed chats. Pass false when
+ *        an explicit claim filter (Mine / unassigned / claimed-by) or a search is
+ *        active — there the WHERE already restricts the claim scope (user 2026-06-15).
  * @returns {string} adapted SQL
  */
-function buildCandidateStatusCountsSql({ whereClause = '', includeHired = false } = {}) {
+function buildCandidateStatusCountsSql({ whereClause = '', includeHired = false, hideClaimedFromNew = false } = {}) {
     const hasCvExpr = `(ca.cv_uploaded IS TRUE OR cvf.has_cv_file IS TRUE)`;
-    const statusCount = (value, alias) =>
-        `COUNT(*) FILTER (WHERE LOWER(COALESCE(ca.status,'new')) = '${value}') AS ${alias}`;
+    // New is the unclaimed "leads to grab" queue: hide claimed chats from the New
+    // badge only, exactly as the New list does. All other badges + total_chats keep
+    // claimed chats so the project pipeline reads in full.
+    const newExtra = hideClaimedFromNew ? ' AND ca.claimed_by IS NULL' : '';
+    const statusCount = (value, alias, extra = '') =>
+        `COUNT(*) FILTER (WHERE LOWER(COALESCE(ca.status,'new')) = '${value}'${extra}) AS ${alias}`;
 
     return adaptQuery(`
         SELECT
@@ -147,7 +161,7 @@ function buildCandidateStatusCountsSql({ whereClause = '', includeHired = false 
             COUNT(*) FILTER (WHERE COALESCE(ca.is_human_handoff, FALSE) = TRUE)  AS human_controlled,
             COUNT(*) FILTER (WHERE COALESCE(ca.is_human_handoff, FALSE) = FALSE) AS bot_controlled,
             COUNT(*) FILTER (WHERE ${hasCvExpr}) AS cv_uploaded,
-            ${statusCount('new', 'st_new')},
+            ${statusCount('new', 'st_new', newExtra)},
             ${statusCount('screening', 'st_screening')},
             ${statusCount('certified', 'st_certified')},
             ${statusCount('interview_scheduled', 'st_interview_scheduled')},

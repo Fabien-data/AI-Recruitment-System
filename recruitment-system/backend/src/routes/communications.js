@@ -584,7 +584,17 @@ router.get('/active-chats/counts', authenticate, requireSection('communications'
         });
         const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
-        const sql = buildCandidateStatusCountsSql({ whereClause });
+        // New badge hides claimed chats only in the DEFAULT claim scope (no explicit
+        // Mine / unassigned / claimed-by filter, and not searching) — the same gate
+        // the New list applies. With an explicit claim filter the WHERE already pins
+        // the claim scope, so don't double-gate New (it would zero out "Mine → New").
+        const isSearch = Boolean(String(req.query.search || '').trim());
+        const explicitClaim = req.query.claimed === 'me'
+            || req.query.claimed === 'unassigned'
+            || (req.user.role === 'admin' && req.query.claimed_by);
+        const hideClaimedFromNew = !isSearch && !explicitClaim;
+
+        const sql = buildCandidateStatusCountsSql({ whereClause, hideClaimedFromNew });
         const result = await query(sql, params);
         res.json(shapeCountsRow(result.rows[0]));
     } catch (error) {
