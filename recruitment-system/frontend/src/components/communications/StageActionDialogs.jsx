@@ -5,9 +5,17 @@ import toast from 'react-hot-toast'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import {
-  getProjects, getProjectJobs,
+  getProjects, getProjectJobs, getProject,
   certifyCandidate, ensureApplication, createInterview,
 } from '../../api'
+
+// 'YYYY-MM-DD' → 'Sat 20 Jun' (UTC-naive; interview dates are literal wall-clock).
+function fmtInterviewDay(date) {
+  const m = String(date || '').match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return String(date || '')
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]))
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+}
 
 /**
  * Shared stage-action popups used from BOTH the Messages call-log panel and the
@@ -192,6 +200,7 @@ export function ScheduleInterviewDialog({ open, onClose, candidateId, candidateN
   const queryClient = useQueryClient()
   const [projId, setProjId] = useState('')
   const [jobId, setJobId] = useState('')
+  const [dayId, setDayId] = useState('')        // chosen configured interview day ('' = custom)
   const [datetime, setDatetime] = useState('')
   const [location, setLocation] = useState('')
   const [notes, setNotes] = useState('')
@@ -200,20 +209,53 @@ export function ScheduleInterviewDialog({ open, onClose, candidateId, candidateN
   useEffect(() => {
     if (open) {
       setProjId(defaultProjectId || ''); setJobId(defaultJobId || '')
-      setDatetime(''); setLocation(''); setNotes(''); setTranslate(false)
+      setDayId(''); setDatetime(''); setLocation(''); setNotes(''); setTranslate(false)
     }
   }, [open, defaultProjectId, defaultJobId])
+
+  // Date-specific interview days configured on the chosen project (if any).
+  const { data: projectForDays } = useQuery({
+    queryKey: ['stage-dlg-project-days', projId],
+    queryFn: () => getProject(projId),
+    enabled: open && !!projId,
+    staleTime: 30 * 1000,
+  })
+  const configDays = useMemo(() => {
+    const days = projectForDays?.interview_config?.days
+    return Array.isArray(days) ? days.filter((d) => d && d.date && d.location) : []
+  }, [projectForDays])
+
+  // Reset the day choice when the project changes (its days differ).
+  useEffect(() => { setDayId(''); setDatetime(''); setLocation('') }, [projId])
+
+  // Pick a configured day → auto-fill date/time + venue. Reschedule + the
+  // candidate's other-day options are driven by the project config downstream.
+  const pickDay = (d) => {
+    setDayId(d.id)
+    setDatetime(`${d.date}T${d.time_start || '09:00'}`)
+    setLocation(d.location || '')
+  }
 
   const mut = useMutation({
     mutationFn: async () => {
       // Resolve (or create) the application this interview attaches to.
       const { application_id } = await ensureApplication(candidateId, { job_id: jobId })
       if (!application_id) throw new Error('Could not resolve an application for this role')
+      // When scheduled against a configured day, tell the candidate the other
+      // days they could pick (parity with the bulk "Interview days" invite).
+      let description = notes.trim()
+      if (dayId) {
+        const others = configDays.filter((d) => d.id !== dayId)
+        if (others.length) {
+          const lines = others.map((d) => `• ${fmtInterviewDay(d.date)} — ${d.location}`).join('\n')
+          description = [description, `If that day doesn't work, you can also choose:\n${lines}`].filter(Boolean).join('\n\n')
+        }
+      }
       return createInterview({
         application_id,
         scheduled_datetime: datetime,
         location: location.trim() || undefined,
-        description: notes.trim() || undefined,
+        description: description || undefined,
         translate_notes: translate,
         notify_channels: ['whatsapp'],
       })
@@ -240,14 +282,39 @@ export function ScheduleInterviewDialog({ open, onClose, candidateId, candidateN
 
         <ProjectJobSelect projId={projId} setProjId={setProjId} jobId={jobId} setJobId={setJobId} required jobLabel="Role" />
 
-        <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">Date &amp; time *</label>
-          <input type="datetime-local" value={datetime} onChange={(e) => setDatetime(e.target.value)} className="input w-full text-sm" />
-        </div>
-        <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">Location</label>
-          <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Office address / video link / TBD" className="input w-full text-sm" />
-        </div>
+        {configDays.length > 0 && (
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">Interview day</label>
+            <div className="space-y-1.5">
+              {configDays.map((d) => (
+                <label key={d.id} className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-2.5 py-1.5 text-sm cursor-pointer">
+                  <input type="radio" name="iday" className="accent-primary-600" checked={dayId === d.id} onChange={() => pickDay(d)} />
+                  <CalendarClock size={13} className="text-zinc-400 shrink-0" />
+                  <span className="font-medium text-zinc-800 dark:text-zinc-100">{fmtInterviewDay(d.date)}</span>
+                  <span className="text-zinc-500 dark:text-zinc-400 truncate">· {d.location}</span>
+                  <span className="ml-auto text-xs text-zinc-400 shrink-0">{d.time_start || '09:00'}</span>
+                </label>
+              ))}
+              <label className="flex items-center gap-2 px-2.5 py-1 text-sm cursor-pointer text-zinc-600 dark:text-zinc-300">
+                <input type="radio" name="iday" className="accent-primary-600" checked={dayId === ''} onChange={() => { setDayId(''); setDatetime(''); setLocation('') }} />
+                Custom date &amp; time
+              </label>
+            </div>
+          </div>
+        )}
+
+        {(configDays.length === 0 || dayId === '') && (
+          <>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">Date &amp; time *</label>
+              <input type="datetime-local" value={datetime} onChange={(e) => { setDatetime(e.target.value); setDayId('') }} className="input w-full text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">Location</label>
+              <input type="text" value={location} onChange={(e) => { setLocation(e.target.value); setDayId('') }} placeholder="Office address / video link / TBD" className="input w-full text-sm" />
+            </div>
+          </>
+        )}
         <div>
           <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">Notes to candidate (optional)</label>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="e.g. Bring your original documents." className="input w-full text-sm resize-none" />
