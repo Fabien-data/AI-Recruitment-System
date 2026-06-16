@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
-  getApplications, getJobs, getProjects, apiClient, getInterviewers,
+  getApplications, getJobs, getProjects, getProject, apiClient, getInterviewers,
   previewInterviewAllocation, bulkScheduleInterviews,
   updateApplication, rejectToPool, batchCertifyApplications, batchRejectToPool,
   getCandidate, getPendingInterviewSends, downloadUnreachableCsv, setCandidateStage,
@@ -796,6 +796,24 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
   // Turn on only when you need it auto-translated into each candidate's language.
   const [translateNotes, setTranslateNotes] = useState(false)
   const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
+  // Days mode (date-specific interviews configured on the project)
+  const [dayFill, setDayFill] = useState('sequential') // 'sequential' | 'round_robin'
+  const [selectedDayIds, setSelectedDayIds] = useState(null) // null = all configured days
+  const [daysPreview, setDaysPreview] = useState(null)
+
+  const { data: projectForDays } = useQuery({
+    queryKey: ['project', projectId, 'interview-config'],
+    queryFn: () => getProject(projectId),
+    enabled: mode === 'days' && !!projectId,
+    staleTime: 30_000,
+  })
+  const configDays = Array.isArray(projectForDays?.interview_config?.days) ? projectForDays.interview_config.days : []
+  const dayChecked = (id) => (selectedDayIds == null ? true : selectedDayIds.includes(id))
+  const toggleDay = (id) => setSelectedDayIds((prev) => {
+    const base = prev == null ? configDays.map((d) => d.id) : prev
+    setDaysPreview(null)
+    return base.includes(id) ? base.filter((x) => x !== id) : [...base, id]
+  })
 
   const today = new Date().toISOString().slice(0, 10)
   const channels = () => (notifyWhatsApp ? ['whatsapp'] : ['whatsapp'])
@@ -826,9 +844,42 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
     onError: (err) => showErrorToast(err, 'Preview failed'),
   })
 
+  const daysPreviewMutation = useMutation({
+    mutationFn: async () => {
+      const ids = configDays.map((d) => d.id)
+      const chosen = selectedDayIds == null ? ids : ids.filter((id) => selectedDayIds.includes(id))
+      if (!ids.length) throw new Error('This project has no interview days configured yet — add them in the Interviews page.')
+      if (!chosen.length) throw new Error('Select at least one interview day')
+      return bulkScheduleInterviews({
+        application_ids: applicationIds,
+        mode: 'days',
+        day_ids: chosen.length === ids.length ? undefined : chosen,
+        day_fill: dayFill,
+        dry_run: true,
+      })
+    },
+    onSuccess: (res) => setDaysPreview(res),
+    onError: (err) => showErrorToast(err, 'Preview failed'),
+  })
+
   const mutation = useMutation({
     mutationFn: async () => {
       rememberMessage()
+      if (mode === 'days') {
+        const ids = configDays.map((d) => d.id)
+        const chosen = selectedDayIds == null ? ids : ids.filter((id) => selectedDayIds.includes(id))
+        if (!ids.length) throw new Error('This project has no interview days configured yet — add them in the Interviews page.')
+        if (!chosen.length) throw new Error('Select at least one interview day')
+        return bulkScheduleInterviews({
+          application_ids: applicationIds,
+          mode: 'days',
+          day_ids: chosen.length === ids.length ? undefined : chosen,
+          day_fill: dayFill,
+          description: description.trim() || null,
+          translate_notes: translateNotes,
+          notify_channels: channels(),
+        })
+      }
       if (mode === 'smart') {
         if (!startDate) throw new Error('Start date is required')
         if (!interviewerId) throw new Error('Select an interviewer')
@@ -937,7 +988,8 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
           </div>
         </div>
 
-        {/* Mode toggle: one shared slot (Fixed) vs per-interviewer/day auto-shift (Smart). */}
+        {/* Mode toggle: shared slot (Fixed) · per-interviewer auto-shift (Smart) ·
+            project's configured interview days (Days). */}
         <div className="flex gap-1 rounded-xl bg-zinc-100 dark:bg-zinc-800 p-1">
           <button
             type="button"
@@ -952,6 +1004,13 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
             className={`flex-1 text-xs font-medium rounded-lg py-1.5 ${mode === 'smart' ? 'bg-white dark:bg-zinc-900 shadow' : 'text-zinc-500'}`}
           >
             Smart (per-day limit)
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('days')}
+            className={`flex-1 text-xs font-medium rounded-lg py-1.5 ${mode === 'days' ? 'bg-white dark:bg-zinc-900 shadow' : 'text-zinc-500'}`}
+          >
+            Interview days
           </button>
         </div>
 
@@ -1018,18 +1077,75 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
           </div>
         )}
 
-        <div>
-          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
-            <MapPinned size={12} /> Location / Venue
-          </label>
-          <input
-            type="text"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="e.g., Head Office, Colombo 3"
-            className="input w-full"
-          />
-        </div>
+        {mode === 'days' && (
+          <div className="space-y-3">
+            {!projectId ? (
+              <p className="text-xs text-amber-600 dark:text-amber-400">Open the bulk schedule from within a project to use its configured interview days.</p>
+            ) : configDays.length === 0 ? (
+              <p className="text-xs text-amber-600 dark:text-amber-400">No interview days configured for this project yet. Add them under <span className="font-medium">Interviews → Interview details for this project</span>, then return here.</p>
+            ) : (
+              <>
+                <div>
+                  <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Use these interview days</p>
+                  <div className="space-y-1.5">
+                    {configDays.map((d) => (
+                      <label key={d.id} className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-2.5 py-1.5 text-sm cursor-pointer">
+                        <input type="checkbox" className="w-4 h-4 rounded accent-primary-600" checked={dayChecked(d.id)} onChange={() => toggleDay(d.id)} />
+                        <CalendarDays size={13} className="text-zinc-400" />
+                        <span className="font-medium text-zinc-800 dark:text-zinc-100">{d.date}</span>
+                        <span className="text-zinc-500 dark:text-zinc-400 truncate">· {d.location}</span>
+                        <span className="ml-auto text-xs text-zinc-400">{d.time_start || '09:00'}{d.capacity != null ? ` · cap ${d.capacity}` : ''}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fill order</p>
+                  <div className="flex gap-1 rounded-xl bg-zinc-100 dark:bg-zinc-800 p-1">
+                    <button type="button" onClick={() => { setDayFill('sequential'); setDaysPreview(null) }} className={`flex-1 text-xs font-medium rounded-lg py-1.5 ${dayFill === 'sequential' ? 'bg-white dark:bg-zinc-900 shadow' : 'text-zinc-500'}`}>Fill day by day</button>
+                    <button type="button" onClick={() => { setDayFill('round_robin'); setDaysPreview(null) }} className={`flex-1 text-xs font-medium rounded-lg py-1.5 ${dayFill === 'round_robin' ? 'bg-white dark:bg-zinc-900 shadow' : 'text-zinc-500'}`}>Spread evenly</button>
+                  </div>
+                </div>
+                <Button variant="secondary" size="sm" onClick={() => daysPreviewMutation.mutate()} disabled={daysPreviewMutation.isPending} className="gap-1">
+                  <CalendarDays size={14} /> {daysPreviewMutation.isPending ? 'Calculating…' : 'Preview allocation'}
+                </Button>
+                {daysPreview && (
+                  <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3 max-h-56 overflow-y-auto text-xs space-y-2">
+                    <p className="font-medium text-zinc-700 dark:text-zinc-300">
+                      {daysPreview.scheduled} of {daysPreview.total} placed
+                      {daysPreview.skipped?.length ? ` · ${daysPreview.skipped.length} over capacity` : ''}
+                    </p>
+                    {(daysPreview.byDay || []).map((d) => (
+                      <div key={d.date}>
+                        <p className="font-semibold text-zinc-600 dark:text-zinc-400">{d.date} — {d.location || 'TBD'} · {d.count} interview{d.count === 1 ? '' : 's'}</p>
+                        <div className="pl-2">
+                          {d.items.map((it) => (
+                            <div key={it.application_id} className="text-zinc-500 dark:text-zinc-400 truncate">{it.candidate_name || 'Candidate'}</div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {mode !== 'days' && (
+          <div>
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
+              <MapPinned size={12} /> Location / Venue
+            </label>
+            <input
+              type="text"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="e.g., Head Office, Colombo 3"
+              className="input w-full"
+            />
+          </div>
+        )}
 
         {mode === 'fixed' && (
           <div>
@@ -1096,6 +1212,8 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
           {mode === 'smart'
             ? <>Candidates are spread across days at the chosen per-interviewer limit (overflow auto-shifts to the next working day). Each gets their own time and status <strong>Scheduled</strong>.</>
+            : mode === 'days'
+            ? <>Candidates are assigned to the selected interview days (each with its own venue). Their invite lists the other days so they can <strong>Reschedule</strong> to another. Status → <strong>Scheduled</strong>.</>
             : <>Each candidate's status will be set to <strong>Scheduled</strong> and they'll receive the same date/time/location.</>}
         </p>
 

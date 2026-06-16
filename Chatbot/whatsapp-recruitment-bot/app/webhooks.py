@@ -1281,6 +1281,8 @@ class CandidateStatusPayload(BaseModel):
     interview_date: Optional[str] = None
     interview_location: Optional[str] = None
     interview_notes: Optional[str] = None  # recruiter instructions (dress code, docs to bring, …)
+    what_to_bring: Optional[str] = None  # per-day "what to bring" → out-of-window invite template param 5
+    dress_code: Optional[str] = None  # per-day dress code → out-of-window invite template param 6
     translate_notes: bool = False  # translate interview_notes into the candidate's language (uses AI). Off = send verbatim, no API cost.
     alternative_jobs: Optional[list] = None
     prescreening_datetime: Optional[str] = None

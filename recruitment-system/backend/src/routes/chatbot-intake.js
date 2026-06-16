@@ -26,6 +26,7 @@ const { normalizeIncomingCvUrl } = require('../utils/cv-url');
 const { normalizePhone: canonicalPhone, phoneVariants } = require('../utils/phone');
 const { emitStageChanged, syncCandidateStage } = require('../services/candidate-stage');
 const { allocateInterviewSlots } = require('../services/interview-scheduler');
+const { resolveInterviewDays } = require('../services/interview-days');
 const notifications = require('../services/notifications');
 const { logAgentAction } = require('../services/activity-log');
 
@@ -1799,6 +1800,18 @@ async function findUpcomingInterview(phone) {
     return r.rows[0] || null;
 }
 
+// Extract the wall-clock YYYY-MM-DD from a scheduled_datetime (pg returns a
+// tz-naive TIMESTAMP as a Date whose UTC fields hold the stored wall-clock when
+// the process runs in UTC; a plain string is matched directly).
+function interviewDateOnly(value) {
+    if (value instanceof Date) {
+        const p = (n) => String(n).padStart(2, '0');
+        return `${value.getUTCFullYear()}-${p(value.getUTCMonth() + 1)}-${p(value.getUTCDate())}`;
+    }
+    const m = String(value || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
 // ── POST /api/chatbot/interview-slots ─────────────────────────────────────────
 // Candidate tapped "Reschedule": compute the next available slots from the
 // project's interview_config + the already-booked interview_schedules, so the bot
@@ -1811,7 +1824,7 @@ router.post('/interview-slots', authenticateChatbot, async (req, res) => {
         if (!iv) return res.json({ ok: false, reason: 'no_upcoming_interview', slots: [] });
 
         const cfg = iv.interview_config || {};
-        // Seed already-booked counts per day (single null lane) so full days are skipped.
+        // Seed already-booked counts per day so full days are skipped.
         const booked = await query(adaptQuery(`
             SELECT to_char(s.scheduled_datetime, 'YYYY-MM-DD') AS d, COUNT(*)::int AS n
             FROM interview_schedules s
@@ -1821,31 +1834,54 @@ router.post('/interview-slots', authenticateChatbot, async (req, res) => {
               AND s.scheduled_datetime >= NOW()
             GROUP BY 1
         `), [iv.project_id]);
-        const existingByInterviewerDay = { null: {} };
-        for (const row of booked.rows) existingByInterviewerDay.null[row.d] = parseInt(row.n, 10) || 0;
+        const bookedByDate = {};
+        for (const row of booked.rows) bookedByDate[row.d] = parseInt(row.n, 10) || 0;
 
-        // Start from tomorrow in Asia/Colombo (interview times are literal wall-clock).
-        const sd = await query(`SELECT ((NOW() AT TIME ZONE 'Asia/Colombo')::date + 1)::text AS start_date`, []);
-        const startDate = sd.rows[0].start_date;
+        const days = resolveInterviewDays(cfg).filter((d) => d.date);
 
-        const SLOT_COUNT = 6;
-        const alloc = allocateInterviewSlots({
-            applications: Array.from({ length: SLOT_COUNT }, (_, i) => `rs${i}`),
-            startDate,
-            perDayLimit: parseInt(cfg.per_day_limit, 10) || undefined,
-            slotMinutes: parseInt(cfg.slot_minutes, 10) || undefined,
-            workdayStartHour: cfg.workday_start_hour != null ? Number(cfg.workday_start_hour) : undefined,
-            workdayEndHour: cfg.workday_end_hour != null ? Number(cfg.workday_end_hour) : undefined,
-            workingDays: Array.isArray(cfg.working_days) && cfg.working_days.length ? cfg.working_days.map(Number) : undefined,
-            skipDates: Array.isArray(cfg.skip_dates) ? cfg.skip_dates : undefined,
-            existingByInterviewerDay,
-        });
-
-        const slots = alloc.assignments.map((s) => ({
-            slot_id: `rs|${iv.interview_id}|${s.scheduled_datetime}`,
-            datetime: s.scheduled_datetime,
-            label: notifications.formatInterviewWallClock(s.scheduled_datetime),
-        }));
+        let slots;
+        if (days.length) {
+            // Date-specific reschedule: offer the project's OTHER configured days
+            // (current day excluded), future-only, with capacity remaining. The id
+            // stays self-describing (`rs|<iv>|<datetime>`) so the chatbot is unchanged.
+            const today = await query(`SELECT (NOW() AT TIME ZONE 'Asia/Colombo')::date::text AS d`, []);
+            const todayColombo = today.rows[0].d;
+            const curDate = interviewDateOnly(iv.scheduled_datetime);
+            slots = days
+                .filter((d) => d.date !== curDate && d.date >= todayColombo)
+                .filter((d) => d.capacity == null || (bookedByDate[d.date] || 0) < d.capacity)
+                .map((d) => {
+                    const dt = `${d.date}T${d.time_start || '09:00'}`;
+                    return {
+                        slot_id: `rs|${iv.interview_id}|${dt}`,
+                        datetime: dt,
+                        label: `${notifications.formatInterviewWallClock(dt)} · ${d.location}`,
+                    };
+                });
+        } else {
+            // Legacy project (no configured days): auto-generate the next free slots.
+            const existingByInterviewerDay = { null: {} };
+            for (const [d, n] of Object.entries(bookedByDate)) existingByInterviewerDay.null[d] = n;
+            const sd = await query(`SELECT ((NOW() AT TIME ZONE 'Asia/Colombo')::date + 1)::text AS start_date`, []);
+            const startDate = sd.rows[0].start_date;
+            const SLOT_COUNT = 6;
+            const alloc = allocateInterviewSlots({
+                applications: Array.from({ length: SLOT_COUNT }, (_, i) => `rs${i}`),
+                startDate,
+                perDayLimit: parseInt(cfg.per_day_limit, 10) || undefined,
+                slotMinutes: parseInt(cfg.slot_minutes, 10) || undefined,
+                workdayStartHour: cfg.workday_start_hour != null ? Number(cfg.workday_start_hour) : undefined,
+                workdayEndHour: cfg.workday_end_hour != null ? Number(cfg.workday_end_hour) : undefined,
+                workingDays: Array.isArray(cfg.working_days) && cfg.working_days.length ? cfg.working_days.map(Number) : undefined,
+                skipDates: Array.isArray(cfg.skip_dates) ? cfg.skip_dates : undefined,
+                existingByInterviewerDay,
+            });
+            slots = alloc.assignments.map((s) => ({
+                slot_id: `rs|${iv.interview_id}|${s.scheduled_datetime}`,
+                datetime: s.scheduled_datetime,
+                label: notifications.formatInterviewWallClock(s.scheduled_datetime),
+            }));
+        }
         return res.json({ ok: true, interview_id: iv.interview_id, slots });
     } catch (err) {
         logger.error(`interview-slots error: ${err.message}`);
@@ -1864,41 +1900,69 @@ router.post('/interview-reschedule-pick', authenticateChatbot, async (req, res) 
         }
         const ivRes = await query(adaptQuery(`
             SELECT iv.id, iv.application_id, iv.scheduled_datetime, iv.interviewer_id,
-                   a.candidate_id, a.job_id, j.project_id, j.title AS job_title
+                   a.candidate_id, a.job_id, j.project_id, j.title AS job_title,
+                   p.interview_config
             FROM interview_schedules iv
             JOIN applications a ON iv.application_id = a.id
             JOIN jobs j ON a.job_id = j.id
+            LEFT JOIN projects p ON p.id = j.project_id
             WHERE iv.id = $1
         `), [interview_id]);
         if (ivRes.rows.length === 0) return res.json({ ok: false, reason: 'interview_not_found' });
         const iv = ivRes.rows[0];
 
-        // Re-validate the chosen slot is still free for this project (a second
-        // candidate may have taken it since it was offered).
-        const clash = await query(adaptQuery(`
-            SELECT 1 FROM interview_schedules s
-            JOIN applications a ON s.application_id = a.id
-            JOIN jobs j ON a.job_id = j.id
-            WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
-              AND s.scheduled_datetime = $2 AND s.id <> $3
-            LIMIT 1
-        `), [iv.project_id, datetime, interview_id]);
-        if (clash.rows.length > 0) return res.json({ ok: false, reason: 'slot_taken' });
+        // Resolve the picked day from the project's configured days so we can move
+        // the VENUE too and re-check that DAY's capacity (not exact-time equality —
+        // many candidates legitimately share a day's start time).
+        const pickedDate = interviewDateOnly(datetime);
+        const days = resolveInterviewDays(iv.interview_config || {}).filter((d) => d.date);
+        const pickedDay = days.find((d) => `${d.date}T${d.time_start || '09:00'}` === datetime)
+            || days.find((d) => d.date === pickedDate);
+        const newLocation = pickedDay ? pickedDay.location : null;
 
-        // Rebook + reset reminder cadence (best-effort on the cadence columns which
-        // are postgres-owned on prod). reschedule_count/rescheduled_from are 058 cols.
+        // Re-validate the chosen slot is still free (a second candidate may have
+        // taken it since it was offered).
+        if (pickedDay) {
+            // Date-specific day → capacity is per DAY (shared start times).
+            if (pickedDay.capacity != null) {
+                const dayCount = await query(adaptQuery(`
+                    SELECT COUNT(*)::int AS n FROM interview_schedules s
+                    JOIN applications a ON s.application_id = a.id
+                    JOIN jobs j ON a.job_id = j.id
+                    WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+                      AND to_char(s.scheduled_datetime, 'YYYY-MM-DD') = $2 AND s.id <> $3
+                `), [iv.project_id, pickedDate, interview_id]);
+                if ((dayCount.rows[0]?.n || 0) >= Number(pickedDay.capacity)) return res.json({ ok: false, reason: 'slot_taken' });
+            }
+        } else {
+            // Legacy auto-slot → each slot is a unique time, so exact-datetime clash.
+            const clash = await query(adaptQuery(`
+                SELECT 1 FROM interview_schedules s
+                JOIN applications a ON s.application_id = a.id
+                JOIN jobs j ON a.job_id = j.id
+                WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+                  AND s.scheduled_datetime = $2 AND s.id <> $3
+                LIMIT 1
+            `), [iv.project_id, datetime, interview_id]);
+            if (clash.rows.length > 0) return res.json({ ok: false, reason: 'slot_taken' });
+        }
+
+        // Rebook + move the venue + reset reminder cadence (best-effort on the
+        // cadence columns which are postgres-owned on prod). reschedule_count/
+        // rescheduled_from are 058 cols; `location` predates the ownership issue.
         await query(adaptQuery(`
             UPDATE interview_schedules
             SET scheduled_datetime = $1, status = 'scheduled',
+                location = COALESCE($3, location),
                 rescheduled_from_datetime = scheduled_datetime,
                 reschedule_count = COALESCE(reschedule_count, 0) + 1,
                 reminder_sent_at = NULL
             WHERE id = $2
-        `), [datetime, interview_id]).catch(async () => {
-            // Fallback if the 058 columns are missing (ownership): just move the time.
-            await query(adaptQuery(`UPDATE interview_schedules SET scheduled_datetime = $1, status = 'scheduled', reminder_sent_at = NULL WHERE id = $2`), [datetime, interview_id]);
+        `), [datetime, interview_id, newLocation]).catch(async () => {
+            // Fallback if the 058 columns are missing (ownership): move time + venue.
+            await query(adaptQuery(`UPDATE interview_schedules SET scheduled_datetime = $1, status = 'scheduled', location = COALESCE($3, location), reminder_sent_at = NULL WHERE id = $2`), [datetime, interview_id, newLocation]);
         });
-        await query(adaptQuery('UPDATE applications SET interview_datetime = $1, updated_at = NOW() WHERE id = $2'), [datetime, iv.application_id]).catch(() => {});
+        await query(adaptQuery('UPDATE applications SET interview_datetime = $1, interview_location = COALESCE($3, interview_location), updated_at = NOW() WHERE id = $2'), [datetime, iv.application_id, newLocation]).catch(() => {});
 
         // Resolve the pending reschedule task.
         await query(adaptQuery(`

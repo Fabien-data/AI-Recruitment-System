@@ -291,6 +291,7 @@ export default function Interviews() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [filters, setFilters] = useState({
     status: '',
+    filter: '', // quick tab: '' | 'rescheduled'
     date_from: '',
     date_to: '',
     project_id: searchParams.get('project_id') || '',
@@ -450,8 +451,27 @@ export default function Interviews() {
   }
 
   const clearFilters = () => setFilters((f) => ({
-    status: '', date_from: '', date_to: '', project_id: f.project_id, interviewer_id: '', outcome: '', search: '',
+    status: '', filter: '', date_from: '', date_to: '', project_id: f.project_id, interviewer_id: '', outcome: '', search: '',
   }))
+
+  // Quick status tabs (under the project tabs). 'rescheduled' uses the dedicated
+  // backend filter (reschedule_count > 0); the others map onto iv.status.
+  const STATUS_TABS = [
+    { key: 'all', label: 'All' },
+    { key: 'scheduled', label: 'Scheduled' },
+    { key: 'confirmed', label: 'Confirmed' },
+    { key: 'completed', label: 'Completed' },
+    { key: 'rescheduled', label: 'Rescheduled' },
+  ]
+  const activeTab = filters.filter === 'rescheduled' ? 'rescheduled' : (filters.status || 'all')
+  const setTab = (key) => {
+    setSelectedIds(new Set())
+    setFilters((f) => ({
+      ...f,
+      status: ['scheduled', 'confirmed', 'completed'].includes(key) ? key : '',
+      filter: key === 'rescheduled' ? 'rescheduled' : '',
+    }))
+  }
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
@@ -503,6 +523,28 @@ export default function Interviews() {
           >
             <FolderKanban size={12} />
             <span className="truncate max-w-[200px]">{p.title}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Quick status tabs */}
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        {STATUS_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition ${
+              activeTab === t.key
+                ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                : 'bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300 dark:border-zinc-700'
+            }`}
+          >
+            {t.key === 'rescheduled' && <CalendarClock size={12} />}
+            {t.label}
+            {t.key === 'rescheduled' && stats?.rescheduled ? (
+              <span className="ml-0.5 inline-flex items-center justify-center rounded-full bg-amber-100 dark:bg-amber-950/50 px-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">{stats.rescheduled}</span>
+            ) : null}
           </button>
         ))}
       </div>
@@ -593,16 +635,20 @@ export default function Interviews() {
               <span className="text-zinc-600 dark:text-zinc-400">
                 {selectedIds.size > 0 ? `${selectedIds.size} selected` : `${total} interview${total === 1 ? '' : 's'}`}
               </span>
-              <button
-                type="button"
-                onClick={selectedIds.size >= interviews.length && interviews.length > 0 ? clearSelected : selectAllVisible}
-                className="text-xs font-medium text-primary-600 hover:text-primary-700"
-              >
-                {selectedIds.size >= interviews.length && interviews.length > 0 ? 'Clear selection' : 'Select all on page'}
-              </button>
+              {activeTab !== 'rescheduled' && (
+                <button
+                  type="button"
+                  onClick={selectedIds.size >= interviews.length && interviews.length > 0 ? clearSelected : selectAllVisible}
+                  className="text-xs font-medium text-primary-600 hover:text-primary-700"
+                >
+                  {selectedIds.size >= interviews.length && interviews.length > 0 ? 'Clear selection' : 'Select all on page'}
+                </button>
+              )}
             </div>
 
-            {view === 'agenda' ? (
+            {activeTab === 'rescheduled' ? (
+              <RescheduledTable interviews={interviews} onCopyPhone={copyPhone} />
+            ) : view === 'agenda' ? (
               <AgendaView
                 interviews={interviews}
                 onReschedule={setRescheduleTarget}
@@ -855,6 +901,65 @@ function InterviewTable({ interviews, selectedIds, onToggleSelect, onSelectAll, 
   )
 }
 
+// Rescheduled view: candidates who moved their interview at least once, showing
+// the move (from day → to day + venue) and how many times they rescheduled.
+function RescheduledTable({ interviews, onCopyPhone }) {
+  if (!interviews.length) {
+    return <EmptyState icon={CalendarClock} title="No reschedules yet" message="When a candidate taps Reschedule and picks another day, they'll appear here." />
+  }
+  return (
+    <Table>
+      <Table.Head>
+        <Table.Tr hover={false}>
+          <Table.Th icon={User}>Candidate</Table.Th>
+          <Table.Th icon={Briefcase}>Job</Table.Th>
+          <Table.Th icon={FolderKanban}>Project</Table.Th>
+          <Table.Th icon={CalendarClock}>Moved from → to</Table.Th>
+          <Table.Th>Times</Table.Th>
+          <Table.Th>Status</Table.Th>
+        </Table.Tr>
+      </Table.Head>
+      <Table.Body>
+        {interviews.map((iv) => (
+          <Table.Tr key={iv.id} accent="purple">
+            <Table.Td className="min-w-[200px]"><CandidateCell iv={iv} onCopyPhone={onCopyPhone} /></Table.Td>
+            <Table.Td>
+              <Link to={`/jobs/${iv.job_id}`} className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 font-medium">
+                <Briefcase size={13} /><span className="truncate max-w-[160px]">{iv.job_title}</span>
+              </Link>
+            </Table.Td>
+            <Table.Td>
+              {iv.project_title ? (
+                <Link to={`/projects/${iv.project_id}`} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 ring-1 ring-inset ring-indigo-200 dark:ring-indigo-900/60">
+                  <FolderKanban size={10} /><span className="truncate max-w-[140px]">{iv.project_title}</span>
+                </Link>
+              ) : <span className="text-zinc-400 text-sm">—</span>}
+            </Table.Td>
+            <Table.Td className="whitespace-nowrap">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-zinc-400 dark:text-zinc-500 line-through">{iv.rescheduled_from_datetime ? formatDateTime(iv.rescheduled_from_datetime) : '—'}</span>
+                <span className="text-zinc-400">→</span>
+                <span className="font-medium text-zinc-800 dark:text-zinc-200">{formatDateTime(iv.scheduled_datetime)}</span>
+              </div>
+              {iv.location && (
+                <div className="mt-0.5 inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  <MapPin size={11} />{iv.location}
+                </div>
+              )}
+            </Table.Td>
+            <Table.Td>
+              <span className="inline-flex items-center justify-center rounded-full bg-amber-100 dark:bg-amber-950/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-200 dark:ring-amber-900/60">
+                {iv.reschedule_count || 1}×
+              </span>
+            </Table.Td>
+            <Table.Td><StatusPill status={iv.status} /></Table.Td>
+          </Table.Tr>
+        ))}
+      </Table.Body>
+    </Table>
+  )
+}
+
 // Agenda view: this page's interviews grouped by day.
 function AgendaView({ interviews, onReschedule, onCheckin, onComplete, onReminder, onCancel }) {
   const groups = useMemo(() => {
@@ -924,15 +1029,17 @@ function IconAction({ title, icon: Icon, tone = 'blue', onClick, to }) {
   )
 }
 
-// Per-project interview details (location / what-to-bring / dress code / timing).
-// Saved to projects.interview_config and injected into the bulk interview invite +
-// the candidate-driven reschedule slot allocator.
-const CONFIG_FIELDS = [
-  { key: 'location', label: 'Location', placeholder: 'e.g. Dewan Office, Colombo 03', type: 'text' },
-  { key: 'date_guidance', label: 'Date guidance', placeholder: 'e.g. Weekdays this month', type: 'text' },
-  { key: 'time_guidance', label: 'Time guidance', placeholder: 'e.g. 9:00 AM – 5:00 PM', type: 'text' },
+// Per-project interview details. Saved to projects.interview_config and injected
+// into the bulk interview invite + the candidate-driven reschedule day picker.
+// SHARED_FIELDS apply to every interview day; the per-day rows (interview_config
+// .days[]) carry their own date / venue / time window (e.g. 20 Jun – Colombo,
+// 21 Jun – Kurunegala), with optional per-day overrides of the shared text.
+const SHARED_FIELDS = [
+  { key: 'location', label: 'Default location (used when a day has no venue)', placeholder: 'e.g. Dewan Office, Colombo 03', type: 'text' },
   { key: 'what_to_bring', label: 'What to bring', placeholder: 'e.g. NIC and original certificates', type: 'text' },
   { key: 'dress_code', label: 'Dress code', placeholder: 'e.g. Smart casual', type: 'text' },
+  { key: 'date_guidance', label: 'Date guidance', placeholder: 'e.g. Weekdays this month', type: 'text' },
+  { key: 'time_guidance', label: 'Time guidance', placeholder: 'e.g. 9:00 AM – 5:00 PM', type: 'text' },
   { key: 'extra_notes', label: 'Extra notes', placeholder: 'Anything else candidates should know', type: 'textarea' },
 ]
 const ADVANCED_FIELDS = [
@@ -941,11 +1048,21 @@ const ADVANCED_FIELDS = [
   { key: 'workday_start_hour', label: 'Day start (hour)', placeholder: '9' },
   { key: 'workday_end_hour', label: 'Day end (hour)', placeholder: '17' },
 ]
+const SHARED_KEYS = SHARED_FIELDS.map((f) => f.key)
+const ADVANCED_KEYS = ADVANCED_FIELDS.map((f) => f.key)
+
+const newDayId = () => {
+  const raw = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `d${Date.now()}${Math.floor(Math.random() * 1e6)}`
+  return raw.replace(/-/g, '').slice(0, 16)
+}
+const emptyInterviewDay = () => ({ id: newDayId(), date: '', location: '', time_start: '09:00', time_end: '17:00', capacity: '', what_to_bring: '', dress_code: '', notes: '' })
 
 function InterviewConfigEditor({ projectId }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({})
+  const [shared, setShared] = useState({})
+  const [days, setDays] = useState([])
+  const [expanded, setExpanded] = useState(() => new Set())
 
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
@@ -954,16 +1071,37 @@ function InterviewConfigEditor({ projectId }) {
   })
 
   useEffect(() => {
-    setForm(project?.interview_config || {})
+    const cfg = project?.interview_config || {}
+    const s = {}
+    for (const k of [...SHARED_KEYS, ...ADVANCED_KEYS]) s[k] = cfg[k] ?? ''
+    setShared(s)
+    setDays(Array.isArray(cfg.days) && cfg.days.length
+      ? cfg.days.map((d) => ({ ...emptyInterviewDay(), ...d, capacity: d.capacity ?? '' }))
+      : [])
+    setExpanded(new Set())
   }, [project?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveMut = useMutation({
     mutationFn: () => {
-      // Coerce the advanced numeric fields; drop empties so we store a clean blob.
-      const cfg = { ...form }
-      for (const f of ADVANCED_FIELDS) {
-        cfg[f.key] = cfg[f.key] === '' || cfg[f.key] == null ? undefined : Number(cfg[f.key])
-      }
+      // Shared fields: coerce the advanced numerics, drop empties for a clean blob.
+      const cfg = { ...shared }
+      for (const k of ADVANCED_KEYS) cfg[k] = cfg[k] === '' || cfg[k] == null ? undefined : Number(cfg[k])
+      for (const k of SHARED_KEYS) if (cfg[k] === '') cfg[k] = undefined
+      // Per-day rows: keep only complete days, sorted by date.
+      cfg.days = days
+        .filter((d) => d.date && (d.location || '').trim())
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((d) => ({
+          id: d.id || newDayId(),
+          date: d.date,
+          location: d.location.trim(),
+          time_start: d.time_start || '09:00',
+          time_end: d.time_end || '17:00',
+          capacity: d.capacity === '' || d.capacity == null ? null : Number(d.capacity),
+          what_to_bring: (d.what_to_bring || '').trim() || null,
+          dress_code: (d.dress_code || '').trim() || null,
+          notes: (d.notes || '').trim() || null,
+        }))
       return updateProject(projectId, { interview_config: cfg })
     },
     onSuccess: () => {
@@ -973,7 +1111,27 @@ function InterviewConfigEditor({ projectId }) {
     onError: (e) => toast.error(e?.response?.data?.error || 'Could not save interview details'),
   })
 
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  const onSave = () => {
+    // Block save if a started day is missing date or venue; warn on dup dates.
+    const started = days.filter((d) => d.date || (d.location || '').trim())
+    if (started.some((d) => !d.date || !(d.location || '').trim())) {
+      toast.error('Each interview day needs both a date and a venue')
+      return
+    }
+    const dates = started.map((d) => d.date)
+    if (new Set(dates).size !== dates.length) toast('Heads up: two interview days share the same date', { icon: '⚠️' })
+    saveMut.mutate()
+  }
+
+  const setS = (k, v) => setShared((f) => ({ ...f, [k]: v }))
+  const setDay = (i, k, v) => setDays((ds) => ds.map((d, j) => (j === i ? { ...d, [k]: v } : d)))
+  const removeDay = (i) => setDays((ds) => ds.filter((_, j) => j !== i))
+  const addDay = () => setDays((ds) => [...ds, emptyInterviewDay()])
+  const toggleOverrides = (id) => setExpanded((s) => {
+    const n = new Set(s)
+    if (n.has(id)) n.delete(id); else n.add(id)
+    return n
+  })
 
   return (
     <Card className="mb-6">
@@ -988,32 +1146,92 @@ function InterviewConfigEditor({ projectId }) {
         <span className="text-xs text-zinc-500">{open ? 'Hide' : 'Edit'}</span>
       </button>
       {open && (
-        <div className="mt-4 space-y-4">
+        <div className="mt-4 space-y-5">
+          {/* Shared details — apply to every interview day unless overridden */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {CONFIG_FIELDS.map((f) => (
+            {SHARED_FIELDS.map((f) => (
               <div key={f.key} className={f.type === 'textarea' ? 'sm:col-span-2' : ''}>
                 <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">{f.label}</label>
                 {f.type === 'textarea' ? (
-                  <textarea className="input w-full" rows={2} placeholder={f.placeholder} value={form[f.key] || ''} onChange={(e) => set(f.key, e.target.value)} />
+                  <textarea className="input w-full" rows={2} placeholder={f.placeholder} value={shared[f.key] || ''} onChange={(e) => setS(f.key, e.target.value)} />
                 ) : (
-                  <input className="input w-full" placeholder={f.placeholder} value={form[f.key] || ''} onChange={(e) => set(f.key, e.target.value)} />
+                  <input className="input w-full" placeholder={f.placeholder} value={shared[f.key] || ''} onChange={(e) => setS(f.key, e.target.value)} />
                 )}
               </div>
             ))}
           </div>
+
+          {/* Interview days — date-specific venue + time (e.g. 20 Jun Colombo, 21 Jun Kurunegala) */}
           <div>
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Scheduling (used by the reschedule slot picker)</p>
+            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-2 inline-flex items-center gap-1">
+              <CalendarDays size={13} /> Interview days
+            </p>
+            <div className="space-y-2">
+              {days.length === 0 && (
+                <p className="text-xs text-zinc-400 dark:text-zinc-500">No specific days yet — add one to offer date-specific interviews and let candidates reschedule between them.</p>
+              )}
+              {days.map((d, i) => (
+                <div key={d.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 space-y-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-12 gap-2 items-end">
+                    <div className="col-span-2 sm:col-span-3">
+                      <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Date</label>
+                      <input type="date" className="input w-full" value={d.date || ''} onChange={(e) => setDay(i, 'date', e.target.value)} />
+                    </div>
+                    <div className="col-span-2 sm:col-span-4">
+                      <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Venue</label>
+                      <input className="input w-full" placeholder="e.g. Dewan Office, Kurunegala" value={d.location || ''} onChange={(e) => setDay(i, 'location', e.target.value)} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">From</label>
+                      <input type="time" className="input w-full" value={d.time_start || ''} onChange={(e) => setDay(i, 'time_start', e.target.value)} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">To</label>
+                      <input type="time" className="input w-full" value={d.time_end || ''} onChange={(e) => setDay(i, 'time_end', e.target.value)} />
+                    </div>
+                    <div className="flex justify-end sm:col-span-1">
+                      <IconAction title="Remove this day" icon={XCircle} tone="rose" onClick={() => removeDay(i)} />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-28">
+                      <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Capacity</label>
+                      <input type="number" min="0" className="input w-full" placeholder="∞" value={d.capacity ?? ''} onChange={(e) => setDay(i, 'capacity', e.target.value)} />
+                    </div>
+                    <button type="button" className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline mt-4" onClick={() => toggleOverrides(d.id)}>
+                      {expanded.has(d.id) ? 'Hide overrides' : 'Per-day overrides'}
+                    </button>
+                  </div>
+                  {expanded.has(d.id) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                      <input className="input w-full" placeholder="What to bring (override)" value={d.what_to_bring || ''} onChange={(e) => setDay(i, 'what_to_bring', e.target.value)} />
+                      <input className="input w-full" placeholder="Dress code (override)" value={d.dress_code || ''} onChange={(e) => setDay(i, 'dress_code', e.target.value)} />
+                      <input className="input w-full" placeholder="Notes (override)" value={d.notes || ''} onChange={(e) => setDay(i, 'notes', e.target.value)} />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="mt-2">
+              <Button variant="secondary" size="sm" onClick={addDay} className="gap-1"><CalendarDays size={14} /> Add interview day</Button>
+            </div>
+          </div>
+
+          {/* Scheduling fallback — only used for projects without specific days */}
+          <div>
+            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Scheduling fallback (used when no specific days are set)</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {ADVANCED_FIELDS.map((f) => (
                 <div key={f.key}>
                   <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">{f.label}</label>
-                  <input type="number" className="input w-full" placeholder={f.placeholder} value={form[f.key] ?? ''} onChange={(e) => set(f.key, e.target.value)} />
+                  <input type="number" className="input w-full" placeholder={f.placeholder} value={shared[f.key] ?? ''} onChange={(e) => setS(f.key, e.target.value)} />
                 </div>
               ))}
             </div>
           </div>
+
           <div className="flex justify-end">
-            <Button onClick={() => saveMut.mutate()} loading={saveMut.isPending}>Save interview details</Button>
+            <Button onClick={onSave} loading={saveMut.isPending}>Save interview details</Button>
           </div>
         </div>
       )}

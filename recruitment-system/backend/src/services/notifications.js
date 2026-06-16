@@ -862,6 +862,8 @@ async function sendNotification(options) {
                                 interviewDate: data.interview_datetime,
                                 interviewLocation: data.interview_location,
                                 interviewNotes: data.interview_notes,
+                                whatToBring: data.what_to_bring,
+                                dressCode: data.dress_code,
                                 // Opt-in translation: off by default to save API cost
                                 // (the note is sent exactly as typed).
                                 translateNotes: data.translate_notes === true,
@@ -1163,7 +1165,7 @@ async function sendPreScreeningNotification(candidateId, jobTitle, prescreeningD
 /**
  * Send interview scheduled notification
  */
-async function sendInterviewNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp'], description = null, translateNotes = false) {
+async function sendInterviewNotification(candidateId, jobTitle, interviewDatetime, interviewLocation, channels = ['whatsapp'], description = null, translateNotes = false, opts = {}) {
     // Pre-format the optional extra-details note here so the template stays a
     // single placeholder — empty string collapses to nothing (B016).
     const notesBlock = description ? `\n📝 Additional details: ${description}` : '';
@@ -1182,6 +1184,11 @@ async function sendInterviewNotification(candidateId, jobTitle, interviewDatetim
             // call = no API cost; the note is sent exactly as typed).
             interview_notes: description || null,
             translate_notes: translateNotes === true,
+            // Per-day what-to-bring / dress code (from the project's configured
+            // interview day). Populates params 5 & 6 of the out-of-window Meta
+            // invite template; falls back to generic copy when absent.
+            what_to_bring: opts.whatToBring || null,
+            dress_code: opts.dressCode || null,
         },
         channels
     });

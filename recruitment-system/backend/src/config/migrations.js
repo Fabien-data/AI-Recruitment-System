@@ -1507,10 +1507,18 @@ async function applyMigrations() {
     await safeAlter(`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(32)`, '057 candidates.contact_phone');
 
     // ── Migration 058: per-project interview config + reschedule audit ────────
-    //   projects.interview_config — JSONB blob: {location, date_guidance,
-    //     time_guidance, what_to_bring, dress_code, extra_notes, slot_minutes,
-    //     per_day_limit, workday_start_hour, workday_end_hour, working_days[],
-    //     skip_dates[]}. Injected into the interview invite + slot allocator.
+    //   projects.interview_config — JSONB blob. Shared fields: {location,
+    //     date_guidance, time_guidance, what_to_bring, dress_code, extra_notes,
+    //     slot_minutes, per_day_limit, workday_start_hour, workday_end_hour,
+    //     working_days[], skip_dates[]}.
+    //   PLUS days[] (date-specific interviews): [{id, date:'YYYY-MM-DD', location,
+    //     time_start:'HH:mm', time_end:'HH:mm', capacity:int|null, what_to_bring?,
+    //     dress_code?, notes?}]. When days[] is set, bulk-schedule distributes
+    //     candidates across the days (services/interview-days.js) and the bot's
+    //     reschedule picker offers the OTHER configured days; when absent, the
+    //     scheduling-fallback fields drive the legacy auto-slot allocator.
+    //     (days[] is JSON content — no schema migration; resolveInterviewDays
+    //     synthesizes a legacy single-day for back-compat.)
     //   interview_schedules.reschedule_count / rescheduled_from_datetime — audit of
     //     bot-driven candidate reschedules (feeds the interview-manager counters).
     // NOTE: interview_schedules is postgres-owned on prod — the two ALTERs below may
@@ -1530,6 +1538,18 @@ async function applyMigrations() {
     await safeAlter(
         `CREATE INDEX IF NOT EXISTS idx_candidates_claimed_by ON candidates(claimed_by) WHERE claimed_by IS NOT NULL`,
         '059 idx_candidates_claimed_by'
+    );
+
+    // ── Migration 060: widen highest_qualification to TEXT ────────────────────
+    // It was created VARCHAR(255) by migration 005, but real qualification text
+    // (full degree/course descriptions, CV-parsed values) routinely exceeds 255
+    // chars. Editing a candidate with a long qualification threw "value too long
+    // for type character varying(255)" → every PUT /api/candidates/:id 500'd.
+    // Every other free-text candidate field (name/email/notes/skills) is already
+    // TEXT; align this one. varchar→text is a metadata-only change (no rewrite).
+    await safeAlter(
+        `ALTER TABLE candidates ALTER COLUMN highest_qualification TYPE TEXT`,
+        '060 candidates.highest_qualification -> TEXT'
     );
 
     logger.info('✅ Startup migrations complete.');
