@@ -678,6 +678,25 @@ router.put('/:id', authenticate, requireSection('candidates', 'edit'), async (re
             });
         }
 
+        // Don't rewrite `phone` when the number isn't actually changing. Edits
+        // always send phone (it's required in the modal), and the handler stores
+        // normalizePhone(phone). For a candidate whose phone was saved in a
+        // non-canonical form (e.g. "+94…" vs "94…" — the dual-chat residue),
+        // re-normalising it on every save collides with another candidate row
+        // that already holds the canonical number (unique constraint
+        // candidates_phone_key), which 500'd the whole edit. Skip the rewrite when
+        // the normalised new value matches the normalised stored value, so editing
+        // any other field never trips the constraint.
+        if (Object.prototype.hasOwnProperty.call(updates, 'phone') && updates.phone) {
+            try {
+                const cur = await query(adaptQuery('SELECT phone FROM candidates WHERE id = $1'), [id]);
+                const curPhone = cur.rows[0] && cur.rows[0].phone;
+                if (curPhone && normalizePhone(updates.phone) === normalizePhone(curPhone)) {
+                    delete updates.phone;
+                }
+            } catch (_) { /* fall through — the 23505 handler below still guards a real collision */ }
+        }
+
         const allowedFields = ['name', 'phone', 'contact_phone', 'email', 'source', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
         // Profile fields stored inside the metadata JSON (like age) rather than
         // as flat columns — avoids schema churn on the production-only DB.
@@ -797,6 +816,15 @@ router.put('/:id', authenticate, requireSection('candidates', 'edit'), async (re
             }
         }
     } catch (error) {
+        // A genuine phone collision with ANOTHER candidate (two records for the
+        // same person). Surface an actionable 409 instead of a raw 500 so the
+        // agent knows to merge the duplicate rather than seeing "Internal server
+        // error" with no clue.
+        if (error && (error.code === '23505' || /candidates_phone_key|unique constraint/i.test(error.message || ''))) {
+            return res.status(409).json({
+                error: 'Another candidate already uses this phone number. Open or merge that duplicate candidate instead of editing this one.',
+            });
+        }
         next(error);
     }
 });
