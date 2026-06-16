@@ -6,7 +6,7 @@ import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import {
   getProjects, getProjectJobs, getProject,
-  certifyCandidate, ensureApplication, createInterview,
+  certifyCandidate, ensureApplication, createInterview, getInterviewDayCapacity,
 } from '../../api'
 
 // 'YYYY-MM-DD' → 'Sat 20 Jun' (UTC-naive; interview dates are literal wall-clock).
@@ -225,6 +225,20 @@ export function ScheduleInterviewDialog({ open, onClose, candidateId, candidateN
     return Array.isArray(days) ? days.filter((d) => d && d.date && d.location) : []
   }, [projectForDays])
 
+  // Per-day remaining capacity (booked vs configured capacity) for this project.
+  const { data: capacityData } = useQuery({
+    queryKey: ['stage-dlg-day-capacity', projId],
+    queryFn: () => getInterviewDayCapacity({ project_id: projId }),
+    enabled: open && !!projId,
+    staleTime: 15 * 1000,
+  })
+  const capByDay = useMemo(() => {
+    const m = new Map()
+    for (const d of capacityData?.days || []) m.set(d.day_id, d)
+    return m
+  }, [capacityData])
+  const pickedFull = dayId ? (capByDay.get(dayId)?.remaining === 0) : false
+
   // Reset the day choice when the project changes (its days differ).
   useEffect(() => { setDayId(''); setDatetime(''); setLocation('') }, [projId])
 
@@ -270,7 +284,7 @@ export function ScheduleInterviewDialog({ open, onClose, candidateId, candidateN
     onError: (err) => toast.error(err?.response?.data?.error || err?.message || 'Failed to schedule interview'),
   })
 
-  const canSubmit = jobId && datetime && !mut.isPending
+  const canSubmit = jobId && datetime && !mut.isPending && !pickedFull
 
   return (
     <Modal open={open} onClose={onClose} title={`Schedule interview${candidateName ? ` — ${candidateName}` : ''}`} size="sm">
@@ -286,15 +300,25 @@ export function ScheduleInterviewDialog({ open, onClose, candidateId, candidateN
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">Interview day</label>
             <div className="space-y-1.5">
-              {configDays.map((d) => (
-                <label key={d.id} className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-2.5 py-1.5 text-sm cursor-pointer">
-                  <input type="radio" name="iday" className="accent-primary-600" checked={dayId === d.id} onChange={() => pickDay(d)} />
+              {configDays.map((d) => {
+                const cap = capByDay.get(d.id)
+                const full = cap?.remaining === 0
+                return (
+                <label key={d.id} className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm ${full ? 'border-rose-200 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/10 cursor-not-allowed opacity-70' : 'border-zinc-200 dark:border-zinc-700 cursor-pointer'}`}>
+                  <input type="radio" name="iday" className="accent-primary-600" checked={dayId === d.id} disabled={full} onChange={() => pickDay(d)} />
                   <CalendarClock size={13} className="text-zinc-400 shrink-0" />
                   <span className="font-medium text-zinc-800 dark:text-zinc-100">{fmtInterviewDay(d.date)}</span>
                   <span className="text-zinc-500 dark:text-zinc-400 truncate">· {d.location}</span>
-                  <span className="ml-auto text-xs text-zinc-400 shrink-0">{d.time_start || '09:00'}</span>
+                  {cap && cap.capacity != null ? (
+                    <span className={`ml-auto text-xs shrink-0 font-medium ${full ? 'text-rose-600 dark:text-rose-400' : cap.remaining <= 3 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                      {full ? 'Full' : `${cap.remaining} left`}
+                    </span>
+                  ) : (
+                    <span className="ml-auto text-xs text-zinc-400 shrink-0">{d.time_start || '09:00'}</span>
+                  )}
                 </label>
-              ))}
+                )
+              })}
               <label className="flex items-center gap-2 px-2.5 py-1 text-sm cursor-pointer text-zinc-600 dark:text-zinc-300">
                 <input type="radio" name="iday" className="accent-primary-600" checked={dayId === ''} onChange={() => { setDayId(''); setDatetime(''); setLocation('') }} />
                 Custom date &amp; time

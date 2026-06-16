@@ -192,6 +192,7 @@ app.post('/api/internal/daily-digest', async (req, res) => {
         const digest = await runDailyDigest();
         res.json({ ok: true, digest });
     } catch (err) {
+        
         logger.error('daily-digest endpoint error:', err.message);
         res.status(500).json({ error: err.message });
     }

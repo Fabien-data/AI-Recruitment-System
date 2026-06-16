@@ -1552,6 +1552,49 @@ async function applyMigrations() {
         '060 candidates.highest_qualification -> TEXT'
     );
 
+    // ── Migration 061: persist the candidate's interview-invite response ──────
+    // When a candidate taps Confirm / Reschedule / Can't-make-it on the WhatsApp
+    // interview template, we record the response here so the per-project
+    // scoreboard shows stable HISTORICAL totals (a count that doesn't vanish when
+    // an agent later clears the reschedule/can't-make task). Confirm also still
+    // sets status='confirmed'; this column adds reschedule/cant_make visibility.
+    //   values: 'confirmed' | 'reschedule' | 'cant_make' | NULL (no response yet)
+    // NOTE: interview_schedules is postgres-owned on prod — this ALTER may be
+    // rejected ("must be owner"); reads are guarded by interviewHasResponseColumn()
+    // in routes/interviews.js, so a missing column degrades gracefully.
+    await safeAlter(
+        `ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS candidate_response VARCHAR(20)`,
+        '061 interview_schedules.candidate_response'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_interview_schedules_candidate_response ON interview_schedules(candidate_response)`,
+        '061 idx_interview_schedules_candidate_response'
+    );
+
+    // ── Migration 062: bulk interview-send audit (the "send report") ──────────
+    // One row per bulk-schedule run so an agent can re-open who failed and why
+    // (delivery_summary) and which applications were skipped — data that was
+    // previously only returned in the response and then lost.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS bulk_interview_sends (
+            id UUID PRIMARY KEY,
+            created_by UUID,
+            project_id UUID,
+            mode VARCHAR(20),
+            total_selected INTEGER DEFAULT 0,
+            scheduled_count INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            delivery_summary JSONB,
+            skipped JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `, '062 bulk_interview_sends table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_bulk_interview_sends_creator ON bulk_interview_sends(created_by, created_at DESC)`,
+        '062 idx_bulk_interview_sends_creator'
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 

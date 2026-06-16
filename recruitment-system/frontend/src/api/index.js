@@ -361,6 +361,17 @@ export const getInterviews = (params) =>
 export const getInterviewStats = (params) =>
   apiClient.get('/api/interviews/stats', { params }).then(res => res.data)
 
+// Per-project interview scoreboard: { projects: [{ project_id, project_title,
+// total, confirmed, rescheduled, cant_make, no_answer, ... }] }. Same filters
+// as the list, so a date/venue/day scope flows through.
+export const getInterviewsByProject = (params) =>
+  apiClient.get('/api/interviews/by-project', { params }).then(res => res.data)
+
+// Per-interview-day capacity for a project: [{ day_id, date, location, capacity,
+// booked, remaining }]. Used to surface remaining/capacity + block overbooking.
+export const getInterviewDayCapacity = (params) =>
+  apiClient.get('/api/interviews/day-capacity', { params }).then(res => res.data)
+
 export const getUpcomingInterviews = () =>
   apiClient.get('/api/interviews/upcoming').then(res => res.data)
 
@@ -391,6 +402,12 @@ export const bulkScheduleInterviews = (data) =>
 // Smart-schedule preview — returns the day-by-day allocation without writing.
 export const previewInterviewAllocation = (data) =>
   apiClient.post('/api/interviews/bulk-schedule', { ...data, mode: 'smart', dry_run: true }).then(res => res.data)
+
+// Bulk-send audit reports (who failed and why), persisted per bulk run.
+export const getInterviewSendReports = (params) =>
+  apiClient.get('/api/interviews/send-reports', { params }).then(res => res.data)
+export const getInterviewSendReport = (id) =>
+  apiClient.get(`/api/interviews/send-reports/${id}`).then(res => res.data)
 
 // Applications still awaiting their interview message ("Quick select 100").
 // params: { project_id?, limit? } → { total_pending, returned, application_ids, applications }

@@ -980,7 +980,7 @@ async def process_single_message(message: dict, contacts: list, db):
             # Reschedule-slot / can't-make-job picks — self-describing ids, handle first.
             if text_body.startswith("rs|") or text_body.startswith("cmapply|") or text_body == "cmno":
                 try:
-                    if await _handle_interview_followup(db, from_number, text_body):
+                    if await _handle_interview_followup(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
                         return
                 except Exception as fe:
                     logger.warning(f"interview follow-up handling failed for {from_number}: {fe}")
@@ -988,7 +988,9 @@ async def process_single_message(message: dict, contacts: list, db):
             _iv_action = _BUTTON_ACTION.get(text_body) or _title_to_interview_action(_btn_title)
             if _iv_action:
                 try:
-                    if await _handle_interview_action(db, from_number, _iv_action):
+                    if await _handle_interview_action(db, from_number, _iv_action,
+                                                      inbound_label=_btn_title or text_body,
+                                                      inbound_msg_id=message.get("id", "")):
                         return
                 except Exception as ib_err:
                     logger.warning(f"interview action handling failed for {from_number}: {ib_err}")
@@ -1007,7 +1009,7 @@ async def process_single_message(message: dict, contacts: list, db):
             # Reschedule-slot / can't-make-job picks come back as list selections.
             if text_body.startswith("rs|") or text_body.startswith("cmapply|") or text_body == "cmno":
                 try:
-                    if await _handle_interview_followup(db, from_number, text_body):
+                    if await _handle_interview_followup(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
                         return
                 except Exception as fe:
                     logger.warning(f"interview follow-up (list) handling failed for {from_number}: {fe}")
@@ -1033,7 +1035,9 @@ async def process_single_message(message: dict, contacts: list, db):
         _iv_action = _title_to_interview_action(_btn_text) or _title_to_interview_action(_btn_payload)
         if _iv_action:
             try:
-                if await _handle_interview_action(db, from_number, _iv_action):
+                if await _handle_interview_action(db, from_number, _iv_action,
+                                                  inbound_label=text_body,
+                                                  inbound_msg_id=message.get("id", "")):
                     return
             except Exception as tb_err:
                 logger.warning(f"template button interview action failed for {from_number}: {tb_err}")
@@ -1534,16 +1538,34 @@ _INTERVIEW_ACK = {
 }
 
 
-async def _handle_interview_action(db, phone: str, action: str) -> bool:
+async def _handle_interview_action(db, phone: str, action: str,
+                                   inbound_label: str = "", inbound_msg_id: str = "") -> bool:
     """Handle an interview action (confirm / reschedule / cant_make), whether the
     candidate tapped an in-window interactive button OR an out-of-window template
     quick-reply. confirm just acks; reschedule offers bookable slots; cant_make
-    offers alternative jobs. Returns True when handled (skip orchestration)."""
+    offers alternative jobs. Returns True when handled (skip orchestration).
+
+    Because the caller `return`s immediately on True (skipping the main reply
+    block's sync), this function self-syncs the inbound tap + every outbound reply
+    into the recruitment `communications` table — otherwise the candidate's tap and
+    the bot's replies never appear in the agent Messages panel (they happen on
+    WhatsApp but were invisible to agents). _sync_chat_message is fire-and-forget.
+
+    NOTE: the main reply block's local Conversation (LLM-memory) write is
+    intentionally skipped here — these are transactional taps, not chat turns."""
     if action not in ("confirm", "reschedule", "cant_make"):
         return False
     cand = crud.get_candidate_by_phone(db, phone)
     from app.services.followup_service import candidate_lang
     lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+
+    # Mirror the candidate's tap into the agent transcript.
+    _ACTION_LABEL = {"confirm": "Confirm", "reschedule": "Reschedule", "cant_make": "Can't make it"}
+    await _sync_chat_message(
+        phone, "inbound", inbound_label or _ACTION_LABEL.get(action, action),
+        lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id,
+    )
 
     # Always record the action on the backend (sets status=confirmed for confirm;
     # creates the agent task + alert for reschedule/cant_make as a safety net).
@@ -1552,6 +1574,7 @@ async def _handle_interview_action(db, phone: str, action: str) -> bool:
     if action == "confirm":
         ack = _INTERVIEW_ACK["confirm"].get(lang) or _INTERVIEW_ACK["confirm"]["en"]
         await meta_client.send_message(phone, ack)
+        await _sync_chat_message(phone, "outbound", ack, lang, _state)
         logger.info(f"🎬 Interview confirm handled for {phone}")
         return True
 
@@ -1571,9 +1594,11 @@ async def _handle_interview_action(db, phone: str, action: str) -> bool:
                 phone, text=intro, button_text="Pick a time",
                 sections=[{"title": "Available times", "rows": rows}],
             )
+            _out = (intro + "\nOptions: " + " / ".join([r["title"] for r in rows if r.get("title")])).strip()
         else:
-            ack = _INTERVIEW_ACK["reschedule"].get(lang) or _INTERVIEW_ACK["reschedule"]["en"]
-            await meta_client.send_message(phone, ack)
+            _out = _INTERVIEW_ACK["reschedule"].get(lang) or _INTERVIEW_ACK["reschedule"]["en"]
+            await meta_client.send_message(phone, _out)
+        await _sync_chat_message(phone, "outbound", _out, lang, _state)
         logger.info(f"🎬 Interview reschedule handled for {phone} ({len(slots)} slots)")
         return True
 
@@ -1589,9 +1614,11 @@ async def _handle_interview_action(db, phone: str, action: str) -> bool:
             phone, text=intro, button_text="View jobs",
             sections=[{"title": "Open roles", "rows": rows}],
         )
+        _out = (intro + "\nOptions: " + " / ".join([r["title"] for r in rows if r.get("title")])).strip()
     else:
-        ack = _INTERVIEW_ACK["cant_make"].get(lang) or _INTERVIEW_ACK["cant_make"]["en"]
-        await meta_client.send_message(phone, ack)
+        _out = _INTERVIEW_ACK["cant_make"].get(lang) or _INTERVIEW_ACK["cant_make"]["en"]
+        await meta_client.send_message(phone, _out)
+    await _sync_chat_message(phone, "outbound", _out, lang, _state)
     logger.info(f"🎬 Interview cant_make handled for {phone} ({len(jobs)} jobs)")
     return True
 
@@ -1606,19 +1633,28 @@ def _compact_slot_title(dt: str) -> str:
         return ""
 
 
-async def _handle_interview_followup(db, phone: str, reply_id: str) -> bool:
+async def _handle_interview_followup(db, phone: str, reply_id: str, inbound_msg_id: str = "") -> bool:
     """Route a reschedule-slot pick ('rs|<iv>|<dt>') or a can't-make choice
     ('cmapply|<job_id>' / 'cmno') to the backend. Self-describing ids, so no stored
-    state needed. Returns True when handled (skip orchestration)."""
+    state needed. Returns True when handled (skip orchestration).
+
+    Self-syncs the inbound pick + the bot's reply into the agent transcript — the
+    caller `return`s on True and skips the main sync block, so without this the
+    rebook/apply messages never reach the Messages panel."""
     rid = reply_id or ""
     cand = crud.get_candidate_by_phone(db, phone)
     from app.services.followup_service import candidate_lang
     lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
 
     if rid.startswith("rs|"):
         parts = rid.split("|", 2)
         if len(parts) == 3:
             interview_id, datetime_str = parts[1], parts[2]
+            await _sync_chat_message(
+                phone, "inbound", f"Picked: {_compact_slot_title(datetime_str) or datetime_str}",
+                lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id,
+            )
             res = await _post_recruitment_api(
                 "/api/chatbot/interview-reschedule-pick",
                 {"phone": phone, "interview_id": interview_id, "datetime": datetime_str},
@@ -1629,20 +1665,27 @@ async def _handle_interview_followup(db, phone: str, reply_id: str) -> bool:
             else:
                 msg = _RESCHEDULE_TAKEN.get(lang) or _RESCHEDULE_TAKEN["en"]
             await meta_client.send_message(phone, msg)
+            await _sync_chat_message(phone, "outbound", msg, lang, _state)
             return True
         return False
 
     if rid.startswith("cmapply|") or rid == "cmno":
         if rid == "cmno":
+            _in_label = _NOT_INTERESTED_ROW.get(lang) or _NOT_INTERESTED_ROW["en"]
+            await _sync_chat_message(phone, "inbound", _in_label, lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id)
             await _post_recruitment_api("/api/chatbot/interview-cant-make-apply", {"phone": phone, "action": "not_interested"})
-            await meta_client.send_message(phone, _CANTMAKE_NOTED.get(lang) or _CANTMAKE_NOTED["en"])
+            _out = _CANTMAKE_NOTED.get(lang) or _CANTMAKE_NOTED["en"]
+            await meta_client.send_message(phone, _out)
         else:
             job_id = rid.split("|", 1)[1]
+            await _sync_chat_message(phone, "inbound", "Applied to alternative role", lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id)
             await _post_recruitment_api(
                 "/api/chatbot/interview-cant-make-apply",
                 {"phone": phone, "action": "apply", "job_id": job_id},
             )
-            await meta_client.send_message(phone, _CANTMAKE_APPLIED.get(lang) or _CANTMAKE_APPLIED["en"])
+            _out = _CANTMAKE_APPLIED.get(lang) or _CANTMAKE_APPLIED["en"]
+            await meta_client.send_message(phone, _out)
+        await _sync_chat_message(phone, "outbound", _out, lang, _state)
         return True
 
     return False

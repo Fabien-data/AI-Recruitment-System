@@ -1720,6 +1720,22 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
 });
 
 // ── Interview response (candidate tapped Confirm / Reschedule / Can't make it) ─
+// Persist the candidate's interview-invite response on the interview row so the
+// per-project scoreboard shows stable historical totals. Guarded: migration 061
+// may not have applied (interview_schedules is postgres-owned on prod), so a
+// missing column must never break the confirm/reschedule flow.
+async function setInterviewResponse(interviewId, value) {
+    if (!interviewId) return;
+    try {
+        await query(
+            adaptQuery('UPDATE interview_schedules SET candidate_response = $1 WHERE id = $2'),
+            [value, interviewId]
+        );
+    } catch (err) {
+        logger.debug(`setInterviewResponse skipped (${value}) — ${err.message}`);
+    }
+}
+
 // POST /api/chatbot/interview-response  { phone, action: confirm|reschedule|cant_make }
 // Confirm marks the interview confirmed; reschedule/cant_make keep the slot,
 // alert the team, and create an agent callback task (candidate_tasks).
@@ -1748,6 +1764,7 @@ router.post('/interview-response', authenticateChatbot, async (req, res) => {
 
         if (action === 'confirm') {
             await query(adaptQuery("UPDATE interview_schedules SET status = 'confirmed' WHERE id = $1"), [iv.interview_id]);
+            await setInterviewResponse(iv.interview_id, 'confirmed');
             // Keep the candidate's canonical stage aligned with the application
             // (it is already interview_scheduled; this re-derives + emits live so
             // the Conversations badge is guaranteed current).
@@ -1767,6 +1784,8 @@ router.post('/interview-response', authenticateChatbot, async (req, res) => {
         } catch (taskErr) {
             logger.warn(`interview-response: task create failed — ${taskErr.message}`);
         }
+        // Record the response (reschedule | cant_make) for the per-project scoreboard.
+        await setInterviewResponse(iv.interview_id, action);
         recruiterAlert('human_handoff', { candidatePhone: phone, lastMessage: note }).catch(() => {});
 
         return res.json({
@@ -1882,6 +1901,22 @@ router.post('/interview-slots', authenticateChatbot, async (req, res) => {
                 label: notifications.formatInterviewWallClock(s.scheduled_datetime),
             }));
         }
+        // No slots free (every configured day is full or in the past). Don't
+        // dead-end the candidate: open a reschedule callback task so an agent
+        // reaches out when capacity frees up, and signal `waitlist` to the bot
+        // (whose existing "our team will contact you" ack fits this case).
+        if (!slots.length) {
+            try {
+                await query(adaptQuery(`
+                    INSERT INTO candidate_tasks (id, candidate_id, application_id, due_at, note, task_type, assigned_to, status)
+                    VALUES ($1, $2, $3, NOW(), $4, 'reschedule_interview', $5, 'pending')
+                `), [generateUUID(), iv.candidate_id, iv.application_id,
+                     `Candidate wants to reschedule their ${iv.job_title} interview but no slots are open — waitlist & follow up when capacity frees.`,
+                     iv.agent_id || null]);
+            } catch (wlErr) { logger.debug(`interview-slots waitlist task skipped — ${wlErr.message}`); }
+            return res.json({ ok: true, interview_id: iv.interview_id, slots: [], waitlist: true });
+        }
+
         return res.json({ ok: true, interview_id: iv.interview_id, slots });
     } catch (err) {
         logger.error(`interview-slots error: ${err.message}`);
@@ -1963,6 +1998,10 @@ router.post('/interview-reschedule-pick', authenticateChatbot, async (req, res) 
             await query(adaptQuery(`UPDATE interview_schedules SET scheduled_datetime = $1, status = 'scheduled', location = COALESCE($3, location), reminder_sent_at = NULL WHERE id = $2`), [datetime, interview_id, newLocation]);
         });
         await query(adaptQuery('UPDATE applications SET interview_datetime = $1, interview_location = COALESCE($3, interview_location), updated_at = NOW() WHERE id = $2'), [datetime, iv.application_id, newLocation]).catch(() => {});
+
+        // The new slot is awaiting a fresh confirm — clear the prior 'reschedule'
+        // response so the scoreboard counts this candidate as pending again.
+        await setInterviewResponse(interview_id, null);
 
         // Resolve the pending reschedule task.
         await query(adaptQuery(`

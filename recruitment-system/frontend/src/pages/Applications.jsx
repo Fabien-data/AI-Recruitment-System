@@ -6,7 +6,7 @@ import {
   previewInterviewAllocation, bulkScheduleInterviews,
   updateApplication, rejectToPool, batchCertifyApplications, batchRejectToPool,
   getCandidate, getPendingInterviewSends, downloadUnreachableCsv, setCandidateStage,
-  getApplicationStatusTotals,
+  getApplicationStatusTotals, getInterviewDayCapacity,
 } from '../api'
 import {
   CalendarDays, FileText, FolderKanban, Briefcase, ListFilter, Plus,
@@ -808,6 +808,20 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
     staleTime: 30_000,
   })
   const configDays = Array.isArray(projectForDays?.interview_config?.days) ? projectForDays.interview_config.days : []
+
+  // Live per-day remaining capacity (booked vs configured) for this project.
+  const { data: dayCapacityData } = useQuery({
+    queryKey: ['bulk-day-capacity', projectId],
+    queryFn: () => getInterviewDayCapacity({ project_id: projectId }),
+    enabled: mode === 'days' && !!projectId,
+    staleTime: 15_000,
+  })
+  const capByDayId = useMemo(() => {
+    const m = new Map()
+    for (const d of dayCapacityData?.days || []) m.set(d.day_id, d)
+    return m
+  }, [dayCapacityData])
+
   const dayChecked = (id) => (selectedDayIds == null ? true : selectedDayIds.includes(id))
   const toggleDay = (id) => setSelectedDayIds((prev) => {
     const base = prev == null ? configDays.map((d) => d.id) : prev
@@ -1088,15 +1102,28 @@ function BulkScheduleInterviewModal({ applicationIds, applicationDetails, onClos
                 <div>
                   <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Use these interview days</p>
                   <div className="space-y-1.5">
-                    {configDays.map((d) => (
+                    {configDays.map((d) => {
+                      const cap = capByDayId.get(d.id)
+                      const full = cap?.remaining === 0
+                      return (
                       <label key={d.id} className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-2.5 py-1.5 text-sm cursor-pointer">
                         <input type="checkbox" className="w-4 h-4 rounded accent-primary-600" checked={dayChecked(d.id)} onChange={() => toggleDay(d.id)} />
                         <CalendarDays size={13} className="text-zinc-400" />
                         <span className="font-medium text-zinc-800 dark:text-zinc-100">{d.date}</span>
                         <span className="text-zinc-500 dark:text-zinc-400 truncate">· {d.location}</span>
-                        <span className="ml-auto text-xs text-zinc-400">{d.time_start || '09:00'}{d.capacity != null ? ` · cap ${d.capacity}` : ''}</span>
+                        <span className="ml-auto text-xs flex items-center gap-1.5 shrink-0">
+                          <span className="text-zinc-400">{d.time_start || '09:00'}</span>
+                          {cap && cap.capacity != null ? (
+                            <span className={`font-medium ${full ? 'text-rose-600 dark:text-rose-400' : cap.remaining <= 3 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                              {cap.booked}/{cap.capacity}{full ? ' · full' : ` · ${cap.remaining} left`}
+                            </span>
+                          ) : d.capacity != null ? (
+                            <span className="text-zinc-400">cap {d.capacity}</span>
+                          ) : null}
+                        </span>
                       </label>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
                 <div>

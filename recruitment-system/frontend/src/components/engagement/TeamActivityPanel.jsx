@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Phone, Megaphone, Loader2, AlertTriangle, Search, Download, Target,
-  MessageSquare, CalendarDays, BadgeCheck, Bookmark, Archive, Check, X,
+  MessageSquare, CalendarDays, CalendarCheck, BadgeCheck, Bookmark, Archive, Check, X,
 } from 'lucide-react'
 import Papa from 'papaparse'
 import {
@@ -25,6 +25,7 @@ const LIVE_KEYS = [['engagement', 'call-activity'], ['engagement', 'scorecard'],
 const SORTABLE = [
   ['calls_logged', 'Calls'], ['messages_sent', 'Msgs'],
   ['screenings', 'Screened'], ['certifications', 'Certified'],
+  ['interviews_scheduled', 'Interviews'],
   ['follow_ups', 'Follow Ups'], ['future_pool', 'Future Pool'],
   ['no_answer', 'No answer'], ['open_claims', 'Claims'],
 ]
@@ -151,6 +152,7 @@ export default function TeamActivityPanel() {
       Rank: r.rank, Agent: r.agent_name,
       Calls: r.calls_logged,
       Messages: r.messages_sent, Screenings: r.screenings, Certified: r.certifications,
+      Interviews: r.interviews_scheduled,
       'Follow ups': r.follow_ups, 'Future Pool': r.future_pool,
       'No answer': r.no_answer, Actions: r.actions_total,
       'Open claims': r.open_claims,
@@ -222,10 +224,11 @@ export default function TeamActivityPanel() {
         </div>
 
         {/* KPI strip with deltas vs the previous window */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mt-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2 mt-3">
           <KpiCard icon={Phone} label="Calls" value={Number(totals.calls_logged || 0)} prev={Number(prevTotals.calls_logged || 0)} accent="text-rose-500" />
           <KpiCard icon={MessageSquare} label="Messages" value={Number(totals.messages_sent || 0)} prev={Number(prevTotals.messages_sent || 0)} accent="text-sky-500" />
           <KpiCard icon={BadgeCheck} label="Certified" value={Number(totals.certifications || 0)} prev={Number(prevTotals.certifications || 0)} accent="text-emerald-500" />
+          <KpiCard icon={CalendarCheck} label="Interviews" value={Number(totals.interviews_scheduled || 0)} prev={Number(prevTotals.interviews_scheduled || 0)} accent="text-indigo-500" />
           <KpiCard icon={CalendarDays} label="Follow ups" value={Number(totals.follow_ups || 0)} prev={Number(prevTotals.follow_ups || 0)} accent="text-cyan-500" />
           <KpiCard icon={Archive} label="Future Pool" value={Number(totals.future_pool || 0)} prev={Number(prevTotals.future_pool || 0)} accent="text-violet-500" />
           <KpiCard icon={Bookmark} label="Open claims" value={Number(totals.open_claims || 0)} accent="text-violet-500" />
@@ -312,6 +315,7 @@ export default function TeamActivityPanel() {
                       <td className="py-2.5 pr-3 text-sky-700 dark:text-sky-300">{r.messages_sent ?? 0}</td>
                       <td className="py-2.5 pr-3 text-amber-700 dark:text-amber-400">{r.screenings ?? 0}</td>
                       <td className="py-2.5 pr-3 text-emerald-700 dark:text-emerald-400">{r.certifications ?? 0}</td>
+                      <td className="py-2.5 pr-3 text-indigo-700 dark:text-indigo-300">{r.interviews_scheduled ?? 0}</td>
                       <td className="py-2.5 pr-3 text-cyan-700 dark:text-cyan-300">{r.follow_ups ?? 0}</td>
                       <td className="py-2.5 pr-3 text-violet-700 dark:text-violet-300">{r.future_pool ?? 0}</td>
                       <td className="py-2.5 pr-3 text-rose-700 dark:text-rose-400">{r.no_answer}</td>

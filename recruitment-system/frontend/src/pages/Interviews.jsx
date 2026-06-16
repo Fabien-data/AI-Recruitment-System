@@ -8,7 +8,7 @@ import {
   CalendarClock, UserCheck, Copy, LayoutList, CalendarRange,
 } from 'lucide-react'
 import {
-  getInterviews, getInterviewStats, updateInterview, deleteInterview, sendInterviewReminder,
+  getInterviews, getInterviewStats, getInterviewsByProject, updateInterview, deleteInterview, sendInterviewReminder,
   getProjects, getProject, updateProject, getInterviewers, bulkUpdateInterviews, exportInterviewsCsv, apiClient,
   downloadUnreachableCsv,
 } from '../api'
@@ -69,6 +69,13 @@ const STATUS_META = {
   completed: { tone: 'purple',  label: 'Completed',  pill: 'bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 ring-purple-200 dark:ring-purple-900/60' },
   cancelled: { tone: 'rose',    label: 'Cancelled',  pill: 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 ring-rose-200 dark:ring-rose-900/60' },
   no_show:   { tone: 'amber',   label: 'No Show',    pill: 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 ring-amber-200 dark:ring-amber-900/60' },
+}
+
+// Candidate's WhatsApp response to the invite (persisted candidate_response).
+// 'confirmed' is intentionally omitted — the status pill already shows Confirmed.
+const RESPONSE_META = {
+  reschedule: { label: 'Reschedule requested', pill: 'bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 ring-purple-200 dark:ring-purple-900/60' },
+  cant_make:  { label: "Can't make it",        pill: 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 ring-rose-200 dark:ring-rose-900/60' },
 }
 
 // Structured hiring outcome (separate from status + rating).
@@ -132,6 +139,18 @@ function OutcomeBadge({ outcome }) {
   if (!meta) return null
   return (
     <span className={`inline-flex items-center rounded-full ring-1 ring-inset px-2 py-0.5 text-[11px] font-semibold ${meta.pill}`}>
+      {meta.label}
+    </span>
+  )
+}
+
+// Candidate-driven response badge (Reschedule requested / Can't make it) shown
+// alongside the status pill so an in-progress reschedule is visible at a glance.
+function ResponseBadge({ response }) {
+  const meta = RESPONSE_META[response]
+  if (!meta) return null
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full ring-1 ring-inset px-2 py-0.5 text-[11px] font-semibold ${meta.pill}`}>
       {meta.label}
     </span>
   )
@@ -298,9 +317,12 @@ export default function Interviews() {
     interviewer_id: '',
     outcome: '',
     search: '',
+    location: '',        // venue contains-filter
+    interview_date: '',  // single interview-day filter
+    response: '',        // candidate_response drill-down (confirmed|reschedule|cant_make|no_answer)
   })
   const [page, setPage] = useState(1)
-  const [view, setView] = useState('table') // 'table' | 'agenda'
+  const [view, setView] = useState('table') // 'table' | 'agenda' | 'by-project'
   const [feedbackTarget, setFeedbackTarget] = useState(null)
   const [rescheduleTarget, setRescheduleTarget] = useState(null) // single interview
   const [checkinTarget, setCheckinTarget] = useState(null)
@@ -331,6 +353,15 @@ export default function Interviews() {
     queryFn: () => getInterviewStats(filters),
     staleTime: 15_000,
   })
+
+  // Per-project scoreboard — only fetched while the by-project view is open.
+  const { data: byProjectData, isLoading: byProjectLoading } = useQuery({
+    queryKey: ['interviews-by-project', filters],
+    queryFn: () => getInterviewsByProject(filters),
+    enabled: view === 'by-project',
+    staleTime: 15_000,
+  })
+  const byProject = Array.isArray(byProjectData?.projects) ? byProjectData.projects : []
 
   const { data: projectsData } = useQuery({
     queryKey: ['projects', 'interviews-filter'],
@@ -452,7 +483,22 @@ export default function Interviews() {
 
   const clearFilters = () => setFilters((f) => ({
     status: '', filter: '', date_from: '', date_to: '', project_id: f.project_id, interviewer_id: '', outcome: '', search: '',
+    location: '', interview_date: '', response: '',
   }))
+
+  // Drill from a per-project scoreboard chip into the filtered interview table.
+  const drillToProject = (projectId, patch = {}) => {
+    setSelectedIds(new Set())
+    setFilters((f) => ({
+      ...f, project_id: projectId,
+      status: '', filter: '', response: '', // reset response/status dimensions first
+      ...patch,
+    }))
+    const next = new URLSearchParams(searchParams)
+    if (projectId) next.set('project_id', projectId); else next.delete('project_id')
+    setSearchParams(next, { replace: true })
+    setView('table')
+  }
 
   // Quick status tabs (under the project tabs). 'rescheduled' uses the dedicated
   // backend filter (reschedule_count > 0); the others map onto iv.status.
@@ -612,13 +658,33 @@ export default function Interviews() {
             <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">To</label>
             <input type="date" value={filters.date_to} onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))} className="input w-full" />
           </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">Interview day</label>
+            <input type="date" value={filters.interview_date} onChange={e => setFilters(f => ({ ...f, interview_date: e.target.value }))} className="input w-full" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">Venue</label>
+            <div className="relative">
+              <MapPin size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" aria-hidden />
+              <input
+                type="text"
+                placeholder="e.g. Colombo…"
+                value={filters.location}
+                onChange={e => setFilters(f => ({ ...f, location: e.target.value }))}
+                className="input w-full pl-8"
+              />
+            </div>
+          </div>
         </div>
         <div className="mt-3 flex justify-end">
           <Button variant="secondary" size="sm" onClick={clearFilters}>Clear filters</Button>
         </div>
       </Card>
 
-      {/* Interview list */}
+      {/* Per-project scoreboard OR the interview list */}
+      {view === 'by-project' ? (
+        <InterviewsByProject projects={byProject} loading={byProjectLoading} onDrill={drillToProject} />
+      ) : (
       <Card className="overflow-hidden p-0">
         {isLoading ? (
           <div className="p-5"><TableSkeleton rows={6} cols={7} /></div>
@@ -683,6 +749,7 @@ export default function Interviews() {
           </>
         )}
       </Card>
+      )}
 
       {/* Floating bulk-action bar */}
       {selectedIds.size > 0 && (
@@ -760,6 +827,7 @@ function ViewToggle({ view, onChange }) {
     <div className="inline-flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
       {opt('table', LayoutList, 'Table view')}
       {opt('agenda', CalendarRange, 'Agenda view')}
+      {opt('by-project', FolderKanban, 'By-project scoreboard')}
     </div>
   )
 }
@@ -884,6 +952,7 @@ function InterviewTable({ interviews, selectedIds, onToggleSelect, onSelectAll, 
               <Table.Td>
                 <div className="flex flex-col items-start gap-1">
                   <StatusPill status={iv.status} />
+                  <ResponseBadge response={iv.candidate_response} />
                   <OutcomeBadge outcome={iv.outcome} />
                 </div>
               </Table.Td>
@@ -996,6 +1065,7 @@ function AgendaView({ interviews, onReschedule, onCheckin, onComplete, onReminde
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    <ResponseBadge response={iv.candidate_response} />
                     <StatusPill status={iv.status} />
                     <RowActions iv={iv} onReminder={onReminder} onComplete={onComplete} onReschedule={onReschedule} onCheckin={onCheckin} onCancel={onCancel} />
                   </div>
@@ -1004,6 +1074,84 @@ function AgendaView({ interviews, onReschedule, onCheckin, onComplete, onReminde
             })}
           </div>
         </div>
+      ))}
+    </div>
+  )
+}
+
+// Per-project interview scoreboard (totals-only). Each card shows how many
+// candidates were scheduled for interview, and within that how many Confirmed /
+// Rescheduled / Can't-make-it / No-answer. Every number drills into the filtered
+// table via onDrill(project_id, filterPatch).
+const SCORE_CHIPS = [
+  { key: 'confirmed',         label: 'Confirmed',           tone: 'emerald', patch: { status: 'confirmed' } },
+  { key: 'rescheduled',       label: 'Rescheduled',         tone: 'purple',  patch: { response: 'reschedule' } },
+  { key: 'cant_make',         label: "Can't make it",       tone: 'rose',    patch: { response: 'cant_make' } },
+  { key: 'no_answer',         label: 'No answer',           tone: 'amber',   patch: { response: 'no_answer' } },
+  { key: 'completed',         label: 'Completed',           tone: 'purple',  patch: { status: 'completed' } },
+  { key: 'cancelled_no_show', label: 'Cancelled / No-show', tone: 'rose',    patch: { status: 'cancelled' } },
+]
+
+function ScoreChip({ label, value, tone, onClick }) {
+  const t = STAT_TONES[tone] || STAT_TONES.blue
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center justify-between gap-2 rounded-xl ring-1 ring-inset px-2.5 py-1.5 text-left transition hover:brightness-105 ${t.wrap}`}
+    >
+      <span className={`text-[11px] font-semibold ${t.label}`}>{label}</span>
+      <span className={`text-sm font-bold tabular-nums ${t.value}`}>{value ?? 0}</span>
+    </button>
+  )
+}
+
+function InterviewsByProject({ projects, loading, onDrill }) {
+  if (loading) {
+    return <div className="p-5"><TableSkeleton rows={4} cols={4} /></div>
+  }
+  if (!projects.length) {
+    return (
+      <EmptyState
+        icon={FolderKanban}
+        tone="blue"
+        title="No interviews to summarise"
+        description="Once interviews are scheduled, each project's confirmed / rescheduled / can't-make breakdown appears here."
+      />
+    )
+  }
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      {projects.map((p) => (
+        <Card key={p.project_id || 'none'} className="p-4">
+          <div className="flex items-start justify-between gap-2 mb-3">
+            <button
+              type="button"
+              onClick={() => onDrill(p.project_id, {})}
+              className="inline-flex items-center gap-1.5 font-semibold text-zinc-900 dark:text-zinc-50 hover:text-primary-600 text-left min-w-0"
+            >
+              <FolderKanban size={14} className="text-indigo-500 shrink-0" />
+              <span className="truncate max-w-[200px]">{p.project_title}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onDrill(p.project_id, {})}
+              title="Scheduled for interview — view all"
+              className="shrink-0 text-right"
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Scheduled</p>
+              <p className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50 tabular-nums">{p.total ?? 0}</p>
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {SCORE_CHIPS.map((c) => (
+              <ScoreChip key={c.key} label={c.label} value={p[c.key]} tone={c.tone} onClick={() => onDrill(p.project_id, c.patch)} />
+            ))}
+          </div>
+          {p.not_sent ? (
+            <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">{p.not_sent} not yet invited</p>
+          ) : null}
+        </Card>
       ))}
     </div>
   )
