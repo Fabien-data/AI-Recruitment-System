@@ -1018,6 +1018,32 @@ async def process_single_message(message: dict, contacts: list, db):
                 source_message_type=message_type,
             )
 
+    # ── Template quick-reply button tap (OUT-of-window) ─────────────────────────
+    # Approved-template quick-reply buttons (the interview invite's Confirm /
+    # Reschedule / Can't-make-it, plus generic ones like "Get started" / "YES")
+    # arrive as a top-level "button" message — NOT interactive.button_reply (that
+    # is in-window only). Map the text/payload to the interview action; otherwise
+    # feed it into the normal flow so generic template buttons still drive the chat.
+    elif message_type == "button":
+        _b = message.get("button", {}) or {}
+        _btn_text = (_b.get("text") or "").strip()
+        _btn_payload = (_b.get("payload") or "").strip()
+        text_body = _btn_text or _btn_payload
+        logger.info(f"🔘 Template button tap from {from_number}: text={_btn_text!r} payload={_btn_payload!r}")
+        _iv_action = _title_to_interview_action(_btn_text) or _title_to_interview_action(_btn_payload)
+        if _iv_action:
+            try:
+                if await _handle_interview_action(db, from_number, _iv_action):
+                    return
+            except Exception as tb_err:
+                logger.warning(f"template button interview action failed for {from_number}: {tb_err}")
+        response_text = await _safe_process_message(
+            db=db,
+            phone_number=from_number,
+            message_text=text_body,
+            source_message_type=message_type,
+        )
+
     # ── Location ──────────────────────────────────────────────────────────────
     # Capture the pin so the agent transcript is complete. We don't drive the
     # conversation off a location, so no bot reply — just sync it inbound.
@@ -1210,6 +1236,8 @@ async def process_single_message(message: dict, contacts: list, db):
                 _inbound_text = message.get("document", {}).get("filename") or "📄 Document"
             elif message_type == "image":
                 _inbound_text = "🖼️ Image"
+            elif message_type == "button":
+                _inbound_text = (message.get("button", {}) or {}).get("text") or "[button reply]"
             else:
                 _inbound_text = message.get("text", {}).get("body") or f"[{message_type} message]"
 
