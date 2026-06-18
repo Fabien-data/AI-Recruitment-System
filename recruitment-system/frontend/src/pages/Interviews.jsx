@@ -5,12 +5,12 @@ import {
   Calendar, CalendarDays, Clock, MapPin, Briefcase, User, Phone,
   CheckCircle2, XCircle, Bell, Star, BarChart3, CalendarCheck, Hourglass, Filter,
   Send, FolderKanban, Download, AlertTriangle, Search, MessageSquare,
-  CalendarClock, UserCheck, Copy, LayoutList, CalendarRange,
+  CalendarClock, UserCheck, Copy, LayoutList, CalendarRange, Loader2, CheckCheck,
 } from 'lucide-react'
 import {
   getInterviews, getInterviewStats, getInterviewsByProject, updateInterview, deleteInterview, sendInterviewReminder,
   getProjects, getProject, updateProject, getInterviewers, bulkUpdateInterviews, exportInterviewsCsv, apiClient,
-  downloadUnreachableCsv,
+  downloadUnreachableCsv, getInterviewIds,
 } from '../api'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -25,6 +25,11 @@ import { formatInterviewDateTime } from '../utils/datetime'
 import toast from 'react-hot-toast'
 
 const PAGE_SIZE = 50
+// Mass-notify is sent to the backend in sequential chunks so each HTTP request
+// stays well under the platform request timeout even when notifying ~1000
+// candidates. The backend throttles within a chunk; we drive chunk-by-chunk and
+// show live progress, so the whole run survives a slow chatbot/Meta without a 504.
+const NOTIFY_CHUNK = 20
 
 // Download the "couldn't reach on WhatsApp" call list as a CSV and save it.
 async function downloadCallListCsv(projectId) {
@@ -305,6 +310,95 @@ function CheckinModal({ open, interview, onClose, onAttended, onNoShow, onResche
   )
 }
 
+// Confirm step before a (possibly large) mass-notify. States the count plainly
+// and is honest about the out-of-window/template reality so an agent never
+// assumes "955 sent" when many will queue until the candidate replies.
+function NotifyConfirmModal({ open, count, onClose, onConfirm }) {
+  if (!open) return null
+  return (
+    <Modal open={open} onClose={onClose} title={`Notify ${count} candidate${count === 1 ? '' : 's'}?`} size="sm">
+      <div className="space-y-4">
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Each selected candidate will be sent (or re-sent) their interview invitation on WhatsApp. This runs in the background with live progress — keep the tab open until it finishes.
+        </p>
+        <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 ring-1 ring-inset ring-amber-200 dark:ring-amber-900/50 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+          <span>Candidates who haven&apos;t messaged in the last 24&nbsp;h can only receive this immediately if the interview template is approved by Meta. Otherwise their invite is <strong>queued</strong> and delivered automatically when they next reply. You&apos;ll see the exact breakdown as it sends.</span>
+        </div>
+        <div className="flex justify-end gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={onConfirm} disabled={count === 0} className="bg-blue-600 hover:bg-blue-500 text-white border-0 gap-1">
+            <Send size={14} /> Send to {count}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function NotifySummaryChip({ label, value, tone }) {
+  const t = STAT_TONES[tone] || STAT_TONES.blue
+  return (
+    <div className={`flex items-center justify-between gap-2 rounded-lg ring-1 ring-inset px-2.5 py-1.5 ${t.wrap}`}>
+      <span className={`text-[11px] font-semibold ${t.label}`}>{label}</span>
+      <span className={`text-sm font-bold tabular-nums ${t.value}`}>{value || 0}</span>
+    </div>
+  )
+}
+
+// Live progress + honest delivery breakdown for a chunked mass-notify run.
+// While running it can't be dismissed; when done it offers "Retry failed" (which
+// also clears previously out-of-window invites once the Meta template is live).
+function NotifyProgressModal({ state, onClose, onRetry }) {
+  if (!state) return null
+  const { running, total, done, summary, failedIds } = state
+  const s = summary || {}
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0
+  const failedCount = failedIds?.length || 0
+  return (
+    <Modal open onClose={running ? () => {} : onClose} title={running ? 'Sending invitations…' : 'Notification complete'} size="sm">
+      <div className="space-y-4">
+        <div>
+          <div className="flex justify-between text-xs text-zinc-500 dark:text-zinc-400 mb-1">
+            <span className="inline-flex items-center gap-1">
+              {running && <Loader2 size={12} className="animate-spin" />}{done} / {total}
+            </span>
+            <span>{pct}%</span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
+            <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <NotifySummaryChip label="Sent now" value={s.sent} tone="emerald" />
+          <NotifySummaryChip label="Queued" value={s.queued} tone="blue" />
+          <NotifySummaryChip label="Out of window" value={s.out_of_window} tone="amber" />
+          <NotifySummaryChip label="No WhatsApp" value={s.no_whatsapp} tone="rose" />
+          <NotifySummaryChip label="Rate-limited" value={s.rate_limited} tone="amber" />
+          <NotifySummaryChip label="Other errors" value={(s.token_expired || 0) + (s.other || 0)} tone="rose" />
+        </div>
+        {(s.queued > 0 || s.out_of_window > 0) && !running && (
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            Queued invites deliver automatically when the candidate next replies. Out-of-window invites need the approved Meta interview template — once it&apos;s live, use “Retry failed” to deliver them.
+          </p>
+        )}
+        {running ? (
+          <p className="text-xs text-center text-zinc-500 dark:text-zinc-400">Keep this tab open until it finishes.</p>
+        ) : (
+          <div className="flex justify-end gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+            {failedCount > 0 && (
+              <Button variant="secondary" onClick={() => onRetry(failedIds)} className="gap-1">
+                <Send size={14} /> Retry failed ({failedCount})
+              </Button>
+            )}
+            <Button onClick={onClose} className="gap-1"><CheckCheck size={14} /> Done</Button>
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
 export default function Interviews() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -328,6 +422,11 @@ export default function Interviews() {
   const [checkinTarget, setCheckinTarget] = useState(null)
   const [bulkRescheduleOpen, setBulkRescheduleOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState(new Set())
+  const [selectAllLoading, setSelectAllLoading] = useState(false)
+  // { open, ids } — confirm dialog before a (potentially large) notify run.
+  const [confirmNotify, setConfirmNotify] = useState(null)
+  // { running, total, done, summary, failedIds } — live progress of a chunked run.
+  const [notifyState, setNotifyState] = useState(null)
 
   // Reset to first page whenever a filter changes.
   useEffect(() => { setPage(1) }, [filters])
@@ -395,30 +494,72 @@ export default function Interviews() {
   const selectAllVisible = () => setSelectedIds(new Set(interviews.map(iv => iv.id)))
   const clearSelected = () => setSelectedIds(new Set())
 
+  // Select EVERY notifiable interview matching the current filters (across all
+  // pages) — the "notify all 955 in this project at once" path. Fetches just the
+  // ids so the selection isn't capped to the 50 rows on screen.
+  const selectAllMatching = async () => {
+    setSelectAllLoading(true)
+    try {
+      const res = await getInterviewIds({ ...filters })
+      const ids = Array.isArray(res?.ids) ? res.ids : []
+      setSelectedIds(new Set(ids))
+      if (res?.capped) {
+        toast(`Selected the first ${ids.length}. Narrow the filter to include the rest.`, { icon: '⚠️', duration: 8000 })
+      } else if (ids.length === 0) {
+        toast('No candidates to notify for this filter')
+      } else {
+        toast.success(`Selected ${ids.length} candidate${ids.length === 1 ? '' : 's'}`)
+      }
+    } catch (err) {
+      showErrorToast(err, 'Could not select all matching')
+    } finally {
+      setSelectAllLoading(false)
+    }
+  }
+
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ['interviews'] })
     queryClient.invalidateQueries({ queryKey: ['interview-stats'] })
   }
 
-  const bulkNotifyMutation = useMutation({
-    mutationFn: (ids) => apiClient.post('/api/interviews/bulk-notify', { interview_ids: ids }).then(r => r.data),
-    onSuccess: (result) => {
-      const sent = result?.successes?.length || 0
-      const failed = result?.failures?.length || 0
-      if (failed > 0) {
-        showNotificationToast({ success: result.successes || [], failed: result.failures || [] }, `Notified ${sent} candidate(s)`)
-      } else {
-        showNotificationToast(null, `Notified ${sent} candidate(s)`)
+  // Chunked, resumable mass-notify. Sends the interview WhatsApp to every given
+  // interview id in sequential batches of NOTIFY_CHUNK, accumulating an honest
+  // per-reason delivery breakdown and the list of ids that didn't reach the
+  // candidate (for "Retry failed"). Drives a live progress modal; never relies on
+  // a single huge request that could 504 part-way through.
+  const runNotify = async (idList) => {
+    const all = Array.from(idList || [])
+    if (all.length === 0) return
+    const summary = { sent: 0, queued: 0, out_of_window: 0, no_whatsapp: 0, rate_limited: 0, token_expired: 0, other: 0 }
+    let failedIds = []
+    setNotifyState({ running: true, total: all.length, done: 0, summary: { ...summary }, failedIds: [] })
+    for (let i = 0; i < all.length; i += NOTIFY_CHUNK) {
+      const batch = all.slice(i, i + NOTIFY_CHUNK)
+      try {
+        const res = await apiClient
+          .post('/api/interviews/bulk-notify', { interview_ids: batch })
+          .then((r) => r.data)
+        const ds = res?.delivery_summary || {}
+        for (const k of Object.keys(summary)) summary[k] += Number(ds[k] || 0)
+        if (Array.isArray(res?.failed_interview_ids)) failedIds = failedIds.concat(res.failed_interview_ids)
+      } catch (err) {
+        // Whole-chunk failure (network / timeout): count the batch as errored and
+        // queue every id in it for retry so nothing is silently lost.
+        summary.other += batch.length
+        failedIds = failedIds.concat(batch)
       }
-      const unreachable = (result?.failures || []).filter(
-        (f) => (f.errors || []).some((e) => e?.reason === 'no_whatsapp')
-      ).length
-      if (unreachable > 0) showCallListToast(unreachable, filters.project_id)
-      invalidateAll()
-      clearSelected()
-    },
-    onError: (err) => showErrorToast(err, 'Bulk notify failed'),
-  })
+      setNotifyState({
+        running: true,
+        total: all.length,
+        done: Math.min(i + NOTIFY_CHUNK, all.length),
+        summary: { ...summary },
+        failedIds: [...failedIds],
+      })
+    }
+    setNotifyState({ running: false, total: all.length, done: all.length, summary: { ...summary }, failedIds: [...failedIds] })
+    invalidateAll()
+    if (summary.no_whatsapp > 0) showCallListToast(summary.no_whatsapp, filters.project_id)
+  }
 
   const bulkUpdateMutation = useMutation({
     mutationFn: (body) => bulkUpdateInterviews(body),
@@ -697,18 +838,32 @@ export default function Interviews() {
           />
         ) : (
           <>
-            <div className="px-4 py-2 border-b border-zinc-100 dark:border-zinc-800/60 flex items-center justify-between text-sm">
+            <div className="px-4 py-2 border-b border-zinc-100 dark:border-zinc-800/60 flex items-center justify-between gap-3 text-sm">
               <span className="text-zinc-600 dark:text-zinc-400">
                 {selectedIds.size > 0 ? `${selectedIds.size} selected` : `${total} interview${total === 1 ? '' : 's'}`}
               </span>
               {activeTab !== 'rescheduled' && (
-                <button
-                  type="button"
-                  onClick={selectedIds.size >= interviews.length && interviews.length > 0 ? clearSelected : selectAllVisible}
-                  className="text-xs font-medium text-primary-600 hover:text-primary-700"
-                >
-                  {selectedIds.size >= interviews.length && interviews.length > 0 ? 'Clear selection' : 'Select all on page'}
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={selectedIds.size >= interviews.length && interviews.length > 0 ? clearSelected : selectAllVisible}
+                    className="text-xs font-medium text-primary-600 hover:text-primary-700"
+                  >
+                    {selectedIds.size >= interviews.length && interviews.length > 0 ? 'Clear selection' : 'Select all on page'}
+                  </button>
+                  {total > interviews.length && (
+                    <button
+                      type="button"
+                      onClick={selectAllMatching}
+                      disabled={selectAllLoading}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700 disabled:opacity-50"
+                      title={`Select every notifiable candidate matching this filter${filters.project_id ? ' in this project' : ''}`}
+                    >
+                      {selectAllLoading ? <Loader2 size={12} className="animate-spin" /> : <CheckCheck size={12} />}
+                      {selectAllLoading ? 'Selecting…' : `Select all ${total} matching`}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
@@ -755,8 +910,8 @@ export default function Interviews() {
       {selectedIds.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white rounded-2xl shadow-2xl px-5 py-3 flex flex-wrap items-center gap-3">
           <span className="text-sm font-medium">{selectedIds.size} selected</span>
-          <Button size="sm" onClick={() => bulkNotifyMutation.mutate(Array.from(selectedIds))} disabled={bulkNotifyMutation.isPending} className="bg-blue-500 hover:bg-blue-400 text-white border-0 gap-1">
-            <Send size={14} /> {bulkNotifyMutation.isPending ? 'Notifying…' : 'Notify'}
+          <Button size="sm" onClick={() => setConfirmNotify({ open: true, ids: Array.from(selectedIds) })} disabled={!!notifyState?.running} className="bg-blue-500 hover:bg-blue-400 text-white border-0 gap-1">
+            <Send size={14} /> {notifyState?.running ? 'Notifying…' : 'Notify'}
           </Button>
           <Button size="sm" onClick={() => setBulkRescheduleOpen(true)} className="bg-indigo-500 hover:bg-indigo-400 text-white border-0 gap-1">
             <CalendarClock size={14} /> Reschedule
@@ -805,6 +960,23 @@ export default function Interviews() {
         onNoShow={() => handleCheckin('no_show')}
         onReschedule={() => { const t = checkinTarget; setCheckinTarget(null); setRescheduleTarget(t) }}
         loading={updateMutation.isPending}
+      />
+
+      <NotifyConfirmModal
+        open={!!confirmNotify?.open}
+        count={confirmNotify?.ids?.length || 0}
+        onClose={() => setConfirmNotify(null)}
+        onConfirm={() => {
+          const ids = confirmNotify?.ids || []
+          setConfirmNotify(null)
+          runNotify(ids)
+        }}
+      />
+
+      <NotifyProgressModal
+        state={notifyState}
+        onRetry={(ids) => runNotify(ids)}
+        onClose={() => { setNotifyState(null); clearSelected() }}
       />
     </div>
   )

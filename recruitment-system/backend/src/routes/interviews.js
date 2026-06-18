@@ -243,6 +243,40 @@ router.get('/', authenticate, requireSection('interviews', 'view'), async (req, 
     } catch (err) { next(err); }
 });
 
+// ── All matching interview IDs (for "select all across pages") ────────────────
+// Returns ONLY the ids of interviews matching the SAME filters as the list, so
+// the UI can select every candidate in a project (not just the 50 on screen)
+// and notify them in client-driven chunks. By default we restrict to notifiable
+// statuses (scheduled/confirmed) so "Select all → Notify" never re-pings a
+// closed (cancelled/completed/no-show) interview. Capped to a sane ceiling;
+// `capped` tells the UI when the selection was truncated. Registered before
+// '/:id' so the literal path isn't captured by the param route.
+router.get('/ids', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const CEIL = 5000;
+        const { conditions, params } = await buildInterviewFilters(req);
+        // notifiable=false lets a caller fetch every matching id regardless of
+        // status; default keeps the bulk-notify path to candidates who still
+        // need to hear about an active interview.
+        const notifiable = String(req.query.notifiable ?? 'true') !== 'false';
+        const statusFilter = notifiable ? `AND iv.status IN ('scheduled','confirmed')` : '';
+        params.push(CEIL);
+        const sql = `
+            SELECT iv.id
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN candidates c ON a.candidate_id = c.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE ${conditions.join(' AND ')} ${statusFilter}
+            ORDER BY COALESCE(c.whatsapp_unreachable, FALSE) ASC, iv.scheduled_datetime ASC
+            LIMIT $${params.length}
+        `;
+        const result = await query(sql, params);
+        const ids = result.rows.map((r) => r.id);
+        res.json({ ids, total: ids.length, capped: ids.length >= CEIL });
+    } catch (err) { next(err); }
+});
+
 // ── Interview stats (server-side aggregates, accurate across ALL rows) ─────────
 // Registered before '/:id'. Respects the same filters as the list so the stat
 // cards stay correct even though the list itself is paginated.
@@ -1021,6 +1055,15 @@ router.post('/bulk-notify', authenticate, requireSection('interviews', 'edit'), 
 
         const successes = [];
         const failures = [];
+        // Failed = no WhatsApp success (neither delivered nor queued). The UI uses
+        // this to power "Retry failed" — including re-trying out_of_window invites
+        // once the Meta interview template is approved.
+        const failedInterviewIds = [];
+        // Per-reason delivery breakdown so a chunked mass-notify can be summed by
+        // the UI into an honest "sent / queued / out_of_window / no_whatsapp / …"
+        // total instead of a vague "notified N".
+        const deliverySummary = { sent: 0, queued: 0, out_of_window: 0, no_whatsapp: 0, rate_limited: 0, token_expired: 0, other: 0 };
+        const manyRows = result.rows.length > 10;
         for (const row of result.rows) {
             try {
                 const notif = await notifications.sendInterviewNotification(
@@ -1033,12 +1076,24 @@ router.post('/bulk-notify', authenticate, requireSection('interviews', 'edit'), 
                     translate_notes === true
                 );
                 await applyWhatsappReachability(row.candidate_id, notif);
+                const waEntry = notif.success.find((s) => s.channel === 'whatsapp');
                 if (notif.success.length > 0) {
-                    successes.push({ interview_id: row.id, channels: notif.success.map(s => s.channel) });
+                    successes.push({ interview_id: row.id, channels: notif.success.map(s => s.channel), queued: !!(waEntry && waEntry.queued) });
+                    // confirmation_sent_at is set even for a queued (deliver-on-reply)
+                    // invite — the candidate is in the funnel; it tracks "we acted".
                     await query(
                         adaptQuery('UPDATE interview_schedules SET confirmation_sent_at = NOW() WHERE id = $1'),
                         [row.id]
                     );
+                }
+                if (waEntry) {
+                    deliverySummary[waEntry.queued ? 'queued' : 'sent'] += 1;
+                } else {
+                    const waFail = (notif.failed || []).find((f) => f.channel === 'whatsapp' || f.channel === 'all');
+                    const reason = waFail?.reason || 'other';
+                    if (deliverySummary[reason] === undefined) deliverySummary.other += 1;
+                    else deliverySummary[reason] += 1;
+                    failedInterviewIds.push(row.id);
                 }
                 if (notif.failed.length > 0) {
                     failures.push({ interview_id: row.id, errors: notif.failed });
@@ -1046,7 +1101,13 @@ router.post('/bulk-notify', authenticate, requireSection('interviews', 'edit'), 
             } catch (err) {
                 logger.warn(`Bulk-notify: interview ${row.id} failed: ${err.message}`);
                 failures.push({ interview_id: row.id, errors: [{ channel: 'whatsapp', error: err.message }] });
+                deliverySummary.other += 1;
+                failedInterviewIds.push(row.id);
             }
+            // Gentle throttle between WhatsApp sends so a batch doesn't burst past
+            // Meta's rate limit (reason='rate_limited' silently drops sends). Mirrors
+            // bulk-schedule; the client sends large selections in sequential chunks.
+            if (manyRows) await new Promise((r) => setTimeout(r, 120));
         }
 
         res.json({
@@ -1054,6 +1115,8 @@ router.post('/bulk-notify', authenticate, requireSection('interviews', 'edit'), 
             total_processed: result.rows.length,
             successes,
             failures,
+            delivery_summary: deliverySummary,
+            failed_interview_ids: failedInterviewIds,
         });
     } catch (err) { next(err); }
 });

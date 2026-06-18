@@ -418,6 +418,12 @@ export const getPendingInterviewSends = (params) =>
 export const bulkNotifyInterviews = (data) =>
   apiClient.post('/api/interviews/bulk-notify', data).then(res => res.data)
 
+// All notifiable interview IDs matching the current filters — powers
+// "Select all in project" across pages. params: same filters as the list
+// (+ notifiable). Returns { ids, total, capped }.
+export const getInterviewIds = (params) =>
+  apiClient.get('/api/interviews/ids', { params }).then(res => res.data)
+
 // Bulk status / reschedule / reassign for selected interviews.
 // body: { interview_ids, status?, scheduled_datetime?, interviewer_id?, location?, notify? }
 export const bulkUpdateInterviews = (data) =>
