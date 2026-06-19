@@ -183,8 +183,60 @@ async function sendAgentMessage({ phone, message = '', messageType = 'text', med
     }
 }
 
+/**
+ * Send an approved Meta template to a candidate for a bulk campaign blast.
+ * Unlike pushCandidateStatus (which prefers free-form when in-window), this
+ * ALWAYS sends the template — the campaign template carries the quick-reply
+ * buttons, so it must go as a template even for in-window recipients. The send
+ * goes through the chatbot's WhatsApp identity (the working token).
+ *
+ * Returns { ok, messageId?, reason? } and never throws. `reason` is the coarse
+ * classification (no_whatsapp / out_of_window / token_expired / rate_limited /
+ * other) the campaign runner records per recipient.
+ */
+async function sendCampaignTemplate({ phone, templateName, language = 'en', components = null }) {
+    const base = process.env.CHATBOT_API_URL;
+    const key = process.env.CHATBOT_API_KEY;
+    if (!base || !key) {
+        return { ok: false, error: 'CHATBOT_API_URL or CHATBOT_API_KEY missing', reason: 'config' };
+    }
+    if (!phone) {
+        return { ok: false, error: 'candidate phone is empty', reason: 'no_phone' };
+    }
+    if (!templateName) {
+        return { ok: false, error: 'templateName is empty', reason: 'config' };
+    }
+
+    const payload = {
+        candidate_phone: phone,
+        template_name: templateName,
+        language: language || 'en',
+        components: components || null,
+    };
+
+    try {
+        const url = `${base.replace(/\/$/, '')}/webhook/campaign-send`;
+        const resp = await axios.post(url, payload, {
+            headers: { 'x-chatbot-api-key': key, 'Content-Type': 'application/json' },
+            timeout: 20000,
+        });
+        const body = resp.data || {};
+        if (body.status === 'sent') {
+            return { ok: true, messageId: body.message_id || null };
+        }
+        const errText = body.detail || body.reason || body.status || 'chatbot did not confirm delivery';
+        logger.warn(`chatbotNotifier.sendCampaignTemplate: non-sent for ${phone} (${templateName}): ${JSON.stringify(body)}`);
+        return { ok: false, error: String(errText), reason: body.reason || 'other', code: body.code || null };
+    } catch (err) {
+        const detail = err.response?.data?.detail || err.response?.data || err.message;
+        logger.error(`chatbotNotifier.sendCampaignTemplate: POST failed for ${phone}: ${JSON.stringify(detail)}`);
+        return { ok: false, error: typeof detail === 'string' ? detail : JSON.stringify(detail), reason: 'other', code: null };
+    }
+}
+
 module.exports = {
     pushCandidateStatus,
     sendAgentMessage,
+    sendCampaignTemplate,
     mapType,
 };

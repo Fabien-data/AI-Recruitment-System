@@ -26,7 +26,7 @@ import {
   Mic, Square, Trash2, Paperclip, Wand2,
   SlidersHorizontal, ChevronDown, X as XIcon,
   FileText, Download, Eye, Image as ImageIcon,
-  FolderKanban, Tag, UserPlus, List, Maximize2,
+  FolderKanban, Tag, UserPlus, List, Maximize2, Megaphone,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { categoryColor } from '../utils/categoryColor'
@@ -37,7 +37,9 @@ import { Button } from '../components/ui/Button'
 import { Skeleton } from '../components/ui/Skeleton'
 import { Modal } from '../components/ui/Modal'
 import { getCommunications, sendCommunication, getCandidate, getMyPreferences, updateMyPreferences } from '../api'
-import { useAuthStore } from '../stores/authStore'
+import { useAuthStore, useSectionAccess } from '../stores/authStore'
+import { notify } from '../components/ui/Toast'
+import { CampaignDialog } from '../components/communications/CampaignDialog'
 import { ConversationDocumentsPanel } from '../components/communications/ConversationDocumentsPanel'
 import { JobDrawer } from '../components/communications/JobDrawer'
 import { CallPresenceToggle } from '../components/communications/CallPresenceToggle'
@@ -188,6 +190,11 @@ const transferCandidate = (id, toUserId) =>
 // Server-side project list for the conversations filter dropdown.
 const getProjectsForFilter = () =>
   apiFetch('/api/projects?limit=200').then((r) => (Array.isArray(r) ? r : (r?.data || r?.projects || [])))
+// Resolve a phone number (any format: +94…/94…/0…) to a candidate id for the 3CX
+// screen-pop deep-link (/communications?phoneNumber=…). apiFetch throws "404: …"
+// when no candidate matches the number.
+const resolveCandidateByPhone = (phone) =>
+  apiFetch(`/api/communications/resolve?phone=${encodeURIComponent(phone)}`)
 const getTranscript = ({ id, responseStatus, dateFrom, dateTo }) => {
   const params = new URLSearchParams()
   params.set('limit', '5000')
@@ -702,6 +709,9 @@ export default function Communications() {
   // Inbound 3CX call ringing for a candidate routed to this agent (screen-pop).
   const [incomingCall, setIncomingCall] = useState(null)
   const [addCandidateOpen, setAddCandidateOpen] = useState(false)
+  const [campaignOpen, setCampaignOpen] = useState(false)
+  // Mass-send is a control-tower action (admin + sourcing only).
+  const canCampaign = useSectionAccess('control_tower', 'edit')
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState(searchParams.get('q') || savedPrefs.search || '')
   const [pipelineStage, setPipelineStage] = useState(searchParams.get('pipeline_stage') || savedPrefs.pipelineStage || '')
@@ -1035,6 +1045,55 @@ export default function Communications() {
       setSearchParams(next, { replace: true })
     }
   }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 3CX screen-pop deep-link: /communications?phoneNumber=<caller> (also accepts
+  // ?phone=). 3CX only knows the caller's number, never our candidate UUID, so it
+  // cannot build a ?candidate= link. Resolve the number → open that chat → normalise
+  // the URL to ?candidate= so the rest of the page behaves like any normal deep-link.
+  // phoneLinkRef tracks the handled value so a fresh pop (new number, same tab) is
+  // re-resolved, while in-flight/duplicate searchParams changes don't double-fire.
+  const phoneLinkRef = useRef('')
+  useEffect(() => {
+    const phoneParam = searchParams.get('phoneNumber') || searchParams.get('phone')
+    if (!phoneParam) { phoneLinkRef.current = ''; return }
+    // Strip the phone params from the URL, preserving every other (possibly
+    // concurrent) param. The functional updater reads the freshest params at apply
+    // time — never the stale closure captured when this effect ran — so a filter
+    // change during the async resolve can't be clobbered.
+    const stripPhone = (mutate) => setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.delete('phoneNumber'); next.delete('phone')
+      if (mutate) mutate(next)
+      return next
+    }, { replace: true })
+    // If a candidate is already pinned, that wins — just drop the phone param.
+    if (searchParams.get('candidate')) { stripPhone(); return }
+    // Resolve each distinct phone once. Sibling URL changes (filters, saved prefs)
+    // re-run this effect on mount — they must NOT cancel an in-flight resolve, or
+    // the deep-link gets silently dropped. So we key off the ref (not a per-run
+    // cancel flag): the re-run short-circuits on the guard below, and the in-flight
+    // resolve re-checks the ref at apply time so a NEWER phone supersedes an older
+    // in-flight one without the older clobbering it.
+    if (phoneLinkRef.current === phoneParam) return
+    phoneLinkRef.current = phoneParam
+    const thisPhone = phoneParam
+    ;(async () => {
+      try {
+        const { candidate_id } = await resolveCandidateByPhone(thisPhone)
+        if (phoneLinkRef.current !== thisPhone) return
+        if (candidate_id) setSelectedId(candidate_id)
+        stripPhone(candidate_id ? (p) => p.set('candidate', candidate_id) : undefined)
+        if (!candidate_id) notify.error({ title: 'No candidate found', message: `No chat matches ${thisPhone}.` })
+      } catch (err) {
+        if (phoneLinkRef.current !== thisPhone) return
+        stripPhone()
+        const notFound = String(err?.message || '').startsWith('404')
+        notify.error(notFound
+          ? { title: 'No candidate found', message: `No chat matches ${thisPhone}.` }
+          : { title: 'Could not open chat', message: 'Failed to look up that number.' })
+      }
+    })()
+  }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isCandidateEscalated = useCallback((candidate) => {
     if (!candidate) return false
@@ -1834,6 +1893,16 @@ export default function Communications() {
               >
                 <UserPlus size={12} /> Add
               </button>
+              {canCampaign && (
+                <button
+                  type="button"
+                  onClick={() => setCampaignOpen(true)}
+                  title="Bulk WhatsApp campaign — message all candidates (minus excluded projects)"
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+                >
+                  <Megaphone size={12} /> Campaign
+                </button>
+              )}
               <span
                 className={clsx(
                   'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset',
@@ -1855,6 +1924,13 @@ export default function Communications() {
             onClose={() => setAddCandidateOpen(false)}
             onCreated={(cand) => { if (cand?.id) { setStatusBucket('new'); setSelectedId(cand.id) } }}
           />
+          {canCampaign && (
+            <CampaignDialog
+              open={campaignOpen}
+              onClose={() => setCampaignOpen(false)}
+              projects={projectList}
+            />
+          )}
           {/* At-a-glance counts — TRUE aggregates from the counts endpoint (the
               old pills used chatList.length, which maxed out at the 500-row cap,
               so "500 chats / 500 bot" was just the ceiling, not the real total). */}

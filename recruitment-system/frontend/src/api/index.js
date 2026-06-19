@@ -134,6 +134,22 @@ export const getJobs = (params) =>
 export const getJob = (id) =>
   apiClient.get(`/api/jobs/${id}`).then(res => res.data)
 
+// ── Bulk campaign (mass WhatsApp template blast from the Messages page) ───────
+export const previewCampaign = (data) =>
+  apiClient.post('/api/communications/campaigns/preview', data).then(res => res.data)
+
+export const createCampaign = (data) =>
+  apiClient.post('/api/communications/campaigns', data).then(res => res.data)
+
+export const getCampaign = (id) =>
+  apiClient.get(`/api/communications/campaigns/${id}`).then(res => res.data)
+
+export const pauseCampaign = (id) =>
+  apiClient.post(`/api/communications/campaigns/${id}/pause`).then(res => res.data)
+
+export const resumeCampaign = (id) =>
+  apiClient.post(`/api/communications/campaigns/${id}/resume`).then(res => res.data)
+
 export const createJob = (data) =>
   apiClient.post('/api/jobs', data).then(res => res.data)
 

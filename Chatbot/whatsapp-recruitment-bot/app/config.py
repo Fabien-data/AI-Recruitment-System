@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     # interview_scheduled path falls back to template_interview_scheduled (no
     # buttons) — so leaving this unset is a safe no-op until the template is approved.
     template_interview_invite: str = ""
+    # Bulk-campaign template (the UAE walk-in blast) — a STATIC promotional body
+    # with three quick-reply buttons (Confirm my slot / Suggest to a friend / Not
+    # Interested) declared ON the template, so it delivers OUT-OF-WINDOW (the whole
+    # point of a mass send). No body params (fully static). Set
+    # TEMPLATE_CAMPAIGN_WALKIN=<approved name> once Meta approves it; the campaign
+    # runner / referral flow read it as the fallback template name.
+    template_campaign_walkin: str = ""
     # Out-of-window teasers that re-open the 24h window after a candidate taps
     # Reschedule / Can't-make-it (the actual slot/job lists are sent in-window as
     # interactive lists). Body params: reschedule_options=[first_name];

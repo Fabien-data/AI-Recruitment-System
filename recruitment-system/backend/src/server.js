@@ -16,6 +16,7 @@ const jobsRouter = require('./routes/jobs');
 const applicationsRouter = require('./routes/applications');
 const bulkImportRouter = require('./routes/bulk-import');
 const communicationsRouter = require('./routes/communications');
+const campaignsRouter = require('./routes/campaigns');
 const webhooksRouter = require('./routes/webhooks');
 const authRouter = require('./routes/auth');
 const adminRouter = require('./routes/admin');
@@ -211,6 +212,9 @@ app.use('/api/projects', projectsRouter); // Projects management
 // /bulk-import/* path is matched first.
 app.use('/api/applications/bulk-import', bulkImportRouter);
 app.use('/api/applications', applicationsRouter);
+// Mount the more specific campaigns sub-router BEFORE the generic communications
+// router so /api/communications/campaigns/* is matched first.
+app.use('/api/communications/campaigns', campaignsRouter);
 app.use('/api/communications', communicationsRouter);
 app.use('/api/gmail', gmailRouter);
 app.use('/api/auto-assign', autoAssignRouter); // Auto-assign CVs to jobs
@@ -290,6 +294,16 @@ applyMigrations()
             // ── Initialize Socket.io WebSocket server ─────────────────────
             initWebSocket(server);
             logger.info('🔌 WebSocket (Socket.io) server ready');
+
+            // ── Bulk-campaign runner: resume any in-flight blast + sweep ──
+            // Re-kicks `sending` campaigns with pending recipients (next-day
+            // cap rollover + crash/deploy recovery).
+            try {
+                require('./services/campaignRunner').startCampaignSweeper();
+                logger.info('📣 Campaign runner sweeper started');
+            } catch (e) {
+                logger.warn(`campaign sweeper start failed: ${e.message}`);
+            }
 
             // ── In-call presence TTL sweep ─────────────────────────────────
             // Backstop for hard crashes where the socket 'disconnect' cleanup

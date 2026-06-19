@@ -738,6 +738,15 @@ async def process_single_message(message: dict, contacts: list, db):
         except Exception as kw_err:
             logger.warning(f"keyword command handling failed for {from_number}: {kw_err}")
 
+        # Bulk-campaign "Suggest to a friend" collection: when the candidate is
+        # mid-referral, parse their reply for the friend's name + number and invite
+        # them — intercepted before any greeting/orchestration logic.
+        try:
+            if await _handle_referral_turn(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
+                return
+        except Exception as ref_err:
+            logger.warning(f"campaign referral turn failed for {from_number}: {ref_err}")
+
         # Fast-path: for simple greetings in early onboarding states, send language selector
         # immediately and skip heavy chatbot orchestration. SKIPPED when:
         #   (a) a CTWA referral is present — needs the orchestrator's headline
@@ -984,6 +993,24 @@ async def process_single_message(message: dict, contacts: list, db):
                         return
                 except Exception as fe:
                     logger.warning(f"interview follow-up handling failed for {from_number}: {fe}")
+            # Campaign walk-in day pick ('cd|<iv>|<dt>').
+            if text_body.startswith("cd|"):
+                try:
+                    if await _handle_campaign_daypick(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as cde:
+                    logger.warning(f"campaign daypick handling failed for {from_number}: {cde}")
+            # Campaign quick-reply (Confirm my slot / Suggest a friend / Not Interested)
+            # — matched BEFORE the interview action ("Confirm my slot" ⊃ "confirm").
+            _camp_action = _title_to_campaign_action(text_body) or _title_to_campaign_action(_btn_title)
+            if _camp_action:
+                try:
+                    if await _handle_campaign_action(db, from_number, _camp_action,
+                                                     inbound_label=_btn_title or text_body,
+                                                     inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as ce:
+                    logger.warning(f"campaign action handling failed for {from_number}: {ce}")
             # Interview action: in-window button id OR out-of-window template title.
             _iv_action = _BUTTON_ACTION.get(text_body) or _title_to_interview_action(_btn_title)
             if _iv_action:
@@ -1013,6 +1040,13 @@ async def process_single_message(message: dict, contacts: list, db):
                         return
                 except Exception as fe:
                     logger.warning(f"interview follow-up (list) handling failed for {from_number}: {fe}")
+            # Campaign walk-in day pick comes back as a list selection ('cd|<iv>|<dt>').
+            if text_body.startswith("cd|"):
+                try:
+                    if await _handle_campaign_daypick(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as cde:
+                    logger.warning(f"campaign daypick (list) handling failed for {from_number}: {cde}")
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
@@ -1032,6 +1066,17 @@ async def process_single_message(message: dict, contacts: list, db):
         _btn_payload = (_b.get("payload") or "").strip()
         text_body = _btn_text or _btn_payload
         logger.info(f"🔘 Template button tap from {from_number}: text={_btn_text!r} payload={_btn_payload!r}")
+        # Campaign quick-reply (out-of-window template tap) — before the interview
+        # matcher, since "Confirm my slot" contains "confirm".
+        _camp_action = _title_to_campaign_action(_btn_text) or _title_to_campaign_action(_btn_payload)
+        if _camp_action:
+            try:
+                if await _handle_campaign_action(db, from_number, _camp_action,
+                                                 inbound_label=text_body,
+                                                 inbound_msg_id=message.get("id", "")):
+                    return
+            except Exception as ce:
+                logger.warning(f"template campaign action failed for {from_number}: {ce}")
         _iv_action = _title_to_interview_action(_btn_text) or _title_to_interview_action(_btn_payload)
         if _iv_action:
             try:
@@ -1691,6 +1736,230 @@ async def _handle_interview_followup(db, phone: str, reply_id: str, inbound_msg_
     return False
 
 
+# ── Bulk-campaign quick-reply handlers ───────────────────────────────────────
+# The UAE walk-in campaign template carries three quick-reply buttons:
+#   "Confirm my slot"  → create the application + interview under the campaign's
+#                         target (AMAYA) job, then ask which walk-in day.
+#   "Suggest to a friend" → collect the friend's name + WhatsApp number and invite
+#                         them with the same template (friend uploads CV later).
+#   "Not Interested"   → no change.
+# Matched by title (works for in-window button_reply taps and out-of-window
+# template `button` taps) and routed BEFORE the interview matcher — because
+# "Confirm my slot" contains the word "confirm" and would otherwise be hijacked.
+
+_CAMPAIGN_CONFIRM_INTRO = "You're in! ✅ Which walk-in day works best for you? Tap one below:"
+_CAMPAIGN_CONFIRM_NODAYS = "You're in! ✅ Our team will confirm your interview details shortly. Please keep your *CV* ready. 🍀"
+_CAMPAIGN_CONFIRM_FAIL = "Thanks for your interest! ✅ Our team will reach out with the next steps shortly."
+_CAMPAIGN_DAYPICK_DONE = "Locked in ✅ — see you on {when}. Please bring your *CV*. Good luck! 🍀"
+_CAMPAIGN_DAYPICK_TAKEN = "Sorry, that day just filled up. Reply *Confirm my slot* to see the remaining days."
+_CAMPAIGN_REFER_ASK = ("Love it! 🙌 Share your friend's *name* and *WhatsApp number* in one message "
+                       "(e.g. _Nimal 0771234567_) and we'll send them the invite.")
+_CAMPAIGN_REFER_RETRY = ("I just need your friend's *name* and a valid *WhatsApp number* together "
+                         "(e.g. _Nimal 0771234567_).")
+_CAMPAIGN_REFER_SELF = "That looks like your own number 😊 Please share a *friend's* name and WhatsApp number."
+_CAMPAIGN_REFER_DONE = "Done 🎉 We've sent {name} the invite. Thanks for spreading the word!"
+_CAMPAIGN_REFER_SOFTDONE = "Thanks! 🙏 Our team will reach out to your friend shortly."
+_CAMPAIGN_REFER_CANCEL = "No problem 🙏 Cancelled. Tap *Suggest to a friend* again whenever you like."
+_CAMPAIGN_NOT_INTERESTED = "No worries 🙏 Thanks for letting us know. If you change your mind, just reply here."
+
+_REFERRAL_PHONE_RE = re.compile(r"(\+?\d[\d\s\-]{7,}\d)")
+
+
+def _title_to_campaign_action(title: str):
+    """Map a campaign quick-reply button title/payload to its action. Keyed on
+    campaign-specific words ('slot' / 'friend'/'suggest' / 'not interested') so it
+    never collides with the interview invite's plain 'Confirm' button."""
+    t = (title or "").strip().lower()
+    if not t:
+        return None
+    if "not interested" in t or "not intrested" in t:
+        return "not_interested"
+    if "friend" in t or "suggest" in t:
+        return "refer_friend"
+    if "slot" in t:  # "Confirm my slot"
+        return "confirm_slot"
+    return None
+
+
+async def _handle_campaign_action(db, phone: str, action: str,
+                                  inbound_label: str = "", inbound_msg_id: str = "") -> bool:
+    """Handle a campaign quick-reply tap. Self-syncs the tap + replies into the
+    agent transcript (the caller returns on True, skipping the main sync block).
+    Returns True when handled."""
+    if action not in ("confirm_slot", "refer_friend", "not_interested"):
+        return False
+    # get_or_create: many campaign recipients (agency imports) never messaged the
+    # bot, so they have no chatbot-DB row yet — needed to persist the referral step.
+    cand = crud.get_or_create_candidate(db, phone)
+    from app.services.followup_service import candidate_lang
+    lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+    _default_label = {"confirm_slot": "Confirm my slot", "refer_friend": "Suggest to a friend",
+                      "not_interested": "Not Interested"}.get(action, action)
+    await _sync_chat_message(
+        phone, "inbound", inbound_label or _default_label,
+        lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id,
+    )
+
+    if action == "not_interested":
+        await meta_client.send_message(phone, _CAMPAIGN_NOT_INTERESTED)
+        await _sync_chat_message(phone, "outbound", _CAMPAIGN_NOT_INTERESTED, lang, _state)
+        return True
+
+    if action == "confirm_slot":
+        res = await _post_recruitment_api("/api/chatbot/campaign-confirm", {"phone": phone})
+        slots = (res or {}).get("slots") or []
+        if res.get("ok") and slots:
+            rows = []
+            for s in slots[:10]:
+                rows.append({
+                    "id": str(s.get("slot_id", ""))[:200],
+                    "title": _compact_slot_title(s.get("datetime", "")) or (str(s.get("label", ""))[:24]),
+                    "description": str(s.get("label", ""))[:72],
+                })
+            await meta_client.send_interactive_list(
+                phone, text=_CAMPAIGN_CONFIRM_INTRO, button_text="Pick a day",
+                sections=[{"title": "Walk-in days", "rows": rows}],
+            )
+            _out = (_CAMPAIGN_CONFIRM_INTRO + "\nOptions: " + " / ".join([r["title"] for r in rows if r.get("title")])).strip()
+        elif res.get("ok"):
+            _out = _CAMPAIGN_CONFIRM_NODAYS
+            await meta_client.send_message(phone, _out)
+        else:
+            _out = _CAMPAIGN_CONFIRM_FAIL
+            await meta_client.send_message(phone, _out)
+        await _sync_chat_message(phone, "outbound", _out, lang, _state)
+        logger.info(f"📣 Campaign confirm handled for {phone} ({len(slots)} days)")
+        return True
+
+    # refer_friend → start a deterministic name+number collection sub-flow.
+    if cand is not None:
+        try:
+            st = dict(getattr(cand, "agent_state", None) or {})
+            st["campaign_referral"] = {"step": "collect"}
+            cand.agent_state = st
+            db.commit()
+        except Exception as e:
+            logger.warning(f"campaign referral state set failed for {phone}: {e}")
+    await meta_client.send_message(phone, _CAMPAIGN_REFER_ASK)
+    await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_ASK, lang, _state)
+    logger.info(f"📣 Campaign referral started for {phone}")
+    return True
+
+
+async def _handle_campaign_daypick(db, phone: str, reply_id: str, inbound_msg_id: str = "") -> bool:
+    """Route a campaign day pick ('cd|<interview_id>|<datetime>') to the backend,
+    which moves the interview to that day + venue (keeping it confirmed). Returns
+    True when handled."""
+    rid = reply_id or ""
+    if not rid.startswith("cd|"):
+        return False
+    parts = rid.split("|", 2)
+    if len(parts) != 3:
+        return False
+    interview_id, datetime_str = parts[1], parts[2]
+    cand = crud.get_candidate_by_phone(db, phone)
+    from app.services.followup_service import candidate_lang
+    lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+    await _sync_chat_message(
+        phone, "inbound", f"Picked: {_compact_slot_title(datetime_str) or datetime_str}",
+        lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id,
+    )
+    res = await _post_recruitment_api(
+        "/api/chatbot/campaign-daypick",
+        {"phone": phone, "interview_id": interview_id, "datetime": datetime_str},
+    )
+    if res.get("ok"):
+        msg = _CAMPAIGN_DAYPICK_DONE.format(when=res.get("label") or datetime_str)
+    else:
+        msg = _CAMPAIGN_DAYPICK_TAKEN
+    await meta_client.send_message(phone, msg)
+    await _sync_chat_message(phone, "outbound", msg, lang, _state)
+    return True
+
+
+async def _handle_referral_turn(db, phone: str, text: str, inbound_msg_id: str = "") -> bool:
+    """When the candidate is mid 'Suggest to a friend' flow, parse their reply for
+    the friend's name + WhatsApp number, create the friend + invite them. Returns
+    True when handled (skip the normal LLM orchestration)."""
+    cand = crud.get_candidate_by_phone(db, phone)
+    if not cand:
+        return False
+    st = dict(getattr(cand, "agent_state", None) or {})
+    ref = st.get("campaign_referral")
+    if not isinstance(ref, dict) or ref.get("step") != "collect":
+        return False
+
+    from app.services.followup_service import candidate_lang
+    from app.utils.phone import normalize_phone
+    lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+    await _sync_chat_message(phone, "inbound", text, lang, _state, whatsapp_message_id=inbound_msg_id)
+
+    def _clear_referral():
+        st.pop("campaign_referral", None)
+        try:
+            cand.agent_state = st
+            db.commit()
+        except Exception as e:
+            logger.warning(f"campaign referral clear failed for {phone}: {e}")
+
+    low = (text or "").strip().lower()
+    if low in ("cancel", "stop", "no", "nevermind", "never mind", "exit"):
+        _clear_referral()
+        await meta_client.send_message(phone, _CAMPAIGN_REFER_CANCEL)
+        await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_CANCEL, lang, _state)
+        return True
+
+    m = _REFERRAL_PHONE_RE.search(text or "")
+    friend_phone = normalize_phone(m.group(1)) if m else None
+    friend_name = ""
+    if m:
+        friend_name = (text[:m.start()] + " " + text[m.end():])
+    friend_name = re.sub(r"\s+", " ", friend_name).strip(" ,.–—-\n\t")[:80]
+
+    if not friend_phone:
+        await meta_client.send_message(phone, _CAMPAIGN_REFER_RETRY)
+        await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_RETRY, lang, _state)
+        return True  # stay in collect
+
+    res = await _post_recruitment_api("/api/chatbot/campaign-refer", {
+        "referrer_phone": phone, "friend_phone": friend_phone, "friend_name": friend_name,
+    })
+    if not res.get("ok"):
+        reason = res.get("reason")
+        if reason == "invalid_phone":
+            await meta_client.send_message(phone, _CAMPAIGN_REFER_RETRY)
+            await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_RETRY, lang, _state)
+            return True
+        if reason == "self_referral":
+            await meta_client.send_message(phone, _CAMPAIGN_REFER_SELF)
+            await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_SELF, lang, _state)
+            return True
+        _clear_referral()
+        await meta_client.send_message(phone, _CAMPAIGN_REFER_SOFTDONE)
+        await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_SOFTDONE, lang, _state)
+        return True
+
+    # Success → invite the friend with the campaign template, then thank the referrer.
+    tmpl = res.get("template_name") or settings.template_campaign_walkin
+    flang = res.get("language") or "en"
+    if tmpl:
+        try:
+            await meta_client.send_template_message(friend_phone, tmpl, language_code=flang)
+        except Exception as e:
+            logger.warning(f"referral invite send failed to {friend_phone}: {e}")
+    else:
+        logger.warning(f"referral: no campaign template configured — friend {friend_phone} not invited")
+    _clear_referral()
+    done = _CAMPAIGN_REFER_DONE.format(name=friend_name or "your friend")
+    await meta_client.send_message(phone, done)
+    await _sync_chat_message(phone, "outbound", done, lang, _state)
+    logger.info(f"📣 Campaign referral completed: {phone} → {friend_phone}")
+    return True
+
+
 @router.post("/candidate-status")
 async def candidate_status_webhook(
     payload: CandidateStatusPayload,
@@ -1839,6 +2108,61 @@ async def candidate_status_webhook(
     except Exception as e:
         logger.error(f"Error sending status update to {phone}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send message: {e}")
+
+
+class CampaignSendPayload(BaseModel):
+    """One bulk-campaign template send, driven by the backend campaign runner.
+    Always delivered as a TEMPLATE (the campaign body carries the quick-reply
+    buttons, so it must be a template even for in-window recipients)."""
+    candidate_phone: str
+    template_name: str
+    language: Optional[str] = "en"
+    components: Optional[list] = None
+
+
+@router.post("/campaign-send")
+async def campaign_send_webhook(
+    payload: CampaignSendPayload,
+    x_chatbot_api_key: Optional[str] = Header(None),
+):
+    """
+    POST /webhook/campaign-send
+    Send one approved campaign template to a candidate and mirror it into the
+    agent transcript. Returns {status: 'sent'|'failed', reason?, message_id?} so
+    the backend runner can record a per-recipient delivery result.
+    """
+    _require_api_key_webhook(x_chatbot_api_key)
+    phone = normalize_phone_or_raw(payload.candidate_phone)
+    if not phone:
+        return {"status": "failed", "reason": "no_phone"}
+    if not payload.template_name:
+        return {"status": "failed", "reason": "config"}
+    lang = (payload.language or "en").strip() or "en"
+    try:
+        result = await meta_client.send_template_message(
+            phone, payload.template_name, language_code=lang,
+            components=payload.components or None,
+        )
+        if isinstance(result, dict) and result.get("messages"):
+            msg_id = result.get("messages", [{}])[0].get("id")
+            try:
+                await _sync_chat_message(
+                    phone, "outbound", f"📣 Campaign invite sent ({payload.template_name})",
+                    lang, "", message_type="template", whatsapp_message_id=msg_id or "",
+                )
+            except Exception:
+                pass
+            return {"status": "sent", "message_id": msg_id}
+        reason = (result or {}).get("reason") or "other"
+        return {
+            "status": "failed",
+            "reason": reason,
+            "code": (result or {}).get("code"),
+            "detail": (result or {}).get("error"),
+        }
+    except Exception as e:
+        logger.error(f"campaign-send to {phone} failed: {e}")
+        return {"status": "failed", "reason": "other", "detail": str(e)}
 
 
 class AgentMessagePayload(BaseModel):

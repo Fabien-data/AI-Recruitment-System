@@ -2131,4 +2131,292 @@ router.post('/interview-cant-make-apply', authenticateChatbot, async (req, res) 
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Bulk-campaign button handlers — the UAE walk-in template's three quick-reply
+// buttons ("Confirm my slot" / "Suggest to a friend" / "Not Interested"). Unlike
+// the interview-invite flow these CREATE the application + interview (none exist
+// yet). The campaign is resolved from the candidate's most-recent
+// campaign_recipients row so "Confirm" attaches to the campaign's target (AMAYA)
+// job. See migrations 063/064 + services/campaignRunner.js.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Resolve which campaign a candidate belongs to (for target job + project + template).
+async function resolveCampaignForCandidate(candidateId) {
+    // Prefer the campaign this candidate was actually sent.
+    let r = await query(adaptQuery(`
+        SELECT c.id, c.target_job_id, c.target_job_id_female, c.target_project_id, c.template_name, c.language
+        FROM campaign_recipients cr
+        JOIN campaigns c ON c.id = cr.campaign_id
+        WHERE cr.candidate_id = $1 AND c.target_job_id IS NOT NULL
+        ORDER BY cr.created_at DESC LIMIT 1
+    `), [candidateId]).catch(() => ({ rows: [] }));
+    if (r.rows.length) return r.rows[0];
+    // Fallback: the most recent campaign that has a target job.
+    r = await query(adaptQuery(`
+        SELECT id, target_job_id, target_job_id_female, target_project_id, template_name, language
+        FROM campaigns
+        WHERE target_job_id IS NOT NULL AND status IN ('sending','paused','done')
+        ORDER BY created_at DESC LIMIT 1
+    `), []).catch(() => ({ rows: [] }));
+    return r.rows[0] || null;
+}
+
+// Read a candidate's recorded gender from metadata ('male'/'female'), tolerant of
+// jsonb (object) or legacy text storage.
+function candidateGender(row) {
+    let m = row && row.metadata;
+    if (typeof m === 'string') { try { m = JSON.parse(m); } catch { m = null; } }
+    return (m && m.gender) ? String(m.gender) : '';
+}
+
+// Route to the AMAYA Male vs Female Security job by gender. Unknown/unspecified
+// gender falls back to the default (target_job_id) — recruiters can re-sort.
+function pickCampaignJob(camp, gender) {
+    const g = String(gender || '').trim().toLowerCase();
+    if (camp && camp.target_job_id_female && ['female', 'f', 'woman', 'girl'].includes(g)) {
+        return camp.target_job_id_female;
+    }
+    return camp ? camp.target_job_id : null;
+}
+
+// Build the day-picker rows from a project's configured interview days — future
+// only (Colombo), capacity-aware. id scheme 'cd|<iv>|<datetime>' (campaign pick).
+async function buildCampaignDaySlots(interviewId, projectId, cfg) {
+    const today = await query(`SELECT (NOW() AT TIME ZONE 'Asia/Colombo')::date::text AS d`, []);
+    const todayColombo = today.rows[0].d;
+    const booked = await query(adaptQuery(`
+        SELECT to_char(s.scheduled_datetime, 'YYYY-MM-DD') AS d, COUNT(*)::int AS n
+        FROM interview_schedules s
+        JOIN applications a ON s.application_id = a.id
+        JOIN jobs j ON a.job_id = j.id
+        WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed') AND s.scheduled_datetime >= NOW()
+        GROUP BY 1
+    `), [projectId]).catch(() => ({ rows: [] }));
+    const bookedByDate = {};
+    for (const row of booked.rows) bookedByDate[row.d] = parseInt(row.n, 10) || 0;
+    const days = resolveInterviewDays(cfg || {}).filter((d) => d.date && d.date >= todayColombo);
+    return days
+        .filter((d) => d.capacity == null || (bookedByDate[d.date] || 0) < d.capacity)
+        .map((d) => {
+            const dt = `${d.date}T${d.time_start || '09:00'}`;
+            return {
+                slot_id: `cd|${interviewId}|${dt}`,
+                datetime: dt,
+                label: `${notifications.formatInterviewWallClock(dt)} · ${d.location}`,
+            };
+        });
+}
+
+// POST /api/chatbot/campaign-confirm { phone } — "Confirm my slot" tap.
+// Creates (idempotently) the application + interview under the campaign's target
+// job, marks it interview_scheduled + candidate_response='confirmed', and returns
+// the project's walk-in days so the bot can ask which day the candidate prefers.
+router.post('/campaign-confirm', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone } = req.body || {};
+        if (!phone) return res.status(400).json({ error: 'phone is required' });
+        const cand = await findCandidateByPhone(phone, 'id, name, metadata');
+        if (!cand.rows.length) return res.json({ ok: false, reason: 'candidate_not_found' });
+        const candidateId = cand.rows[0].id;
+
+        const camp = await resolveCampaignForCandidate(candidateId);
+        if (!camp || !camp.target_job_id) return res.json({ ok: false, reason: 'no_target_job' });
+
+        // Route to the AMAYA Male vs Female Security job by recorded gender
+        // (unknown → the default job; recruiters can re-sort).
+        const jobId = pickCampaignJob(camp, candidateGender(cand.rows[0]));
+
+        // Idempotent application under the gender-matched (AMAYA) job.
+        await query(adaptQuery(`
+            INSERT INTO applications (id, candidate_id, job_id, status, applied_at)
+            VALUES ($1, $2, $3, 'screening', NOW())
+            ON CONFLICT (candidate_id, job_id) DO NOTHING
+        `), [generateUUID(), candidateId, jobId]);
+        const appRes = await query(adaptQuery('SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1'), [candidateId, jobId]);
+        if (!appRes.rows.length) return res.json({ ok: false, reason: 'application_failed' });
+        const applicationId = appRes.rows[0].id;
+
+        const jr = await query(adaptQuery(`
+            SELECT j.project_id, p.interview_config
+            FROM jobs j LEFT JOIN projects p ON p.id = j.project_id WHERE j.id = $1
+        `), [jobId]);
+        const projectId = jr.rows[0]?.project_id || camp.target_project_id || null;
+        const cfg = jr.rows[0]?.interview_config || {};
+
+        // Reuse an existing campaign interview, else create one at the earliest
+        // future configured day (so it's interview_scheduled immediately).
+        let interviewId;
+        const exRes = await query(adaptQuery(`
+            SELECT id FROM interview_schedules
+            WHERE application_id = $1 AND status IN ('scheduled','confirmed')
+            ORDER BY scheduled_datetime ASC LIMIT 1
+        `), [applicationId]);
+        if (exRes.rows.length) {
+            interviewId = exRes.rows[0].id;
+        } else {
+            const today = await query(`SELECT (NOW() AT TIME ZONE 'Asia/Colombo')::date::text AS d`, []);
+            const todayColombo = today.rows[0].d;
+            const days = resolveInterviewDays(cfg).filter((d) => d.date);
+            const future = days.filter((d) => d.date >= todayColombo).sort((a, b) => a.date.localeCompare(b.date));
+            const chosen = future[0] || days[0] || null;
+            // Fallback datetime when the project has no configured days yet — keeps
+            // scheduled_datetime (NOT NULL) valid so the app still goes
+            // interview_scheduled; a recruiter sets the real day later.
+            const dt = chosen ? `${chosen.date}T${chosen.time_start || '09:00'}` : `${todayColombo}T09:00`;
+            const loc = chosen ? chosen.location : null;
+            interviewId = generateUUID();
+            await query(adaptQuery(`
+                INSERT INTO interview_schedules (id, application_id, scheduled_datetime, location, duration_minutes, status)
+                VALUES ($1, $2, $3, $4, 30, 'scheduled')
+            `), [interviewId, applicationId, dt, loc]);
+            await query(adaptQuery(`
+                UPDATE applications SET status = 'interview_scheduled', interview_datetime = $1, interview_location = $2, updated_at = NOW() WHERE id = $3
+            `), [dt, loc, applicationId]);
+        }
+        await setInterviewResponse(interviewId, 'confirmed').catch(() => {});
+        await query(adaptQuery(
+            "UPDATE applications SET status = 'interview_scheduled', updated_at = NOW() WHERE id = $1 AND status NOT IN ('hired','rejected')"
+        ), [applicationId]).catch(() => {});
+        syncCandidateStage(candidateId).catch(() => {});
+
+        const slots = projectId ? await buildCampaignDaySlots(interviewId, projectId, cfg) : [];
+        return res.json({ ok: true, interview_id: interviewId, slots });
+    } catch (err) {
+        logger.error(`campaign-confirm error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/chatbot/campaign-daypick { phone, interview_id, datetime } — the
+// candidate picked one of the walk-in days after confirming. Move the interview
+// to that day + venue, keep candidate_response='confirmed'.
+router.post('/campaign-daypick', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone, interview_id, datetime } = req.body || {};
+        if (!phone || !interview_id || !datetime) {
+            return res.status(400).json({ error: 'phone, interview_id and datetime are required' });
+        }
+        const ivRes = await query(adaptQuery(`
+            SELECT iv.id, iv.application_id, a.candidate_id, j.project_id, p.interview_config
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            LEFT JOIN projects p ON p.id = j.project_id
+            WHERE iv.id = $1
+        `), [interview_id]);
+        if (!ivRes.rows.length) return res.json({ ok: false, reason: 'interview_not_found' });
+        const iv = ivRes.rows[0];
+        const pickedDate = interviewDateOnly(datetime);
+        const days = resolveInterviewDays(iv.interview_config || {}).filter((d) => d.date);
+        const pickedDay = days.find((d) => `${d.date}T${d.time_start || '09:00'}` === datetime)
+            || days.find((d) => d.date === pickedDate);
+        const newLocation = pickedDay ? pickedDay.location : null;
+        if (pickedDay && pickedDay.capacity != null) {
+            const dayCount = await query(adaptQuery(`
+                SELECT COUNT(*)::int AS n FROM interview_schedules s
+                JOIN applications a ON s.application_id = a.id JOIN jobs j ON a.job_id = j.id
+                WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+                  AND to_char(s.scheduled_datetime,'YYYY-MM-DD') = $2 AND s.id <> $3
+            `), [iv.project_id, pickedDate, interview_id]);
+            if ((dayCount.rows[0]?.n || 0) >= Number(pickedDay.capacity)) return res.json({ ok: false, reason: 'slot_taken' });
+        }
+        await query(adaptQuery(
+            "UPDATE interview_schedules SET scheduled_datetime = $1, status = 'confirmed', location = COALESCE($3, location) WHERE id = $2"
+        ), [datetime, interview_id, newLocation]).catch(() => {});
+        await query(adaptQuery(
+            "UPDATE applications SET interview_datetime = $1, interview_location = COALESCE($3, interview_location), status = 'interview_scheduled', updated_at = NOW() WHERE id = $2"
+        ), [datetime, iv.application_id, newLocation]).catch(() => {});
+        await setInterviewResponse(interview_id, 'confirmed').catch(() => {});
+        syncCandidateStage(iv.candidate_id).catch(() => {});
+        const label = notifications.formatInterviewWallClock(datetime) + (newLocation ? ` · ${newLocation}` : '');
+        return res.json({ ok: true, label });
+    } catch (err) {
+        logger.error(`campaign-daypick error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/chatbot/campaign-refer { referrer_phone, friend_phone, friend_name }
+// "Suggest to a friend": create/find the friend candidate + an AMAYA application,
+// and return the campaign template so the chatbot can invite the friend.
+router.post('/campaign-refer', authenticateChatbot, async (req, res) => {
+    try {
+        const { referrer_phone, friend_phone, friend_name } = req.body || {};
+        if (!friend_phone) return res.status(400).json({ error: 'friend_phone is required' });
+        const friendNorm = normalizePhone(friend_phone);
+        if (!friendNorm || friendNorm.replace(/\D/g, '').length < 10) {
+            return res.json({ ok: false, reason: 'invalid_phone' });
+        }
+        if (referrer_phone && normalizePhone(referrer_phone) === friendNorm) {
+            return res.json({ ok: false, reason: 'self_referral' });
+        }
+
+        let referrerName = '';
+        let referrerCampaign = null;
+        if (referrer_phone) {
+            const rc = await findCandidateByPhone(referrer_phone, 'id, name');
+            if (rc.rows.length) {
+                referrerName = rc.rows[0].name || '';
+                referrerCampaign = await resolveCampaignForCandidate(rc.rows[0].id);
+            }
+        }
+        const remark = `Referred by ${referrerName || 'a candidate'}${referrer_phone ? ` (${normalizePhone(referrer_phone)})` : ''} via WhatsApp campaign`;
+
+        let alreadyExisted = false;
+        let friendId;
+        const existing = await findCandidateByPhone(friendNorm, 'id, name');
+        if (existing.rows.length) {
+            alreadyExisted = true;
+            friendId = existing.rows[0].id;
+        } else {
+            friendId = generateUUID();
+            const insertSQL = isMySQL
+                ? `INSERT INTO candidates (id, phone, whatsapp_phone, name, source, status, remarks, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'referral', 'new', ?, NOW(), NOW())`
+                : `INSERT INTO candidates (id, phone, whatsapp_phone, name, source, status, remarks)
+                   VALUES ($1, $2, $3, $4, 'referral', 'new', $5)`;
+            try {
+                await query(insertSQL, [friendId, friendNorm, friendNorm, (friend_name || '').trim() || friendNorm, remark]);
+            } catch (e) {
+                if (!isDuplicateConstraintError(e)) throw e;
+                const again = await findCandidateByPhone(friendNorm, 'id, name');
+                friendId = again.rows[0]?.id;
+                alreadyExisted = true;
+            }
+        }
+        if (!friendId) return res.json({ ok: false, reason: 'create_failed' });
+
+        const camp = referrerCampaign || await resolveCampaignForCandidate(friendId);
+        if (camp && camp.target_job_id) {
+            await query(adaptQuery(`
+                INSERT INTO applications (id, candidate_id, job_id, status, applied_at)
+                VALUES ($1, $2, $3, 'screening', NOW())
+                ON CONFLICT (candidate_id, job_id) DO NOTHING
+            `), [generateUUID(), friendId, camp.target_job_id]).catch(() => {});
+            syncCandidateStage(friendId).catch(() => {});
+        }
+        // Tie the friend to this campaign so their own taps resolve back to it and
+        // a later bulk run treats them as already contacted.
+        if (camp && camp.id) {
+            await query(adaptQuery(`
+                INSERT INTO campaign_recipients (campaign_id, candidate_id, phone, status, reason, sent_at)
+                VALUES ($1, $2, $3, 'sent', 'referral', NOW())
+                ON CONFLICT (campaign_id, candidate_id) DO NOTHING
+            `), [camp.id, friendId, friendNorm]).catch(() => {});
+        }
+        await logAgentAction({ candidateId: friendId, agentId: null, actionType: 'note', remark }).catch(() => {});
+
+        return res.json({
+            ok: true,
+            friend_candidate_id: friendId,
+            already_existed: alreadyExisted,
+            template_name: camp?.template_name || null,
+            language: camp?.language || 'en',
+        });
+    } catch (err) {
+        logger.error(`campaign-refer error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;

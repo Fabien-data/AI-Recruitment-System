@@ -1595,6 +1595,72 @@ async function applyMigrations() {
         '062 idx_bulk_interview_sends_creator'
     );
 
+    // ── Migration 063: bulk campaign (mass template blast) header ─────────────
+    // One row per campaign run. excluded_project_ids is the set of projects whose
+    // candidates are filtered OUT of the recipient universe. target_project_id /
+    // target_job_id are where a "Confirm my slot" tap creates the application +
+    // interview. daily_cap bounds how many template sends go out per rolling day
+    // (Meta messaging-tier safety). Counters + delivery_summary are the live
+    // rollup the progress UI polls.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name                 TEXT,
+            template_name        TEXT,
+            language             VARCHAR(12) DEFAULT 'en',
+            target_project_id    UUID,
+            target_job_id        UUID,
+            target_job_id_female UUID,
+            excluded_project_ids JSONB DEFAULT '[]'::jsonb,
+            status               VARCHAR(20) NOT NULL DEFAULT 'draft',
+            total                INTEGER NOT NULL DEFAULT 0,
+            sent                 INTEGER NOT NULL DEFAULT 0,
+            queued               INTEGER NOT NULL DEFAULT 0,
+            failed               INTEGER NOT NULL DEFAULT 0,
+            skipped              INTEGER NOT NULL DEFAULT 0,
+            daily_cap            INTEGER,
+            sent_today           INTEGER NOT NULL DEFAULT 0,
+            send_day             DATE,
+            delivery_summary     JSONB DEFAULT '{}'::jsonb,
+            last_error           TEXT,
+            created_by           UUID,
+            created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `, '063 campaigns table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status, created_at DESC)`,
+        '063 idx_campaigns_status'
+    );
+
+    // ── Migration 064: per-recipient campaign delivery ledger ─────────────────
+    // The send worker walks pending rows; UNIQUE(campaign_id, candidate_id) + the
+    // status guard make it idempotent and resumable (a re-run never double-sends).
+    // A button tap resolves its campaign via the candidate's most-recent row here.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS campaign_recipients (
+            id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            campaign_id         UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+            candidate_id        UUID NOT NULL,
+            phone               TEXT,
+            status              VARCHAR(16) NOT NULL DEFAULT 'pending',
+            reason              VARCHAR(32),
+            whatsapp_message_id TEXT,
+            attempts            INTEGER NOT NULL DEFAULT 0,
+            sent_at             TIMESTAMPTZ,
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (campaign_id, candidate_id)
+        )
+    `, '064 campaign_recipients table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_campaign_recipients_pending ON campaign_recipients(campaign_id, status)`,
+        '064 idx_campaign_recipients_pending'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_campaign_recipients_candidate ON campaign_recipients(candidate_id, created_at DESC)`,
+        '064 idx_campaign_recipients_candidate'
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 
