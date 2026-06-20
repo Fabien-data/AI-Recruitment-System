@@ -117,6 +117,28 @@ router.post('/', authenticate, requireSection('control_tower', 'edit'), async (r
     } catch (err) { next(err); }
 });
 
+// ── GET /templates — approved, ZERO-VARIABLE templates for the blast dropdown ─
+// MUST be declared before GET /:id, else Express matches "/templates" as :id.
+// Proxies the chatbot (holds the working Meta token + WABA id). Static-only: a
+// template with body variables can't be filled from a bare phone list.
+router.get('/templates', authenticate, requireSection('control_tower', 'view'), async (req, res, next) => {
+    try {
+        const base = process.env.CHATBOT_API_URL;
+        const key = process.env.CHATBOT_API_KEY;
+        if (!base || !key) return res.status(503).json({ error: 'chatbot not configured', templates: [] });
+        const resp = await axios.get(`${base.replace(/\/$/, '')}/webhook/templates`, {
+            headers: { 'x-chatbot-api-key': key },
+            timeout: 15000,
+        });
+        const all = (resp.data && resp.data.templates) || [];
+        const usable = all.filter((t) => String(t.status).toUpperCase() === 'APPROVED' && Number(t.variable_count || 0) === 0);
+        res.json({ templates: usable, all });
+    } catch (err) {
+        logger.warn(`campaign templates fetch failed: ${err.message}`);
+        res.status(502).json({ error: 'could not fetch templates from chatbot', templates: [] });
+    }
+});
+
 // ── GET /:id — live status (recompute rollup so the UI is always current) ─────
 router.get('/:id', authenticate, requireSection('control_tower', 'view'), async (req, res, next) => {
     try {
@@ -168,27 +190,6 @@ function classifyPhones(rawPhones) {
     }
     return { valid, invalid, duplicates };
 }
-
-// ── GET /templates — approved, ZERO-VARIABLE templates for the blast dropdown ─
-// Proxies the chatbot (which holds the working Meta token + WABA id). Static-only
-// blasts: a template with body variables can't be filled from a bare phone list.
-router.get('/templates', authenticate, requireSection('control_tower', 'view'), async (req, res, next) => {
-    try {
-        const base = process.env.CHATBOT_API_URL;
-        const key = process.env.CHATBOT_API_KEY;
-        if (!base || !key) return res.status(503).json({ error: 'chatbot not configured', templates: [] });
-        const resp = await axios.get(`${base.replace(/\/$/, '')}/webhook/templates`, {
-            headers: { 'x-chatbot-api-key': key },
-            timeout: 15000,
-        });
-        const all = (resp.data && resp.data.templates) || [];
-        const usable = all.filter((t) => String(t.status).toUpperCase() === 'APPROVED' && Number(t.variable_count || 0) === 0);
-        res.json({ templates: usable, all });
-    } catch (err) {
-        logger.warn(`campaign templates fetch failed: ${err.message}`);
-        res.status(502).json({ error: 'could not fetch templates from chatbot', templates: [] });
-    }
-});
 
 // ── POST /preview-numbers — dry-run classify a phone list (no writes) ─────────
 router.post('/preview-numbers', authenticate, requireSection('control_tower', 'edit'), async (req, res, next) => {
