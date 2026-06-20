@@ -1910,7 +1910,7 @@ export default function Communications() {
                   type="button"
                   onClick={() => setCsvBlastOpen(true)}
                   title="CSV blast — upload phone numbers + send an approved template to all of them"
-                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-500 text-white hover:bg-indigo-600 transition-colors"
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
                 >
                   <Upload size={12} /> CSV Blast
                 </button>
