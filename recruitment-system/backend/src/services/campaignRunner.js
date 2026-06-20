@@ -30,6 +30,7 @@ const THROTTLE_MS = 150;            // pause between sends (rate-limit / quality
 const BATCH = 25;                   // recipients pulled per loop iteration
 const AUTOPAUSE_CONSECUTIVE = 25;   // consecutive infra failures → auto-pause
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000; // re-kick stuck/next-day campaigns every 10 min
+const MAX_ATTEMPTS = 3;             // transient failures auto-retry up to this many sends
 
 const running = new Set();          // campaign ids currently being processed (in-proc guard)
 
@@ -112,6 +113,23 @@ async function processCampaign(campaignId) {
             `), [campaignId]);
 
             if (rRes.rows.length === 0) {
+                // Before finishing, auto-retry transient failures (rate_limited /
+                // token_expired / other) under the per-recipient attempt cap — the
+                // "every message attempted" guarantee. attempts increments on each
+                // send, so this converges (no infinite loop). Permanent reasons
+                // (no_whatsapp / no_phone) are never re-queued.
+                const rq = await query(adaptQuery(`
+                    UPDATE campaign_recipients SET status = 'pending', reason = NULL
+                    WHERE campaign_id = $1 AND status = 'failed'
+                      AND COALESCE(reason,'other') IN ('rate_limited','token_expired','other')
+                      AND attempts < ${MAX_ATTEMPTS}
+                `), [campaignId]);
+                if (Number(rq.rowCount || 0) > 0) {
+                    logger.info(`campaign ${campaignId}: re-queued ${rq.rowCount} transient failures for retry`);
+                    await rollup(campaignId);
+                    await sleep(2000); // brief backoff before the retry pass
+                    continue;          // loop again to drain the re-queued rows
+                }
                 await query(adaptQuery(
                     "UPDATE campaigns SET status = 'done', updated_at = NOW() WHERE id = $1 AND status = 'sending'"
                 ), [campaignId]);

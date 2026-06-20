@@ -58,4 +58,27 @@ function phoneVariants(raw) {
     return out;
 }
 
-module.exports = { normalizePhone, phoneVariants };
+/**
+ * Tolerant normaliser for messy spreadsheet/CSV cells (same intent as the
+ * bulk-import parser): splits a cell that holds several numbers ("0771234567 /
+ * 0712345678"), and re-adds a leading zero dropped by Excel number formatting on
+ * 9-digit Sri Lankan mobiles ("766379024" → "0766379024"). Returns the first
+ * segment that normalises to E.164, else null. The strict normalizePhone keeps
+ * its contract for WhatsApp intake; this is only for bulk CSV ingestion.
+ */
+function parseLoosePhone(raw) {
+    if (raw == null) return null;
+    const segments = String(raw).split(/[/,;|\n]+/).map((s) => s.trim()).filter(Boolean);
+    for (const seg of segments) {
+        const direct = normalizePhone(seg);
+        if (direct) return direct;
+        const d = seg.replace(/\D/g, '');
+        if (d.length === 9) {
+            const withZero = normalizePhone('0' + d);
+            if (withZero) return withZero;
+        }
+    }
+    return null;
+}
+
+module.exports = { normalizePhone, phoneVariants, parseLoosePhone };

@@ -26,7 +26,7 @@ import {
   Mic, Square, Trash2, Paperclip, Wand2,
   SlidersHorizontal, ChevronDown, X as XIcon,
   FileText, Download, Eye, Image as ImageIcon,
-  FolderKanban, Tag, UserPlus, List, Maximize2, Megaphone,
+  FolderKanban, Tag, UserPlus, List, Maximize2, Megaphone, Upload,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { categoryColor } from '../utils/categoryColor'
@@ -40,6 +40,7 @@ import { getCommunications, sendCommunication, getCandidate, getMyPreferences, u
 import { useAuthStore, useSectionAccess } from '../stores/authStore'
 import { notify } from '../components/ui/Toast'
 import { CampaignDialog } from '../components/communications/CampaignDialog'
+import { CsvCampaignDialog } from '../components/communications/CsvCampaignDialog'
 import { ConversationDocumentsPanel } from '../components/communications/ConversationDocumentsPanel'
 import { JobDrawer } from '../components/communications/JobDrawer'
 import { CallPresenceToggle } from '../components/communications/CallPresenceToggle'
@@ -710,6 +711,7 @@ export default function Communications() {
   const [incomingCall, setIncomingCall] = useState(null)
   const [addCandidateOpen, setAddCandidateOpen] = useState(false)
   const [campaignOpen, setCampaignOpen] = useState(false)
+  const [csvBlastOpen, setCsvBlastOpen] = useState(false)
   // Mass-send is a control-tower action (admin + sourcing only).
   const canCampaign = useSectionAccess('control_tower', 'edit')
   const [message, setMessage] = useState('')
@@ -1903,6 +1905,16 @@ export default function Communications() {
                   <Megaphone size={12} /> Campaign
                 </button>
               )}
+              {canCampaign && (
+                <button
+                  type="button"
+                  onClick={() => setCsvBlastOpen(true)}
+                  title="CSV blast — upload phone numbers + send an approved template to all of them"
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold bg-indigo-500 text-white hover:bg-indigo-600 transition-colors"
+                >
+                  <Upload size={12} /> CSV Blast
+                </button>
+              )}
               <span
                 className={clsx(
                   'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset',
@@ -1929,6 +1941,12 @@ export default function Communications() {
               open={campaignOpen}
               onClose={() => setCampaignOpen(false)}
               projects={projectList}
+            />
+          )}
+          {canCampaign && (
+            <CsvCampaignDialog
+              open={csvBlastOpen}
+              onClose={() => setCsvBlastOpen(false)}
             />
           )}
           {/* At-a-glance counts — TRUE aggregates from the counts endpoint (the

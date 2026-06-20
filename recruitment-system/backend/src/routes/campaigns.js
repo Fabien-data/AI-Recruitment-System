@@ -14,11 +14,13 @@
  */
 
 const express = require('express');
+const axios = require('axios');
 const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
 const { requireSection } = require('../middleware/sections');
+const { parseLoosePhone } = require('../utils/phone');
 const logger = require('../utils/logger');
 const campaignRunner = require('../services/campaignRunner');
 
@@ -142,6 +144,145 @@ router.post('/:id/resume', authenticate, requireSection('control_tower', 'edit')
         ), [req.params.id]);
         campaignRunner.kickCampaign(req.params.id);
         res.json({ ok: true });
+    } catch (err) { next(err); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CSV BULK BLAST — upload arbitrary phone numbers, pick an approved Meta template,
+// send to every number. Recipients are raw phones (candidate_id NULL); delivery
+// receipts land on each recipient via /status-sync (migration 065).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Normalise + de-dupe a raw phone list. Returns { valid:[E.164…], invalid, duplicates }.
+function classifyPhones(rawPhones) {
+    const seen = new Set();
+    const valid = [];
+    let invalid = 0;
+    let duplicates = 0;
+    for (const raw of rawPhones) {
+        const norm = parseLoosePhone(raw);
+        if (!norm) { invalid += 1; continue; }
+        if (seen.has(norm)) { duplicates += 1; continue; }
+        seen.add(norm);
+        valid.push(norm);
+    }
+    return { valid, invalid, duplicates };
+}
+
+// ── GET /templates — approved, ZERO-VARIABLE templates for the blast dropdown ─
+// Proxies the chatbot (which holds the working Meta token + WABA id). Static-only
+// blasts: a template with body variables can't be filled from a bare phone list.
+router.get('/templates', authenticate, requireSection('control_tower', 'view'), async (req, res, next) => {
+    try {
+        const base = process.env.CHATBOT_API_URL;
+        const key = process.env.CHATBOT_API_KEY;
+        if (!base || !key) return res.status(503).json({ error: 'chatbot not configured', templates: [] });
+        const resp = await axios.get(`${base.replace(/\/$/, '')}/webhook/templates`, {
+            headers: { 'x-chatbot-api-key': key },
+            timeout: 15000,
+        });
+        const all = (resp.data && resp.data.templates) || [];
+        const usable = all.filter((t) => String(t.status).toUpperCase() === 'APPROVED' && Number(t.variable_count || 0) === 0);
+        res.json({ templates: usable, all });
+    } catch (err) {
+        logger.warn(`campaign templates fetch failed: ${err.message}`);
+        res.status(502).json({ error: 'could not fetch templates from chatbot', templates: [] });
+    }
+});
+
+// ── POST /preview-numbers — dry-run classify a phone list (no writes) ─────────
+router.post('/preview-numbers', authenticate, requireSection('control_tower', 'edit'), async (req, res, next) => {
+    try {
+        const phones = Array.isArray(req.body?.phones) ? req.body.phones : [];
+        const { valid, invalid, duplicates } = classifyPhones(phones);
+        res.json({ total: phones.length, valid: valid.length, invalid, duplicates, sample: valid.slice(0, 8) });
+    } catch (err) { next(err); }
+});
+
+// ── POST /from-csv — create a CSV blast, snapshot numbers, kick the runner ────
+router.post('/from-csv', authenticate, requireSection('control_tower', 'edit'), async (req, res, next) => {
+    try {
+        const { name, template_name, language = 'en', daily_cap, phones } = req.body || {};
+        if (!template_name) return res.status(400).json({ error: 'template_name is required' });
+        const list = Array.isArray(phones) ? phones : [];
+        if (list.length === 0) return res.status(400).json({ error: 'phones array is required' });
+        if (list.length > 60000) return res.status(413).json({ error: 'too many numbers in one blast (max 60000)' });
+
+        const { valid, invalid, duplicates } = classifyPhones(list);
+        if (valid.length === 0) return res.status(400).json({ error: 'no valid phone numbers found', invalid_count: invalid });
+
+        const cap = Number.isFinite(Number(daily_cap)) && Number(daily_cap) > 0
+            ? Math.floor(Number(daily_cap)) : DEFAULT_DAILY_CAP;
+
+        const id = generateUUID();
+        await query(adaptQuery(`
+            INSERT INTO campaigns (id, name, template_name, language, status, daily_cap, source, created_by)
+            VALUES ($1, $2, $3, $4, 'sending', $5, 'csv', $6)
+        `), [id, name || 'CSV blast', template_name, language || 'en', cap, req.user.id]);
+
+        // De-duped `valid` + a fresh campaign_id → one UNNEST insert, no ON CONFLICT.
+        await query(
+            `INSERT INTO campaign_recipients (campaign_id, phone, status)
+             SELECT $1, p, 'pending' FROM unnest($2::text[]) AS p`,
+            [id, valid]
+        );
+        await query(adaptQuery('UPDATE campaigns SET total = $1, updated_at = NOW() WHERE id = $2'), [valid.length, id]);
+        campaignRunner.kickCampaign(id);
+
+        logger.info(`CSV campaign ${id} by ${req.user.id}: ${valid.length} numbers (invalid ${invalid}, dup ${duplicates}), cap ${cap}, template ${template_name}`);
+        res.status(201).json({ campaign_id: id, total: valid.length, invalid_count: invalid, duplicate_count: duplicates, daily_cap: cap });
+    } catch (err) { next(err); }
+});
+
+// ── GET /:id/delivery — true receipt breakdown (sent/delivered/read/failed) ───
+router.get('/:id/delivery', authenticate, requireSection('control_tower', 'view'), async (req, res, next) => {
+    try {
+        const r = await query(adaptQuery(`
+            SELECT
+              COUNT(*)::int AS total,
+              SUM(CASE WHEN status='pending'  THEN 1 ELSE 0 END)::int AS pending,
+              SUM(CASE WHEN status='sent'     THEN 1 ELSE 0 END)::int AS sent,
+              SUM(CASE WHEN status='failed'   THEN 1 ELSE 0 END)::int AS failed,
+              SUM(CASE WHEN status='skipped'  THEN 1 ELSE 0 END)::int AS skipped,
+              SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END)::int AS delivered,
+              SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END)::int AS read
+            FROM campaign_recipients WHERE campaign_id = $1
+        `), [req.params.id]);
+        res.json(r.rows[0] || {});
+    } catch (err) { next(err); }
+});
+
+// ── GET /:id/failures — rows that failed / weren't delivered (for a CSV export)
+router.get('/:id/failures', authenticate, requireSection('control_tower', 'view'), async (req, res, next) => {
+    try {
+        const r = await query(adaptQuery(`
+            SELECT phone, status, reason, sent_at, delivered_at
+            FROM campaign_recipients
+            WHERE campaign_id = $1
+              AND (status IN ('failed','skipped') OR (status='sent' AND delivered_at IS NULL))
+            ORDER BY status, phone
+            LIMIT 50000
+        `), [req.params.id]);
+        res.json({ rows: r.rows });
+    } catch (err) { next(err); }
+});
+
+// ── POST /:id/retry-failed — re-queue transient failures (bounded by attempts) ─
+router.post('/:id/retry-failed', authenticate, requireSection('control_tower', 'edit'), async (req, res, next) => {
+    try {
+        const r = await query(adaptQuery(`
+            UPDATE campaign_recipients
+            SET status = 'pending', reason = NULL
+            WHERE campaign_id = $1 AND status = 'failed'
+              AND COALESCE(reason,'other') IN ('rate_limited','token_expired','other')
+              AND attempts < 3
+        `), [req.params.id]);
+        const requeued = Number(r.rowCount || 0);
+        if (requeued > 0) {
+            await query(adaptQuery("UPDATE campaigns SET status = 'sending', last_error = NULL, updated_at = NOW() WHERE id = $1 AND status IN ('done','paused')"), [req.params.id]);
+            campaignRunner.kickCampaign(req.params.id);
+        }
+        res.json({ requeued });
     } catch (err) { next(err); }
 });
 

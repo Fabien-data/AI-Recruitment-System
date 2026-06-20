@@ -758,6 +758,27 @@ router.post('/status-sync', authenticateChatbot, async (req, res, next) => {
         const updateResult = await query(updateSql, updateParams);
         const updatedRows = Number(updateResult.rowCount || 0);
 
+        // Also land the receipt on the campaign recipient row (CSV/candidate blasts)
+        // so the campaign delivery report shows TRUE delivered/read, not just "sent".
+        // Best-effort: a non-campaign message simply matches nothing here.
+        try {
+            if (normalizedStatus === 'delivered') {
+                await query(adaptQuery(
+                    "UPDATE campaign_recipients SET delivered_at = COALESCE(delivered_at, NOW()) WHERE whatsapp_message_id = $1"
+                ), [whatsapp_message_id]);
+            } else if (normalizedStatus === 'read') {
+                await query(adaptQuery(
+                    "UPDATE campaign_recipients SET read_at = COALESCE(read_at, NOW()), delivered_at = COALESCE(delivered_at, NOW()) WHERE whatsapp_message_id = $1"
+                ), [whatsapp_message_id]);
+            } else if (normalizedStatus === 'failed') {
+                await query(adaptQuery(
+                    "UPDATE campaign_recipients SET status = 'failed', reason = COALESCE(reason, 'undelivered') WHERE whatsapp_message_id = $1 AND status = 'sent'"
+                ), [whatsapp_message_id]);
+            }
+        } catch (crErr) {
+            logger.warn(`status-sync campaign_recipients update skipped: ${crErr.message}`);
+        }
+
         return res.json({
             success: true,
             status: normalizedStatus,

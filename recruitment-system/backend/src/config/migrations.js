@@ -1661,6 +1661,32 @@ async function applyMigrations() {
         '064 idx_campaign_recipients_candidate'
     );
 
+    // ── Migration 065: CSV bulk-blast source + per-recipient delivery receipts ─
+    // A campaign can target an uploaded CSV of raw phone numbers (source='csv')
+    // rather than the candidate universe, so candidate_id may be NULL. delivered_at
+    // / read_at land Meta's status callbacks (via /status-sync) onto each recipient
+    // so the delivery report is TRUE receipt data, not just "API-accepted".
+    await safeAlter(
+        `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS source VARCHAR(16) DEFAULT 'candidates'`,
+        '065 campaigns.source'
+    );
+    await safeAlter(
+        `ALTER TABLE campaign_recipients ALTER COLUMN candidate_id DROP NOT NULL`,
+        '065 campaign_recipients.candidate_id nullable'
+    );
+    await safeAlter(
+        `ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ`,
+        '065 campaign_recipients.delivered_at'
+    );
+    await safeAlter(
+        `ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ`,
+        '065 campaign_recipients.read_at'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_campaign_recipients_waid ON campaign_recipients(whatsapp_message_id)`,
+        '065 idx_campaign_recipients_waid'
+    );
+
     logger.info('✅ Startup migrations complete.');
 }
 

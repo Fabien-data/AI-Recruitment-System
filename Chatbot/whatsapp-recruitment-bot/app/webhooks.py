@@ -2165,6 +2165,34 @@ async def campaign_send_webhook(
         return {"status": "failed", "reason": "other", "detail": str(e)}
 
 
+@router.get("/templates")
+async def list_templates_webhook(x_chatbot_api_key: Optional[str] = Header(None)):
+    """
+    GET /webhook/templates
+    List this WhatsApp Business Account's message templates for the campaign / CSV
+    blast template picker. Each entry carries name/status/category/language plus a
+    `variable_count` (the BODY component's highest {{n}}) so the backend can offer
+    only zero-variable templates for a static blast. Api-key gated.
+    """
+    _require_api_key_webhook(x_chatbot_api_key)
+    raw = await meta_client.list_message_templates()
+    out = []
+    for t in (raw.get("data") or []):
+        var_count = 0
+        for comp in (t.get("components") or []):
+            if str(comp.get("type", "")).upper() == "BODY":
+                nums = re.findall(r"\{\{\s*(\d+)\s*\}\}", comp.get("text", "") or "")
+                var_count = max([int(n) for n in nums], default=0)
+        out.append({
+            "name": t.get("name"),
+            "status": t.get("status"),
+            "category": t.get("category"),
+            "language": t.get("language"),
+            "variable_count": var_count,
+        })
+    return {"templates": out}
+
+
 class AgentMessagePayload(BaseModel):
     """An agent's free-form reply (typed in the recruitment dashboard), to be sent
     on the chatbot's WhatsApp identity — the working token. The backend used to

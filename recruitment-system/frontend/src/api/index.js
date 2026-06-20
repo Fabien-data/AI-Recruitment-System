@@ -150,6 +150,25 @@ export const pauseCampaign = (id) =>
 export const resumeCampaign = (id) =>
   apiClient.post(`/api/communications/campaigns/${id}/resume`).then(res => res.data)
 
+// ── CSV bulk blast (upload numbers → pick template → send to all) ────────────
+export const listCampaignTemplates = () =>
+  apiClient.get('/api/communications/campaigns/templates').then(res => res.data)
+
+export const previewCampaignNumbers = (phones) =>
+  apiClient.post('/api/communications/campaigns/preview-numbers', { phones }).then(res => res.data)
+
+export const createCsvCampaign = (data) =>
+  apiClient.post('/api/communications/campaigns/from-csv', data).then(res => res.data)
+
+export const getCampaignDelivery = (id) =>
+  apiClient.get(`/api/communications/campaigns/${id}/delivery`).then(res => res.data)
+
+export const getCampaignFailures = (id) =>
+  apiClient.get(`/api/communications/campaigns/${id}/failures`).then(res => res.data)
+
+export const retryCampaignFailed = (id) =>
+  apiClient.post(`/api/communications/campaigns/${id}/retry-failed`).then(res => res.data)
+
 export const createJob = (data) =>
   apiClient.post('/api/jobs', data).then(res => res.data)
 

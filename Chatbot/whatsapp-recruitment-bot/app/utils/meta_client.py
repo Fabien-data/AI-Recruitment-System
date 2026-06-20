@@ -97,6 +97,10 @@ class MetaWhatsAppClient:
         return settings.meta_api_version
 
     @property
+    def whatsapp_business_account_id(self):
+        return settings.meta_whatsapp_business_account_id
+
+    @property
     def base_url(self):
         return f"https://graph.facebook.com/{self.api_version}"
 
@@ -339,7 +343,29 @@ class MetaWhatsAppClient:
                 f"reason={err.get('reason')} msg={err.get('error')!r}"
             )
             return err
-    
+
+    async def list_message_templates(self) -> Dict[str, Any]:
+        """List this WABA's message templates (for the campaign template picker).
+        Returns the raw Graph response {"data": [...]} or a classified error dict.
+        Each template carries name/status/category/language/components — the BODY
+        component's {{n}} count is the variable count."""
+        waba = self.whatsapp_business_account_id
+        if not waba:
+            return {"error": "META_WHATSAPP_BUSINESS_ACCOUNT_ID not set", "data": []}
+        url = f"{self.base_url}/{waba}/message_templates"
+        params = {"fields": "name,status,category,language,components", "limit": 200}
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url, headers=self._whatsapp_headers(), params=params, timeout=30.0
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            err = _classify_meta_error(e)
+            logger.error(f"Failed to list templates: code={err.get('code')} reason={err.get('reason')}")
+            return {**err, "data": []}
+
     async def download_media(self, media_id: str) -> Optional[bytes]:
         """
         Download media file from Meta asynchronously.
