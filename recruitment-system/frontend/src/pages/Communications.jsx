@@ -1868,11 +1868,11 @@ export default function Communications() {
       <div className="w-80 shrink-0 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col">
         {/* Header */}
         <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/60">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex flex-wrap items-center justify-between gap-y-2 mb-3">
             <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-primary-700 to-indigo-600 dark:from-primary-300 dark:to-indigo-300 bg-clip-text text-transparent">
               Conversations
             </h1>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
               <button
                 type="button"
                 onClick={() => setCompactFilters((v) => !v)}
