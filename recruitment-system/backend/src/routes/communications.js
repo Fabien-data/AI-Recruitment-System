@@ -22,7 +22,7 @@ const { adaptQuery } = require('../utils/query-adapter');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
 const { requireSection } = require('../middleware/sections');
-const { normalizePhone } = require('../utils/phone');
+const { normalizePhone, phoneVariants } = require('../utils/phone');
 const logger = require('../utils/logger');
 const { uploadToGCS } = require('../utils/gcs-upload');
 const { setCandidateStage, emitStageChanged } = require('../services/candidate-stage');
@@ -344,6 +344,57 @@ router.get('/history/:phone', authenticate, requireSection('communications', 'vi
                 timestamp: m.sent_at,
             })),
         });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── GET /api/communications/resolve?phone=… ──────────────────────────────────
+// Resolve a phone number (in ANY format: +94…, 94…, 0…) to a candidate id, using
+// the canonical phoneVariants matcher — the SAME matcher the 3CX webhook uses, so
+// lookups never diverge. Powers the 3CX screen-pop deep-link
+// (/communications?phoneNumber=<caller>): 3CX only ever knows the caller's number,
+// never our internal candidate UUID, so it cannot build a ?candidate= link.
+// Read-only; same auth + section guard as the rest of Messages. Removed candidates
+// are excluded, and the most-recently-updated match wins when a number is shared.
+router.get('/resolve', authenticate, requireSection('communications', 'view'), async (req, res, next) => {
+    try {
+        const rawPhone = String(req.query.phone || '').trim();
+        if (!rawPhone) {
+            return res.status(400).json({ error: 'phone is required' });
+        }
+
+        const variants = phoneVariants(rawPhone);
+        if (variants.length === 0) {
+            return res.status(404).json({ error: 'not_found' });
+        }
+
+        let result;
+        if (isMySQL) {
+            const placeholders = variants.map(() => '?').join(',');
+            result = await query(
+                `SELECT id FROM candidates
+                  WHERE (phone IN (${placeholders}) OR whatsapp_phone IN (${placeholders}))
+                    AND removed_at IS NULL
+                  ORDER BY updated_at DESC
+                  LIMIT 1`,
+                [...variants, ...variants]
+            );
+        } else {
+            result = await query(
+                `SELECT id FROM candidates
+                  WHERE (phone = ANY($1) OR whatsapp_phone = ANY($1))
+                    AND removed_at IS NULL
+                  ORDER BY updated_at DESC
+                  LIMIT 1`,
+                [variants]
+            );
+        }
+
+        if (!result.rows.length) {
+            return res.status(404).json({ error: 'not_found' });
+        }
+        return res.json({ candidate_id: result.rows[0].id });
     } catch (error) {
         next(error);
     }

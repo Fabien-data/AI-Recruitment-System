@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuthStore, ROLES } from '../stores/authStore'
 import { Button } from '../components/ui/Button'
@@ -14,6 +14,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const login = useAuthStore((state) => state.login)
   const navigate = useNavigate()
+  const location = useLocation()
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -21,8 +22,14 @@ export default function Login() {
     try {
       const user = await login(email, password)
       notify.success({ title: 'Welcome back', message: 'Login successful.' })
+      // If we were deep-linked here (e.g. a 3CX screen-pop to a protected URL with
+      // an expired session), return to that exact URL incl. its query string.
+      const from = location.state?.from
+      const fromPath = from?.pathname && from.pathname !== '/login' && from.pathname !== '/register'
+        ? `${from.pathname}${from.search || ''}${from.hash || ''}`
+        : null
       // Admins land on the Admin Dashboard; everyone else on the Overview (B018).
-      navigate(user?.role === ROLES.ADMIN ? '/admin' : '/', { replace: true })
+      navigate(fromPath || (user?.role === ROLES.ADMIN ? '/admin' : '/'), { replace: true })
     } catch (error) {
       notify.error(error.response?.data?.error || 'Login failed')
     } finally {

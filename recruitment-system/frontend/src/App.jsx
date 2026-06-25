@@ -68,7 +68,11 @@ class ErrorBoundary extends Component {
 
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuthStore()
-  return isAuthenticated ? children : <Navigate to="/login" replace />
+  const location = useLocation()
+  // Preserve the intended URL (incl. query string) so deep-links survive the login
+  // redirect — e.g. a 3CX screen-pop to /communications?phoneNumber=… opened in a
+  // tab with an expired session lands back on the right chat after sign-in.
+  return isAuthenticated ? children : <Navigate to="/login" replace state={{ from: location }} />
 }
 
 // Wrap each route in a per-pathname boundary so a crash on one page can be
