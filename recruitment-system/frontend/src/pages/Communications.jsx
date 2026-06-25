@@ -1036,22 +1036,32 @@ export default function Communications() {
     }
   }, [searchParams])
 
-  // Mirror the open chat into the URL (?candidate=) so leaving Messages (e.g. to
-  // CV Manager full page, Candidates, etc.) and coming back restores the exact
-  // conversation the agent was working — they never lose their place.
+  // Tracks the candidate id opened via a 3CX phone deep-link, so the URL mirror
+  // below keeps the readable ?phoneNumber=<caller> form instead of the candidate UUID.
+  const phoneRoutedRef = useRef('')
+
+  // Mirror the open chat into the URL so leaving Messages (e.g. to CV Manager,
+  // Candidates, etc.) and coming back restores the exact conversation — they never
+  // lose their place. Normally that's ?candidate=<id>; but a chat opened from a 3CX
+  // phone deep-link KEEPS its readable ?phoneNumber=<caller> URL until the agent
+  // switches to a different chat.
   useEffect(() => {
+    if (!selectedId) return
+    const phoneParam = searchParams.get('phoneNumber') || searchParams.get('phone')
+    if (phoneParam && phoneRoutedRef.current === selectedId) return // keep ?phoneNumber=
     const current = searchParams.get('candidate') || ''
-    if (selectedId && selectedId !== current) {
-      const next = new URLSearchParams(searchParams)
-      next.set('candidate', selectedId)
-      setSearchParams(next, { replace: true })
-    }
+    if (selectedId === current && !phoneParam) return
+    const next = new URLSearchParams(searchParams)
+    next.set('candidate', selectedId)
+    next.delete('phoneNumber'); next.delete('phone')
+    setSearchParams(next, { replace: true })
   }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 3CX screen-pop deep-link: /communications?phoneNumber=<caller> (also accepts
   // ?phone=). 3CX only knows the caller's number, never our candidate UUID, so it
-  // cannot build a ?candidate= link. Resolve the number → open that chat → normalise
-  // the URL to ?candidate= so the rest of the page behaves like any normal deep-link.
+  // cannot build a ?candidate= link. Resolve the number → open that chat, and KEEP
+  // the readable ?phoneNumber=<caller> in the URL (the mirror effect won't flip it to
+  // the candidate UUID for a phone-opened chat). On no-match we drop the param + toast.
   // phoneLinkRef tracks the handled value so a fresh pop (new number, same tab) is
   // re-resolved, while in-flight/duplicate searchParams changes don't double-fire.
   const phoneLinkRef = useRef('')
@@ -1083,9 +1093,15 @@ export default function Communications() {
       try {
         const { candidate_id } = await resolveCandidateByPhone(thisPhone)
         if (phoneLinkRef.current !== thisPhone) return
-        if (candidate_id) setSelectedId(candidate_id)
-        stripPhone(candidate_id ? (p) => p.set('candidate', candidate_id) : undefined)
-        if (!candidate_id) notify.error({ title: 'No candidate found', message: `No chat matches ${thisPhone}.` })
+        if (candidate_id) {
+          // Open the chat but KEEP the readable ?phoneNumber= in the URL — the mirror
+          // effect leaves it as-is for this candidate (it won't flip to the UUID).
+          phoneRoutedRef.current = candidate_id
+          setSelectedId(candidate_id)
+        } else {
+          stripPhone()
+          notify.error({ title: 'No candidate found', message: `No chat matches ${thisPhone}.` })
+        }
       } catch (err) {
         if (phoneLinkRef.current !== thisPhone) return
         stripPhone()
