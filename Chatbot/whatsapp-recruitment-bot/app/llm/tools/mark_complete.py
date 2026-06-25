@@ -48,6 +48,15 @@ async def handle_mark_complete(args: Dict[str, Any], ctx) -> Dict[str, Any]:
     from app.services.sync_validator import sync_validator
     from app.services.recruitment_sync import recruitment_sync
 
+    # Safety net: backfill any details the per-turn tools missed (e.g. summed
+    # multi-stint experience, licenses, employers) from the transcript before
+    # the final validation + sync. Best-effort — never blocks completion.
+    try:
+        from app.services.profile_extractor import backfill as _profile_backfill
+        await _profile_backfill(ctx.candidate, ctx.db, state)
+    except Exception as exc:    # noqa: BLE001
+        logger.debug("profile backfill skipped: %s", exc)
+
     validation = await sync_validator.validate(ctx.candidate, ctx.db)
     state["validation"] = validation.model_dump()
 

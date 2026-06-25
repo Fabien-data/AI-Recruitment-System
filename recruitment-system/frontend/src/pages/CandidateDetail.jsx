@@ -1,15 +1,19 @@
 ﻿import { useParams, Link } from 'react-router-dom'
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getCandidate, uploadCandidatePhoto } from '../api'
-import { ArrowLeft, User, Mail, Phone, FileText, Briefcase, MessageSquare, ClipboardList, CheckSquare, Square, Download, Camera, FolderKanban, Globe } from 'lucide-react'
+import { ArrowLeft, User, Mail, Phone, FileText, Briefcase, MessageSquare, ClipboardList, CheckSquare, Square, Download, Camera, FolderKanban, Globe, Pencil } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
+import { EditCandidateModal } from '../components/EditCandidateModal'
+import { CandidateOnboardingChecklist } from '../components/CandidateOnboardingChecklist'
+import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
 import { useRole } from '../stores/authStore'
 import { format } from 'date-fns'
 import { getDocumentCategory, resolveDocumentUrl, PENDING_URL } from '../utils/documents'
+import { normalizeStatus } from '../constants/lifecycle'
 
 const LANGUAGE_LABELS = {
   en: 'English',
@@ -19,7 +23,10 @@ const LANGUAGE_LABELS = {
   tanglish: 'Tanglish',
 }
 
-const INACTIVE_APPLICATION_STATUSES = new Set(['rejected', 'withdrawn', 'dropped', 'archived'])
+// Canonical vocabulary: the only inactive application status is 'rejected'
+// (the backend never emits withdrawn/dropped/archived). Legacy 'transferred'
+// folds to 'rejected' via normalizeStatus, so it's treated as inactive too.
+const INACTIVE_APPLICATION_STATUSES = new Set(['rejected'])
 
 function parseCandidateMetadata(metadata) {
   if (!metadata) return {}
@@ -37,7 +44,7 @@ function getCandidateLanguageLabel(candidate, metadata) {
 }
 
 function getPrimaryApplication(applications) {
-  return applications.find((application) => !INACTIVE_APPLICATION_STATUSES.has(String(application?.status || '').toLowerCase())) || applications[0] || null
+  return applications.find((application) => !INACTIVE_APPLICATION_STATUSES.has(normalizeStatus(String(application?.status || '').toLowerCase()))) || applications[0] || null
 }
 
 export default function CandidateDetail() {
@@ -45,6 +52,7 @@ export default function CandidateDetail() {
   const qc = useQueryClient()
   const { canEdit } = useRole()
   const photoInputRef = useRef(null)
+  const [editOpen, setEditOpen] = useState(false)
 
   const { data: candidate, isLoading, error } = useQuery({
     queryKey: ['candidate', id],
@@ -105,8 +113,6 @@ export default function CandidateDetail() {
   const applicationForm = metadata.application_form || {}
   const primaryApplication = getPrimaryApplication(applications)
   const candidateAge = candidate.age || metadata.age || applicationForm.age || null
-  const latestCv = cvs[0] || null
-  const latestCvUrl = latestCv ? resolveDocumentUrl(latestCv) : null
   const languageLabel = getCandidateLanguageLabel(candidate, metadata)
 
   return (
@@ -154,13 +160,18 @@ export default function CandidateDetail() {
           <div className="space-y-4">
             <div className="flex flex-wrap items-start gap-3">
               <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 break-words">{candidate.name || candidate.phone || 'Unknown'}</h1>
-              <Badge status={candidate.status} className="text-sm" />
+              <Badge status={normalizeStatus(candidate.status)} className="text-sm" />
             </div>
 
             <div className="flex flex-wrap items-center gap-4 text-zinc-600 dark:text-zinc-400">
-              <span className="inline-flex items-center gap-1">
+              <span className="inline-flex items-center gap-1" title="WhatsApp Number">
                 <Phone size={18} aria-hidden /> {candidate.phone || '-'}
               </span>
+              {candidate.contact_phone && (
+                <span className="inline-flex items-center gap-1" title="Call Number (non-WhatsApp)">
+                  <Phone size={18} aria-hidden className="opacity-60" /> {candidate.contact_phone}
+                </span>
+              )}
               <span className="inline-flex items-center gap-1">
                 <Mail size={18} aria-hidden /> {candidate.email || 'No email provided'}
               </span>
@@ -183,7 +194,7 @@ export default function CandidateDetail() {
                 <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Application Status</p>
                 <div className="mt-2">
                   {primaryApplication ? (
-                    <Badge status={primaryApplication.status} className="text-xs" />
+                    <Badge status={normalizeStatus(primaryApplication.status)} className="text-xs" />
                   ) : (
                     <span className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Not assigned</span>
                   )}
@@ -194,6 +205,15 @@ export default function CandidateDetail() {
         </div>
 
         <div className="flex flex-wrap gap-3 xl:justify-end">
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => setEditOpen(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
+            >
+              <Pencil size={16} aria-hidden /> Edit Profile
+            </button>
+          )}
           <Link
             to={`/communications?candidate=${candidate.id}`}
             className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700"
@@ -206,22 +226,16 @@ export default function CandidateDetail() {
           >
             <FileText size={16} aria-hidden /> Open CV Manager
           </Link>
-          {latestCvUrl === PENDING_URL ? (
-            <span className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700">
-              CV processing...
-            </span>
-          ) : latestCvUrl ? (
-            <a
-              href={latestCvUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40"
-            >
-              <Download size={16} aria-hidden /> View Latest CV
-            </a>
-          ) : null}
         </div>
       </div>
+
+      {canEdit && (
+        <EditCandidateModal
+          candidate={candidate}
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+        />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
@@ -231,8 +245,12 @@ export default function CandidateDetail() {
             </h2>
             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div>
-                <dt className="text-zinc-500 dark:text-zinc-400">Phone number</dt>
+                <dt className="text-zinc-500 dark:text-zinc-400">WhatsApp Number</dt>
                 <dd className="font-medium text-zinc-900 dark:text-zinc-50 break-words">{candidate.phone || '-'}</dd>
+              </div>
+              <div>
+                <dt className="text-zinc-500 dark:text-zinc-400">Call Number</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-50 break-words">{candidate.contact_phone || '-'}</dd>
               </div>
               <div>
                 <dt className="text-zinc-500 dark:text-zinc-400">Email</dt>
@@ -303,6 +321,17 @@ export default function CandidateDetail() {
                 </dd>
               </div>
             )}
+          </Card>
+
+          {/* Call log & remarks — same engagement feed shown in the chat + CV
+              Manager, so an agent's calls/notes follow the candidate everywhere. */}
+          <Card>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-3 flex items-center gap-2">
+              <MessageSquare size={20} aria-hidden /> Call log &amp; remarks
+            </h2>
+            <div className="-mx-2">
+              <CallRemarksPanel candidateId={candidate.id} />
+            </div>
           </Card>
 
           {Object.keys(applicationForm).length > 0 && (
@@ -524,6 +553,8 @@ export default function CandidateDetail() {
         </div>
 
         <div className="space-y-6">
+          <CandidateOnboardingChecklist candidate={candidate} />
+
           <Card>
             <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
               <FolderKanban size={20} aria-hidden /> Current Assignment
@@ -552,7 +583,7 @@ export default function CandidateDetail() {
                 <div className="rounded-xl bg-zinc-50 dark:bg-zinc-900/60 p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Application Status</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Badge status={primaryApplication.status} className="text-xs" />
+                    <Badge status={normalizeStatus(primaryApplication.status)} className="text-xs" />
                     {primaryApplication.match_score != null && (
                       <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Match score: {primaryApplication.match_score}%</span>
                     )}
@@ -561,63 +592,6 @@ export default function CandidateDetail() {
               </div>
             ) : (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">No job or project assignment yet.</p>
-            )}
-          </Card>
-
-          <Card>
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-              <FileText size={20} aria-hidden /> Latest CV
-            </h2>
-            {latestCv ? (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50 break-words">{latestCv.file_name || 'CV Document'}</p>
-                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                    {latestCv.uploaded_at ? `Uploaded ${format(new Date(latestCv.uploaded_at), 'MMM d, yyyy')}` : 'Uploaded'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {latestCvUrl ? (
-                    <>
-                      <a
-                        href={latestCvUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100"
-                      >
-                        View CV
-                      </a>
-                      <a
-                        href={latestCvUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        download={latestCv.file_name || 'cv'}
-                        className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-gray-200"
-                      >
-                        <Download size={14} aria-hidden /> Download CV
-                      </a>
-                    </>
-                  ) : (
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">This CV record does not have a downloadable file link yet.</p>
-                  )}
-                </div>
-                <Link
-                  to={`/cv-manager?candidate=${candidate.id}`}
-                  className="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
-                >
-                  Open this candidate in CV Manager
-                </Link>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">No CV uploaded yet.</p>
-                <Link
-                  to={`/cv-manager?candidate=${candidate.id}`}
-                  className="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
-                >
-                  Open this candidate in CV Manager
-                </Link>
-              </div>
             )}
           </Card>
 
@@ -650,7 +624,7 @@ export default function CandidateDetail() {
                         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{app.job_category || 'Job role'}</p>
                       </div>
                     </div>
-                    <Badge status={app.status} className="mt-3 text-xs" />
+                    <Badge status={normalizeStatus(app.status)} className="mt-3 text-xs" />
                   </li>
                 ))}
               </ul>

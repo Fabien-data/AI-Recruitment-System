@@ -20,9 +20,16 @@ import { CandidateReviewModal } from '../components/CandidateReviewModal'
 import { EditCandidateModal } from '../components/EditCandidateModal'
 import { SourceBadge } from '../components/SourceBadge'
 import { useRole } from '../stores/authStore'
+import { useRealtime } from '../hooks/useRealtime'
 import toast from 'react-hot-toast'
 
 const DEBOUNCE_MS = 300
+
+// Live-update triggers: a stage advance or application change anywhere refetches
+// the candidate list so badges/stages stay current without a manual refresh.
+// Module-level consts → stable references for useRealtime's mount-once contract.
+const CAND_REALTIME_EVENTS = ['candidate_stage_changed', 'application_changed']
+const CAND_REALTIME_KEYS = [['candidates']]
 
 const SORT_OPTIONS = [
   { value: 'created_at',    label: 'Date Added' },
@@ -52,6 +59,9 @@ export default function Candidates() {
   const queryClient = useQueryClient()
   const { canDeleteCandidate } = useRole()
 
+  // Real-time refetch on stage/application changes from any agent or the chatbot.
+  useRealtime({ events: CAND_REALTIME_EVENTS, invalidateKeys: CAND_REALTIME_KEYS })
+
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput), DEBOUNCE_MS)
     return () => clearTimeout(t)
@@ -72,7 +82,9 @@ export default function Candidates() {
         job_id: jobId || undefined,
         sort_by: sortBy,
         sort_order: sortOrder,
-      })
+      }),
+    // Fallback poll behind the socket pushes (pauses when the tab is hidden).
+    refetchInterval: 30000,
   })
 
   const { data: activeProjectsData } = useQuery({
@@ -260,7 +272,9 @@ export default function Candidates() {
             </select>
           </div>
 
-          {/* Project filter */}
+          {/* Project filter. The tall multi-select rendered as an empty box
+              between the Job and Language filters when no active projects
+              existed (B009) — show a placeholder option instead. */}
           <div className="md:col-span-5">
             <select
               value={projectIds}
@@ -268,10 +282,15 @@ export default function Candidates() {
               onChange={handleProjectFilterChange}
               className="input h-24"
               aria-label="Filter by ongoing projects"
+              disabled={activeProjects.length === 0}
             >
-              {activeProjects.map((project) => (
-                <option key={project.id} value={project.id}>{project.title}</option>
-              ))}
+              {activeProjects.length === 0 ? (
+                <option disabled>No active projects</option>
+              ) : (
+                activeProjects.map((project) => (
+                  <option key={project.id} value={project.id}>{project.title}</option>
+                ))
+              )}
             </select>
           </div>
 

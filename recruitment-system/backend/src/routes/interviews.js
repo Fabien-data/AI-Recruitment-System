@@ -14,52 +14,483 @@ const express = require('express');
 const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, authorize, ROLES } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const notifications = require('../services/notifications');
+const { syncCandidateStage } = require('../services/candidate-stage');
+const { logAgentAction } = require('../services/activity-log');
+const {
+    allocateInterviewSlots,
+    DEFAULT_PER_DAY_LIMIT,
+    DEFAULT_SLOT_MINUTES,
+} = require('../services/interview-scheduler');
+const {
+    resolveInterviewDays,
+    assignDaysRoundRobin,
+    shortWallClockDate,
+    formatOtherDaysList,
+} = require('../services/interview-days');
 const logger = require('../utils/logger');
+// Shared with the bulk-import welcome pass so the no-WhatsApp flag is set identically.
+const { applyWhatsappReachability } = require('../utils/whatsapp-reachability');
+
+// Upper bound for a single bulk request. The per-item loops below are sequential
+// and fault-isolated (one failure never aborts the batch), so the real constraint
+// is request wall-clock vs. the platform timeout — the frontend sends very large
+// selections in sequential chunks. This ceiling is a safety backstop, not the old
+// hard "100 per time" limit the user hit.
+const BULK_MAX = 1000;
+
+// Roles permitted to schedule / run interviews. Marketing agents source leads
+// but must NOT schedule or notify interviews (B010); the UI hides the action
+// and this re-enforces it server-side so a crafted request can't bypass it.
+const SCHEDULER_ROLES = [ROLES.ADMIN, ROLES.PROJECT_HANDLER, ROLES.SOURCING_DEPARTMENT];
+
+// interview_schedules.description is added by migration 023, but on prod the
+// table is owned by `postgres` so the ALTER is rejected ("must be owner").
+// Cache a one-time existence check so scheduling degrades gracefully (inserts
+// without the column) instead of 500ing; the description still goes into the
+// WhatsApp invite regardless (B016). Run scripts/fix-interview-ownership.js to
+// add the column and enable DB persistence.
+let _ivDescColumn = null;
+async function interviewHasDescriptionColumn() {
+    if (_ivDescColumn !== null) return _ivDescColumn;
+    try {
+        const r = await query(adaptQuery(
+            `SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'interview_schedules' AND column_name = 'description' LIMIT 1`
+        ), []);
+        _ivDescColumn = r.rows.length > 0;
+    } catch (_) {
+        _ivDescColumn = false;
+    }
+    return _ivDescColumn;
+}
+
+// interview_schedules.outcome (pass/fail/pending_review) is added by migration,
+// but prod's interview_schedules is postgres-owned so the ALTER can be rejected
+// ("must be owner"). Cache a one-time existence check so outcome reads/writes
+// degrade gracefully (skipped) instead of 500ing. Run
+// scripts/fix-interview-ownership.js to add the column and enable persistence.
+let _ivOutcomeColumn = null;
+async function interviewHasOutcomeColumn() {
+    if (_ivOutcomeColumn !== null) return _ivOutcomeColumn;
+    try {
+        const r = await query(adaptQuery(
+            `SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'interview_schedules' AND column_name = 'outcome' LIMIT 1`
+        ), []);
+        _ivOutcomeColumn = r.rows.length > 0;
+    } catch (_) {
+        _ivOutcomeColumn = false;
+    }
+    return _ivOutcomeColumn;
+}
+
+// interview_schedules.reschedule_count + rescheduled_from_datetime are added by
+// migration 058, but prod's interview_schedules is postgres-owned so the ALTER
+// can be rejected ("must be owner"). Cache a one-time existence check so the
+// "Rescheduled" filter/stat degrade gracefully (empty) instead of 500ing.
+let _ivRescheduleColumns = null;
+async function interviewHasRescheduleColumns() {
+    if (_ivRescheduleColumns !== null) return _ivRescheduleColumns;
+    try {
+        const r = await query(adaptQuery(
+            `SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'interview_schedules' AND column_name = 'reschedule_count' LIMIT 1`
+        ), []);
+        _ivRescheduleColumns = r.rows.length > 0;
+    } catch (_) {
+        _ivRescheduleColumns = false;
+    }
+    return _ivRescheduleColumns;
+}
+
+// interview_schedules.candidate_response (confirm/reschedule/cant_make persisted
+// at WhatsApp button-tap) is added by migration 061, but prod's interview_schedules
+// is postgres-owned so the ALTER can be rejected ("must be owner"). Cache a one-time
+// existence check so the per-project scoreboard + response filter degrade gracefully
+// (fall back to candidate_tasks-derived counts) instead of 500ing.
+let _ivResponseColumn = null;
+async function interviewHasResponseColumn() {
+    if (_ivResponseColumn !== null) return _ivResponseColumn;
+    try {
+        const r = await query(adaptQuery(
+            `SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'interview_schedules' AND column_name = 'candidate_response' LIMIT 1`
+        ), []);
+        _ivResponseColumn = r.rows.length > 0;
+    } catch (_) {
+        _ivResponseColumn = false;
+    }
+    return _ivResponseColumn;
+}
+
+// Generic cached existence check for optional candidate columns (followup_stopped
+// is a chatbot-side opt-out flag that may not exist on every env; removed_at is
+// added by the reject-&-remove migration). Lets the bulk-send opt-out guard
+// degrade to a no-op instead of 500ing where the column is absent.
+const _candColCache = {};
+async function candidatesHaveColumn(col) {
+    if (_candColCache[col] !== undefined) return _candColCache[col];
+    try {
+        const r = await query(adaptQuery(
+            `SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = $1 LIMIT 1`
+        ), [col]);
+        _candColCache[col] = r.rows.length > 0;
+    } catch (_) {
+        _candColCache[col] = false;
+    }
+    return _candColCache[col];
+}
+
+// SQL fragments that exclude candidates who should never receive a bulk interview
+// invite: already left the funnel (merged/hired/future_pool), removed, or opted
+// out of follow-ups. Guarded so absent columns are simply skipped. Returns an
+// array of WHERE fragments referencing the `c` (candidates) alias.
+async function interviewOptOutConditions() {
+    const frags = [`c.status NOT IN ('merged','hired','future_pool')`];
+    if (await candidatesHaveColumn('removed_at')) frags.push(`c.removed_at IS NULL`);
+    if (await candidatesHaveColumn('followup_stopped')) frags.push(`COALESCE(c.followup_stopped, FALSE) = FALSE`);
+    return frags;
+}
+
+// Valid interview outcomes (app-validated, no DB CHECK — keep in sync with the UI).
+const INTERVIEW_OUTCOMES = ['passed', 'failed', 'pending_review'];
+
+// Build the shared WHERE for interview list / export / stats from query params.
+// Returns { conditions, params } — caller appends LIMIT/OFFSET as needed.
+async function buildInterviewFilters(req) {
+    const { job_id, project_id, status, date_from, date_to, interviewer_id, candidate_name, candidate_phone, search, outcome, filter, location, interview_date, response } = req.query;
+    const params = [];
+    const conditions = ['1=1'];
+    const add = (frag, val) => { params.push(val); conditions.push(frag.replace(/\?/g, `$${params.length}`)); };
+
+    if (job_id)          add('a.job_id = ?', job_id);
+    if (project_id)      add('j.project_id = ?', project_id);
+    if (status)          add('iv.status = ?', status);
+    if (interviewer_id)  add('iv.interviewer_id = ?', interviewer_id);
+    if (date_from)       add('iv.scheduled_datetime >= ?', date_from);
+    if (date_to)         add('iv.scheduled_datetime <= ?', date_to);
+    // Venue (free-text contains) + single interview-day convenience filters.
+    if (location)        add('iv.location ILIKE ?', `%${location}%`);
+    if (interview_date)  add('iv.scheduled_datetime::date = ?', interview_date);
+    if (candidate_name)  add('c.name ILIKE ?', `%${candidate_name}%`);
+    if (candidate_phone) { params.push(`%${candidate_phone}%`); conditions.push(`(c.phone ILIKE $${params.length} OR c.whatsapp_phone ILIKE $${params.length})`); }
+    // Single search box → match candidate name OR phone OR whatsapp (OR'd).
+    if (search) { params.push(`%${search}%`); conditions.push(`(c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length} OR c.whatsapp_phone ILIKE $${params.length})`); }
+    // outcome filter only when the column exists (prod ownership may block it).
+    if (outcome && (await interviewHasOutcomeColumn())) add('iv.outcome = ?', outcome);
+    // 'rescheduled' filter → interviews the candidate moved at least once (058 cols).
+    if (filter === 'rescheduled' && (await interviewHasRescheduleColumns())) conditions.push('COALESCE(iv.reschedule_count, 0) > 0');
+    // Candidate-response drill-down (from the per-project scoreboard chips). Only
+    // when the 061 column exists; 'no_answer' = invite sent, no button tapped yet.
+    if (response && (await interviewHasResponseColumn())) {
+        if (response === 'no_answer') {
+            conditions.push("(iv.candidate_response IS NULL AND iv.confirmation_sent_at IS NOT NULL AND iv.status = 'scheduled')");
+        } else if (['confirmed', 'reschedule', 'cant_make'].includes(response)) {
+            add('iv.candidate_response = ?', response);
+        }
+    }
+
+    return { conditions, params };
+}
 
 // ── List / filter interviews ──────────────────────────────────────────────────
-router.get('/', authenticate, async (req, res, next) => {
+// Returns { data, total, limit, offset }. total = full filtered count (window
+// COUNT) so the UI can paginate through ALL interviews — the old endpoint capped
+// at 50 with no total, hiding everything past the first page (the "only 50 of
+// 800" complaint). Search by candidate name/phone + interviewer filter added.
+router.get('/', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
     try {
-        const { job_id, project_id, status, date_from, date_to, limit = 50, offset = 0 } = req.query;
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 1000);
+        const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+        const { conditions, params } = await buildInterviewFilters(req);
 
-        const params = [];
-        const conditions = ['1=1'];
-
-        if (job_id) {
-            params.push(job_id);
-            conditions.push(`a.job_id = $${params.length}`);
-        }
-        // Group-by-project support: filter all interviews that belong to any
-        // job inside the given project. Joined via applications → jobs already.
-        if (project_id) {
-            params.push(project_id);
-            conditions.push(`j.project_id = $${params.length}`);
-        }
-        if (status) {
-            params.push(status);
-            conditions.push(`iv.status = $${params.length}`);
-        }
-        if (date_from) {
-            params.push(date_from);
-            conditions.push(`iv.scheduled_datetime >= $${params.length}`);
-        }
-        if (date_to) {
-            params.push(date_to);
-            conditions.push(`iv.scheduled_datetime <= $${params.length}`);
-        }
-
-        params.push(parseInt(limit, 10));
-        params.push(parseInt(offset, 10));
+        params.push(limit);  const limitIdx = params.length;
+        params.push(offset); const offsetIdx = params.length;
 
         const sql = `
             SELECT
                 iv.*,
+                c.id AS candidate_id,
                 c.name AS candidate_name, c.phone AS candidate_phone,
+                c.whatsapp_unreachable,
                 j.title AS job_title, j.id AS job_id, j.project_id,
                 p.title AS project_title,
-                a.id AS application_id,
-                u.full_name AS interviewer_name
+                a.id AS application_id, a.status AS application_status,
+                u.full_name AS interviewer_name,
+                COUNT(*) OVER () AS total_count
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN candidates c ON a.candidate_id = c.id
+            JOIN jobs j ON a.job_id = j.id
+            LEFT JOIN projects p ON j.project_id = p.id
+            LEFT JOIN users u ON iv.interviewer_id = u.id
+            WHERE ${conditions.join(' AND ')}
+            ORDER BY COALESCE(c.whatsapp_unreachable, FALSE) ASC, iv.scheduled_datetime ASC
+            LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        `;
+
+        const result = await query(sql, params);
+        const total = result.rows.length ? parseInt(result.rows[0].total_count, 10) : 0;
+        res.json({
+            data: result.rows.map(({ total_count, ...row }) => row),
+            total,
+            limit,
+            offset,
+        });
+    } catch (err) { next(err); }
+});
+
+// ── All matching interview IDs (for "select all across pages") ────────────────
+// Returns ONLY the ids of interviews matching the SAME filters as the list, so
+// the UI can select every candidate in a project (not just the 50 on screen)
+// and notify them in client-driven chunks. By default we restrict to notifiable
+// statuses (scheduled/confirmed) so "Select all → Notify" never re-pings a
+// closed (cancelled/completed/no-show) interview. Capped to a sane ceiling;
+// `capped` tells the UI when the selection was truncated. Registered before
+// '/:id' so the literal path isn't captured by the param route.
+router.get('/ids', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const CEIL = 5000;
+        const { conditions, params } = await buildInterviewFilters(req);
+        // notifiable=false lets a caller fetch every matching id regardless of
+        // status; default keeps the bulk-notify path to candidates who still
+        // need to hear about an active interview.
+        const notifiable = String(req.query.notifiable ?? 'true') !== 'false';
+        const statusFilter = notifiable ? `AND iv.status IN ('scheduled','confirmed')` : '';
+        params.push(CEIL);
+        const sql = `
+            SELECT iv.id
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN candidates c ON a.candidate_id = c.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE ${conditions.join(' AND ')} ${statusFilter}
+            ORDER BY COALESCE(c.whatsapp_unreachable, FALSE) ASC, iv.scheduled_datetime ASC
+            LIMIT $${params.length}
+        `;
+        const result = await query(sql, params);
+        const ids = result.rows.map((r) => r.id);
+        res.json({ ids, total: ids.length, capped: ids.length >= CEIL });
+    } catch (err) { next(err); }
+});
+
+// ── Interview stats (server-side aggregates, accurate across ALL rows) ─────────
+// Registered before '/:id'. Respects the same filters as the list so the stat
+// cards stay correct even though the list itself is paginated.
+router.get('/stats', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const { conditions, params } = await buildInterviewFilters(req);
+        const hasReschedule = await interviewHasRescheduleColumns();
+        const statsSql = `
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE iv.scheduled_datetime::date = CURRENT_DATE) AS today,
+                COUNT(*) FILTER (WHERE iv.scheduled_datetime >= NOW() AND iv.scheduled_datetime < NOW() + INTERVAL '7 days') AS this_week,
+                COUNT(*) FILTER (WHERE iv.status = 'completed') AS completed,
+                COUNT(*) FILTER (WHERE iv.status = 'cancelled') AS cancelled,
+                COUNT(*) FILTER (WHERE iv.status = 'no_show') AS no_show,
+                COUNT(*) FILTER (WHERE iv.status = 'confirmed') AS confirmed,
+                ${hasReschedule ? "COUNT(*) FILTER (WHERE COALESCE(iv.reschedule_count, 0) > 0)" : '0'} AS rescheduled,
+                COUNT(*) FILTER (WHERE iv.status IN ('scheduled','confirmed')) AS upcoming,
+                COUNT(*) FILTER (WHERE iv.status IN ('scheduled','confirmed') AND iv.scheduled_datetime < NOW()) AS overdue
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN candidates c ON a.candidate_id = c.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE ${conditions.join(' AND ')}
+        `;
+        const statsRes = await query(statsSql, params);
+
+        // pending-send = applications ready for an invite that haven't had a
+        // successful interview WhatsApp yet (respects project scope only).
+        const psParams = [];
+        let psProject = '';
+        if (req.query.project_id) { psParams.push(req.query.project_id); psProject = `AND j.project_id = $${psParams.length}`; }
+        // Same opt-out exclusions as /pending-send so the stat matches the list.
+        const psOptOut = (await interviewOptOutConditions()).map((f) => `AND ${f}`).join(' ');
+        const psRes = await query(`
+            SELECT COUNT(*) AS pending_send
+            FROM applications a
+            JOIN jobs j ON a.job_id = j.id
+            JOIN candidates c ON a.candidate_id = c.id
+            WHERE a.status IN ('certified','interview_scheduled')
+              AND NOT EXISTS (
+                SELECT 1 FROM interview_schedules iv
+                WHERE iv.application_id = a.id AND iv.confirmation_sent_at IS NOT NULL AND iv.status <> 'cancelled'
+              ) ${psProject} ${psOptOut}
+        `, psParams);
+
+        // Candidate-driven WhatsApp button outcomes: how many tapped Reschedule or
+        // Can't-make-it (open agent tasks). Project-scoped to match the cards.
+        // Degrades to 0 if candidate_tasks is unavailable (never breaks the stats).
+        let reschedule_requested = 0, cant_make = 0;
+        try {
+            const ctParams = [];
+            let ctProject = '';
+            if (req.query.project_id) { ctParams.push(req.query.project_id); ctProject = `AND j.project_id = $${ctParams.length}`; }
+            const ctRes = await query(`
+                SELECT
+                    COUNT(*) FILTER (WHERE t.task_type = 'reschedule_interview') AS reschedule_requested,
+                    COUNT(*) FILTER (WHERE t.task_type = 'interview_cant_make')   AS cant_make
+                FROM candidate_tasks t
+                JOIN applications a ON t.application_id = a.id
+                JOIN jobs j ON a.job_id = j.id
+                WHERE t.status = 'pending'
+                  AND t.task_type IN ('reschedule_interview','interview_cant_make') ${ctProject}
+            `, ctParams);
+            reschedule_requested = parseInt(ctRes.rows[0]?.reschedule_requested, 10) || 0;
+            cant_make = parseInt(ctRes.rows[0]?.cant_make, 10) || 0;
+        } catch (ctErr) { logger.debug(`interviews/stats: candidate_tasks counts skipped — ${ctErr.message}`); }
+
+        const s = statsRes.rows[0] || {};
+        const n = (v) => parseInt(v, 10) || 0;
+        res.json({
+            total: n(s.total), today: n(s.today), this_week: n(s.this_week),
+            completed: n(s.completed), cancelled: n(s.cancelled), no_show: n(s.no_show),
+            confirmed: n(s.confirmed), rescheduled: n(s.rescheduled),
+            upcoming: n(s.upcoming), overdue: n(s.overdue),
+            pending_send: n(psRes.rows[0] && psRes.rows[0].pending_send),
+            reschedule_requested, cant_make,
+        });
+    } catch (err) { next(err); }
+});
+
+// ── Per-project interview scoreboard ──────────────────────────────────────────
+// Registered before '/:id'. One grouped query (no N+1) over the same join chain
+// + filters as the list/stats, so it respects date-range / venue / day scoping.
+// For each project: how many candidates were SCHEDULED for interview and, within
+// that, how many Confirmed / Rescheduled / Can't-make-it / No-answer. Counts come
+// from the persisted iv.candidate_response (migration 061); if that column is
+// missing on prod (postgres-owned table), reschedule/cant_make fall back to open
+// candidate_tasks — the same source the flat /stats uses — so it never 500s.
+router.get('/by-project', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const { conditions, params } = await buildInterviewFilters(req);
+        const hasResponse = await interviewHasResponseColumn();
+        const n = (v) => parseInt(v, 10) || 0;
+
+        const sql = `
+            SELECT
+                j.project_id,
+                p.title AS project_title,
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE iv.status = 'confirmed'${hasResponse ? " OR iv.candidate_response = 'confirmed'" : ''}) AS confirmed,
+                ${hasResponse ? "COUNT(*) FILTER (WHERE iv.candidate_response = 'reschedule')" : '0'} AS rescheduled,
+                ${hasResponse ? "COUNT(*) FILTER (WHERE iv.candidate_response = 'cant_make')" : '0'} AS cant_make,
+                ${hasResponse
+                    ? "COUNT(*) FILTER (WHERE iv.candidate_response IS NULL AND iv.confirmation_sent_at IS NOT NULL AND iv.status = 'scheduled')"
+                    : "COUNT(*) FILTER (WHERE iv.confirmation_sent_at IS NOT NULL AND iv.status = 'scheduled')"} AS no_answer,
+                COUNT(*) FILTER (WHERE iv.status = 'scheduled' AND iv.confirmation_sent_at IS NULL) AS not_sent,
+                COUNT(*) FILTER (WHERE iv.status = 'completed') AS completed,
+                COUNT(*) FILTER (WHERE iv.status IN ('cancelled','no_show')) AS cancelled_no_show
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN candidates c ON a.candidate_id = c.id
+            JOIN jobs j ON a.job_id = j.id
+            LEFT JOIN projects p ON j.project_id = p.id
+            WHERE ${conditions.join(' AND ')}
+            GROUP BY j.project_id, p.title
+            ORDER BY total DESC, p.title ASC
+        `;
+        const result = await query(sql, params);
+        let projects = result.rows.map((r) => ({
+            project_id: r.project_id,
+            project_title: r.project_title || 'No project',
+            total: n(r.total), confirmed: n(r.confirmed), rescheduled: n(r.rescheduled),
+            cant_make: n(r.cant_make), no_answer: n(r.no_answer), not_sent: n(r.not_sent),
+            completed: n(r.completed), cancelled_no_show: n(r.cancelled_no_show),
+        }));
+
+        // Column-absent fallback: derive reschedule/cant_make from open tasks and
+        // merge by project_id (the projects list is already filter-scoped).
+        if (!hasResponse) {
+            try {
+                const ctRes = await query(`
+                    SELECT j.project_id,
+                        COUNT(*) FILTER (WHERE t.task_type = 'reschedule_interview') AS rescheduled,
+                        COUNT(*) FILTER (WHERE t.task_type = 'interview_cant_make')   AS cant_make
+                    FROM candidate_tasks t
+                    JOIN applications a ON t.application_id = a.id
+                    JOIN jobs j ON a.job_id = j.id
+                    WHERE t.status = 'pending'
+                      AND t.task_type IN ('reschedule_interview','interview_cant_make')
+                    GROUP BY j.project_id
+                `, []);
+                const byProj = new Map(ctRes.rows.map((r) => [r.project_id, r]));
+                projects = projects.map((proj) => {
+                    const ct = byProj.get(proj.project_id);
+                    return ct ? { ...proj, rescheduled: n(ct.rescheduled), cant_make: n(ct.cant_make) } : proj;
+                });
+            } catch (ctErr) { logger.debug(`interviews/by-project: candidate_tasks fallback skipped — ${ctErr.message}`); }
+        }
+
+        res.json({ projects, generated_at: new Date().toISOString() });
+    } catch (err) { next(err); }
+});
+
+// ── Per-day interview capacity for a project ──────────────────────────────────
+// Registered before '/:id'. For each configured interview day (interview_config
+// .days[]) returns { day_id, date, location, capacity, booked, remaining } so the
+// scheduling dialog + bulk preview can show remaining seats and block overbooking.
+// booked = active (scheduled/confirmed) interviews already on that date+venue.
+router.get('/day-capacity', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const projectId = req.query.project_id;
+        if (!projectId) return res.json({ days: [] });
+
+        const projRes = await query(adaptQuery('SELECT interview_config FROM projects WHERE id = $1'), [projectId]);
+        if (projRes.rows.length === 0) return res.json({ days: [] });
+        let cfg = projRes.rows[0].interview_config;
+        if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch (_) { cfg = null; } }
+        // Only dated days have meaningful capacity (legacy undated day is skipped).
+        const days = resolveInterviewDays(cfg).filter((d) => d.date);
+
+        // Booked per (wall-clock date, venue). to_char avoids TZ drift since
+        // scheduled_datetime is a literal Asia/Colombo wall-clock.
+        const bookedRes = await query(adaptQuery(`
+            SELECT to_char(iv.scheduled_datetime, 'YYYY-MM-DD') AS d, iv.location, COUNT(*) AS booked
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE j.project_id = $1 AND iv.status IN ('scheduled','confirmed')
+            GROUP BY to_char(iv.scheduled_datetime, 'YYYY-MM-DD'), iv.location
+        `), [projectId]);
+        const bookedByKey = new Map();
+        for (const r of bookedRes.rows) {
+            bookedByKey.set(`${r.d}|${r.location || ''}`, parseInt(r.booked, 10) || 0);
+        }
+
+        const out = days.map((d) => {
+            const booked = bookedByKey.get(`${d.date}|${d.location || ''}`) || 0;
+            const capacity = d.capacity == null ? null : Number(d.capacity);
+            return {
+                day_id: d.id, date: d.date, location: d.location,
+                time_start: d.time_start, time_end: d.time_end,
+                capacity, booked,
+                remaining: capacity == null ? null : Math.max(0, capacity - booked),
+            };
+        });
+        res.json({ days: out });
+    } catch (err) { next(err); }
+});
+
+// ── Export interviews to CSV (current filters, no row cap) ─────────────────────
+// Registered before '/:id'. .csv suffix keeps it out of the param route.
+router.get('/export.csv', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const hasOutcome = await interviewHasOutcomeColumn();
+        const { conditions, params } = await buildInterviewFilters(req);
+        const result = await query(`
+            SELECT
+                c.name AS candidate_name, c.phone AS candidate_phone,
+                j.title AS job_title, p.title AS project_title,
+                u.full_name AS interviewer_name,
+                iv.scheduled_datetime, iv.location, iv.status,
+                ${hasOutcome ? 'iv.outcome,' : 'NULL AS outcome,'}
+                iv.rating, iv.feedback
             FROM interview_schedules iv
             JOIN applications a ON iv.application_id = a.id
             JOIN candidates c ON a.candidate_id = c.id
@@ -68,16 +499,31 @@ router.get('/', authenticate, async (req, res, next) => {
             LEFT JOIN users u ON iv.interviewer_id = u.id
             WHERE ${conditions.join(' AND ')}
             ORDER BY iv.scheduled_datetime ASC
-            LIMIT $${params.length - 1} OFFSET $${params.length}
-        `;
+        `, params);
 
-        const result = await query(sql, params);
-        res.json(result.rows);
+        const esc = (v) => {
+            const sval = v === null || v === undefined ? '' : String(v);
+            return /[",\n]/.test(sval) ? `"${sval.replace(/"/g, '""')}"` : sval;
+        };
+        const header = ['Candidate', 'Phone', 'Job', 'Project', 'Interviewer', 'Scheduled', 'Location', 'Status', 'Outcome', 'Rating', 'Feedback'];
+        const lines = [header.join(',')];
+        for (const r of result.rows) {
+            lines.push([
+                esc(r.candidate_name), esc(r.candidate_phone), esc(r.job_title), esc(r.project_title),
+                esc(r.interviewer_name),
+                esc(r.scheduled_datetime ? new Date(r.scheduled_datetime).toISOString() : ''),
+                esc(r.location), esc(r.status), esc(r.outcome), esc(r.rating), esc(r.feedback),
+            ].join(','));
+        }
+        const csv = '﻿' + lines.join('\r\n');
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="interviews.csv"');
+        res.send(csv);
     } catch (err) { next(err); }
 });
 
 // ── Upcoming interviews (next 7 days) — dashboard widget ─────────────────────
-router.get('/upcoming', authenticate, async (req, res, next) => {
+router.get('/upcoming', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery(`
@@ -101,8 +547,182 @@ router.get('/upcoming', authenticate, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// ── Interviewer directory (scheduler-scoped, not admin-only) ───────────────────
+// Registered BEFORE '/:id' so the literal "interviewers" path isn't captured by
+// the :id param route. Lets project handlers populate the interviewer dropdown
+// without granting them admin /users access.
+router.get('/interviewers', authenticate, requireSection('interviews', 'view'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
+    try {
+        const result = await query(
+            adaptQuery(`
+                SELECT id, full_name, role
+                FROM users
+                WHERE is_active = TRUE
+                  AND role IN ('admin', 'project_handler', 'sourcing_department')
+                ORDER BY full_name ASC
+            `),
+            []
+        );
+        res.json(result.rows);
+    } catch (err) { next(err); }
+});
+
+// ── Applications still awaiting their interview message ───────────────────────
+// Powers the "Quick select 100" button: the next N applications that are ready
+// to be invited (certified, or scheduled-but-the-WhatsApp-never-confirmed) and
+// have NOT yet had a successful interview invite. confirmation_sent_at is the
+// source of truth — it's set only when the invite WhatsApp succeeds, so a failed
+// (out-of-window / no-WhatsApp) send correctly leaves the application "pending".
+// Registered before '/:id' so the literal path isn't captured by the param route.
+router.get('/pending-send', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const { project_id } = req.query;
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), BULK_MAX);
+
+        const params = [];
+        const conditions = [
+            `a.status IN ('certified','interview_scheduled')`,
+            `NOT EXISTS (
+                SELECT 1 FROM interview_schedules iv
+                WHERE iv.application_id = a.id
+                  AND iv.confirmation_sent_at IS NOT NULL
+                  AND iv.status <> 'cancelled'
+            )`,
+            // Never queue opted-out / removed / out-of-funnel candidates.
+            ...(await interviewOptOutConditions()),
+        ];
+        if (project_id) {
+            params.push(project_id);
+            conditions.push(`j.project_id = $${params.length}`);
+        }
+        params.push(limit);
+
+        // Oldest-waiting first = fair queue; each successful send drops the row out
+        // of this set, so re-pressing the button returns the NEXT batch.
+        const sql = `
+            SELECT a.id AS application_id, a.candidate_id, a.status,
+                   c.name AS candidate_name, c.phone AS candidate_phone,
+                   j.title AS job_title, j.project_id,
+                   COUNT(*) OVER () AS total_pending
+            FROM applications a
+            JOIN candidates c ON a.candidate_id = c.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE ${conditions.join(' AND ')}
+            ORDER BY a.applied_at ASC NULLS LAST
+            LIMIT $${params.length}
+        `;
+        const result = await query(sql, params);
+        const total = result.rows.length ? parseInt(result.rows[0].total_pending, 10) : 0;
+        res.json({
+            total_pending: total,
+            returned: result.rows.length,
+            application_ids: result.rows.map((r) => r.application_id),
+            applications: result.rows.map((r) => ({
+                application_id: r.application_id,
+                candidate_id: r.candidate_id,
+                candidate_name: r.candidate_name,
+                candidate_phone: r.candidate_phone,
+                job_title: r.job_title,
+                project_id: r.project_id,
+                status: r.status,
+            })),
+        });
+    } catch (err) { next(err); }
+});
+
+// ── Unreachable candidates CSV (manual call list) ─────────────────────────────
+// Streams a CSV of candidates flagged "not a WhatsApp user" so agents can phone
+// them — the guarantee that no application is silently dropped. Registered before
+// '/:id'. The .csv suffix is captured by '/:id'-less literal matching here.
+router.get('/unreachable.csv', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const { project_id } = req.query;
+        const params = [];
+        let projectFilter = '';
+        if (project_id) {
+            params.push(project_id);
+            projectFilter = `AND app.project_id = $${params.length}`;
+        }
+        const result = await query(
+            adaptQuery(`
+                SELECT c.name, c.phone, c.whatsapp_last_error, c.whatsapp_checked_at,
+                       app.job_title, app.project_title
+                FROM candidates c
+                LEFT JOIN LATERAL (
+                    SELECT j.title AS job_title, p.title AS project_title, j.project_id
+                    FROM applications a
+                    JOIN jobs j ON a.job_id = j.id
+                    LEFT JOIN projects p ON j.project_id = p.id
+                    WHERE a.candidate_id = c.id
+                    ORDER BY a.applied_at DESC NULLS LAST
+                    LIMIT 1
+                ) app ON TRUE
+                WHERE c.whatsapp_unreachable IS TRUE ${projectFilter}
+                ORDER BY c.whatsapp_checked_at DESC NULLS LAST
+            `),
+            params
+        );
+
+        const esc = (v) => {
+            const s = v === null || v === undefined ? '' : String(v);
+            return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const header = ['Name', 'Phone', 'Job', 'Project', 'Last error', 'Last attempt'];
+        const lines = [header.join(',')];
+        for (const r of result.rows) {
+            lines.push([
+                esc(r.name), esc(r.phone), esc(r.job_title), esc(r.project_title),
+                esc(r.whatsapp_last_error),
+                esc(r.whatsapp_checked_at ? new Date(r.whatsapp_checked_at).toISOString() : ''),
+            ].join(','));
+        }
+        // BOM so Excel reads UTF-8 (Sinhala/Tamil names) correctly.
+        const csv = '﻿' + lines.join('\r\n');
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="unreachable-candidates.csv"`);
+        res.send(csv);
+    } catch (err) { next(err); }
+});
+
+// ── Bulk send reports (the "who failed and why" audit) ────────────────────────
+// Registered before '/:id' so the literal path isn't captured by the param route.
+// GET /send-reports → recent runs; GET /send-reports/:id → one run's detail.
+router.get('/send-reports', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+        const result = await query(adaptQuery(`
+            SELECT b.id, b.mode, b.total_selected, b.scheduled_count, b.sent_count, b.failed_count,
+                   b.delivery_summary, b.created_at, u.full_name AS created_by_name, p.title AS project_title
+            FROM bulk_interview_sends b
+            LEFT JOIN users u ON u.id = b.created_by
+            LEFT JOIN projects p ON p.id = b.project_id
+            ORDER BY b.created_at DESC
+            LIMIT $1
+        `), [limit]);
+        res.json({ reports: result.rows });
+    } catch (err) {
+        // Table may not exist yet (migration 062 pending) — degrade to empty.
+        logger.debug(`send-reports list skipped — ${err.message}`);
+        res.json({ reports: [] });
+    }
+});
+
+router.get('/send-reports/:id', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
+    try {
+        const result = await query(adaptQuery(`
+            SELECT b.*, u.full_name AS created_by_name, p.title AS project_title
+            FROM bulk_interview_sends b
+            LEFT JOIN users u ON u.id = b.created_by
+            LEFT JOIN projects p ON p.id = b.project_id
+            WHERE b.id = $1
+        `), [req.params.id]);
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Send report not found' });
+        res.json(result.rows[0]);
+    } catch (err) { next(err); }
+});
+
 // ── Get single interview ──────────────────────────────────────────────────────
-router.get('/:id', authenticate, async (req, res, next) => {
+router.get('/:id', authenticate, requireSection('interviews', 'view'), async (req, res, next) => {
     try {
         const result = await query(
             adaptQuery(`
@@ -126,7 +746,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 });
 
 // ── Schedule new interview ────────────────────────────────────────────────────
-router.post('/', authenticate, async (req, res, next) => {
+router.post('/', authenticate, requireSection('interviews', 'create'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const {
             application_id,
@@ -134,6 +754,8 @@ router.post('/', authenticate, async (req, res, next) => {
             location,
             interviewer_id,
             duration_minutes = 30,
+            description,
+            translate_notes = false,
             notify_channels = ['whatsapp']
         } = req.body;
 
@@ -156,22 +778,39 @@ router.post('/', authenticate, async (req, res, next) => {
         const { candidate_id, job_title } = appResult.rows[0];
 
         const id = generateUUID();
-        await query(
-            adaptQuery(`
-                INSERT INTO interview_schedules
-                    (id, application_id, scheduled_datetime, location, interviewer_id,
-                     duration_minutes, status, created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
-            `),
-            [id, application_id, scheduled_datetime, location || null, interviewer_id || null,
-             duration_minutes, req.user.id]
-        );
+        if (await interviewHasDescriptionColumn()) {
+            await query(
+                adaptQuery(`
+                    INSERT INTO interview_schedules
+                        (id, application_id, scheduled_datetime, location, interviewer_id,
+                         duration_minutes, status, description, created_by)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7, $8)
+                `),
+                [id, application_id, scheduled_datetime, location || null, interviewer_id || null,
+                 duration_minutes, description || null, req.user.id]
+            );
+        } else {
+            // description column not present (table-ownership block) — persist
+            // the row without it; the note still rides the WhatsApp invite below.
+            await query(
+                adaptQuery(`
+                    INSERT INTO interview_schedules
+                        (id, application_id, scheduled_datetime, location, interviewer_id,
+                         duration_minutes, status, created_by)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
+                `),
+                [id, application_id, scheduled_datetime, location || null, interviewer_id || null,
+                 duration_minutes, req.user.id]
+            );
+        }
 
         // Update application status to interview_scheduled
         await query(
             adaptQuery("UPDATE applications SET status = 'interview_scheduled', interview_datetime = $1, interview_location = $2, updated_at = NOW() WHERE id = $3"),
             [scheduled_datetime, location || null, application_id]
         );
+        // Candidate stage → Interview Scheduled.
+        syncCandidateStage(candidate_id).catch(() => {});
 
         // Send candidate notification synchronously so the response carries
         // real per-channel delivery results (no more silent fire-and-forget).
@@ -179,7 +818,7 @@ router.post('/', authenticate, async (req, res, next) => {
         let notification = { success: [], failed: [] };
         try {
             notification = await notifications.sendInterviewNotification(
-                candidate_id, job_title, scheduled_datetime, location || 'TBD', channels
+                candidate_id, job_title, scheduled_datetime, location || 'TBD', channels, description || null, translate_notes === true
             );
             if (notification.success.some(s => s.channel === 'whatsapp')) {
                 await query(
@@ -192,19 +831,49 @@ router.post('/', authenticate, async (req, res, next) => {
             notification.failed.push({ channel: 'all', error: notifErr.message });
         }
 
+        // Engagement timeline: "Interview … — invite sent / queued / not delivered".
+        try {
+            const waEntry = notification.success.find(s => s.channel === 'whatsapp');
+            const inviteState = waEntry
+                ? (waEntry.queued ? 'queued — delivers when the candidate replies' : 'sent')
+                : 'not delivered';
+            const whenStr = notifications.formatInterviewWallClock
+                ? notifications.formatInterviewWallClock(scheduled_datetime)
+                : String(scheduled_datetime);
+            await logAgentAction({
+                candidateId: candidate_id, agentId: req.user?.id, actionType: 'interview',
+                applicationId: application_id,
+                remark: `Interview for ${job_title} on ${whenStr}${location ? ` @ ${location}` : ''} — invite ${inviteState}`,
+            });
+        } catch (_e) { /* best-effort */ }
+
         const created = await query(adaptQuery('SELECT * FROM interview_schedules WHERE id = $1'), [id]);
         res.status(201).json({ ...created.rows[0], notification });
     } catch (err) { next(err); }
 });
 
 // ── Update interview (status / feedback / rating) ─────────────────────────────
-router.put('/:id', authenticate, async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('interviews', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const {
             status, feedback, rating, location,
-            scheduled_datetime, interviewer_id, duration_minutes
+            scheduled_datetime, interviewer_id, duration_minutes, outcome
         } = req.body;
+
+        // Detect a genuine reschedule (datetime actually changed) so we only
+        // reset reminder markers + notify the candidate when it really moved.
+        let datetimeChanged = false;
+        if (scheduled_datetime) {
+            try {
+                const before = await query(
+                    adaptQuery('SELECT scheduled_datetime FROM interview_schedules WHERE id = $1'),
+                    [id]
+                );
+                const oldDt = before.rows[0] && before.rows[0].scheduled_datetime;
+                datetimeChanged = !oldDt || new Date(oldDt).getTime() !== new Date(scheduled_datetime).getTime();
+            } catch (_) { datetimeChanged = true; }
+        }
 
         const setClauses = [];
         const values = [];
@@ -217,7 +886,16 @@ router.put('/:id', authenticate, async (req, res, next) => {
         if (scheduled_datetime) { setClauses.push(`scheduled_datetime = ${p()}`); values.push(scheduled_datetime); }
         if (interviewer_id)     { setClauses.push(`interviewer_id = ${p()}`);     values.push(interviewer_id); }
         if (duration_minutes)   { setClauses.push(`duration_minutes = ${p()}`);   values.push(duration_minutes); }
+        // Structured outcome (passed / failed / pending_review) — only when the
+        // column exists (prod ownership may block the ALTER; degrade gracefully).
+        if (outcome && INTERVIEW_OUTCOMES.includes(outcome) && (await interviewHasOutcomeColumn())) {
+            setClauses.push(`outcome = ${p()}`); values.push(outcome);
+        }
         if (status === 'completed') { setClauses.push('completed_at = NOW()'); }
+        // Reschedule: clear the one-shot reminder marker so reminders re-fire for
+        // the new datetime (reminder_sent_at always exists; cadence columns are
+        // reset best-effort below in case the prod table lacks them).
+        if (datetimeChanged) { setClauses.push('reminder_sent_at = NULL'); }
 
         if (setClauses.length === 0) return res.status(400).json({ error: 'No fields to update' });
 
@@ -227,26 +905,82 @@ router.put('/:id', authenticate, async (req, res, next) => {
             values
         );
 
+        // Reschedule: reset the recurring-cadence markers so the daily + day-of
+        // reminders run again for the new date. Best-effort — the migration-025
+        // columns may be absent on a postgres-owned prod table.
+        if (datetimeChanged) {
+            try {
+                await query(
+                    adaptQuery(`UPDATE interview_schedules
+                                   SET last_reminder_date = NULL,
+                                       reminder_count = 0,
+                                       dayof_reminder_sent_at = NULL
+                                 WHERE id = $1`),
+                    [id]
+                );
+            } catch (_) { /* cadence columns not present (ownership) — reminder_sent_at reset above still resumes reminders */ }
+        }
+
         const updated = await query(adaptQuery('SELECT * FROM interview_schedules WHERE id = $1'), [id]);
         if (updated.rows.length === 0) return res.status(404).json({ error: 'Interview not found' });
+
+        // Tell the candidate their interview moved (fire-and-forget so the
+        // response isn't blocked by outbound WhatsApp).
+        if (datetimeChanged) {
+            try {
+                const info = await query(adaptQuery(`
+                    SELECT c.id AS candidate_id, j.title AS job_title
+                    FROM interview_schedules iv
+                    JOIN applications a ON iv.application_id = a.id
+                    JOIN candidates c ON a.candidate_id = c.id
+                    JOIN jobs j ON a.job_id = j.id
+                    WHERE iv.id = $1
+                `), [id]);
+                if (info.rows.length) {
+                    const row = updated.rows[0];
+                    notifications.sendInterviewRescheduledNotification(
+                        info.rows[0].candidate_id, info.rows[0].job_title,
+                        row.scheduled_datetime, row.location || 'TBD'
+                    ).catch((e) => logger.warn(`reschedule notify failed for interview ${id}: ${e.message}`));
+                }
+            } catch (e) { logger.warn(`reschedule notify lookup failed for ${id}: ${e.message}`); }
+        }
+
         res.json(updated.rows[0]);
     } catch (err) { next(err); }
 });
 
 // ── Cancel / delete interview ─────────────────────────────────────────────────
-router.delete('/:id', authenticate, async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('interviews', 'delete'), async (req, res, next) => {
     try {
         const result = await query(
-            adaptQuery("UPDATE interview_schedules SET status = 'cancelled' WHERE id = $1 RETURNING id"),
+            adaptQuery("UPDATE interview_schedules SET status = 'cancelled' WHERE id = $1 RETURNING id, application_id"),
             [req.params.id]
         );
         if (result.rows.length === 0) return res.status(404).json({ error: 'Interview not found' });
+
+        // Tell the candidate their interview was cancelled (fire-and-forget).
+        try {
+            const info = await query(adaptQuery(`
+                SELECT c.id AS candidate_id, j.title AS job_title
+                FROM applications a
+                JOIN candidates c ON a.candidate_id = c.id
+                JOIN jobs j ON a.job_id = j.id
+                WHERE a.id = $1
+            `), [result.rows[0].application_id]);
+            if (info.rows.length) {
+                notifications.sendInterviewCancelledNotification(
+                    info.rows[0].candidate_id, info.rows[0].job_title
+                ).catch((e) => logger.warn(`cancel notify failed for interview ${req.params.id}: ${e.message}`));
+            }
+        } catch (e) { logger.warn(`cancel notify lookup failed for ${req.params.id}: ${e.message}`); }
+
         res.json({ success: true, id: req.params.id });
     } catch (err) { next(err); }
 });
 
 // ── Manually trigger reminder ─────────────────────────────────────────────────
-router.post('/:id/remind', authenticate, async (req, res, next) => {
+router.post('/:id/remind', authenticate, requireSection('interviews', 'edit'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const ivResult = await query(
             adaptQuery(`
@@ -291,21 +1025,25 @@ router.post('/:id/remind', authenticate, async (req, res, next) => {
 // ── Bulk notify — re-send the interview WhatsApp to multiple scheduled
 // candidates at once. Used by the Interview Management page when a project
 // handler picks several rows and clicks "Notify selected".
-router.post('/bulk-notify', authenticate, async (req, res, next) => {
+router.post('/bulk-notify', authenticate, requireSection('interviews', 'edit'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
-        const { interview_ids } = req.body || {};
+        const { interview_ids, translate_notes = false } = req.body || {};
         if (!Array.isArray(interview_ids) || interview_ids.length === 0) {
             return res.status(400).json({ error: 'interview_ids must be a non-empty array' });
         }
-        if (interview_ids.length > 200) {
-            return res.status(400).json({ error: 'Cannot notify more than 200 interviews at once' });
+        if (interview_ids.length > BULK_MAX) {
+            return res.status(400).json({ error: `Cannot notify more than ${BULK_MAX} interviews at once` });
         }
 
         // Pull the rows we need to send notifications. Skip any that no
-        // longer exist instead of failing the whole batch.
+        // longer exist instead of failing the whole batch. Include the stored
+        // description (when the column exists) so the re-sent invite carries
+        // the same instructions as the original.
+        const hasDescCol = await interviewHasDescriptionColumn();
         const result = await query(
             adaptQuery(`
                 SELECT iv.id, iv.scheduled_datetime, iv.location,
+                       ${hasDescCol ? 'iv.description,' : ''}
                        a.candidate_id, j.title AS job_title
                 FROM interview_schedules iv
                 JOIN applications a ON iv.application_id = a.id
@@ -317,6 +1055,15 @@ router.post('/bulk-notify', authenticate, async (req, res, next) => {
 
         const successes = [];
         const failures = [];
+        // Failed = no WhatsApp success (neither delivered nor queued). The UI uses
+        // this to power "Retry failed" — including re-trying out_of_window invites
+        // once the Meta interview template is approved.
+        const failedInterviewIds = [];
+        // Per-reason delivery breakdown so a chunked mass-notify can be summed by
+        // the UI into an honest "sent / queued / out_of_window / no_whatsapp / …"
+        // total instead of a vague "notified N".
+        const deliverySummary = { sent: 0, queued: 0, out_of_window: 0, no_whatsapp: 0, rate_limited: 0, token_expired: 0, other: 0 };
+        const manyRows = result.rows.length > 10;
         for (const row of result.rows) {
             try {
                 const notif = await notifications.sendInterviewNotification(
@@ -324,14 +1071,29 @@ router.post('/bulk-notify', authenticate, async (req, res, next) => {
                     row.job_title,
                     row.scheduled_datetime,
                     row.location || 'TBD',
-                    ['whatsapp']
+                    ['whatsapp'],
+                    row.description || null,
+                    translate_notes === true
                 );
+                await applyWhatsappReachability(row.candidate_id, notif);
+                const waEntry = notif.success.find((s) => s.channel === 'whatsapp');
                 if (notif.success.length > 0) {
-                    successes.push({ interview_id: row.id, channels: notif.success.map(s => s.channel) });
+                    successes.push({ interview_id: row.id, channels: notif.success.map(s => s.channel), queued: !!(waEntry && waEntry.queued) });
+                    // confirmation_sent_at is set even for a queued (deliver-on-reply)
+                    // invite — the candidate is in the funnel; it tracks "we acted".
                     await query(
                         adaptQuery('UPDATE interview_schedules SET confirmation_sent_at = NOW() WHERE id = $1'),
                         [row.id]
                     );
+                }
+                if (waEntry) {
+                    deliverySummary[waEntry.queued ? 'queued' : 'sent'] += 1;
+                } else {
+                    const waFail = (notif.failed || []).find((f) => f.channel === 'whatsapp' || f.channel === 'all');
+                    const reason = waFail?.reason || 'other';
+                    if (deliverySummary[reason] === undefined) deliverySummary.other += 1;
+                    else deliverySummary[reason] += 1;
+                    failedInterviewIds.push(row.id);
                 }
                 if (notif.failed.length > 0) {
                     failures.push({ interview_id: row.id, errors: notif.failed });
@@ -339,7 +1101,13 @@ router.post('/bulk-notify', authenticate, async (req, res, next) => {
             } catch (err) {
                 logger.warn(`Bulk-notify: interview ${row.id} failed: ${err.message}`);
                 failures.push({ interview_id: row.id, errors: [{ channel: 'whatsapp', error: err.message }] });
+                deliverySummary.other += 1;
+                failedInterviewIds.push(row.id);
             }
+            // Gentle throttle between WhatsApp sends so a batch doesn't burst past
+            // Meta's rate limit (reason='rate_limited' silently drops sends). Mirrors
+            // bulk-schedule; the client sends large selections in sequential chunks.
+            if (manyRows) await new Promise((r) => setTimeout(r, 120));
         }
 
         res.json({
@@ -347,6 +1115,8 @@ router.post('/bulk-notify', authenticate, async (req, res, next) => {
             total_processed: result.rows.length,
             successes,
             failures,
+            delivery_summary: deliverySummary,
+            failed_interview_ids: failedInterviewIds,
         });
     } catch (err) { next(err); }
 });
@@ -355,7 +1125,7 @@ router.post('/bulk-notify', authenticate, async (req, res, next) => {
 // location, flip each application's status to interview_scheduled, and
 // dispatch the invitation WhatsApp per candidate. One round-trip from the
 // UI instead of N.
-router.post('/bulk-schedule', authenticate, async (req, res, next) => {
+router.post('/bulk-schedule', authenticate, requireSection('interviews', 'edit'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
     try {
         const {
             application_ids,
@@ -363,49 +1133,271 @@ router.post('/bulk-schedule', authenticate, async (req, res, next) => {
             location,
             duration_minutes = 30,
             interviewer_id,
+            interviewer_ids,
+            description,
+            translate_notes = false,
             notify_channels = ['whatsapp'],
+            mode = 'fixed',
+            start_date,
+            per_day_limit,
+            slot_minutes,
+            dry_run = false,
+            day_fill = 'sequential',
+            day_ids,
         } = req.body || {};
 
         if (!Array.isArray(application_ids) || application_ids.length === 0) {
             return res.status(400).json({ error: 'application_ids must be a non-empty array' });
         }
-        if (!scheduled_datetime) {
-            return res.status(400).json({ error: 'scheduled_datetime is required' });
+        if (application_ids.length > BULK_MAX) {
+            return res.status(400).json({ error: `Cannot schedule more than ${BULK_MAX} interviews at once` });
         }
-        if (application_ids.length > 100) {
-            return res.status(400).json({ error: 'Cannot schedule more than 100 interviews at once' });
+
+        const requestedMode = String(mode || 'fixed').toLowerCase();
+        const isSmart = requestedMode === 'smart';
+        // 'days' mode distributes candidates across the project's configured
+        // interview days (each its own date/venue). Auto-selected when not smart
+        // and no explicit datetime was given. Apps whose project has no configured
+        // days (and no fallback datetime) are reported in `skipped`, never 500.
+        const isDays = !isSmart && (requestedMode === 'days' || !scheduled_datetime);
+        const dryRunRequested = dry_run === true || dry_run === 'true' || dry_run === 1;
+
+        // Interviewer lane(s): smart mode is interviewer-scoped (the per-day cap
+        // is per interviewer), so it requires at least one.
+        const interviewerLanes = Array.isArray(interviewer_ids) && interviewer_ids.length
+            ? interviewer_ids.filter(Boolean)
+            : (interviewer_id ? [interviewer_id] : []);
+        if (isSmart) {
+            if (!start_date) return res.status(400).json({ error: 'start_date (YYYY-MM-DD) is required for smart mode' });
+            if (interviewerLanes.length === 0) return res.status(400).json({ error: 'At least one interviewer is required for smart mode' });
         }
 
         // Fetch the apps we'll touch, joined to candidate+job for notification.
         const appsResult = await query(
             adaptQuery(`
-                SELECT a.id, a.candidate_id, a.job_id, c.name, j.title AS job_title
+                SELECT a.id, a.candidate_id, a.job_id, c.name, j.title AS job_title,
+                       j.project_id, p.interview_config
                 FROM applications a
                 JOIN candidates c ON a.candidate_id = c.id
                 JOIN jobs j ON a.job_id = j.id
+                LEFT JOIN projects p ON p.id = j.project_id
                 WHERE a.id = ANY($1::uuid[])
             `),
             [application_ids]
         );
 
-        const created = [];
+        // Preserve the caller's order so allocation is deterministic.
+        const orderIndex = new Map(application_ids.map((id, i) => [id, i]));
+        const appRows = appsResult.rows.slice().sort(
+            (a, b) => (orderIndex.get(a.id) ?? 0) - (orderIndex.get(b.id) ?? 0)
+        );
+
+        // Build a per-application slot plan: id -> { datetime, interviewer_id }.
+        const slotMins = Math.min(Math.max(parseInt(slot_minutes, 10) || DEFAULT_SLOT_MINUTES, 5), 240);
+        const perDay = Math.min(Math.max(parseInt(per_day_limit, 10) || DEFAULT_PER_DAY_LIMIT, 1), 50);
+        const plan = new Map();
         const skipped = [];
+        let allocation = null;
+
+        // Drop opted-out / removed / out-of-funnel candidates before scheduling —
+        // they should never receive a bulk interview invite. Reported in `skipped`
+        // (reason 'opted_out') so the agent sees who was excluded. Guarded so a
+        // missing optional column never blocks the batch.
+        try {
+            const ooFrags = await interviewOptOutConditions();
+            const ooRes = await query(adaptQuery(`
+                SELECT a.id FROM applications a
+                JOIN candidates c ON a.candidate_id = c.id
+                WHERE a.id = ANY($1::uuid[]) AND NOT (${ooFrags.join(' AND ')})
+            `), [application_ids]);
+            const optedOut = new Set(ooRes.rows.map((r) => r.id));
+            for (let i = appRows.length - 1; i >= 0; i--) {
+                if (optedOut.has(appRows[i].id)) {
+                    skipped.push({ application_id: appRows[i].id, error: 'opted_out' });
+                    appRows.splice(i, 1);
+                }
+            }
+        } catch (ooErr) { logger.debug(`bulk-schedule opt-out filter skipped — ${ooErr.message}`); }
+
+        if (isSmart) {
+            // Seed existing per-interviewer/day load so re-runs don't overbook.
+            const seedRes = await query(
+                adaptQuery(`
+                    SELECT interviewer_id, CAST(scheduled_datetime AS DATE) AS d, COUNT(*) AS n
+                    FROM interview_schedules
+                    WHERE interviewer_id = ANY($1::uuid[])
+                      AND status IN ('scheduled', 'confirmed')
+                      AND scheduled_datetime >= $2
+                    GROUP BY interviewer_id, CAST(scheduled_datetime AS DATE)
+                `),
+                [interviewerLanes, start_date]
+            );
+            const existingByInterviewerDay = {};
+            for (const r of seedRes.rows) {
+                const dKey = (r.d instanceof Date) ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
+                if (!existingByInterviewerDay[r.interviewer_id]) existingByInterviewerDay[r.interviewer_id] = {};
+                existingByInterviewerDay[r.interviewer_id][dKey] = Number(r.n) || 0;
+            }
+
+            allocation = allocateInterviewSlots({
+                applications: appRows.map((a) => a.id),
+                interviewerIds: interviewerLanes,
+                startDate: start_date,
+                perDayLimit: perDay,
+                slotMinutes: slotMins,
+                existingByInterviewerDay,
+            });
+            for (const a of allocation.assignments) {
+                plan.set(a.application_id, { datetime: a.scheduled_datetime, interviewer_id: a.interviewer_id });
+            }
+        } else if (isDays) {
+            // Distribute candidates across each project's configured interview days
+            // (each day = a physical session with its own date + venue + capacity).
+            const byProject = new Map(); // project_id -> { cfg, apps: [] }
+            for (const a of appRows) {
+                const key = a.project_id || 'none';
+                if (!byProject.has(key)) byProject.set(key, { cfg: a.interview_config || {}, apps: [] });
+                byProject.get(key).apps.push(a);
+            }
+            const fill = String(day_fill).toLowerCase() === 'round_robin' ? 'round_robin' : 'sequential';
+            const wantDayIds = Array.isArray(day_ids) && day_ids.length ? day_ids : null;
+            for (const [projectId, grp] of byProject) {
+                const days = resolveInterviewDays(grp.cfg).filter((d) => d.date);
+                if (!days.length) {
+                    // No configured days → fall back to the explicit datetime if the
+                    // caller supplied one, else report these apps as skipped.
+                    for (const a of grp.apps) {
+                        if (scheduled_datetime) plan.set(a.id, { datetime: scheduled_datetime, interviewer_id: interviewer_id || null, location: location || null });
+                        else skipped.push({ application_id: a.id, error: 'no_interview_days' });
+                    }
+                    continue;
+                }
+                // Seed already-booked counts per day so re-runs don't overfill a day.
+                const bookedByDate = {};
+                if (projectId !== 'none') {
+                    const seed = await query(adaptQuery(`
+                        SELECT to_char(s.scheduled_datetime, 'YYYY-MM-DD') AS d, COUNT(*)::int AS n
+                        FROM interview_schedules s
+                        JOIN applications a ON s.application_id = a.id
+                        JOIN jobs j ON a.job_id = j.id
+                        WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+                          AND s.scheduled_datetime >= NOW()
+                        GROUP BY 1
+                    `), [projectId]);
+                    for (const r of seed.rows) bookedByDate[r.d] = parseInt(r.n, 10) || 0;
+                }
+                const { assignments } = assignDaysRoundRobin({ days, count: grp.apps.length, bookedByDate, fill, dayIds: wantDayIds });
+                grp.apps.forEach((a, i) => {
+                    const asg = assignments[i];
+                    if (!asg) { skipped.push({ application_id: a.id, error: 'no_capacity' }); return; }
+                    plan.set(a.id, {
+                        datetime: asg.scheduled_datetime,
+                        interviewer_id: interviewer_id || null,
+                        location: asg.location,
+                        dayLine: `Your interview day: ${shortWallClockDate(asg.day.date)} at ${asg.location}.`,
+                        others: formatOtherDaysList(days, asg.day.date),
+                        whatToBring: asg.day.what_to_bring || null,
+                        dressCode: asg.day.dress_code || null,
+                    });
+                });
+            }
+        } else {
+            for (const a of appRows) {
+                plan.set(a.id, { datetime: scheduled_datetime, interviewer_id: interviewer_id || null, location: location || null });
+            }
+        }
+
+        // Days preview (dry run): aggregate the plan into per-day counts + venues.
+        if (isDays && dryRunRequested) {
+            const byDayMap = new Map();
+            for (const a of appRows) {
+                const slot = plan.get(a.id);
+                if (!slot || !slot.datetime) continue;
+                const d = String(slot.datetime).slice(0, 10);
+                if (!byDayMap.has(d)) byDayMap.set(d, { date: d, location: slot.location || null, count: 0, items: [] });
+                const b = byDayMap.get(d);
+                b.count += 1;
+                b.items.push({ application_id: a.id, candidate_name: a.name, job_title: a.job_title, scheduled_datetime: slot.datetime });
+            }
+            const byDay = Array.from(byDayMap.values()).sort((x, y) => x.date.localeCompare(y.date));
+            return res.json({
+                mode: 'days', dry_run: true,
+                total: appRows.length,
+                scheduled: plan.size,
+                skipped,
+                span: byDay.length ? { first: byDay[0].date, last: byDay[byDay.length - 1].date } : null,
+                byDay,
+            });
+        }
+
+        // Smart preview (dry run): return the day-by-day plan without writing.
+        if (isSmart && (dry_run === true || dry_run === 'true' || dry_run === 1)) {
+            const nameByApp = new Map(appRows.map((a) => [a.id, { candidate_name: a.name, job_title: a.job_title }]));
+            const enrich = (it) => ({
+                ...it,
+                candidate_name: nameByApp.get(it.application_id)?.candidate_name || null,
+                job_title: nameByApp.get(it.application_id)?.job_title || null,
+            });
+            const dates = (allocation.assignments || []).map((a) => a.scheduled_datetime.slice(0, 10)).sort();
+            return res.json({
+                mode: 'smart',
+                dry_run: true,
+                total: appRows.length,
+                effective_slots_per_day: allocation.effective_slots_per_day,
+                physical_slots_per_day: allocation.physical_slots_per_day,
+                span: dates.length ? { first: dates[0], last: dates[dates.length - 1] } : null,
+                assignments: allocation.assignments.map(enrich),
+                byDay: (allocation.byDay || []).map((b) => ({ ...b, items: b.items.map(enrich) })),
+            });
+        }
+
+        const created = [];
         const notificationResults = [];
         const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
+        // Resolve once for the whole batch; the note still rides the WhatsApp
+        // invite even when the column is absent (B016).
+        const hasDescCol = await interviewHasDescriptionColumn();
 
-        for (const app of appsResult.rows) {
+        for (const app of appRows) {
+            const slot = plan.get(app.id);
+            if (!slot || !slot.datetime) {
+                skipped.push({ application_id: app.id, error: 'No slot allocated' });
+                continue;
+            }
+            const apptDatetime = slot.datetime;
+            const apptInterviewer = slot.interviewer_id || interviewer_id || null;
+            // Per-day venue in 'days' mode; otherwise the batch-level location.
+            const apptLocation = slot.location != null ? slot.location : (location || null);
+            // In 'days' mode, fold the assigned day + venue + other available days
+            // into the note so the candidate sees them in the WhatsApp invite.
+            const apptDescription = slot.dayLine
+                ? [description || null, slot.dayLine, slot.others ? `If that doesn't work, you can also choose:\n${slot.others}` : null].filter(Boolean).join('\n')
+                : (description || null);
             try {
                 const id = generateUUID();
-                await query(
-                    adaptQuery(`
-                        INSERT INTO interview_schedules
-                            (id, application_id, scheduled_datetime, location, interviewer_id,
-                             duration_minutes, status, created_by)
-                        VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
-                    `),
-                    [id, app.id, scheduled_datetime, location || null, interviewer_id || null,
-                     duration_minutes, req.user.id]
-                );
+                if (hasDescCol) {
+                    await query(
+                        adaptQuery(`
+                            INSERT INTO interview_schedules
+                                (id, application_id, scheduled_datetime, location, interviewer_id,
+                                 duration_minutes, status, description, created_by)
+                            VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7, $8)
+                        `),
+                        [id, app.id, apptDatetime, apptLocation, apptInterviewer,
+                         duration_minutes, description || null, req.user.id]
+                    );
+                } else {
+                    await query(
+                        adaptQuery(`
+                            INSERT INTO interview_schedules
+                                (id, application_id, scheduled_datetime, location, interviewer_id,
+                                 duration_minutes, status, created_by)
+                            VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7)
+                        `),
+                        [id, app.id, apptDatetime, apptLocation, apptInterviewer,
+                         duration_minutes, req.user.id]
+                    );
+                }
                 await query(
                     adaptQuery(`
                         UPDATE applications
@@ -415,14 +1407,18 @@ router.post('/bulk-schedule', authenticate, async (req, res, next) => {
                             updated_at = NOW()
                         WHERE id = $3
                     `),
-                    [scheduled_datetime, location || null, app.id]
+                    [apptDatetime, apptLocation, app.id]
                 );
+                // Candidate stage → Interview Scheduled.
+                syncCandidateStage(app.candidate_id).catch(() => {});
 
                 let notification = { success: [], failed: [] };
                 try {
                     notification = await notifications.sendInterviewNotification(
-                        app.candidate_id, app.job_title, scheduled_datetime, location || 'TBD', channels
+                        app.candidate_id, app.job_title, apptDatetime, apptLocation || 'TBD', channels, apptDescription, translate_notes === true,
+                        { whatToBring: slot.whatToBring || null, dressCode: slot.dressCode || null }
                     );
+                    await applyWhatsappReachability(app.candidate_id, notification);
                     if (notification.success.some(s => s.channel === 'whatsapp')) {
                         await query(
                             adaptQuery('UPDATE interview_schedules SET confirmation_sent_at = NOW() WHERE id = $1'),
@@ -434,7 +1430,34 @@ router.post('/bulk-schedule', authenticate, async (req, res, next) => {
                     notification.failed.push({ channel: 'all', error: notifErr.message });
                 }
 
-                created.push({ interview_id: id, application_id: app.id, candidate_name: app.name });
+                // Engagement timeline entry per candidate.
+                try {
+                    const waEntry = notification.success.find(s => s.channel === 'whatsapp');
+                    const inviteState = waEntry
+                        ? (waEntry.queued ? 'queued — delivers when the candidate replies' : 'sent')
+                        : 'not delivered';
+                    const whenStr = notifications.formatInterviewWallClock
+                        ? notifications.formatInterviewWallClock(apptDatetime)
+                        : String(apptDatetime);
+                    await logAgentAction({
+                        candidateId: app.candidate_id, agentId: req.user?.id, actionType: 'interview',
+                        applicationId: app.id,
+                        remark: `Interview for ${app.job_title} on ${whenStr} — invite ${inviteState}`,
+                    });
+                } catch (_e) { /* best-effort */ }
+
+                created.push({
+                    interview_id: id,
+                    application_id: app.id,
+                    candidate_name: app.name,
+                    scheduled_datetime: apptDatetime,
+                    interviewer_id: apptInterviewer,
+                });
+                // Gentle throttle between WhatsApp sends so a large batch doesn't
+                // burst past Meta's rate limit (reason='rate_limited' drops sends).
+                if (appRows.length > 10) {
+                    await new Promise((r) => setTimeout(r, 120));
+                }
                 notificationResults.push({ application_id: app.id, notification });
             } catch (err) {
                 logger.warn(`Bulk-schedule: failed for application ${app.id}: ${err.message}`);
@@ -442,13 +1465,119 @@ router.post('/bulk-schedule', authenticate, async (req, res, next) => {
             }
         }
 
+        // Per-reason delivery breakdown so the UI can tell the agent EXACTLY what
+        // happened: how many invites actually reached candidates vs. were dropped
+        // (out_of_window / no_whatsapp / rate_limited / other), instead of a vague
+        // "scheduled N". This is the difference between "done" and "silently lost".
+        const deliverySummary = { sent: 0, queued: 0, out_of_window: 0, no_whatsapp: 0, rate_limited: 0, token_expired: 0, other: 0 };
+        for (const r of notificationResults) {
+            const waEntry = r.notification?.success?.find?.((s) => s.channel === 'whatsapp');
+            if (waEntry) { deliverySummary[waEntry.queued ? 'queued' : 'sent'] += 1; continue; }
+            const waFail = (r.notification?.failed || []).find((f) => f.channel === 'whatsapp' || f.channel === 'all');
+            const reason = waFail?.reason || 'other';
+            if (deliverySummary[reason] === undefined) deliverySummary.other += 1;
+            else deliverySummary[reason] += 1;
+        }
+
+        // Persist a send report (best-effort; table from migration 062) so the
+        // agent can re-open exactly who failed and why. Dry-runs return earlier,
+        // so this only records real sends.
+        let reportId = null;
+        try {
+            reportId = generateUUID();
+            const failKeys = ['out_of_window', 'no_whatsapp', 'rate_limited', 'token_expired', 'other'];
+            const failedCount = skipped.length + failKeys.reduce((s, k) => s + (deliverySummary[k] || 0), 0);
+            const projForReport = (appRows[0] && appRows[0].project_id) || null;
+            await query(adaptQuery(`
+                INSERT INTO bulk_interview_sends
+                  (id, created_by, project_id, mode, total_selected, scheduled_count, sent_count, failed_count, delivery_summary, skipped)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            `), [
+                reportId, req.user?.id || null, projForReport,
+                isSmart ? 'smart' : (isDays ? 'days' : 'fixed'),
+                application_ids.length, created.length, deliverySummary.sent || 0,
+                failedCount, JSON.stringify(deliverySummary), JSON.stringify(skipped),
+            ]);
+        } catch (repErr) {
+            logger.debug(`bulk-schedule: send report not persisted — ${repErr.message}`);
+            reportId = null;
+        }
+
         res.status(201).json({
+            mode: isSmart ? 'smart' : (isDays ? 'days' : 'fixed'),
             total_requested: application_ids.length,
             total_created: created.length,
             created,
             skipped,
             notifications: notificationResults,
+            delivery_summary: deliverySummary,
+            report_id: reportId,
+            ...(isSmart && allocation
+                ? { byDay: allocation.byDay, effective_slots_per_day: allocation.effective_slots_per_day }
+                : {}),
         });
+    } catch (err) { next(err); }
+});
+
+// ── Bulk update — change status / reschedule / reassign N interviews at once ───
+// Used by the Interview Management floating action bar (bulk status, bulk
+// reschedule). A reschedule (scheduled_datetime) resets reminder markers and
+// notifies each candidate of the new time (best-effort, fire-and-forget).
+router.post('/bulk-update', authenticate, requireSection('interviews', 'edit'), authorize(...SCHEDULER_ROLES), async (req, res, next) => {
+    try {
+        const { interview_ids, status, scheduled_datetime, interviewer_id, location, notify = true } = req.body || {};
+        if (!Array.isArray(interview_ids) || interview_ids.length === 0) {
+            return res.status(400).json({ error: 'interview_ids must be a non-empty array' });
+        }
+        if (interview_ids.length > BULK_MAX) {
+            return res.status(400).json({ error: `Cannot update more than ${BULK_MAX} interviews at once` });
+        }
+        if (!status && !scheduled_datetime && !interviewer_id && !location) {
+            return res.status(400).json({ error: 'Provide at least one of: status, scheduled_datetime, interviewer_id, location' });
+        }
+
+        const setClauses = [];
+        const values = [];
+        const p = () => `$${values.length + 1}`;
+        if (status)             { setClauses.push(`status = ${p()}`); values.push(status); if (status === 'completed') setClauses.push('completed_at = NOW()'); }
+        if (scheduled_datetime) { setClauses.push(`scheduled_datetime = ${p()}`); values.push(scheduled_datetime); setClauses.push('reminder_sent_at = NULL'); }
+        if (interviewer_id)     { setClauses.push(`interviewer_id = ${p()}`); values.push(interviewer_id); }
+        if (location)           { setClauses.push(`location = ${p()}`); values.push(location); }
+
+        values.push(interview_ids);
+        const upd = await query(
+            adaptQuery(`UPDATE interview_schedules SET ${setClauses.join(', ')} WHERE id = ANY(${p()}::uuid[]) RETURNING id`),
+            values
+        );
+        const ids = (upd.rows || []).map((r) => r.id);
+
+        // Reschedule housekeeping: reset recurring cadence + notify each candidate.
+        if (scheduled_datetime && ids.length) {
+            try {
+                await query(adaptQuery(`UPDATE interview_schedules
+                                           SET last_reminder_date = NULL, reminder_count = 0, dayof_reminder_sent_at = NULL
+                                         WHERE id = ANY($1::uuid[])`), [ids]).catch(() => {});
+            } catch (_) { /* cadence columns may be absent on prod (ownership) */ }
+            if (notify) {
+                try {
+                    const info = await query(adaptQuery(`
+                        SELECT iv.scheduled_datetime, iv.location, c.id AS candidate_id, j.title AS job_title
+                        FROM interview_schedules iv
+                        JOIN applications a ON iv.application_id = a.id
+                        JOIN candidates c ON a.candidate_id = c.id
+                        JOIN jobs j ON a.job_id = j.id
+                        WHERE iv.id = ANY($1::uuid[])
+                    `), [ids]);
+                    for (const r of info.rows) {
+                        notifications.sendInterviewRescheduledNotification(
+                            r.candidate_id, r.job_title, r.scheduled_datetime, r.location || 'TBD'
+                        ).catch((e) => logger.warn(`bulk-update reschedule notify failed: ${e.message}`));
+                    }
+                } catch (e) { logger.warn(`bulk-update notify lookup failed: ${e.message}`); }
+            }
+        }
+
+        res.json({ updated: ids.length, requested: interview_ids.length });
     } catch (err) { next(err); }
 });
 

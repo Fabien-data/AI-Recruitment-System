@@ -1,18 +1,29 @@
-﻿import { useState, useEffect } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { clsx } from 'clsx'
 import { Link, useSearchParams } from 'react-router-dom'
 import { showNotificationToast } from '../utils/notificationToast'
 import {
   getCandidates,
   getCandidate,
   getJobs,
+  getProjects,
   getApplications,
   createApplication,
   updateApplication,
   transferApplication,
   updateCandidate,
-  batchAutoAssign
+  batchAutoAssign,
+  reparseCv,
+  screenCandidate,
+  uploadCandidateDocument,
+  setCandidateStage,
+  apiClient,
 } from '../api'
+import { getStatusLabel, normalizeStatus, CANDIDATE_STAGES, CANDIDATE_STAGE_LABELS, CANDIDATE_MANUAL_STATUS_OPTIONS, FUTURE_POOL_CATEGORY_OPTIONS } from '../constants/lifecycle'
+import { FuturePoolTags } from '../components/ui/FuturePoolTags'
+import { useSectionAccess } from '../stores/authStore'
+import { EditCandidateModal } from '../components/EditCandidateModal'
 import {
   Search,
   FileText,
@@ -41,6 +52,9 @@ import {
   Smartphone,
   Sparkles,
   Plus,
+  Pencil,
+  Calendar,
+  MapPinned,
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -49,10 +63,15 @@ import { Modal, ConfirmModal } from '../components/ui/Modal'
 import { TableSkeleton } from '../components/ui/Skeleton'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Tabs } from '../components/ui/Tabs'
+import { CallRemarksPanel } from '../components/communications/CallRemarksPanel'
+import ProjectJobSelector from '../components/applications/ProjectJobSelector'
+import { CertifyDialog, ScheduleInterviewDialog } from '../components/communications/StageActionDialogs'
 import { EmptyState } from '../components/ui/EmptyState'
-import { FileSearch } from 'lucide-react'
+import { FileSearch, BadgeCheck, CalendarClock } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { getDocumentCategory } from '../utils/documents'
+import { getDocumentCategory, resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
+import { formatHeight } from '../utils/height'
+import { DocumentPreview } from '../components/documents/DocumentPreview'
 
 const DEBOUNCE_MS = 300
 
@@ -66,24 +85,14 @@ function parseTags(value) {
   return []
 }
 
-function resolveCvUrl(rawUrl) {
-  if (!rawUrl || typeof rawUrl !== 'string') return null
-  if (rawUrl.startsWith('chatbot://')) return null
-  if (/^https?:\/\//i.test(rawUrl)) return rawUrl
-  const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-  if (!apiBase) return rawUrl
-  return rawUrl.startsWith('/') ? `${apiBase}${rawUrl}` : `${apiBase}/${rawUrl}`
-}
-
 function getCvSourceUrl(cv) {
   return cv?.resolved_file_url || cv?.file_url || ''
 }
 
-// getDocumentCategory now lives in utils/documents.js (imported at top of
-// file) so Communications + CandidateDetail + this page all classify the
-// same way. resolveCvUrl above stays here because CVManager passes a raw
-// URL string (rather than a cv object) and many downstream call sites would
-// need to be touched to migrate.
+// getDocumentCategory, resolveDocumentUrl and isImageDocument all live in
+// utils/documents.js (imported at top) so Communications + CandidateDetail +
+// this page classify and resolve CV URLs the same way — including chatbot://
+// uploads (→ PENDING_URL) and image rendering (B004/B014).
 
 // Remark types for CV evaluation
 const REMARK_TYPES = [
@@ -111,15 +120,53 @@ export default function CVManager() {
   const [search, setSearch] = useState('')
   const [selectedCandidate, setSelectedCandidate] = useState(null)
   const [statusFilter, setStatusFilter] = useState('')
+  // Future Pool drill-down (only meaningful when statusFilter === 'future_pool').
+  const [futurePoolCat, setFuturePoolCat] = useState('')
+  const [futurePoolCountry, setFuturePoolCountry] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
+  const [jobFilter, setJobFilter] = useState('')
+  const [projectFilter, setProjectFilter] = useState('')
+  const [languageFilter, setLanguageFilter] = useState('')
+  const [hasCvFilter, setHasCvFilter] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [showFilters, setShowFilters] = useState(false)
 
   const queryClient = useQueryClient()
+
+  // Auto-assign hits backend routes that require applications.create; hide the
+  // trigger for roles that can reach CV Manager but would get a 403 (e.g.
+  // marketing_agent, project_handler).
+  const canAutoAssign = useSectionAccess('applications', 'create')
+
+  // Options for the Job / Project selects (active jobs + all projects).
+  const { data: jobsOptions } = useQuery({
+    queryKey: ['jobs', { status: 'active', limit: 200 }],
+    queryFn: () => getJobs({ status: 'active', limit: 200 }),
+  })
+  const { data: projectsOptions } = useQuery({
+    queryKey: ['projects', { limit: 200 }],
+    queryFn: () => getProjects({ limit: 200 }),
+  })
+  const jobChoices = jobsOptions?.data || []
+  const projectChoices = projectsOptions?.data || projectsOptions || []
+
+  const clearAllFilters = () => {
+    setStatusFilter(''); setSourceFilter(''); setJobFilter(''); setProjectFilter('')
+    setLanguageFilter(''); setHasCvFilter(''); setDateFrom(''); setDateTo('')
+    setFuturePoolCat(''); setFuturePoolCountry('')
+  }
 
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput), DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [searchInput])
+
+  // Any filter change should send the user back to page 1 (otherwise a
+  // narrower result set can leave them stranded on an empty later page).
+  useEffect(() => {
+    setPage(1)
+  }, [search, statusFilter, sourceFilter, jobFilter, projectFilter, languageFilter, hasCvFilter, dateFrom, dateTo, futurePoolCat, futurePoolCountry])
 
   const candidateIdFromQuery = searchParams.get('candidate')
 
@@ -139,9 +186,26 @@ export default function CVManager() {
     setSearchParams(nextParams, { replace: true })
   }
 
+  const candidateQueryParams = {
+    page,
+    search,
+    limit: 20,
+    status: statusFilter || undefined,
+    source: sourceFilter || undefined,
+    job_id: jobFilter || undefined,
+    project_ids: projectFilter || undefined,
+    language: languageFilter || undefined,
+    has_cv: hasCvFilter || undefined,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+    // Future Pool drill-down only applies inside the Future Pool view.
+    future_pool_category: statusFilter === 'future_pool' ? (futurePoolCat || undefined) : undefined,
+    future_pool_country: statusFilter === 'future_pool' ? (futurePoolCountry.trim() || undefined) : undefined,
+  }
+
   const { data: candidatesData, isLoading: isLoadingCandidates, refetch } = useQuery({
-    queryKey: ['candidates', { page, search, status: statusFilter, source: sourceFilter }],
-    queryFn: () => getCandidates({ page, search, limit: 20, status: statusFilter || undefined, source: sourceFilter || undefined })
+    queryKey: ['candidates', candidateQueryParams],
+    queryFn: () => getCandidates(candidateQueryParams)
   })
 
   // Auto-assign all new candidates to matching jobs
@@ -196,15 +260,17 @@ export default function CVManager() {
         subtitle="Review, Remark, and Assign Candidates to Projects"
         actions={
           <>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => autoAssignMutation.mutate()}
-              loading={autoAssignMutation.isPending}
-            >
-              <Sparkles size={16} />
-              Auto-Assign All
-            </Button>
+            {canAutoAssign && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => autoAssignMutation.mutate()}
+                loading={autoAssignMutation.isPending}
+              >
+                <Sparkles size={16} />
+                Auto-Assign All
+              </Button>
+            )}
             <Button variant="secondary" size="sm" onClick={() => refetch()} aria-label="Refresh">
               <RefreshCw size={16} />
             </Button>
@@ -249,12 +315,33 @@ export default function CVManager() {
                 <option value="">All Statuses</option>
                 <option value="new">New</option>
                 <option value="screening">Screening</option>
-                <option value="interview">Interview</option>
-                <option value="hired">Hired</option>
-                <option value="rejected">Rejected</option>
+                <option value="certified">Certified</option>
+                <option value="interview_scheduled">Interview Scheduled</option>
                 <option value="future_pool">Future Pool</option>
               </select>
             </div>
+            {statusFilter === 'future_pool' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Future Pool reason</label>
+                  <select className="input w-full" value={futurePoolCat} onChange={(e) => setFuturePoolCat(e.target.value)}>
+                    {FUTURE_POOL_CATEGORY_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Desired country</label>
+                  <input
+                    type="text"
+                    className="input w-full"
+                    placeholder="e.g. Qatar"
+                    value={futurePoolCountry}
+                    onChange={(e) => setFuturePoolCountry(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Source</label>
               <select
@@ -270,12 +357,51 @@ export default function CVManager() {
                 <option value="web">Web</option>
               </select>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Job</label>
+              <select className="input w-full" value={jobFilter} onChange={(e) => setJobFilter(e.target.value)}>
+                <option value="">All Jobs</option>
+                {jobChoices.map((j) => (
+                  <option key={j.id} value={j.id}>{j.title}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Project</label>
+              <select className="input w-full" value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)}>
+                <option value="">All Projects</option>
+                {projectChoices.map((p) => (
+                  <option key={p.id} value={p.id}>{p.title}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Language</label>
+              <select className="input w-full" value={languageFilter} onChange={(e) => setLanguageFilter(e.target.value)}>
+                <option value="">All Languages</option>
+                <option value="en">English</option>
+                <option value="si">Sinhala</option>
+                <option value="ta">Tamil</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">CV</label>
+              <select className="input w-full" value={hasCvFilter} onChange={(e) => setHasCvFilter(e.target.value)}>
+                <option value="">All Candidates</option>
+                <option value="true">CV uploaded</option>
+                <option value="false">No CV</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Added from</label>
+              <input type="date" className="input w-full" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Added to</label>
+              <input type="date" className="input w-full" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            </div>
             <div className="flex items-end">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => { setStatusFilter(''); setSourceFilter(''); }}
-              >
+              <Button variant="secondary" size="sm" onClick={clearAllFilters}>
                 Clear Filters
               </Button>
             </div>
@@ -284,12 +410,13 @@ export default function CVManager() {
       </div>
 
       {/* Stats Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
         <StatCard label="Total CVs" value={pagination?.total || 0} color="blue" />
-        <StatCard label="New" value={candidatesList.filter(c => c.status === 'new').length} color="green" />
-        <StatCard label="Screening" value={candidatesList.filter(c => c.status === 'screening').length} color="amber" />
-        <StatCard label="Interview" value={candidatesList.filter(c => c.status === 'interview').length} color="purple" />
-        <StatCard label="Future Pool" value={candidatesList.filter(c => c.status === 'future_pool').length} color="gray" />
+        <StatCard label="New" value={candidatesList.filter(c => normalizeStatus(c.status) === 'new').length} color="green" />
+        <StatCard label="Screening" value={candidatesList.filter(c => normalizeStatus(c.status) === 'screening').length} color="amber" />
+        <StatCard label="Certified" value={candidatesList.filter(c => normalizeStatus(c.status) === 'certified').length} color="emerald" />
+        <StatCard label="Interview Scheduled" value={candidatesList.filter(c => normalizeStatus(c.status) === 'interview_scheduled').length} color="purple" />
+        <StatCard label="Future Pool" value={candidatesList.filter(c => normalizeStatus(c.status) === 'future_pool').length} color="gray" />
       </div>
 
       {/* Candidates List */}
@@ -348,6 +475,7 @@ export default function CVManager() {
                     </td>
                     <td className="py-4 px-4">
                       <Badge status={candidate.status} />
+                      <FuturePoolTags candidate={candidate} className="mt-1.5 max-w-[220px]" />
                     </td>
                     <td className="py-4 px-4">
                       <Button
@@ -409,6 +537,7 @@ function StatCard({ label, value, color }) {
     blue: 'bg-blue-50 text-blue-700 border-blue-200',
     green: 'bg-green-50 text-green-700 border-green-200',
     amber: 'bg-amber-50 text-amber-700 border-amber-200',
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     purple: 'bg-purple-50 text-purple-700 border-purple-200',
     gray: 'bg-zinc-50 dark:bg-zinc-900/60 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800'
   }
@@ -438,7 +567,10 @@ function SourceBadge({ source }) {
   )
 }
 
-function CVReviewModal({ candidate, onClose }) {
+// Exported so the Communications panel can open the full CV review/edit flow
+// in-place (as a modal over the conversation) without navigating away — the
+// agent never loses the chat they were on.
+export function CVReviewModal({ candidate, onClose }) {
   const [activeTab, setActiveTab] = useState('overview')
   const queryClient = useQueryClient()
 
@@ -501,9 +633,70 @@ function CVReviewModal({ candidate, onClose }) {
 
 function OverviewTab({ candidate }) {
   const [expandedCVs, setExpandedCVs] = useState({})
+  const [reparsingId, setReparsingId] = useState(null)
+  const [docType, setDocType] = useState('cv')
+  const [editOpen, setEditOpen] = useState(false)
+  const [certifyOpen, setCertifyOpen] = useState(false)
+  const [interviewOpen, setInterviewOpen] = useState(false)
+  const docFileRef = useRef(null)
+  const queryClient = useQueryClient()
+
+  // Quick status change from the overview header. Status changes are NOT silent
+  // (user decision 2026-06-11): the candidate is notified of the new stage.
+  // certified / interview route to the dialogs (which carry notes / a date and
+  // notify with full context); the rest send the matching message via notify=true.
+  const statusMutation = useMutation({
+    mutationFn: (status) => setCandidateStage(candidate.id, status, true),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['applications'] })
+      const waOk = res?.notification?.success?.some?.((s) => s.channel === 'whatsapp')
+      toast.success(waOk ? 'Status updated — candidate notified' : 'Status updated')
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Failed to update status'),
+  })
+
+  const onStatusSelect = (value) => {
+    if (!value) return
+    if (value === 'certified') { setCertifyOpen(true); return }
+    if (value === 'interview_scheduled') { setInterviewOpen(true); return }
+    statusMutation.mutate(value)
+  }
+
+  const uploadDocMutation = useMutation({
+    mutationFn: ({ file, doc_type }) => uploadCandidateDocument(candidate.id, file, doc_type),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      toast.success('Document uploaded')
+      if (docFileRef.current) docFileRef.current.value = ''
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Upload failed'),
+  })
+
+  const onPickDoc = (e) => {
+    const file = e.target.files?.[0]
+    if (file) uploadDocMutation.mutate({ file, doc_type: docType })
+  }
 
   const toggleCV = (id) => {
     setExpandedCVs(prev => ({ ...prev, [id]: !prev[id] }))
+  }
+
+  const handleReparse = async (cvId) => {
+    setReparsingId(cvId)
+    try {
+      await reparseCv(cvId)
+      await queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      await queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      showNotificationToast?.({ title: 'Re-parsed', message: 'CV details refreshed from the document.', type: 'success' })
+    } catch (e) {
+      const msg = e?.response?.data?.error || e.message || 'Re-parse failed'
+      showNotificationToast?.({ title: 'Re-parse failed', message: msg, type: 'error' })
+    } finally {
+      setReparsingId(null)
+    }
   }
 
   const metadata = typeof candidate.metadata === 'string'
@@ -512,7 +705,8 @@ function OverviewTab({ candidate }) {
 
   const mismatches = metadata.mismatches || []
   const cvDocuments = (candidate.cvs || []).filter(cv => getDocumentCategory(cv) === 'cv')
-  const additionalDocuments = (candidate.cvs || []).filter(cv => getDocumentCategory(cv) === 'additional')
+  // Everything that isn't a primary CV (passport / certificate / photo / other).
+  const additionalDocuments = (candidate.cvs || []).filter(cv => getDocumentCategory(cv) !== 'cv')
 
   const safeParseJSON = (str) => {
     if (!str) return null;
@@ -552,17 +746,107 @@ function OverviewTab({ candidate }) {
               )}
             </div>
           </div>
-          <Badge status={candidate.status} />
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <Badge status={candidate.status} />
+            {/* Quick status change */}
+            <select
+              value={CANDIDATE_MANUAL_STATUS_OPTIONS.some((o) => o.value === normalizeStatus(candidate.status)) ? normalizeStatus(candidate.status) : ''}
+              onChange={(e) => onStatusSelect(e.target.value)}
+              disabled={statusMutation.isPending}
+              title="Change candidate status (notifies the candidate)"
+              className="input text-xs py-1 w-40"
+            >
+              <option value="" disabled>Set status…</option>
+              {CANDIDATE_MANUAL_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            {/* Certify / Schedule also notify with full context (notes / date).
+                Changing status in the dropdown above now notifies too. */}
+            <div className="flex gap-1.5">
+              <Button size="sm" variant="secondary" className="gap-1 text-emerald-700 dark:text-emerald-300" onClick={() => setCertifyOpen(true)}>
+                <BadgeCheck size={14} /> Certify &amp; notify
+              </Button>
+              <Button size="sm" variant="secondary" className="gap-1 text-indigo-700 dark:text-indigo-300" onClick={() => setInterviewOpen(true)}>
+                <CalendarClock size={14} /> Schedule interview
+              </Button>
+            </div>
+            <Button size="sm" variant="secondary" className="gap-1" onClick={() => setEditOpen(true)}>
+              <Pencil size={14} /> Edit details
+            </Button>
+          </div>
         </div>
       </div>
+
+      <EditCandidateModal candidate={candidate} open={editOpen} onClose={() => setEditOpen(false)} />
+      <CertifyDialog
+        open={certifyOpen}
+        onClose={() => setCertifyOpen(false)}
+        candidateId={candidate.id}
+        candidateName={candidate.name}
+      />
+      <ScheduleInterviewDialog
+        open={interviewOpen}
+        onClose={() => setInterviewOpen(false)}
+        candidateId={candidate.id}
+        candidateName={candidate.name}
+      />
 
       {/* Details Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <DetailCard label="Source"     value={candidate.source} icon={Database}    tone="indigo" />
-        <DetailCard label="Height"     value={metadata.height_cm ? `${metadata.height_cm} cm` : 'N/A'} icon={Star} tone="emerald" />
+        <DetailCard label="Height"     value={formatHeight(metadata.height_cm) || 'N/A'} icon={Star} tone="emerald" />
         <DetailCard label="Age"        value={(candidate.age || metadata.age) ? `${candidate.age || metadata.age} years` : 'N/A'} icon={User} tone="amber" />
         <DetailCard label="Experience" value={(candidate.experience_years || metadata.experience_years) ? `${candidate.experience_years || metadata.experience_years} years` : 'N/A'} icon={Briefcase} tone="purple" />
       </div>
+
+      {/* Extra profile details captured from chat + CV extraction */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <DetailCard label="Country"   value={metadata.destination_country || metadata.country || candidate.preferred_country || 'N/A'} icon={MapPin} tone="indigo" />
+        <DetailCard label="Licenses"  value={metadata.licenses || 'N/A'} icon={Tag} tone="amber" />
+        <DetailCard label="Prev. Employer" value={metadata.previous_employer || 'N/A'} icon={Building} tone="purple" />
+        <DetailCard label="English"   value={metadata.english_proficiency || 'N/A'} icon={CheckCircle} tone="emerald" />
+      </div>
+
+      {/* Profile completeness + needs-review flag */}
+      {(() => {
+        const checks = [
+          !!candidate.name,
+          !!(candidate.age || metadata.age),
+          (candidate.experience_years != null || metadata.experience_years != null),
+          parseTags(candidate.skills || candidate.tags).length > 0,
+          !!(metadata.destination_country || metadata.country || candidate.preferred_country),
+          (cvDocuments?.length || 0) > 0,
+        ]
+        const pct = Math.round((checks.filter(Boolean).length / checks.length) * 100)
+        const needsReview = (cvDocuments?.length || 0) === 0 || (cvDocuments || []).some((cv) => {
+          let pd = cv.parsed_data
+          if (typeof pd === 'string') { try { pd = JSON.parse(pd) } catch { pd = {} } }
+          pd = pd || {}
+          const missing = Array.isArray(pd.missing_critical_fields) ? pd.missing_critical_fields.length : 0
+          const conf = typeof pd.overall_confidence === 'number' ? pd.overall_confidence : 1
+          return missing > 0 || conf < 0.6
+        })
+        const barTone = pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500'
+        return (
+          <div className="rounded-2xl ring-1 ring-inset ring-zinc-200 dark:ring-zinc-800 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Profile completeness</span>
+              <div className="flex items-center gap-2">
+                {needsReview && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    <AlertCircle size={11} /> Needs review
+                  </span>
+                )}
+                <span className="text-sm font-bold text-zinc-800 dark:text-zinc-200">{pct}%</span>
+              </div>
+            </div>
+            <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+              <div className={clsx('h-full rounded-full transition-all', barTone)} style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Mismatches Alert */}
       {mismatches.length > 0 && (
@@ -575,7 +859,7 @@ function OverviewTab({ candidate }) {
           </h4>
           <ul className="list-disc list-inside text-sm text-amber-800 dark:text-amber-200 space-y-1 ml-1">
             {mismatches.map((mismatch, idx) => (
-              <li key={idx}>{mismatch}</li>
+              <li key={idx}>{typeof mismatch === 'string' ? mismatch : (mismatch?.reason || mismatch?.field || JSON.stringify(mismatch))}</li>
             ))}
           </ul>
         </div>
@@ -596,35 +880,46 @@ function OverviewTab({ candidate }) {
         </div>
       </div>
 
-      {/* Primary CV Quick-View — shows the latest uploaded CV if available */}
+      {/* Add document — admin-side CV/passport/certificate/photo upload. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-3">
+        <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Add document:</span>
+        <select className="input w-auto" value={docType} onChange={(e) => setDocType(e.target.value)}>
+          <option value="cv">CV / Resume</option>
+          <option value="passport">Passport</option>
+          <option value="certificate">Certificate</option>
+          <option value="photo">Photo</option>
+          <option value="other">Other</option>
+        </select>
+        <input
+          ref={docFileRef}
+          type="file"
+          className="hidden"
+          accept=".pdf,.doc,.docx,image/*"
+          onChange={onPickDoc}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          className="gap-1"
+          loading={uploadDocMutation.isPending}
+          onClick={() => docFileRef.current?.click()}
+        >
+          <Plus size={14} /> Upload
+        </Button>
+      </div>
+
+      {/* Primary CV Quick-View — shows the latest uploaded CV if available.
+          Uses the shared DocumentPreview so image CVs render as <img> (not a
+          broken PDF iframe), and chatbot uploads still syncing show a clear
+          "processing" state instead of a dead preview (B014). */}
       {(() => {
         const primaryCv = cvDocuments?.[0]
         if (!primaryCv) return null
-        const rawUrl = getCvSourceUrl(primaryCv)
-        const resolvedUrl = resolveCvUrl(rawUrl)
-        if (!resolvedUrl) return null
-        const isImage = /\.(png|jpe?g|webp|gif)$/i.test(rawUrl) || primaryCv.file_type === 'image'
+        // null → nothing to preview (the CV list below shows the messaging);
+        // PENDING_URL is truthy so DocumentPreview can render its "processing".
+        if (!resolveDocumentUrl(primaryCv)) return null
         return (
-          <div className="border border-blue-100 rounded-xl overflow-hidden bg-blue-50">
-            <div className="flex items-center justify-between px-4 py-2 border-b border-blue-100 bg-white dark:bg-zinc-900">
-              <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">CV Preview</span>
-              <a
-                href={resolvedUrl}
-                download={`CV_${candidate.name}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs btn btn-primary py-1 px-3"
-              >
-                <Download size={13} /> Download CV
-              </a>
-            </div>
-            <div className="h-96">
-              {isImage
-                ? <img src={resolvedUrl} alt="CV" className="w-full h-full object-contain" />
-                : <iframe src={`${resolvedUrl}#toolbar=0`} className="w-full h-full" title="CV Preview" />
-              }
-            </div>
-          </div>
+          <DocumentPreview cv={primaryCv} fileName={primaryCv.file_name || `CV_${candidate.name}`} className="h-96" />
         )
       })()}
 
@@ -634,9 +929,11 @@ function OverviewTab({ candidate }) {
         {cvDocuments && cvDocuments.length > 0 ? (
           <div className="space-y-3">
             {cvDocuments.map(cv => {
-              // Resolve a proper HTTP URL; returns null for chatbot:// or missing URLs
+              // Shared resolver: real https URL when ready, PENDING_URL while a
+              // chatbot upload is still syncing, null when there's nothing.
               const rawUrl = getCvSourceUrl(cv)
-              const resolvedUrl = resolveCvUrl(rawUrl)
+              const resolvedUrl = resolveDocumentUrl(cv)
+              const pendingUpload = resolvedUrl === PENDING_URL
               const isChatbotRecord = rawUrl.startsWith('chatbot://')
               const parsedInsights = safeParseJSON(cv.parsed_data)
 
@@ -671,7 +968,17 @@ function OverviewTab({ candidate }) {
                       >
                         <Sparkles size={14} /> {expandedCVs[cv.id] ? 'Hide Insights' : 'AI Insights'}
                       </Button>
-                      {resolvedUrl && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1"
+                        onClick={() => handleReparse(cv.id)}
+                        loading={reparsingId === cv.id}
+                        title="Re-run AI extraction on this document"
+                      >
+                        <RefreshCw size={14} /> Re-parse
+                      </Button>
+                      {resolvedUrl && !pendingUpload && (
                         <>
                           <a href={resolvedUrl} target="_blank" rel="noopener noreferrer">
                             <Button variant="secondary" size="sm" className="gap-1">
@@ -684,6 +991,11 @@ function OverviewTab({ candidate }) {
                             </Button>
                           </a>
                         </>
+                      )}
+                      {pendingUpload && (
+                        <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                          <Clock size={13} /> Processing…
+                        </span>
                       )}
                     </div>
                   </div>
@@ -737,7 +1049,8 @@ function OverviewTab({ candidate }) {
           <div className="space-y-3">
             {additionalDocuments.map(doc => {
               const rawUrl = getCvSourceUrl(doc)
-              const resolvedUrl = resolveCvUrl(rawUrl)
+              const resolvedUrl = resolveDocumentUrl(doc)
+              const pendingUpload = resolvedUrl === PENDING_URL
               const parsedInsights = safeParseJSON(doc.parsed_data)
 
               return (
@@ -746,8 +1059,13 @@ function OverviewTab({ candidate }) {
                     <div className="flex items-center gap-3">
                       <FileText className="text-primary-500" size={24} />
                       <div>
-                        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                          {doc.file_name || 'Additional Document'}
+                        <span className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                            {doc.file_name || 'Additional Document'}
+                          </span>
+                          <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                            {getDocumentCategory(doc)}
+                          </span>
                         </span>
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">
                           {doc.uploaded_at
@@ -767,7 +1085,17 @@ function OverviewTab({ candidate }) {
                       >
                         <Sparkles size={14} /> {expandedCVs[doc.id] ? 'Hide Insights' : 'AI Insights'}
                       </Button>
-                      {resolvedUrl && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1"
+                        onClick={() => handleReparse(doc.id)}
+                        loading={reparsingId === doc.id}
+                        title="Re-run AI extraction on this document"
+                      >
+                        <RefreshCw size={14} /> Re-parse
+                      </Button>
+                      {resolvedUrl && !pendingUpload && (
                         <>
                           <a href={resolvedUrl} target="_blank" rel="noopener noreferrer">
                             <Button variant="secondary" size="sm" className="gap-1">
@@ -780,6 +1108,11 @@ function OverviewTab({ candidate }) {
                             </Button>
                           </a>
                         </>
+                      )}
+                      {pendingUpload && (
+                        <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                          <Clock size={13} /> Processing…
+                        </span>
                       )}
                     </div>
                   </div>
@@ -932,7 +1265,7 @@ function AIInsightsTab({ candidate }) {
                 <XCircle size={15} className="text-rose-500 mt-0.5 flex-shrink-0"/>
                 <div>
                   {m.field && <span className="font-semibold text-rose-700 dark:text-rose-300">{m.field}: </span>}
-                  <span className="text-rose-700 dark:text-rose-300">{m.reason || m.field || m}</span>
+                  <span className="text-rose-700 dark:text-rose-300">{m.reason || m.field || (typeof m === 'object' ? JSON.stringify(m) : String(m))}</span>
                 </div>
               </div>
             ))}
@@ -953,7 +1286,7 @@ function AIInsightsTab({ candidate }) {
             {otherMismatches.map((m, i) => (
               <div key={i} className="flex items-start gap-2 p-2.5 bg-white/70 dark:bg-zinc-900/40 ring-1 ring-amber-200/70 dark:ring-amber-900/40 rounded-xl text-sm text-amber-800 dark:text-amber-200">
                 <AlertCircle size={13} className="mt-0.5 flex-shrink-0"/>
-                <span>{m.reason || m.field || m}</span>
+                <span>{m.reason || m.field || (typeof m === 'object' ? JSON.stringify(m) : String(m))}</span>
               </div>
             ))}
           </div>
@@ -1083,6 +1416,12 @@ Examples:
         />
       </div>
 
+      {/* Call log & remarks — shared with the conversation panel so the agent's
+          call history follows the candidate everywhere (synced source of truth). */}
+      <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+        <CallRemarksPanel candidateId={candidate.id} />
+      </div>
+
       {/* Save Button */}
       <div className="flex justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
         <Button variant="secondary" onClick={() => {
@@ -1102,9 +1441,15 @@ Examples:
 
 function ApplicationsTab({ applications, candidate, jobs }) {
   const queryClient = useQueryClient()
-  const [certifyId, setCertifyId] = useState(null)
+  const [screeningAppId, setScreeningAppId] = useState(null)
   const [transferId, setTransferId] = useState(null)
+  const [scheduleApp, setScheduleApp] = useState(null)
   const [assignJobId, setAssignJobId] = useState('')
+
+  // A CV on file is the hard gate for moving New → Screening (matches the
+  // backend has_cv check: cv_uploaded flag OR a CV-category document).
+  const hasCv = candidate?.cv_uploaded === true
+    || (candidate?.cvs || []).some((cv) => getDocumentCategory(cv) === 'cv')
 
   // Pull the WhatsApp-stated job interest from candidate metadata. The
   // chatbot writes this to candidates.metadata.job_interest_stated in
@@ -1159,16 +1504,24 @@ function ApplicationsTab({ applications, candidate, jobs }) {
     onError: (err) => toast.error(err?.response?.data?.error || 'Failed to assign'),
   })
 
-  const certifyMutation = useMutation({
-    mutationFn: ({ id, payload }) => updateApplication(id, payload),
+  // New → Screening is a candidate-stage transition (not an application status
+  // change): it sends the "application complete" WhatsApp and drops the
+  // candidate into the job to await certification. Certification itself is now
+  // an agent action in Applications/Projects.
+  const screeningMutation = useMutation({
+    mutationFn: (payload) => screenCandidate(candidate.id, payload),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['applications'] })
-      setCertifyId(null)
-      showNotificationToast(data?.notification, 'Candidate certified')
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      setScreeningAppId(null)
+      showNotificationToast(data?.notification, 'Moved to Screening')
     },
     onError: (error) => {
-      toast.error('Failed to certify: ' + error.message)
-    }
+      const code = error?.response?.data?.code
+      const msg = error?.response?.data?.error || error.message
+      toast.error(code === 'screening_gate' ? msg : ('Failed to move to Screening: ' + msg))
+    },
   })
 
   return (
@@ -1264,43 +1617,72 @@ function ApplicationsTab({ applications, candidate, jobs }) {
             )}
           </div>
 
-          <div className="flex gap-2 border-t border-zinc-100 dark:border-zinc-800/60 pt-3">
-            {['applied', 'new', 'reviewing'].includes(app.status) ? (
-              <>
-                <Button
-                  size="sm"
-                  className="gap-1"
-                  onClick={() => setCertifyId(app.id)}
-                >
-                  <CheckCircle size={16} /> Certify
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="gap-1"
-                  onClick={() => setTransferId(app.id)}
-                >
-                  <ArrowRight size={16} /> Transfer
-                </Button>
-              </>
-            ) : (
-              <span className="text-sm text-zinc-500 dark:text-zinc-400 italic flex items-center gap-1">
-                {app.status === 'certified' && <CheckCircle2 size={14} className="text-green-500" />}
-                {app.status === 'certified'
-                  ? `Certified on ${new Date(app.certified_at).toLocaleDateString()}`
-                  : `Status: ${app.status}`}
-              </span>
-            )}
-          </div>
+          {(() => {
+            const appStatus = normalizeStatus(app.status)
+            // Entry = an application still in the screening bucket (legacy
+            // applied/auto_assigned/reviewing all fold to 'screening').
+            const isEntryState = appStatus === 'screening'
+            const isCertifiedPlus = ['certified', 'interview_scheduled', 'hired'].includes(appStatus)
+            return (
+              <div className="flex gap-2 items-center border-t border-zinc-100 dark:border-zinc-800/60 pt-3">
+                {/* New → Screening: the only stage action in CV Manager. Certify
+                    (Screening → Certified) is done by agents in Applications. */}
+                {normalizeStatus(candidate.status) === 'new' && isEntryState && (
+                  <Button
+                    size="sm"
+                    className="gap-1"
+                    disabled={!hasCv}
+                    title={hasCv
+                      ? 'Move to Screening and notify the candidate their application is complete'
+                      : 'Upload a CV/resume before moving the candidate to Screening'}
+                    onClick={() => setScreeningAppId(app.id)}
+                  >
+                    <CheckCircle size={16} /> Screening
+                  </Button>
+                )}
+                {normalizeStatus(candidate.status) !== 'new' && (
+                  <span className="text-sm text-zinc-500 dark:text-zinc-400 italic flex items-center gap-1">
+                    {isCertifiedPlus && <CheckCircle2 size={14} className="text-green-500" />}
+                    {appStatus === 'certified'
+                      ? `Certified${app.certified_at ? ` on ${new Date(app.certified_at).toLocaleDateString()}` : ''}`
+                      : isEntryState
+                        ? 'In Screening — awaiting certification'
+                        : `Status: ${getStatusLabel(app.status)}`}
+                  </span>
+                )}
+                {/* Certified → let the agent book the interview right here
+                    instead of jumping to the Job Candidates page. */}
+                {appStatus === 'certified' && (
+                  <Button
+                    size="sm"
+                    className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white"
+                    onClick={() => setScheduleApp(app)}
+                  >
+                    <Calendar size={16} /> Schedule Interview
+                  </Button>
+                )}
+                {isEntryState && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="gap-1"
+                    onClick={() => setTransferId(app.id)}
+                  >
+                    <ArrowRight size={16} /> Transfer
+                  </Button>
+                )}
+              </div>
+            )
+          })()}
         </div>
       ))}
 
-      {certifyId && (
-        <CertifyModal
-          appId={certifyId}
-          onClose={() => setCertifyId(null)}
-          onConfirm={(payload) => certifyMutation.mutate({ id: certifyId, payload })}
-          loading={certifyMutation.isPending}
+      {screeningAppId && (
+        <ScreeningModal
+          jobTitle={applications.find((a) => a.id === screeningAppId)?.job_title || ''}
+          onClose={() => setScreeningAppId(null)}
+          onConfirm={(payload) => screeningMutation.mutate(payload)}
+          loading={screeningMutation.isPending}
         />
       )}
 
@@ -1310,191 +1692,217 @@ function ApplicationsTab({ applications, candidate, jobs }) {
           onClose={() => setTransferId(null)}
         />
       )}
+
+      {scheduleApp && (
+        <ScheduleInterviewModal
+          application={scheduleApp}
+          candidate={candidate}
+          onClose={() => setScheduleApp(null)}
+          onSuccess={() => {
+            setScheduleApp(null)
+            queryClient.invalidateQueries({ queryKey: ['applications'] })
+            queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
+            queryClient.invalidateQueries({ queryKey: ['candidates'] })
+            queryClient.invalidateQueries({ queryKey: ['interviews'] })
+          }}
+        />
+      )}
     </div>
   )
 }
 
-function CertifyModal({ appId, onClose, onConfirm, loading }) {
-  const [notes, setNotes] = useState('')
+// Single-candidate interview scheduler, surfaced in CV Manager once an
+// application is Certified / Pre-Screened. Mirrors the Job Candidates modal:
+// POST /api/interviews creates the record, flips the application to Scheduled,
+// and sends the candidate a WhatsApp invitation.
+function ScheduleInterviewModal({ application, candidate, onClose, onSuccess }) {
+  const [date, setDate] = useState('')
+  const [time, setTime] = useState('')
+  const [location, setLocation] = useState('')
+  const [duration, setDuration] = useState(30)
+  const [description, setDescription] = useState('')
   const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
-  const [notifyEmail, setNotifyEmail] = useState(false)
-  const [showPreview, setShowPreview] = useState(false)
-  const [interviewDate, setInterviewDate] = useState('')
-  const [interviewTime, setInterviewTime] = useState('')
-  const [interviewLocation, setInterviewLocation] = useState('')
 
-  const notifyChannels = [
-    notifyWhatsApp ? 'whatsapp' : null,
-    notifyEmail ? 'email' : null
-  ].filter(Boolean)
-
-  const handleSubmit = () => {
-    if (!interviewDate || !interviewTime) {
-      toast.error('Please select interview date and time before certifying')
-      return
-    }
-
-    const localDateTime = new Date(`${interviewDate}T${interviewTime}`)
-    if (Number.isNaN(localDateTime.getTime())) {
-      toast.error('Invalid interview date/time')
-      return
-    }
-
-    onConfirm({
-      status: 'certified',
-      certification_notes: notes,
-      prescreening_datetime: localDateTime.toISOString(),
-      prescreening_location: interviewLocation || null,
-      notify_channels: notifyChannels
-    })
-  }
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!date || !time) throw new Error('Date and time are required')
+      const channels = notifyWhatsApp ? ['whatsapp'] : []
+      return apiClient.post('/api/interviews', {
+        application_id: application.id,
+        scheduled_datetime: `${date}T${time}`,
+        location: location || null,
+        duration_minutes: Number(duration) || 30,
+        description: description.trim() || null,
+        notify_channels: channels,
+      }).then((res) => res.data)
+    },
+    onSuccess: (result) => {
+      const notif = result?.notification
+      if (notif && Array.isArray(notif.failed) && notif.failed.length > 0) {
+        showNotificationToast(notif, 'Interview scheduled')
+      } else {
+        toast.success(`Interview scheduled for ${candidate.name || 'candidate'}`)
+      }
+      onSuccess()
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || err.message || 'Failed to schedule interview'),
+  })
 
   return (
-    <Modal open={true} onClose={onClose} title="Certify Candidate" size="md">
+    <Modal open onClose={onClose} title="Schedule Interview" size="md">
       <div className="space-y-4">
-        {/* Success Message */}
-        <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg border border-green-200">
-          <CheckCircle className="text-green-500 mt-0.5 flex-shrink-0" size={24} />
+        <div className="rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 p-4 flex items-start gap-3">
+          <Calendar className="text-indigo-600 mt-0.5 flex-shrink-0" size={20} />
           <div>
-            <h4 className="font-semibold text-green-800">Certify & Notify Candidate</h4>
-            <p className="text-sm text-green-700 mt-1">
-              This will mark the candidate as <strong>certified</strong> and automatically send them a congratulatory notification.
+            <h4 className="font-semibold text-indigo-800 dark:text-indigo-200">
+              Interview for {candidate.name || 'Candidate'} — {application.job_title || 'Job'}
+            </h4>
+            <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-1">
+              Creates the interview record, moves the application to <strong>Scheduled</strong>, and sends the candidate a WhatsApp invitation with the date, time, and location.
             </p>
           </div>
         </div>
 
-        {/* Notification Channels */}
-        <div>
-          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-            <Bell size={14} className="inline mr-1" /> Notification Channels
-          </label>
-          <div className="flex gap-3">
-            <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyWhatsApp ? 'border-green-500 bg-green-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
-              }`}>
-              <input
-                type="checkbox"
-                checked={notifyWhatsApp}
-                onChange={(e) => setNotifyWhatsApp(e.target.checked)}
-                className="sr-only"
-              />
-              <Smartphone size={18} className={notifyWhatsApp ? 'text-green-600' : 'text-zinc-400 dark:text-zinc-500'} />
-              <span className={`text-sm font-medium ${notifyWhatsApp ? 'text-green-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
-                WhatsApp
-              </span>
-              {notifyWhatsApp && <CheckCircle2 size={16} className="text-green-500 ml-auto" />}
-            </label>
-
-            <label className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${notifyEmail ? 'border-blue-500 bg-blue-50' : 'border-zinc-200 dark:border-zinc-800 hover:border-gray-300'
-              }`}>
-              <input
-                type="checkbox"
-                checked={notifyEmail}
-                onChange={(e) => setNotifyEmail(e.target.checked)}
-                className="sr-only"
-              />
-              <Send size={18} className={notifyEmail ? 'text-blue-600' : 'text-zinc-400 dark:text-zinc-500'} />
-              <span className={`text-sm font-medium ${notifyEmail ? 'text-blue-700' : 'text-zinc-600 dark:text-zinc-400'}`}>
-                Email
-              </span>
-              {notifyEmail && <CheckCircle2 size={16} className="text-blue-500 ml-auto" />}
-            </label>
-          </div>
-        </div>
-
-        {/* Certification Remarks */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-              <Clock size={14} className="inline mr-1" /> Interview Date
-            </label>
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Date</label>
             <input
               type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              min={new Date().toISOString().slice(0, 10)}
               className="input w-full"
-              value={interviewDate}
-              onChange={(e) => setInterviewDate(e.target.value)}
-              required
             />
           </div>
           <div>
-            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-              <Clock size={14} className="inline mr-1" /> Interview Time
-            </label>
+            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Time</label>
             <input
               type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
               className="input w-full"
-              value={interviewTime}
-              onChange={(e) => setInterviewTime(e.target.value)}
-              required
             />
           </div>
         </div>
 
         <div>
-          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-            <MapPin size={14} className="inline mr-1" /> Interview Location
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1 flex items-center gap-1">
+            <MapPinned size={12} /> Location / Venue
           </label>
           <input
             type="text"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="e.g., Head Office, Colombo 3"
             className="input w-full"
-            placeholder="Office / venue / online link"
-            value={interviewLocation}
-            onChange={(e) => setInterviewLocation(e.target.value)}
           />
         </div>
 
         <div>
-          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
-            <MessageSquare size={14} className="inline mr-1" /> Certification Remarks (Internal)
-          </label>
-          <textarea
-            className="input w-full h-20"
-            placeholder="Enter internal notes (e.g., 'Documents verified, height confirmed')"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Duration (minutes)</label>
+          <input
+            type="number"
+            min="10"
+            max="240"
+            value={duration}
+            onChange={(e) => setDuration(e.target.value)}
+            className="input w-full"
           />
         </div>
 
-        {/* Message Preview */}
-        <button
-          type="button"
-          onClick={() => setShowPreview(!showPreview)}
-          className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-        >
-          <Eye size={14} /> {showPreview ? 'Hide' : 'Preview'} notification message
-        </button>
+        <div>
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Extra details for the candidate (optional)</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="e.g., Bring your portfolio. Ask for Mr. Perera at reception."
+            className="input w-full resize-y"
+          />
+          {notifyWhatsApp && (
+            <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Included in the WhatsApp invitation.</p>
+          )}
+        </div>
 
-        {showPreview && (
-          <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-200 dark:border-zinc-800">
-            <div className="flex items-center gap-2 mb-2">
-              <MessageSquare size={14} className="text-zinc-500 dark:text-zinc-400" />
-              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase">Message Preview</span>
-            </div>
-            <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-line bg-white dark:bg-zinc-900 p-3 rounded border border-zinc-100 dark:border-zinc-800/60">
-              🎉 Dear [Candidate Name],
-              {'\n\n'}
-              Congratulations! You have successfully passed our pre-screening process for the position.
-              {'\n\n'}
-              📋 Next Steps:
-              {'\n'}1. Our team will contact you shortly to schedule an interview
-              {'\n'}2. Please keep your documents ready
-              {'\n'}3. Make sure your phone is reachable
-              {'\n\n'}
-              Best regards,
-              {'\n'}Dewan Recruitment Team
-            </div>
-          </div>
-        )}
+        <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={notifyWhatsApp}
+            onChange={(e) => setNotifyWhatsApp(e.target.checked)}
+            className="accent-primary-600"
+          />
+          Send interview invitation via WhatsApp
+        </label>
 
-        {/* Action Buttons */}
+        <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+          <Button variant="secondary" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white">
+            <Calendar size={16} />
+            {mutation.isPending ? 'Scheduling…' : 'Schedule Interview'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// Lightweight modal for the New → Screening transition. It only confirms the
+// move + collects an optional internal note and a "notify candidate" toggle —
+// no interview scheduling (that belongs to certify/interview, done by agents).
+function ScreeningModal({ jobTitle, onClose, onConfirm, loading }) {
+  const [note, setNote] = useState('')
+  const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
+
+  const handleSubmit = () => {
+    onConfirm({
+      note: note || undefined,
+      notify_channels: notifyWhatsApp ? ['whatsapp'] : [],
+    })
+  }
+
+  return (
+    <Modal open={true} onClose={onClose} title="Move to Screening" size="sm">
+      <div className="space-y-4">
+        <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-amber-50 to-emerald-50 dark:from-amber-950/30 dark:to-emerald-950/30 rounded-lg border border-amber-200 dark:border-amber-900/40">
+          <CheckCircle className="text-emerald-500 mt-0.5 flex-shrink-0" size={22} />
+          <p className="text-sm text-zinc-700 dark:text-zinc-300">
+            This confirms the candidate's details + CV are complete and moves them to{' '}
+            <strong>Screening</strong>{jobTitle ? <> under <strong>{jobTitle}</strong></> : null}. They'll wait
+            here until an agent certifies them.
+          </p>
+        </div>
+
+        <label className={clsx(
+          'flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all w-fit',
+          notifyWhatsApp ? 'border-green-500 bg-green-50 dark:bg-green-950/30' : 'border-zinc-200 dark:border-zinc-800',
+        )}>
+          <input
+            type="checkbox"
+            checked={notifyWhatsApp}
+            onChange={(e) => setNotifyWhatsApp(e.target.checked)}
+          />
+          <Smartphone size={18} className={notifyWhatsApp ? 'text-green-600' : 'text-zinc-400 dark:text-zinc-500'} />
+          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Send "application complete" WhatsApp
+          </span>
+        </label>
+
+        <div>
+          <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
+            <MessageSquare size={14} className="inline mr-1" /> Internal note (optional)
+          </label>
+          <textarea
+            className="input w-full h-20"
+            placeholder="e.g. 'Documents verified, ready for the project handler'"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </div>
+
         <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button
-            onClick={handleSubmit}
-            loading={loading}
-            className="gap-2"
-            disabled={!notifyWhatsApp && !notifyEmail}
-          >
-            <Send size={16} /> Certify & Send Notification
+          <Button onClick={handleSubmit} loading={loading} className="gap-2">
+            <Send size={16} /> Move to Screening
           </Button>
         </div>
       </div>
@@ -1576,139 +1984,79 @@ function TransferModal({ appId, onClose }) {
   )
 }
 
-function AllocateTab({ candidate, jobs, existingApplications }) {
+function AllocateTab({ candidate, existingApplications }) {
   const queryClient = useQueryClient()
-  const appliedJobIds = existingApplications.map(a => a.job_id)
-  const [selectedCategory, setSelectedCategory] = useState('')
+  const appliedJobIds = (existingApplications || []).map(a => a.job_id)
+  const [selectedJob, setSelectedJob] = useState(null)
 
   const allocateMutation = useMutation({
     mutationFn: (jobId) => createApplication({ candidate_id: candidate.id, job_id: jobId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['applications'] })
+      queryClient.invalidateQueries({ queryKey: ['candidate', candidate.id] })
       toast.success('Candidate assigned to project!')
+      setSelectedJob(null)
     },
     onError: (error) => {
-      toast.error('Failed to assign: ' + error.message)
+      toast.error('Failed to assign: ' + (error?.message || 'unknown error'))
     }
   })
 
-  const availableJobs = jobs.filter(job => !appliedJobIds.includes(job.id))
-  const filteredJobs = selectedCategory
-    ? availableJobs.filter(job => job.category === selectedCategory)
-    : availableJobs
-
-  const categories = [...new Set(jobs.map(j => j.category))]
+  const remaining = selectedJob
+    ? Math.max(0, (selectedJob.positions_available || 0) - (selectedJob.positions_filled || 0))
+    : 0
+  const isFull = selectedJob && (selectedJob.positions_available || 0) > 0 && remaining === 0
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          Assign {candidate.name} to a Project
-        </h3>
-        <select
-          className="input text-sm py-1"
-          value={selectedCategory}
-          onChange={(e) => setSelectedCategory(e.target.value)}
-        >
-          <option value="">All Categories</option>
-          {categories.map(cat => (
-            <option key={cat} value={cat}>{cat}</option>
-          ))}
-        </select>
-      </div>
+      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+        Assign {candidate.name} to a Project
+      </h3>
 
-      {filteredJobs.length === 0 ? (
-        <EmptyState
-          icon={Building}
-          tone="indigo"
-          title={availableJobs.length === 0 ? 'Already assigned everywhere' : 'No projects in this category'}
-          description={availableJobs.length === 0
-            ? 'This candidate is already linked to every available project.'
-            : 'Try a different category or clear the filter.'}
-          compact
-        />
-      ) : (
-        <div className="space-y-3 max-h-[420px] overflow-y-auto scrollbar-thin pr-2 -mr-2">
-          {filteredJobs.map(job => {
-            const remaining = Math.max(0, (job.positions_available || 0) - (job.positions_filled || 0))
-            const total = job.positions_available || 0
-            const filledPct = total > 0 ? Math.min(100, Math.round(((job.positions_filled || 0) / total) * 100)) : 0
-            const remainingTone = remaining === 0 ? 'rose' : remaining <= 2 ? 'amber' : 'emerald'
-            const remainingClass = {
-              emerald: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200 ring-emerald-200 dark:ring-emerald-900',
-              amber:   'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200 ring-amber-200 dark:ring-amber-900',
-              rose:    'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-200 ring-rose-200 dark:ring-rose-900',
-            }[remainingTone]
-            return (
-              <div
-                key={job.id}
-                className="relative rounded-2xl border border-zinc-200 dark:border-zinc-800 p-4 transition-all hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md bg-white dark:bg-zinc-900 before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-1 before:rounded-r before:bg-gradient-to-b before:from-indigo-500 before:to-purple-500"
-              >
-                <div className="flex justify-between items-start gap-3 mb-3 pl-2">
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold shrink-0 ring-2 ring-white dark:ring-zinc-900 shadow-sm">
-                      {job.title?.charAt(0)?.toUpperCase() || 'J'}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{job.title}</h4>
-                      <div className="flex flex-wrap gap-2 mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                        {job.category && (
-                          <span className="inline-flex items-center gap-1">
-                            <Briefcase size={11} /> {job.category}
-                          </span>
-                        )}
-                        {job.location && (
-                          <span className="inline-flex items-center gap-1">
-                            <MapPin size={11} /> {job.location}
-                          </span>
-                        )}
-                        {job.salary_range && (
-                          <span className="inline-flex items-center gap-1">
-                            <DollarSign size={11} /> {job.salary_range}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`text-xs font-semibold px-2 py-1 rounded-full ring-1 ring-inset whitespace-nowrap shrink-0 ${remainingClass}`}>
-                    {remaining} open
-                  </span>
-                </div>
+      {/* Cascading: pick a Project first, then a Job within it. */}
+      <ProjectJobSelector excludeJobIds={appliedJobIds} onChange={setSelectedJob} />
 
-                {/* Positions progress */}
-                <div className="pl-2 mb-3">
-                  <div className="flex items-baseline justify-between mb-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Positions filled</span>
-                    <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{job.positions_filled || 0} / {total}</span>
-                  </div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500"
-                      style={{ width: `${filledPct}%` }}
-                    />
-                  </div>
-                </div>
-
-                {job.description && (
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-3 line-clamp-2 pl-2">{job.description}</p>
+      {selectedJob && (
+        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 p-4 bg-white dark:bg-zinc-900">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{selectedJob.title}</h4>
+              <div className="flex flex-wrap gap-2 mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                {selectedJob.category && (
+                  <span className="inline-flex items-center gap-1"><Briefcase size={11} /> {selectedJob.category}</span>
                 )}
-
-                <div className="flex justify-end pl-2">
-                  <Button
-                    size="sm"
-                    onClick={() => allocateMutation.mutate(job.id)}
-                    loading={allocateMutation.isPending}
-                    disabled={remaining === 0}
-                    className="gap-1"
-                  >
-                    <CheckCircle size={14} /> Assign
-                  </Button>
-                </div>
+                {selectedJob.location && (
+                  <span className="inline-flex items-center gap-1"><MapPin size={11} /> {selectedJob.location}</span>
+                )}
               </div>
-            )
-          })}
+            </div>
+            {(selectedJob.positions_available || 0) > 0 && (
+              <span className={`text-xs font-semibold px-2 py-1 rounded-full ring-1 ring-inset whitespace-nowrap shrink-0 ${
+                remaining === 0
+                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-200 ring-rose-200 dark:ring-rose-900'
+                  : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200 ring-emerald-200 dark:ring-emerald-900'
+              }`}>
+                {remaining} open
+              </span>
+            )}
+          </div>
+          {selectedJob.description && (
+            <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 line-clamp-2">{selectedJob.description}</p>
+          )}
         </div>
       )}
+
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          onClick={() => selectedJob && allocateMutation.mutate(selectedJob.id)}
+          loading={allocateMutation.isPending}
+          disabled={!selectedJob || isFull}
+          className="gap-1"
+        >
+          <CheckCircle size={14} /> Assign
+        </Button>
+      </div>
     </div>
   )
 }

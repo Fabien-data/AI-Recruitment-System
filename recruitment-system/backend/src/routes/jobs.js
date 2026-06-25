@@ -3,10 +3,12 @@ const router = express.Router();
 const multer = require('multer');
 const { pool } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { syncJobAsync, syncJobDeleteAsync, syncProjectAsync } = require('./chatbot-sync');
 const { processJobFlyer, extractJobFlyer } = require('../services/auto-ingest');
-const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
+const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT, CERTIFIED_JOIN, CERTIFIED_SELECT, JOB_COUNTS_JOIN, JOB_COUNTS_SELECT } = require('../utils/job-queries');
 const { resolveCountry } = require('../utils/countries');
+const { notifyWaitlistForJob } = require('../services/job-waitlist');
 const logger = require('../utils/logger');
 
 const MAX_FLYERS_PER_BATCH = 20;
@@ -155,9 +157,9 @@ async function handleMagicCreate(req, res, next) {
     }
 }
 
-router.post('/extract',      authenticate, authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleExtractFlyers);
-router.post('/magic-create', authenticate, authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
-router.post('/auto-ingest',  authenticate, authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
+router.post('/extract',      authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleExtractFlyers);
+router.post('/magic-create', authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
+router.post('/auto-ingest',  authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department'), upload.array('flyer', MAX_FLYERS_PER_BATCH), handleMagicCreate);
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -175,7 +177,7 @@ router.post('/auto-ingest',  authenticate, authorize('admin', 'sourcing_departme
  * positions_filled / positions_remaining are derived from applications, not
  * read from the stored column (which is no longer written).
  */
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('jobs', 'view'), async (req, res, next) => {
     try {
         const {
             category,
@@ -208,8 +210,12 @@ router.get('/', authenticate, async (req, res, next) => {
             params.push(...statuses);
         }
         if (category) {
-            params.push(category);
-            where.push(`j.category = $${params.length}`);
+            // Substring, case-insensitive match: stored categories are mixed-case
+            // (e.g. 'Security Officer') and recruiters type partial text ("secur"),
+            // so an exact `=` comparison silently returned nothing (B006). ILIKE
+            // with wildcards matches any job whose category contains the query.
+            params.push(`%${String(category).trim()}%`);
+            where.push(`j.category ILIKE $${params.length}`);
         }
         if (project_id) {
             params.push(project_id);
@@ -253,11 +259,13 @@ router.get('/', authenticate, async (req, res, next) => {
         params.push(limit, offset);
 
         const sql = `
-            SELECT j.*, ${POSITIONS_FILLED_SELECT},
+            SELECT j.*, ${POSITIONS_FILLED_SELECT}, ${CERTIFIED_SELECT}, ${JOB_COUNTS_SELECT},
                    p.title AS project_title, p.client_name AS project_client
             FROM jobs j
             LEFT JOIN projects p ON j.project_id = p.id
             ${POSITIONS_FILLED_JOIN}
+            ${CERTIFIED_JOIN}
+            ${JOB_COUNTS_JOIN}
             WHERE ${where.join(' AND ')}
             ORDER BY ${orderBy}
             LIMIT $${params.length - 1} OFFSET $${params.length}
@@ -270,16 +278,18 @@ router.get('/', authenticate, async (req, res, next) => {
     }
 });
 
-router.get('/:id', authenticate, async (req, res, next) => {
+router.get('/:id', authenticate, requireSection('jobs', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
         const result = await pool.query(
-            `SELECT j.*, ${POSITIONS_FILLED_SELECT},
+            `SELECT j.*, ${POSITIONS_FILLED_SELECT}, ${CERTIFIED_SELECT}, ${JOB_COUNTS_SELECT},
                     p.title AS project_title, p.client_name AS project_client
              FROM jobs j
              LEFT JOIN projects p ON j.project_id = p.id
              ${POSITIONS_FILLED_JOIN}
+             ${CERTIFIED_JOIN}
+             ${JOB_COUNTS_JOIN}
              WHERE j.id = $1`,
             [id]
         );
@@ -314,7 +324,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
  * for back-compat with the chatbot's Pinecone metadata. The manual
  * positions_filled override is no longer accepted — counts are derived.
  */
-router.post('/', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+router.post('/', authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const {
             title,
@@ -330,7 +340,20 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
             required_fields_schema,
         } = req.body;
 
-        if (!title || !category || !requirements) {
+        // Status: default 'active' for manual create. Only allow values from the
+        // user-facing set + pending_review (for the AI review-queue Save action).
+        const requestedStatus = String(req.body.status || 'active').toLowerCase();
+        const status = VALID_STATUSES.has(requestedStatus) ? requestedStatus : 'active';
+
+        // Inline / future roles are lightweight placeholders created from the
+        // Messages assign/transfer picker (or a "future project"): only a title +
+        // project are required — category/requirements default so it's still a
+        // real, assignable job (Kanban/shortlist/counts key off project_id/job_id).
+        const isInline = req.body.inline === true || status === 'future';
+        const effCategory = category || (isInline ? 'General' : null);
+        const effRequirements = requirements || (isInline ? {} : null);
+
+        if (!title || !effCategory || !effRequirements) {
             return res.status(400).json({ error: 'Title, category, and requirements are required' });
         }
         if (!project_id) {
@@ -341,11 +364,6 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
         if (projectResult.rows.length === 0) {
             return res.status(404).json({ error: 'Project not found' });
         }
-
-        // Status: default 'active' for manual create. Only allow values from the
-        // user-facing set + pending_review (for the AI review-queue Save action).
-        const requestedStatus = String(req.body.status || 'active').toLowerCase();
-        const status = VALID_STATUSES.has(requestedStatus) ? requestedStatus : 'active';
 
         // Urgency: validated and used to derive is_urgent (deprecated column).
         const urgency_level = VALID_URGENCY.has(req.body.urgency_level) ? req.body.urgency_level : 'normal';
@@ -373,9 +391,9 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
              ) RETURNING *`,
             [
                 title,
-                category,
+                effCategory,
                 description,
-                JSON.stringify(requirements),
+                JSON.stringify(effRequirements),
                 JSON.stringify(wiggle_room || {}),
                 positions_available || 1,
                 salary_range,
@@ -405,6 +423,12 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
         } catch (syncErr) {
             logger.warn(`Project resync failed for ${project_id}: ${syncErr.message}`);
         }
+        // Re-engage waiting-list candidates who wanted this role (fire-and-forget
+        // so the create response isn't blocked by outbound messaging).
+        if (String(newJob.status).toLowerCase() === 'active') {
+            notifyWaitlistForJob(newJob).catch((e) =>
+                logger.warn(`job-waitlist notify failed for new job ${newJob.id}: ${e.message}`));
+        }
         res.status(201).json(newJob);
     } catch (error) {
         next(error);
@@ -418,17 +442,19 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
  * If project_id changes, both the old and the new project are re-enqueued
  * to the chatbot KB so neither stale-references the moved job.
  */
-router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('jobs', 'edit'), authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = req.body;
 
-        // Look up old project_id before update so we can detect a move.
-        const beforeRes = await pool.query('SELECT project_id FROM jobs WHERE id = $1', [id]);
+        // Look up old project_id + status before update so we can detect a move
+        // and a transition into 'active' (for the re-engagement waitlist).
+        const beforeRes = await pool.query('SELECT project_id, status FROM jobs WHERE id = $1', [id]);
         if (beforeRes.rows.length === 0) {
             return res.status(404).json({ error: 'Job not found' });
         }
         const oldProjectId = beforeRes.rows[0].project_id;
+        const oldStatus = String(beforeRes.rows[0].status || '').toLowerCase();
 
         const allowedFields = [
             'title', 'category', 'description', 'requirements',
@@ -511,6 +537,13 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
             logger.warn(`Job updated but chatbot sync failed for job ${updated.id}: ${syncErr.message}`);
         }
 
+        // Job just became active (e.g. future/inactive → active): re-engage
+        // waiting-list candidates who wanted this role. Fire-and-forget.
+        if (String(updated.status).toLowerCase() === 'active' && oldStatus !== 'active') {
+            notifyWaitlistForJob(updated).catch((e) =>
+                logger.warn(`job-waitlist notify failed for job ${updated.id}: ${e.message}`));
+        }
+
         // If the job moved between projects, re-sync both. Otherwise just one.
         const newProjectId = updated.project_id;
         const projectsToResync = newProjectId === oldProjectId
@@ -530,7 +563,7 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
     }
 });
 
-router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('jobs', 'delete'), authorize('admin'), async (req, res, next) => {
     try {
         const { id } = req.params;
 

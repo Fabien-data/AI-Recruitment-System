@@ -15,7 +15,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const { query, generateUUID } = require('../config/database');
 const { saveCVFile, uploadToGCS } = require('../utils/gcs-upload');
-const { isMySQL } = require('../utils/query-adapter');
+const { isMySQL, adaptQuery } = require('../utils/query-adapter');
 const rateLimit = require('express-rate-limit');
 const logger = require('../utils/logger');
 const { recruiterAlert } = require('../services/recruiter-alerts');
@@ -23,6 +23,12 @@ const { checkForDuplicate } = require('../services/duplicate-detection');
 const { searchKnowledgeBase } = require('../services/knowledge-base');
 const multer = require('multer');
 const { normalizeIncomingCvUrl } = require('../utils/cv-url');
+const { normalizePhone: canonicalPhone, phoneVariants } = require('../utils/phone');
+const { emitStageChanged, syncCandidateStage } = require('../services/candidate-stage');
+const { allocateInterviewSlots } = require('../services/interview-scheduler');
+const { resolveInterviewDays } = require('../services/interview-days');
+const notifications = require('../services/notifications');
+const { logAgentAction } = require('../services/activity-log');
 
 // Multer for multipart/form-data CV uploads (max 20MB)
 const upload = multer({
@@ -74,38 +80,33 @@ function authenticateChatbot(req, res, next) {
 // ── GET /api/chatbot/jobs — Active jobs for chatbot job cache bootstrap ───────
 router.get('/jobs', authenticateChatbot, async (req, res) => {
     try {
-        // The chatbot only "knows about" active jobs that have a live ad
-        // campaign (>=1 active ad_tracking row). Ad-clicked candidates still
-        // reach ANY job directly via /api/public/job-context/:ad_ref — this
-        // list governs only what the bot can discuss with cold candidates and
-        // what it may suggest as an alternative. EXISTS keeps it to one row
-        // per job regardless of how many ad links a job has.
+        // The chatbot caches ALL active jobs so it can always discuss/serve the
+        // roles that exist — ad campaigns must NOT gate visibility (a job with
+        // no ad_tracking row was previously invisible, which made the bot tell
+        // every ad visitor "no active jobs"). `has_active_ad` is returned as
+        // metadata (for attribution/ranking), not as a filter.
         const jobsSQL = isMySQL
             ? `SELECT j.id, j.title, j.category, j.status, j.salary_range,
                       j.requirements, j.positions_available, j.location, j.description,
                       j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
                       p.id as project_id, p.countries, p.benefits, p.salary_info,
-                      p.interview_date, p.start_date, p.title as project_title
+                      p.interview_date, p.start_date, p.title as project_title,
+                      EXISTS (SELECT 1 FROM ad_tracking at
+                               WHERE at.job_id = j.id AND at.is_active = 1) AS has_active_ad
                FROM jobs j
                LEFT JOIN projects p ON j.project_id = p.id
                WHERE j.status = 'active'
-                 AND EXISTS (
-                     SELECT 1 FROM ad_tracking at
-                      WHERE at.job_id = j.id AND at.is_active = 1
-                 )
                ORDER BY j.created_at DESC`
             : `SELECT j.id, j.title, j.category, j.status, j.salary_range,
                       j.requirements, j.positions_available, j.location, j.description,
                       j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
                       p.id as project_id, p.countries, p.benefits, p.salary_info,
-                      p.interview_date, p.start_date, p.title as project_title
+                      p.interview_date, p.start_date, p.title as project_title,
+                      EXISTS (SELECT 1 FROM ad_tracking at
+                               WHERE at.job_id = j.id AND at.is_active = TRUE) AS has_active_ad
                FROM jobs j
                LEFT JOIN projects p ON j.project_id = p.id
                WHERE j.status = 'active'
-                 AND EXISTS (
-                     SELECT 1 FROM ad_tracking at
-                      WHERE at.job_id::uuid = j.id AND at.is_active = TRUE
-                 )
                ORDER BY j.created_at DESC`;
 
         const result = await query(jobsSQL, []);
@@ -136,7 +137,7 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
                 project_title:  job.project_title  || null,
                 is_urgent:      Boolean(job.is_urgent),
                 required_fields_schema: _parseJsonSafe(job.required_fields_schema, {}),
-                has_active_ad:  true,
+                has_active_ad:  Boolean(job.has_active_ad),
                 created_at:     job.created_at || null,
                 updated_at:     job.updated_at || null,
             };
@@ -150,39 +151,64 @@ router.get('/jobs', authenticateChatbot, async (req, res) => {
     }
 });
 
+// Tokenize a string into lowercase alphanumeric words for slug/title matching.
+function _slugTokens(s) {
+    return String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+// Resolve a slug/title key (e.g. "security-officer-female-dubai") to the best
+// matching job row by token overlap. The key may carry extra tokens (country),
+// so we score by how much of the JOB TITLE is covered by the key's tokens.
+function _resolveJobBySlug(key, rows) {
+    const keyTokens = new Set(_slugTokens(key));
+    if (keyTokens.size === 0) return null;
+    let best = null;
+    let bestScore = 0;
+    for (const row of rows) {
+        const titleTokens = _slugTokens(row.title);
+        if (titleTokens.length === 0) continue;
+        const matched = titleTokens.filter(t => keyTokens.has(t)).length;
+        const score = matched / titleTokens.length;
+        if (score > bestScore) { bestScore = score; best = row; }
+    }
+    // Require a solid majority of the title's words to appear in the key.
+    return bestScore >= 0.6 ? best : null;
+}
+
+const JOB_INFO_SELECT = `SELECT j.id, j.title, j.category, j.status, j.salary_range,
+                      j.requirements, j.positions_available, j.location, j.description,
+                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
+                      p.id as project_id, p.countries, p.benefits, p.salary_info,
+                      p.interview_date, p.start_date, p.title as project_title
+                 FROM jobs j
+                 LEFT JOIN projects p ON j.project_id = p.id`;
+
 // ── GET /api/chatbot/job-info/:job_id ────────────────────────────────────────
-// Live lookup for a single job by UUID. Unlike /jobs, this is NOT limited to
-// the 2 newest active jobs — the chatbot needs it to resolve historical jobs
-// it learned about via an ad_ref, even if the job is no longer in the
-// bot's visible cache.
+// Live lookup for a single job by UUID *or* slug/title. The chatbot may pass a
+// slugified title (the lookup_job_info tool), so we never blindly cast the key
+// to uuid (that 500'd on every slug). UUIDs hit the row directly; everything
+// else is fuzzy-matched against active jobs by title token overlap.
 router.get('/job-info/:job_id', authenticateChatbot, async (req, res) => {
     const { job_id } = req.params;
-    if (!job_id || job_id.length > 64) {
+    if (!job_id || job_id.length > 120) {
         return res.status(400).json({ error: 'Invalid job_id' });
     }
     try {
-        const sql = isMySQL
-            ? `SELECT j.id, j.title, j.category, j.status, j.salary_range,
-                      j.requirements, j.positions_available, j.location, j.description,
-                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
-                      p.id as project_id, p.countries, p.benefits, p.salary_info,
-                      p.interview_date, p.start_date, p.title as project_title
-                 FROM jobs j
-                 LEFT JOIN projects p ON j.project_id = p.id
-                WHERE j.id = ?`
-            : `SELECT j.id, j.title, j.category, j.status, j.salary_range,
-                      j.requirements, j.positions_available, j.location, j.description,
-                      j.is_urgent, j.required_fields_schema, j.created_at, j.updated_at,
-                      p.id as project_id, p.countries, p.benefits, p.salary_info,
-                      p.interview_date, p.start_date, p.title as project_title
-                 FROM jobs j
-                 LEFT JOIN projects p ON j.project_id = p.id
-                WHERE j.id = $1::uuid`;
-        const result = await query(sql, [job_id]);
-        if (result.rows.length === 0) {
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        let job = null;
+        if (UUID_RE.test(job_id)) {
+            const sql = isMySQL
+                ? `${JOB_INFO_SELECT} WHERE j.id = ?`
+                : `${JOB_INFO_SELECT} WHERE j.id = $1::uuid`;
+            const result = await query(sql, [job_id]);
+            job = result.rows[0] || null;
+        } else {
+            const result = await query(`${JOB_INFO_SELECT} WHERE j.status = 'active'`, []);
+            job = _resolveJobBySlug(job_id, result.rows);
+        }
+        if (!job) {
             return res.status(404).json({ error: 'Job not found', job_id });
         }
-        const job = result.rows[0];
         const _parseJsonSafe = (v, fallback) => {
             if (!v) return fallback;
             if (typeof v === 'object') return v;
@@ -298,6 +324,49 @@ router.post('/media-upload', chatbotLimiter, authenticateChatbot, async (req, re
     }
 });
 
+/**
+ * POST /api/chatbot/set-profile-photo  (#6)
+ * Set a candidate's profile picture from a chatbot-detected person-photo.
+ * Uploads the bytes to GCS, then sets candidates.photo_url + photo_source='auto'
+ * — but NEVER overwrites a manually-uploaded picture (photo_source='manual' is
+ * locked). Matches the candidate by phone (same normalization as intake).
+ * Body: { base64, phone, mime_type?, filename? }
+ */
+router.post('/set-profile-photo', chatbotLimiter, authenticateChatbot, async (req, res) => {
+    try {
+        const { base64, phone, mime_type = 'image/jpeg', filename = 'photo.jpg' } = req.body || {};
+        if (!base64 || typeof base64 !== 'string' || !phone) {
+            return res.status(400).json({ error: 'base64 and phone are required' });
+        }
+        const normalizedPhone = normalizePhone(phone);
+        const cand = await findCandidateByPhone(normalizedPhone, 'id, photo_source');
+        if (cand.rows.length === 0) {
+            return res.status(404).json({ error: 'Candidate not found' });
+        }
+        const c = cand.rows[0];
+        // Manual upload wins + locks — auto never overwrites it.
+        if (c.photo_source === 'manual') {
+            return res.json({ success: false, reason: 'manual_locked' });
+        }
+        const safePhone = String(phone).replace(/[^0-9]/g, '') || 'unknown';
+        const safeName = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const destPath = `photos/${safePhone}/${Date.now()}_${safeName}`;
+        const url = await uploadToGCS(Buffer.from(base64, 'base64'), destPath, mime_type);
+        if (!url) {
+            return res.status(502).json({ error: 'photo storage unavailable' });
+        }
+        await query(
+            adaptQuery("UPDATE candidates SET photo_url = $1, photo_source = 'auto', updated_at = NOW() WHERE id = $2"),
+            [url, c.id],
+        );
+        logger.info(`set-profile-photo: candidate ${c.id} avatar set (auto)`);
+        return res.json({ success: true, photo_url: url, photo_source: 'auto' });
+    } catch (error) {
+        logger.error('Chatbot set-profile-photo error:', error);
+        return res.status(500).json({ error: 'Failed to set profile photo', detail: error.message });
+    }
+});
+
 // ── Payload Validation middleware ────────────────────────────────────────────
 function validateIntakePayload(req, res, next) {
     const { phone, name, job_interest } = req.body;
@@ -357,9 +426,33 @@ function validateIntakePayload(req, res, next) {
     next();
 }
 
-// ── Normalize phone to E.164-ish format ──────────────────────────────────────
+// ── Normalize phone to canonical E.164 ("+94…") ──────────────────────────────
+// Delegates to the SHARED normaliser (utils/phone.js) so this sync/intake path
+// stores & looks up phones in the SAME form as the manual "Add candidate" route.
+// The old local version only stripped spaces/dashes, leaving inbound "94…"
+// un-prefixed — which forked a second candidate row (the bug). Falls back to a
+// light strip if the number can't be normalised so we never insert null.
 function normalizePhone(phone) {
-    return phone.replace(/[\s\-()]/g, '');
+    return canonicalPhone(phone) || String(phone || '').replace(/[\s\-()]/g, '');
+}
+
+// Look up a candidate by phone, matching ANY equivalent stored form (+94…, 94…, 0…)
+// so a normalised lookup still finds rows written before normalisation (legacy
+// "94…" rows). `selectCols` is a trusted literal (never user input).
+async function findCandidateByPhone(phone, selectCols) {
+    const variants = phoneVariants(phone);
+    const vals = variants.length ? variants : [normalizePhone(phone)];
+    if (isMySQL) {
+        const ph = vals.map(() => '?').join(',');
+        return query(
+            `SELECT ${selectCols} FROM candidates WHERE phone IN (${ph}) OR whatsapp_phone IN (${ph}) LIMIT 1`,
+            [...vals, ...vals]
+        );
+    }
+    return query(
+        `SELECT ${selectCols} FROM candidates WHERE phone = ANY($1) OR whatsapp_phone = ANY($1) LIMIT 1`,
+        [vals]
+    );
 }
 
 function isDuplicateConstraintError(error) {
@@ -432,6 +525,32 @@ function withDocumentCategory(parsedData, category) {
         ...base,
         __document_category: category,
     };
+}
+
+// Classify an uploaded document into cv / passport / certificate / photo using
+// the extractor's document_type hint when present, else the shape of the
+// parsed data (CVs carry work history / skills / experience; passports carry a
+// passport number but no CV shape; certificates carry certifications only).
+function classifyDocument(baseCategory, fileName, parsedData) {
+    const pd = (parsedData && typeof parsedData === 'object' && !Array.isArray(parsedData)) ? parsedData : {};
+    const dt = String(pd.document_type || '').toLowerCase();
+    if (['cv', 'resume'].includes(dt)) return 'cv';
+    if (['passport', 'id', 'nic'].includes(dt)) return 'passport';
+    if (['certificate', 'license', 'licence', 'diploma'].includes(dt)) return 'certificate';
+    if (dt === 'photo') return 'photo';
+
+    const hasCvShape = (Array.isArray(pd.work_history) && pd.work_history.length > 0)
+        || (Array.isArray(pd.technical_skills) && pd.technical_skills.length > 0)
+        || (pd.total_experience_years != null && Number(pd.total_experience_years) > 0)
+        || Boolean(pd.current_job_title)
+        || Boolean(pd.highest_qualification);
+    if (hasCvShape) return 'cv';
+    if (pd.passport_number) return 'passport';
+    if (Array.isArray(pd.certifications) && pd.certifications.length > 0) return 'certificate';
+    const name = String(fileName || '').toLowerCase();
+    if (/passport/.test(name)) return 'passport';
+    if (/(certificate|cert|licen|diploma)/.test(name)) return 'certificate';
+    return baseCategory;
 }
 
 // ── Main Intake Handler ───────────────────────────────────────────────────────
@@ -558,7 +677,11 @@ router.post(
 
         const hasMultipartCV = Boolean(multipartCvFile && multipartCvFile.buffer);
         const additionalDocumentsFromPayload = parseAdditionalDocuments(additional_documents);
-        const requireCvForChatbot = process.env.CHATBOT_REQUIRE_CV !== 'false';
+        // CV is NOT required by default: the chatbot saves partial leads as soon
+        // as a name is known (CV optional, unknown-job → general pool). Requiring
+        // a CV here would 422-reject every name-only / general-pool sync. Opt in
+        // with CHATBOT_REQUIRE_CV='true' only if a CV-gated flow is ever needed.
+        const requireCvForChatbot = process.env.CHATBOT_REQUIRE_CV === 'true';
         const hasAnyCvPayload = Boolean(cv_file_path || cv_base64 || hasMultipartCV);
 
         if (requireCvForChatbot && hasAnyCvPayload === false) {
@@ -588,11 +711,7 @@ router.post(
         try {
             // ── Step 1: Lookup existing candidate by phone ─────────────────
             let existingCandidate = null;
-            const lookupSQL = isMySQL
-                ? 'SELECT id, name, status, metadata FROM candidates WHERE phone = ? OR whatsapp_phone = ? LIMIT 1'
-                : 'SELECT id, name, status, metadata FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1';
-
-            const lookupResult = await query(lookupSQL, [normalizedPhone, normalizedPhone]);
+            const lookupResult = await findCandidateByPhone(normalizedPhone, 'id, name, status, metadata');
             existingCandidate = lookupResult.rows.length > 0 ? lookupResult.rows[0] : null;
 
             let existingMetadata = {};
@@ -642,6 +761,15 @@ router.post(
                 firstDefined(parsed.height_cm, topLevel.height_cm, parsed.height, topLevel.height)
             );
             if (heightVal != null) metadataUpdates.height_cm = heightVal;
+
+            // Gender — normalised to male/female so the auto-assign matcher can
+            // use it as a hard filter (B013). Tolerates m/f and word variants.
+            const rawGender = firstDefined(parsed.gender, topLevel.gender);
+            if (rawGender != null) {
+                const g = String(rawGender).trim().toLowerCase();
+                if (['m', 'male', 'man', 'boy'].includes(g)) metadataUpdates.gender = 'male';
+                else if (['f', 'female', 'woman', 'girl'].includes(g)) metadataUpdates.gender = 'female';
+            }
 
             // Mismatches — only ever nested under cv_parsed_data.
             if (parsed.mismatches) metadataUpdates.mismatches = parsed.mismatches;
@@ -710,6 +838,17 @@ router.post(
                     metadataUpdates[field] = val;
                 }
             }
+
+            // A separate CALLABLE number (non-WhatsApp / landline / family member) the
+            // candidate or bot provides — stored in the dedicated candidates.contact_phone
+            // column (migration 057) so recruiters see "WhatsApp Number" vs "Call Number"
+            // distinctly. We still keep metadata.phone_alternative above for back-compat.
+            const callableContactPhone = firstDefined(
+                parsed.contact_phone, topLevel.contact_phone,
+                parsed.call_number, topLevel.call_number,
+                parsed.alternative_phone, topLevel.alternative_phone,
+                parsed.phone_alternative, topLevel.phone_alternative,
+            );
 
             const mergedMetadata = { ...existingMetadata, ...metadataUpdates };
             // Produce a valid JSON value (never the string "null")
@@ -826,6 +965,19 @@ router.post(
                 logger.info(`Chatbot intake: CREATED candidate ${candidateId} (${normalizedPhone})`);
             }
 
+            // Persist the callable (non-WhatsApp) number into its dedicated column.
+            // Best-effort: a missing column on a not-yet-migrated DB just no-ops here.
+            if (callableContactPhone) {
+                try {
+                    await query(
+                        adaptQuery('UPDATE candidates SET contact_phone = $1, updated_at = NOW() WHERE id = $2'),
+                        [canonicalPhone(callableContactPhone) || String(callableContactPhone).trim(), candidateId]
+                    );
+                } catch (cpErr) {
+                    logger.debug(`Chatbot intake: contact_phone update skipped for ${candidateId} — ${cpErr.message}`);
+                }
+            }
+
             // ── Step 3: Create CV + additional document records ─────────────
             let cvFileId = null;
             const additionalDocumentIds = [];
@@ -891,9 +1043,40 @@ router.post(
                     throw new Error(`${category}_storage_unretrievable`);
                 }
 
-                const documentParsedData = withDocumentCategory(inputParsedData, category);
+                const refinedCategory = classifyDocument(category, savedFileName, inputParsedData);
+                const documentParsedData = withDocumentCategory(inputParsedData, refinedCategory);
                 const detectedFileType = inferFileType(savedFileName);
-                const isPrimary = category === 'cv';
+                const isPrimary = refinedCategory === 'cv';
+
+                // Dedup TRUE duplicates only: same candidate + same file name.
+                // Per-turn re-syncs and pending-sync retries re-send the SAME
+                // file (stable name) → update in place. DISTINCT documents (CV,
+                // passport, certificate) have different names → each gets its own
+                // row, so multi-document candidates aren't collapsed.
+                {
+                    const existingCvSQL = isMySQL
+                        ? 'SELECT id FROM cv_files WHERE candidate_id = ? AND file_name = ? ORDER BY uploaded_at DESC LIMIT 1'
+                        : 'SELECT id FROM cv_files WHERE candidate_id = $1 AND file_name = $2 ORDER BY uploaded_at DESC LIMIT 1';
+                    const existingCv = await query(existingCvSQL, [candidateId, savedFileName]);
+                    if (existingCv.rows && existingCv.rows.length > 0) {
+                        const existingId = existingCv.rows[0].id;
+                        if (hasPhysicalPayload) {
+                            // A new file arrived — replace file + parsed data.
+                            const upSQL = isMySQL
+                                ? "UPDATE cv_files SET file_url=?, file_name=?, file_type=?, ocr_status='completed', ocr_text=COALESCE(?, ocr_text), parsed_data=? WHERE id=?"
+                                : "UPDATE cv_files SET file_url=$1, file_name=$2, file_type=$3, ocr_status='completed', ocr_text=COALESCE($4, ocr_text), parsed_data=$5 WHERE id=$6";
+                            await query(upSQL, [savedFileUrl, savedFileName, detectedFileType, inputRawText || null, JSON.stringify(documentParsedData), existingId]);
+                        } else {
+                            // Only fresh parsed text/data — enrich without touching the file.
+                            const upSQL = isMySQL
+                                ? "UPDATE cv_files SET ocr_text=COALESCE(?, ocr_text), parsed_data=? WHERE id=?"
+                                : "UPDATE cv_files SET ocr_text=COALESCE($1, ocr_text), parsed_data=$2 WHERE id=$3";
+                            await query(upSQL, [inputRawText || null, JSON.stringify(documentParsedData), existingId]);
+                        }
+                        logger.info(`Chatbot intake: updated existing primary CV ${existingId} for ${candidateId}`);
+                        return existingId;
+                    }
+                }
 
                 const cvInsertSQL = isMySQL
                     ? `INSERT INTO cv_files
@@ -919,7 +1102,13 @@ router.post(
                 return recordId;
             };
 
-            if (cv_file_path || cv_raw_text || cv_parsed_data || cv_base64 || hasMultipartCV) {
+            // Only create/refresh a CV row when an ACTUAL document is present
+            // (multipart file, base64, a retrievable URL, or extracted raw
+            // text). cv_parsed_data alone is NOT a document — the chatbot ships
+            // it on every turn-sync, and its fields already flow into
+            // candidates.metadata above; creating a row for it spawned phantom
+            // CVs with null file_url on each turn.
+            if (cv_file_path || cv_raw_text || cv_base64 || hasMultipartCV) {
                 try {
                     cvFileId = await insertDocumentRecord({
                         category: 'cv',
@@ -1062,12 +1251,18 @@ router.post(
                     ]);
                 }
 
+                // Route to future_pool (general pool, no job matched). CV gate
+                // removed (2026-06-08): park the candidate regardless of whether a
+                // CV is on file; only terminal states are protected.
                 const setFuturePoolSQL = isMySQL
-                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = ?`
-                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`;
+                    ? `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW()
+                       WHERE id = ? AND status NOT IN ('merged','hired')`
+                    : `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW()
+                       WHERE id = $1 AND status NOT IN ('merged','hired')`;
                 await query(setFuturePoolSQL, [candidateId]).catch(err =>
                     logger.warn(`Failed to set future_pool status for general-pool candidate ${candidateId}: ${err.message}`)
                 );
+                emitStageChanged(candidateId, 'future_pool');
 
                 logger.info(`Chatbot intake: candidate ${candidateId} routed to general_pool`);
             } else if (resolvedJobId) {
@@ -1082,15 +1277,19 @@ router.post(
                     logger.info(`Chatbot intake: application already exists ${applicationId}`);
                 } else {
                     applicationId = generateUUID();
+                    // Intent application (canonical entry status 'screening', #1) — kept
+                    // for attribution. The candidate stays New and the application is
+                    // invisible on eligibility surfaces (which filter to CV-present)
+                    // until a CV arrives (#5).
                     const appSQL = isMySQL
                         ? `INSERT INTO applications
                             (id, candidate_id, job_id, status, applied_at,
                              metadata)
-                           VALUES (?, ?, ?, 'applied', NOW(), ?)`
+                           VALUES (?, ?, ?, 'screening', NOW(), ?)`
                         : `INSERT INTO applications
                             (id, candidate_id, job_id, status,
                              metadata)
-                           VALUES ($1, $2, $3, 'applied', $4)`;
+                           VALUES ($1, $2, $3, 'screening', $4)`;
 
                     await query(appSQL, [
                         applicationId,
@@ -1114,12 +1313,17 @@ router.post(
             // When the chatbot marks a candidate as future_pool (requested role not available),
             // update their status so recruiters can find them in the Future Pool view.
             if (!resolvedJobId && cv_parsed_data && cv_parsed_data.future_pool) {
+                // CV gate removed (2026-06-08): move a New lead → future_pool when
+                // they asked for an unavailable role, regardless of CV on file.
                 const futurePoolSQL = isMySQL
-                    ? `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = ? AND status = 'new'`
-                    : `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1 AND status = 'new'`;
+                    ? `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW()
+                       WHERE id = ? AND status = 'new'`
+                    : `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW()
+                       WHERE id = $1 AND status = 'new'`;
                 await query(futurePoolSQL, [candidateId]).catch(err =>
                     logger.warn(`Failed to set future_pool status for candidate ${candidateId}: ${err.message}`)
                 );
+                emitStageChanged(candidateId, 'future_pool');
                 logger.info(`Chatbot intake: candidate ${candidateId} set to future_pool (requested role: "${cv_parsed_data.future_pool_role || job_interest}")`);
             }
 
@@ -1280,6 +1484,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         chatbot_state = '',
         pipeline_stage,
         whatsapp_message_id,
+        extra_meta,
     } = req.body;
 
     if (!phone || !direction || !content) {
@@ -1296,13 +1501,8 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
     const conversationStage = pipeline_stage || mapConversationStage(chatbot_state, message_type, direction);
 
     try {
-        // Look up candidate by phone — needed for candidate_id FK
-        const candResult = await query(
-            isMySQL
-                ? 'SELECT id, name FROM candidates WHERE phone = ? OR whatsapp_phone = ? LIMIT 1'
-                : 'SELECT id, name FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1',
-            [normalizedPhone, normalizedPhone]
-        );
+        // Look up candidate by phone (any stored variant) — needed for candidate_id FK
+        const candResult = await findCandidateByPhone(normalizedPhone, 'id, name');
 
         let candidateId = null;
         let candidateName = null;
@@ -1337,12 +1537,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     throw insertErr;
                 }
 
-                const existingResult = await query(
-                    isMySQL
-                        ? 'SELECT id, name FROM candidates WHERE phone = ? OR whatsapp_phone = ? LIMIT 1'
-                        : 'SELECT id, name FROM candidates WHERE phone = $1 OR whatsapp_phone = $2 LIMIT 1',
-                    [normalizedPhone, normalizedPhone]
-                );
+                const existingResult = await findCandidateByPhone(normalizedPhone, 'id, name');
 
                 if (!existingResult.rows.length) {
                     throw insertErr;
@@ -1357,6 +1552,9 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
         // Insert into communications
         const commId = generateUUID();
         const senderType = direction === 'inbound' ? 'candidate' : 'bot';
+        // Merge any extra per-type metadata (location lat/lng, reaction emoji,
+        // sticker info) so the conversation panel can render the full message.
+        const safeExtraMeta = extra_meta && typeof extra_meta === 'object' ? extra_meta : {};
         const metadataJson = JSON.stringify({
             sender_type: senderType,
             chatbot_state: chatbot_state || null,
@@ -1364,15 +1562,16 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
             // media_url lives in metadata so voice/image/document messages are
             // playable/openable in the conversation panel without a schema change.
             media_url: media_url || null,
+            ...safeExtraMeta,
         });
 
         const insertWithMessageIdSQL = isMySQL
             ? `INSERT INTO communications
-               (id, candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id)
-               VALUES (?, ?, 'whatsapp', ?, ?, ?, ?, ?)`
+               (id, candidate_id, channel, direction, message_type, content, metadata, sender_type, whatsapp_message_id)
+               VALUES (?, ?, 'whatsapp', ?, ?, ?, ?, ?, ?)`
             : `INSERT INTO communications
-               (id, candidate_id, channel, direction, message_type, content, metadata, whatsapp_message_id)
-               VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6, $7)`;
+               (id, candidate_id, channel, direction, message_type, content, metadata, sender_type, whatsapp_message_id)
+               VALUES ($1, $2, 'whatsapp', $3, $4, $5, $6, $7, $8)`;
 
         try {
             await query(insertWithMessageIdSQL, [
@@ -1382,6 +1581,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                 message_type,
                 safeContent.slice(0, 4000),
                 metadataJson,
+                senderType,
                 whatsapp_message_id || null,
             ]);
         } catch (insertErr) {
@@ -1464,7 +1664,7 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     message_type,
                     content: safeContent.slice(0, 4000),
                     media_url: media_url || null,
-                    metadata: { media_url: media_url || null },
+                    metadata: { media_url: media_url || null, ...safeExtraMeta },
                     sender_type: senderType,
                     chatbot_state: chatbot_state || null,
                     detected_language: language || null,
@@ -1480,6 +1680,8 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
                     timestamp: new Date().toISOString(),
                     message_type,
                     direction,
+                    media_url: media_url || null,
+                    metadata: { media_url: media_url || null, ...safeExtraMeta },
                 });
                 // Also notify the global chat list that this candidate has new activity
                 io.emit('chat_activity', {
@@ -1497,11 +1699,723 @@ router.post('/sync-message', chatbotLimiter, authenticateChatbot, async (req, re
             logger.debug(`sync-message: WebSocket emit skipped — ${wsErr.message}`);
         }
 
+        // The candidate just messaged in → the 24h window is open. Flush any
+        // messages that were queued while they were out-of-window (agent
+        // replies, full status texts behind a template teaser). Fire-and-forget.
+        if (direction === 'inbound' && candidateId) {
+            const { flushPendingForCandidate } = require('../services/pendingMessages');
+            setImmediate(() => {
+                flushPendingForCandidate(candidateId, normalizedPhone).catch((err) =>
+                    logger.error(`sync-message: pending flush failed for ${candidateId}: ${err.message}`)
+                );
+            });
+        }
+
         return res.status(201).json({ id: commId, candidate_id: candidateId, conversation_stage: conversationStage });
     } catch (error) {
         const errorDetail = error?.message || (typeof error === 'string' ? error : JSON.stringify(error));
         logger.error(`sync-message error: ${errorDetail}`);
         return res.status(500).json({ error: 'Failed to store message', detail: errorDetail });
+    }
+});
+
+// ── Interview response (candidate tapped Confirm / Reschedule / Can't make it) ─
+// Persist the candidate's interview-invite response on the interview row so the
+// per-project scoreboard shows stable historical totals. Guarded: migration 061
+// may not have applied (interview_schedules is postgres-owned on prod), so a
+// missing column must never break the confirm/reschedule flow.
+async function setInterviewResponse(interviewId, value) {
+    if (!interviewId) return;
+    try {
+        await query(
+            adaptQuery('UPDATE interview_schedules SET candidate_response = $1 WHERE id = $2'),
+            [value, interviewId]
+        );
+    } catch (err) {
+        logger.debug(`setInterviewResponse skipped (${value}) — ${err.message}`);
+    }
+}
+
+// POST /api/chatbot/interview-response  { phone, action: confirm|reschedule|cant_make }
+// Confirm marks the interview confirmed; reschedule/cant_make keep the slot,
+// alert the team, and create an agent callback task (candidate_tasks).
+router.post('/interview-response', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone, action } = req.body || {};
+        if (!phone || !['confirm', 'reschedule', 'cant_make'].includes(action)) {
+            return res.status(400).json({ error: 'phone and a valid action (confirm|reschedule|cant_make) are required' });
+        }
+
+        const r = await query(adaptQuery(`
+            SELECT c.id AS candidate_id, c.name, c.agent_id,
+                   iv.id AS interview_id, iv.application_id, iv.scheduled_datetime,
+                   j.title AS job_title
+            FROM candidates c
+            JOIN applications a ON a.candidate_id = c.id
+            JOIN interview_schedules iv ON iv.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE (c.phone = $1 OR c.whatsapp_phone = $1)
+              AND iv.status IN ('scheduled', 'confirmed')
+            ORDER BY iv.scheduled_datetime ASC
+            LIMIT 1
+        `), [phone]);
+        if (r.rows.length === 0) return res.json({ ok: false, reason: 'no_upcoming_interview' });
+        const iv = r.rows[0];
+
+        if (action === 'confirm') {
+            await query(adaptQuery("UPDATE interview_schedules SET status = 'confirmed' WHERE id = $1"), [iv.interview_id]);
+            await setInterviewResponse(iv.interview_id, 'confirmed');
+            // Keep the candidate's canonical stage aligned with the application
+            // (it is already interview_scheduled; this re-derives + emits live so
+            // the Conversations badge is guaranteed current).
+            syncCandidateStage(iv.candidate_id).catch(() => {});
+            return res.json({ ok: true, result: 'confirmed', interview_id: iv.interview_id });
+        }
+
+        const taskType = action === 'reschedule' ? 'reschedule_interview' : 'interview_cant_make';
+        const note = action === 'reschedule'
+            ? `Candidate requested to RESCHEDULE their ${iv.job_title} interview (${iv.scheduled_datetime}).`
+            : `Candidate said they CANNOT make their ${iv.job_title} interview (${iv.scheduled_datetime}).`;
+        try {
+            await query(adaptQuery(`
+                INSERT INTO candidate_tasks (id, candidate_id, application_id, due_at, note, task_type, assigned_to, status)
+                VALUES ($1, $2, $3, NOW(), $4, $5, $6, 'pending')
+            `), [generateUUID(), iv.candidate_id, iv.application_id, note, taskType, iv.agent_id || null]);
+        } catch (taskErr) {
+            logger.warn(`interview-response: task create failed — ${taskErr.message}`);
+        }
+        // Record the response (reschedule | cant_make) for the per-project scoreboard.
+        await setInterviewResponse(iv.interview_id, action);
+        recruiterAlert('human_handoff', { candidatePhone: phone, lastMessage: note }).catch(() => {});
+
+        return res.json({
+            ok: true,
+            result: action === 'reschedule' ? 'reschedule_requested' : 'noted',
+            interview_id: iv.interview_id,
+        });
+    } catch (err) {
+        logger.error(`interview-response error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Helper: load a candidate's nearest upcoming interview + its project interview_config.
+async function findUpcomingInterview(phone) {
+    const r = await query(adaptQuery(`
+        SELECT c.id AS candidate_id, c.name, c.agent_id,
+               iv.id AS interview_id, iv.application_id, iv.scheduled_datetime, iv.interviewer_id,
+               a.job_id, j.title AS job_title, j.project_id,
+               p.interview_config
+        FROM candidates c
+        JOIN applications a ON a.candidate_id = c.id
+        JOIN interview_schedules iv ON iv.application_id = a.id
+        JOIN jobs j ON a.job_id = j.id
+        LEFT JOIN projects p ON p.id = j.project_id
+        WHERE (c.phone = $1 OR c.whatsapp_phone = $1)
+          AND iv.status IN ('scheduled', 'confirmed')
+        ORDER BY iv.scheduled_datetime ASC
+        LIMIT 1
+    `), [phone]);
+    return r.rows[0] || null;
+}
+
+// Extract the wall-clock YYYY-MM-DD from a scheduled_datetime (pg returns a
+// tz-naive TIMESTAMP as a Date whose UTC fields hold the stored wall-clock when
+// the process runs in UTC; a plain string is matched directly).
+function interviewDateOnly(value) {
+    if (value instanceof Date) {
+        const p = (n) => String(n).padStart(2, '0');
+        return `${value.getUTCFullYear()}-${p(value.getUTCMonth() + 1)}-${p(value.getUTCDate())}`;
+    }
+    const m = String(value || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+// ── POST /api/chatbot/interview-slots ─────────────────────────────────────────
+// Candidate tapped "Reschedule": compute the next available slots from the
+// project's interview_config + the already-booked interview_schedules, so the bot
+// can offer them as an interactive list. Returns [{slot_id, datetime, label}].
+router.post('/interview-slots', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone } = req.body || {};
+        if (!phone) return res.status(400).json({ error: 'phone is required' });
+        const iv = await findUpcomingInterview(phone);
+        if (!iv) return res.json({ ok: false, reason: 'no_upcoming_interview', slots: [] });
+
+        const cfg = iv.interview_config || {};
+        // Seed already-booked counts per day so full days are skipped.
+        const booked = await query(adaptQuery(`
+            SELECT to_char(s.scheduled_datetime, 'YYYY-MM-DD') AS d, COUNT(*)::int AS n
+            FROM interview_schedules s
+            JOIN applications a ON s.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+              AND s.scheduled_datetime >= NOW()
+            GROUP BY 1
+        `), [iv.project_id]);
+        const bookedByDate = {};
+        for (const row of booked.rows) bookedByDate[row.d] = parseInt(row.n, 10) || 0;
+
+        const days = resolveInterviewDays(cfg).filter((d) => d.date);
+
+        let slots;
+        if (days.length) {
+            // Date-specific reschedule: offer the project's OTHER configured days
+            // (current day excluded), future-only, with capacity remaining. The id
+            // stays self-describing (`rs|<iv>|<datetime>`) so the chatbot is unchanged.
+            const today = await query(`SELECT (NOW() AT TIME ZONE 'Asia/Colombo')::date::text AS d`, []);
+            const todayColombo = today.rows[0].d;
+            const curDate = interviewDateOnly(iv.scheduled_datetime);
+            slots = days
+                .filter((d) => d.date !== curDate && d.date >= todayColombo)
+                .filter((d) => d.capacity == null || (bookedByDate[d.date] || 0) < d.capacity)
+                .map((d) => {
+                    const dt = `${d.date}T${d.time_start || '09:00'}`;
+                    return {
+                        slot_id: `rs|${iv.interview_id}|${dt}`,
+                        datetime: dt,
+                        label: `${notifications.formatInterviewWallClock(dt)} · ${d.location}`,
+                    };
+                });
+        } else {
+            // Legacy project (no configured days): auto-generate the next free slots.
+            const existingByInterviewerDay = { null: {} };
+            for (const [d, n] of Object.entries(bookedByDate)) existingByInterviewerDay.null[d] = n;
+            const sd = await query(`SELECT ((NOW() AT TIME ZONE 'Asia/Colombo')::date + 1)::text AS start_date`, []);
+            const startDate = sd.rows[0].start_date;
+            const SLOT_COUNT = 6;
+            const alloc = allocateInterviewSlots({
+                applications: Array.from({ length: SLOT_COUNT }, (_, i) => `rs${i}`),
+                startDate,
+                perDayLimit: parseInt(cfg.per_day_limit, 10) || undefined,
+                slotMinutes: parseInt(cfg.slot_minutes, 10) || undefined,
+                workdayStartHour: cfg.workday_start_hour != null ? Number(cfg.workday_start_hour) : undefined,
+                workdayEndHour: cfg.workday_end_hour != null ? Number(cfg.workday_end_hour) : undefined,
+                workingDays: Array.isArray(cfg.working_days) && cfg.working_days.length ? cfg.working_days.map(Number) : undefined,
+                skipDates: Array.isArray(cfg.skip_dates) ? cfg.skip_dates : undefined,
+                existingByInterviewerDay,
+            });
+            slots = alloc.assignments.map((s) => ({
+                slot_id: `rs|${iv.interview_id}|${s.scheduled_datetime}`,
+                datetime: s.scheduled_datetime,
+                label: notifications.formatInterviewWallClock(s.scheduled_datetime),
+            }));
+        }
+        // No slots free (every configured day is full or in the past). Don't
+        // dead-end the candidate: open a reschedule callback task so an agent
+        // reaches out when capacity frees up, and signal `waitlist` to the bot
+        // (whose existing "our team will contact you" ack fits this case).
+        if (!slots.length) {
+            try {
+                await query(adaptQuery(`
+                    INSERT INTO candidate_tasks (id, candidate_id, application_id, due_at, note, task_type, assigned_to, status)
+                    VALUES ($1, $2, $3, NOW(), $4, 'reschedule_interview', $5, 'pending')
+                `), [generateUUID(), iv.candidate_id, iv.application_id,
+                     `Candidate wants to reschedule their ${iv.job_title} interview but no slots are open — waitlist & follow up when capacity frees.`,
+                     iv.agent_id || null]);
+            } catch (wlErr) { logger.debug(`interview-slots waitlist task skipped — ${wlErr.message}`); }
+            return res.json({ ok: true, interview_id: iv.interview_id, slots: [], waitlist: true });
+        }
+
+        return res.json({ ok: true, interview_id: iv.interview_id, slots });
+    } catch (err) {
+        logger.error(`interview-slots error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/chatbot/interview-reschedule-pick ───────────────────────────────
+// Candidate picked one of the offered slots: re-validate it's still free, rebook
+// the interview, complete the reschedule task, notify the team, live-emit.
+router.post('/interview-reschedule-pick', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone, interview_id, datetime } = req.body || {};
+        if (!phone || !interview_id || !datetime) {
+            return res.status(400).json({ error: 'phone, interview_id and datetime are required' });
+        }
+        const ivRes = await query(adaptQuery(`
+            SELECT iv.id, iv.application_id, iv.scheduled_datetime, iv.interviewer_id,
+                   a.candidate_id, a.job_id, j.project_id, j.title AS job_title,
+                   p.interview_config
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            LEFT JOIN projects p ON p.id = j.project_id
+            WHERE iv.id = $1
+        `), [interview_id]);
+        if (ivRes.rows.length === 0) return res.json({ ok: false, reason: 'interview_not_found' });
+        const iv = ivRes.rows[0];
+
+        // Resolve the picked day from the project's configured days so we can move
+        // the VENUE too and re-check that DAY's capacity (not exact-time equality —
+        // many candidates legitimately share a day's start time).
+        const pickedDate = interviewDateOnly(datetime);
+        const days = resolveInterviewDays(iv.interview_config || {}).filter((d) => d.date);
+        const pickedDay = days.find((d) => `${d.date}T${d.time_start || '09:00'}` === datetime)
+            || days.find((d) => d.date === pickedDate);
+        const newLocation = pickedDay ? pickedDay.location : null;
+
+        // Re-validate the chosen slot is still free (a second candidate may have
+        // taken it since it was offered).
+        if (pickedDay) {
+            // Date-specific day → capacity is per DAY (shared start times).
+            if (pickedDay.capacity != null) {
+                const dayCount = await query(adaptQuery(`
+                    SELECT COUNT(*)::int AS n FROM interview_schedules s
+                    JOIN applications a ON s.application_id = a.id
+                    JOIN jobs j ON a.job_id = j.id
+                    WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+                      AND to_char(s.scheduled_datetime, 'YYYY-MM-DD') = $2 AND s.id <> $3
+                `), [iv.project_id, pickedDate, interview_id]);
+                if ((dayCount.rows[0]?.n || 0) >= Number(pickedDay.capacity)) return res.json({ ok: false, reason: 'slot_taken' });
+            }
+        } else {
+            // Legacy auto-slot → each slot is a unique time, so exact-datetime clash.
+            const clash = await query(adaptQuery(`
+                SELECT 1 FROM interview_schedules s
+                JOIN applications a ON s.application_id = a.id
+                JOIN jobs j ON a.job_id = j.id
+                WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+                  AND s.scheduled_datetime = $2 AND s.id <> $3
+                LIMIT 1
+            `), [iv.project_id, datetime, interview_id]);
+            if (clash.rows.length > 0) return res.json({ ok: false, reason: 'slot_taken' });
+        }
+
+        // Rebook + move the venue + reset reminder cadence (best-effort on the
+        // cadence columns which are postgres-owned on prod). reschedule_count/
+        // rescheduled_from are 058 cols; `location` predates the ownership issue.
+        await query(adaptQuery(`
+            UPDATE interview_schedules
+            SET scheduled_datetime = $1, status = 'scheduled',
+                location = COALESCE($3, location),
+                rescheduled_from_datetime = scheduled_datetime,
+                reschedule_count = COALESCE(reschedule_count, 0) + 1,
+                reminder_sent_at = NULL
+            WHERE id = $2
+        `), [datetime, interview_id, newLocation]).catch(async () => {
+            // Fallback if the 058 columns are missing (ownership): move time + venue.
+            await query(adaptQuery(`UPDATE interview_schedules SET scheduled_datetime = $1, status = 'scheduled', location = COALESCE($3, location), reminder_sent_at = NULL WHERE id = $2`), [datetime, interview_id, newLocation]);
+        });
+        await query(adaptQuery('UPDATE applications SET interview_datetime = $1, interview_location = COALESCE($3, interview_location), updated_at = NOW() WHERE id = $2'), [datetime, iv.application_id, newLocation]).catch(() => {});
+
+        // The new slot is awaiting a fresh confirm — clear the prior 'reschedule'
+        // response so the scoreboard counts this candidate as pending again.
+        await setInterviewResponse(interview_id, null);
+
+        // Resolve the pending reschedule task.
+        await query(adaptQuery(`
+            UPDATE candidate_tasks SET status = 'completed', completed_at = NOW()
+            WHERE application_id = $1 AND task_type = 'reschedule_interview' AND status = 'pending'
+        `), [iv.application_id]).catch(() => {});
+
+        syncCandidateStage(iv.candidate_id).catch(() => {});
+        const when = notifications.formatInterviewWallClock(datetime);
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('candidate_stage_changed', { candidate_id: iv.candidate_id, status: 'interview_scheduled', ts: new Date().toISOString() });
+        } catch (_) { /* best-effort */ }
+        recruiterAlert('human_handoff', {
+            candidatePhone: phone,
+            lastMessage: `Candidate RESCHEDULED their ${iv.job_title} interview to ${when}.`,
+        }).catch(() => {});
+
+        return res.json({ ok: true, new_datetime: datetime, label: when });
+    } catch (err) {
+        logger.error(`interview-reschedule-pick error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/chatbot/interview-cant-make-jobs ────────────────────────────────
+// Candidate tapped "Can't make it": offer up to 5 currently-open jobs (their own
+// project(s) first), excluding jobs they already applied to, for the bot to render
+// with Apply / Not-interested.
+router.post('/interview-cant-make-jobs', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone } = req.body || {};
+        if (!phone) return res.status(400).json({ error: 'phone is required' });
+        const c = await query(adaptQuery('SELECT id FROM candidates WHERE phone = $1 OR whatsapp_phone = $1 LIMIT 1'), [phone]);
+        if (c.rows.length === 0) return res.json({ ok: false, reason: 'candidate_not_found', jobs: [] });
+        const candidateId = c.rows[0].id;
+
+        const r = await query(adaptQuery(`
+            SELECT j.id AS job_id, j.title, j.country, p.title AS project_title,
+                   CASE WHEN j.project_id IN (
+                       SELECT j2.project_id FROM applications a2 JOIN jobs j2 ON j2.id = a2.job_id
+                       WHERE a2.candidate_id = $1 AND a2.status <> 'rejected'
+                   ) THEN 0 ELSE 1 END AS own_project_rank
+            FROM jobs j
+            LEFT JOIN projects p ON p.id = j.project_id
+            WHERE j.status = 'active'
+              AND COALESCE(j.positions_available, 0) > (
+                  SELECT COUNT(DISTINCT a3.candidate_id) FROM applications a3
+                  WHERE a3.job_id = j.id AND a3.status = 'hired'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM applications a4 WHERE a4.candidate_id = $1 AND a4.job_id = j.id
+              )
+            ORDER BY own_project_rank ASC, j.created_at DESC
+            LIMIT 5
+        `), [candidateId]);
+
+        const jobs = r.rows.map((row) => ({
+            job_id: row.job_id,
+            title: row.title,
+            label: `${row.title}${row.country ? ' — ' + row.country : ''}`,
+        }));
+        return res.json({ ok: true, jobs });
+    } catch (err) {
+        logger.error(`interview-cant-make-jobs error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/chatbot/interview-cant-make-apply ───────────────────────────────
+// Candidate chose Apply (to an alternative job) or Not-interested after declining
+// the interview. apply → create application (ON CONFLICT no-op) + remark; not
+// interested → future_pool + remark. Both resolve the pending cant-make task.
+router.post('/interview-cant-make-apply', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone, job_id, action } = req.body || {};
+        if (!phone || !['apply', 'not_interested'].includes(action)) {
+            return res.status(400).json({ error: 'phone and a valid action (apply|not_interested) are required' });
+        }
+        const c = await query(adaptQuery('SELECT id FROM candidates WHERE phone = $1 OR whatsapp_phone = $1 LIMIT 1'), [phone]);
+        if (c.rows.length === 0) return res.json({ ok: false, reason: 'candidate_not_found' });
+        const candidateId = c.rows[0].id;
+
+        if (action === 'apply') {
+            if (!job_id) return res.status(400).json({ error: 'job_id is required to apply' });
+            const jr = await query(adaptQuery('SELECT title FROM jobs WHERE id = $1'), [job_id]);
+            const jobTitle = jr.rows[0]?.title || 'a role';
+            // UNIQUE(candidate_id, job_id) stays per the locked decision — no-op on dup.
+            await query(adaptQuery(`
+                INSERT INTO applications (id, candidate_id, job_id, status, applied_at)
+                VALUES ($1, $2, $3, 'screening', NOW())
+                ON CONFLICT (candidate_id, job_id) DO NOTHING
+            `), [generateUUID(), candidateId, job_id]);
+            await logAgentAction({
+                candidateId, agentId: null, actionType: 'note', jobId: job_id,
+                remark: `Candidate could not attend their interview and applied to ${jobTitle} instead (via WhatsApp).`,
+            }).catch(() => {});
+            syncCandidateStage(candidateId).catch(() => {});
+        } else {
+            // Not interested → park in future_pool (reuse migration-053 columns).
+            await query(adaptQuery(`
+                UPDATE candidates
+                SET status = 'future_pool', conversation_stage = 'future_pool',
+                    future_pool_category = 'not_interested',
+                    future_pool_note = 'Declined interview and not interested in current openings (via WhatsApp).',
+                    future_pool_at = NOW(), updated_at = NOW()
+                WHERE id = $1 AND status NOT IN ('merged','hired')
+            `), [candidateId]).catch(() => {});
+            await logAgentAction({
+                candidateId, agentId: null, actionType: 'note',
+                remark: 'Candidate could not attend their interview and is not interested in other current openings (via WhatsApp).',
+            }).catch(() => {});
+            emitStageChanged(candidateId, 'future_pool');
+        }
+
+        // Resolve the pending cant-make task either way.
+        await query(adaptQuery(`
+            UPDATE candidate_tasks SET status = 'completed', completed_at = NOW()
+            WHERE candidate_id = $1 AND task_type = 'interview_cant_make' AND status = 'pending'
+        `), [candidateId]).catch(() => {});
+
+        return res.json({ ok: true, result: action });
+    } catch (err) {
+        logger.error(`interview-cant-make-apply error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bulk-campaign button handlers — the UAE walk-in template's three quick-reply
+// buttons ("Confirm my slot" / "Suggest to a friend" / "Not Interested"). Unlike
+// the interview-invite flow these CREATE the application + interview (none exist
+// yet). The campaign is resolved from the candidate's most-recent
+// campaign_recipients row so "Confirm" attaches to the campaign's target (AMAYA)
+// job. See migrations 063/064 + services/campaignRunner.js.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Resolve which campaign a candidate belongs to (for target job + project + template).
+async function resolveCampaignForCandidate(candidateId) {
+    // Prefer the campaign this candidate was actually sent.
+    let r = await query(adaptQuery(`
+        SELECT c.id, c.target_job_id, c.target_job_id_female, c.target_project_id, c.template_name, c.language
+        FROM campaign_recipients cr
+        JOIN campaigns c ON c.id = cr.campaign_id
+        WHERE cr.candidate_id = $1 AND c.target_job_id IS NOT NULL
+        ORDER BY cr.created_at DESC LIMIT 1
+    `), [candidateId]).catch(() => ({ rows: [] }));
+    if (r.rows.length) return r.rows[0];
+    // Fallback: the most recent campaign that has a target job.
+    r = await query(adaptQuery(`
+        SELECT id, target_job_id, target_job_id_female, target_project_id, template_name, language
+        FROM campaigns
+        WHERE target_job_id IS NOT NULL AND status IN ('sending','paused','done')
+        ORDER BY created_at DESC LIMIT 1
+    `), []).catch(() => ({ rows: [] }));
+    return r.rows[0] || null;
+}
+
+// Read a candidate's recorded gender from metadata ('male'/'female'), tolerant of
+// jsonb (object) or legacy text storage.
+function candidateGender(row) {
+    let m = row && row.metadata;
+    if (typeof m === 'string') { try { m = JSON.parse(m); } catch { m = null; } }
+    return (m && m.gender) ? String(m.gender) : '';
+}
+
+// Route to the AMAYA Male vs Female Security job by gender. Unknown/unspecified
+// gender falls back to the default (target_job_id) — recruiters can re-sort.
+function pickCampaignJob(camp, gender) {
+    const g = String(gender || '').trim().toLowerCase();
+    if (camp && camp.target_job_id_female && ['female', 'f', 'woman', 'girl'].includes(g)) {
+        return camp.target_job_id_female;
+    }
+    return camp ? camp.target_job_id : null;
+}
+
+// Build the day-picker rows from a project's configured interview days — future
+// only (Colombo), capacity-aware. id scheme 'cd|<iv>|<datetime>' (campaign pick).
+async function buildCampaignDaySlots(interviewId, projectId, cfg) {
+    const today = await query(`SELECT (NOW() AT TIME ZONE 'Asia/Colombo')::date::text AS d`, []);
+    const todayColombo = today.rows[0].d;
+    const booked = await query(adaptQuery(`
+        SELECT to_char(s.scheduled_datetime, 'YYYY-MM-DD') AS d, COUNT(*)::int AS n
+        FROM interview_schedules s
+        JOIN applications a ON s.application_id = a.id
+        JOIN jobs j ON a.job_id = j.id
+        WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed') AND s.scheduled_datetime >= NOW()
+        GROUP BY 1
+    `), [projectId]).catch(() => ({ rows: [] }));
+    const bookedByDate = {};
+    for (const row of booked.rows) bookedByDate[row.d] = parseInt(row.n, 10) || 0;
+    const days = resolveInterviewDays(cfg || {}).filter((d) => d.date && d.date >= todayColombo);
+    return days
+        .filter((d) => d.capacity == null || (bookedByDate[d.date] || 0) < d.capacity)
+        .map((d) => {
+            const dt = `${d.date}T${d.time_start || '09:00'}`;
+            return {
+                slot_id: `cd|${interviewId}|${dt}`,
+                datetime: dt,
+                label: `${notifications.formatInterviewWallClock(dt)} · ${d.location}`,
+            };
+        });
+}
+
+// POST /api/chatbot/campaign-confirm { phone } — "Confirm my slot" tap.
+// Creates (idempotently) the application + interview under the campaign's target
+// job, marks it interview_scheduled + candidate_response='confirmed', and returns
+// the project's walk-in days so the bot can ask which day the candidate prefers.
+router.post('/campaign-confirm', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone } = req.body || {};
+        if (!phone) return res.status(400).json({ error: 'phone is required' });
+        const cand = await findCandidateByPhone(phone, 'id, name, metadata');
+        if (!cand.rows.length) return res.json({ ok: false, reason: 'candidate_not_found' });
+        const candidateId = cand.rows[0].id;
+
+        const camp = await resolveCampaignForCandidate(candidateId);
+        if (!camp || !camp.target_job_id) return res.json({ ok: false, reason: 'no_target_job' });
+
+        // Route to the AMAYA Male vs Female Security job by recorded gender
+        // (unknown → the default job; recruiters can re-sort).
+        const jobId = pickCampaignJob(camp, candidateGender(cand.rows[0]));
+
+        // Idempotent application under the gender-matched (AMAYA) job.
+        await query(adaptQuery(`
+            INSERT INTO applications (id, candidate_id, job_id, status, applied_at)
+            VALUES ($1, $2, $3, 'screening', NOW())
+            ON CONFLICT (candidate_id, job_id) DO NOTHING
+        `), [generateUUID(), candidateId, jobId]);
+        const appRes = await query(adaptQuery('SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1'), [candidateId, jobId]);
+        if (!appRes.rows.length) return res.json({ ok: false, reason: 'application_failed' });
+        const applicationId = appRes.rows[0].id;
+
+        const jr = await query(adaptQuery(`
+            SELECT j.project_id, p.interview_config
+            FROM jobs j LEFT JOIN projects p ON p.id = j.project_id WHERE j.id = $1
+        `), [jobId]);
+        const projectId = jr.rows[0]?.project_id || camp.target_project_id || null;
+        const cfg = jr.rows[0]?.interview_config || {};
+
+        // Reuse an existing campaign interview, else create one at the earliest
+        // future configured day (so it's interview_scheduled immediately).
+        let interviewId;
+        const exRes = await query(adaptQuery(`
+            SELECT id FROM interview_schedules
+            WHERE application_id = $1 AND status IN ('scheduled','confirmed')
+            ORDER BY scheduled_datetime ASC LIMIT 1
+        `), [applicationId]);
+        if (exRes.rows.length) {
+            interviewId = exRes.rows[0].id;
+        } else {
+            const today = await query(`SELECT (NOW() AT TIME ZONE 'Asia/Colombo')::date::text AS d`, []);
+            const todayColombo = today.rows[0].d;
+            const days = resolveInterviewDays(cfg).filter((d) => d.date);
+            const future = days.filter((d) => d.date >= todayColombo).sort((a, b) => a.date.localeCompare(b.date));
+            const chosen = future[0] || days[0] || null;
+            // Fallback datetime when the project has no configured days yet — keeps
+            // scheduled_datetime (NOT NULL) valid so the app still goes
+            // interview_scheduled; a recruiter sets the real day later.
+            const dt = chosen ? `${chosen.date}T${chosen.time_start || '09:00'}` : `${todayColombo}T09:00`;
+            const loc = chosen ? chosen.location : null;
+            interviewId = generateUUID();
+            await query(adaptQuery(`
+                INSERT INTO interview_schedules (id, application_id, scheduled_datetime, location, duration_minutes, status)
+                VALUES ($1, $2, $3, $4, 30, 'scheduled')
+            `), [interviewId, applicationId, dt, loc]);
+            await query(adaptQuery(`
+                UPDATE applications SET status = 'interview_scheduled', interview_datetime = $1, interview_location = $2, updated_at = NOW() WHERE id = $3
+            `), [dt, loc, applicationId]);
+        }
+        await setInterviewResponse(interviewId, 'confirmed').catch(() => {});
+        await query(adaptQuery(
+            "UPDATE applications SET status = 'interview_scheduled', updated_at = NOW() WHERE id = $1 AND status NOT IN ('hired','rejected')"
+        ), [applicationId]).catch(() => {});
+        syncCandidateStage(candidateId).catch(() => {});
+
+        const slots = projectId ? await buildCampaignDaySlots(interviewId, projectId, cfg) : [];
+        return res.json({ ok: true, interview_id: interviewId, slots });
+    } catch (err) {
+        logger.error(`campaign-confirm error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/chatbot/campaign-daypick { phone, interview_id, datetime } — the
+// candidate picked one of the walk-in days after confirming. Move the interview
+// to that day + venue, keep candidate_response='confirmed'.
+router.post('/campaign-daypick', authenticateChatbot, async (req, res) => {
+    try {
+        const { phone, interview_id, datetime } = req.body || {};
+        if (!phone || !interview_id || !datetime) {
+            return res.status(400).json({ error: 'phone, interview_id and datetime are required' });
+        }
+        const ivRes = await query(adaptQuery(`
+            SELECT iv.id, iv.application_id, a.candidate_id, j.project_id, p.interview_config
+            FROM interview_schedules iv
+            JOIN applications a ON iv.application_id = a.id
+            JOIN jobs j ON a.job_id = j.id
+            LEFT JOIN projects p ON p.id = j.project_id
+            WHERE iv.id = $1
+        `), [interview_id]);
+        if (!ivRes.rows.length) return res.json({ ok: false, reason: 'interview_not_found' });
+        const iv = ivRes.rows[0];
+        const pickedDate = interviewDateOnly(datetime);
+        const days = resolveInterviewDays(iv.interview_config || {}).filter((d) => d.date);
+        const pickedDay = days.find((d) => `${d.date}T${d.time_start || '09:00'}` === datetime)
+            || days.find((d) => d.date === pickedDate);
+        const newLocation = pickedDay ? pickedDay.location : null;
+        if (pickedDay && pickedDay.capacity != null) {
+            const dayCount = await query(adaptQuery(`
+                SELECT COUNT(*)::int AS n FROM interview_schedules s
+                JOIN applications a ON s.application_id = a.id JOIN jobs j ON a.job_id = j.id
+                WHERE j.project_id = $1 AND s.status IN ('scheduled','confirmed')
+                  AND to_char(s.scheduled_datetime,'YYYY-MM-DD') = $2 AND s.id <> $3
+            `), [iv.project_id, pickedDate, interview_id]);
+            if ((dayCount.rows[0]?.n || 0) >= Number(pickedDay.capacity)) return res.json({ ok: false, reason: 'slot_taken' });
+        }
+        await query(adaptQuery(
+            "UPDATE interview_schedules SET scheduled_datetime = $1, status = 'confirmed', location = COALESCE($3, location) WHERE id = $2"
+        ), [datetime, interview_id, newLocation]).catch(() => {});
+        await query(adaptQuery(
+            "UPDATE applications SET interview_datetime = $1, interview_location = COALESCE($3, interview_location), status = 'interview_scheduled', updated_at = NOW() WHERE id = $2"
+        ), [datetime, iv.application_id, newLocation]).catch(() => {});
+        await setInterviewResponse(interview_id, 'confirmed').catch(() => {});
+        syncCandidateStage(iv.candidate_id).catch(() => {});
+        const label = notifications.formatInterviewWallClock(datetime) + (newLocation ? ` · ${newLocation}` : '');
+        return res.json({ ok: true, label });
+    } catch (err) {
+        logger.error(`campaign-daypick error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/chatbot/campaign-refer { referrer_phone, friend_phone, friend_name }
+// "Suggest to a friend": create/find the friend candidate + an AMAYA application,
+// and return the campaign template so the chatbot can invite the friend.
+router.post('/campaign-refer', authenticateChatbot, async (req, res) => {
+    try {
+        const { referrer_phone, friend_phone, friend_name } = req.body || {};
+        if (!friend_phone) return res.status(400).json({ error: 'friend_phone is required' });
+        const friendNorm = normalizePhone(friend_phone);
+        if (!friendNorm || friendNorm.replace(/\D/g, '').length < 10) {
+            return res.json({ ok: false, reason: 'invalid_phone' });
+        }
+        if (referrer_phone && normalizePhone(referrer_phone) === friendNorm) {
+            return res.json({ ok: false, reason: 'self_referral' });
+        }
+
+        let referrerName = '';
+        let referrerCampaign = null;
+        if (referrer_phone) {
+            const rc = await findCandidateByPhone(referrer_phone, 'id, name');
+            if (rc.rows.length) {
+                referrerName = rc.rows[0].name || '';
+                referrerCampaign = await resolveCampaignForCandidate(rc.rows[0].id);
+            }
+        }
+        const remark = `Referred by ${referrerName || 'a candidate'}${referrer_phone ? ` (${normalizePhone(referrer_phone)})` : ''} via WhatsApp campaign`;
+
+        let alreadyExisted = false;
+        let friendId;
+        const existing = await findCandidateByPhone(friendNorm, 'id, name');
+        if (existing.rows.length) {
+            alreadyExisted = true;
+            friendId = existing.rows[0].id;
+        } else {
+            friendId = generateUUID();
+            const insertSQL = isMySQL
+                ? `INSERT INTO candidates (id, phone, whatsapp_phone, name, source, status, remarks, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'referral', 'new', ?, NOW(), NOW())`
+                : `INSERT INTO candidates (id, phone, whatsapp_phone, name, source, status, remarks)
+                   VALUES ($1, $2, $3, $4, 'referral', 'new', $5)`;
+            try {
+                await query(insertSQL, [friendId, friendNorm, friendNorm, (friend_name || '').trim() || friendNorm, remark]);
+            } catch (e) {
+                if (!isDuplicateConstraintError(e)) throw e;
+                const again = await findCandidateByPhone(friendNorm, 'id, name');
+                friendId = again.rows[0]?.id;
+                alreadyExisted = true;
+            }
+        }
+        if (!friendId) return res.json({ ok: false, reason: 'create_failed' });
+
+        const camp = referrerCampaign || await resolveCampaignForCandidate(friendId);
+        if (camp && camp.target_job_id) {
+            await query(adaptQuery(`
+                INSERT INTO applications (id, candidate_id, job_id, status, applied_at)
+                VALUES ($1, $2, $3, 'screening', NOW())
+                ON CONFLICT (candidate_id, job_id) DO NOTHING
+            `), [generateUUID(), friendId, camp.target_job_id]).catch(() => {});
+            syncCandidateStage(friendId).catch(() => {});
+        }
+        // Tie the friend to this campaign so their own taps resolve back to it and
+        // a later bulk run treats them as already contacted.
+        if (camp && camp.id) {
+            await query(adaptQuery(`
+                INSERT INTO campaign_recipients (campaign_id, candidate_id, phone, status, reason, sent_at)
+                VALUES ($1, $2, $3, 'sent', 'referral', NOW())
+                ON CONFLICT (campaign_id, candidate_id) DO NOTHING
+            `), [camp.id, friendId, friendNorm]).catch(() => {});
+        }
+        await logAgentAction({ candidateId: friendId, agentId: null, actionType: 'note', remark }).catch(() => {});
+
+        return res.json({
+            ok: true,
+            friend_candidate_id: friendId,
+            already_existed: alreadyExisted,
+            template_name: camp?.template_name || null,
+            language: camp?.language || 'en',
+        });
+    } catch (err) {
+        logger.error(`campaign-refer error: ${err.message}`);
+        res.status(500).json({ error: err.message });
     }
 });
 

@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowRight, Briefcase, Check, Loader2 } from 'lucide-react'
+import { Search, ArrowRight, Briefcase, Check, Loader2, Archive } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
-import { getJobs, transferApplication } from '../../api'
+import { getJobs, transferApplication, rejectToPool } from '../../api'
+import { InlineCreateRole } from '../communications/InlineCreateRole'
+
+// Sentinel "job" representing the Future Pool target (parks the candidate instead
+// of moving them to another job).
+const FUTURE_POOL_TARGET = { id: '__future_pool__', title: 'Future Pool', isFuturePool: true }
 
 export function TransferApplicationModal({ open, onClose, application }) {
   const queryClient = useQueryClient()
@@ -21,8 +26,10 @@ export function TransferApplicationModal({ open, onClose, application }) {
   }, [open, application?.id])
 
   const jobsQuery = useQuery({
+    // Include 'future' roles so previously-created future-project positions are
+    // valid transfer targets, not just currently-active jobs.
     queryKey: ['transfer-app-jobs'],
-    queryFn: () => getJobs({ status: 'active' }),
+    queryFn: () => getJobs({ status: 'active,future' }),
     enabled: open,
   })
 
@@ -40,17 +47,20 @@ export function TransferApplicationModal({ open, onClose, application }) {
   }, [jobsQuery.data, jobSearch, application?.job_id])
 
   const transferMutation = useMutation({
-    mutationFn: () => transferApplication(application.id, {
-      target_job_id: selectedJob.id,
-      transfer_reason: reason || undefined,
-    }),
+    mutationFn: () => selectedJob?.isFuturePool
+      ? rejectToPool(application.id, { rejection_reason: reason || undefined })
+      : transferApplication(application.id, {
+          target_job_id: selectedJob.id,
+          transfer_reason: reason || undefined,
+        }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['applications'] })
-      toast.success('Application transferred')
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      toast.success(selectedJob?.isFuturePool ? 'Moved to Future Pool' : 'Application transferred')
       onClose()
     },
     onError: (error) => {
-      toast.error(error.response?.data?.error || 'Failed to transfer application')
+      toast.error(error.response?.data?.error || (selectedJob?.isFuturePool ? 'Failed to move to Future Pool' : 'Failed to transfer application'))
     },
   })
 
@@ -101,6 +111,26 @@ export function TransferApplicationModal({ open, onClose, application }) {
               className="input w-full pl-9"
             />
           </div>
+          {/* Park the candidate instead of moving to a job. Always visible (not
+              affected by the job search/filter). */}
+          <button
+            type="button"
+            onClick={() => setSelectedJob(selectedJob?.isFuturePool ? null : FUTURE_POOL_TARGET)}
+            className={`mt-2 w-full text-left px-3 py-2.5 rounded-2xl border flex items-center gap-3 transition-colors ${
+              selectedJob?.isFuturePool
+                ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800/60'
+                : 'border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
+            }`}
+          >
+            <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center text-amber-700 dark:text-amber-300 shrink-0">
+              <Archive size={15} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Move to Future Pool</p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">Park the candidate — closes the current application</p>
+            </div>
+            {selectedJob?.isFuturePool && <Check size={16} className="text-amber-600 shrink-0" />}
+          </button>
           <div className="mt-2 max-h-60 overflow-y-auto custom-scrollbar rounded-2xl border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-100 dark:divide-zinc-800/60">
             {jobsQuery.isLoading ? (
               <div className="flex items-center justify-center py-6 text-sm text-zinc-500">
@@ -138,6 +168,8 @@ export function TransferApplicationModal({ open, onClose, application }) {
               )
             })}
           </div>
+          {/* Transfer to a future project / manually-entered role without leaving here. */}
+          <InlineCreateRole onCreated={(job) => { setSelectedJob(job); setJobSearch('') }} />
         </div>
 
         <div>
@@ -156,7 +188,7 @@ export function TransferApplicationModal({ open, onClose, application }) {
         <div className="flex items-center justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <Button type="submit" disabled={!selectedJob?.id} loading={transferMutation.isPending}>
-            Transfer
+            {selectedJob?.isFuturePool ? 'Move to Pool' : 'Transfer'}
           </Button>
         </div>
       </form>

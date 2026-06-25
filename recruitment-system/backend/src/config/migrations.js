@@ -27,6 +27,25 @@ async function safeAlter(sql, label) {
     }
 }
 
+/**
+ * Run a one-time DATA migration (UPDATE/INSERT). Logs the affected row count and
+ * never throws into startup — a WARN keeps the server booting (table-ownership
+ * issues on Cloud SQL surface here as a WARN, never a crash). Idempotent by
+ * construction: the WHERE clauses match only the legacy values they rewrite, so
+ * re-running on already-migrated data is a no-op (0 rows).
+ */
+async function safeUpdate(sql, label) {
+    try {
+        const res = await query(sql, []);
+        const n = res.rowCount != null ? res.rowCount : (res.rows ? res.rows.length : 0);
+        logger.info(`  migration: OK  — ${label} (${n} row${n === 1 ? '' : 's'})`);
+        return n;
+    } catch (err) {
+        logger.warn(`  migration: WARN — ${label}: ${err.message.split('\n')[0]}`);
+        return -1;
+    }
+}
+
 async function applyMigrations() {
     logger.info('🔄 Running startup migrations...');
 
@@ -60,6 +79,12 @@ async function applyMigrations() {
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS whatsapp_phone        VARCHAR(50)`, 'candidates.whatsapp_phone'],
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS chatbot_ref           VARCHAR(100)`, 'candidates.chatbot_ref'],
         [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS ad_ref                VARCHAR(100)`, 'candidates.ad_ref'],
+        // photo_url was referenced by the photo-upload route and the
+        // auto-assign job-candidates query but never added by any migration
+        // or schema.sql — its absence made /api/auto-assign/job/:id/candidates
+        // 500 ("column c.photo_url does not exist"), which the frontend
+        // rendered as "Job Not Found" on the View Candidates page.
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS photo_url             TEXT`, 'candidates.photo_url'],
         [`CREATE INDEX IF NOT EXISTS idx_candidates_whatsapp ON candidates(whatsapp_phone)`, 'idx_candidates_whatsapp'],
         [`CREATE INDEX IF NOT EXISTS idx_candidates_ad_ref   ON candidates(ad_ref)`, 'idx_candidates_ad_ref'],
     ];
@@ -509,10 +534,13 @@ async function applyMigrations() {
             ('communications', 'Communications',  'MessageSquare',   'Messaging and outreach', 80),
             ('analytics',      'Analytics',       'BarChart2',       'Reporting and KPIs', 90),
             ('knowledge_base', 'Knowledge Base',  'BookOpen',        'FAQ and documents for chatbot', 100),
-            ('marketing_hub',  'Marketing Hub',   'Megaphone',       'Lead intake and call handling', 110),
             ('general_pool',   'General Pool',    'Database',        'Unassigned candidate pool', 120)
         ON CONFLICT (key) DO NOTHING
     `, 'sections seed');
+    // NOTE: 'marketing_hub' section intentionally NOT seeded — the Marketing Hub
+    // feature was removed (Migration 051 drops the row on existing DBs). The
+    // underlying lead_* tables are kept because the 3CX call webhook writes to
+    // them (see routes/webhooks-3cx.js).
 
     // per-user, per-section CRUD permissions
     await safeAlter(`
@@ -625,6 +653,1038 @@ async function applyMigrations() {
     await safeAlter(
         `CREATE INDEX IF NOT EXISTS idx_app_prescreened ON applications(prescreening_completed_at) WHERE prescreening_completed_at IS NOT NULL`,
         'idx_app_prescreened',
+    );
+
+    // ── Migration 023: interview description ──────────────────────────────────
+    // Free-text note captured when scheduling an interview (extra details for
+    // the candidate), surfaced in the WhatsApp invite (B016).
+    await safeAlter(
+        `ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS description TEXT`,
+        'interview_schedules.description',
+    );
+
+    // ── Migration 024: de-duplicate applications + enforce uniqueness ─────────
+    // Legacy rows may hold duplicate (candidate_id, job_id) pairs created by
+    // races/retries before the API-layer upsert landed. Keep the single
+    // furthest-along application per pair, delete the rest. Idempotent: a clean
+    // table deletes 0. On prod the table may be postgres-owned, so the DELETE
+    // can be rejected ("must be owner") — safeAlter logs WARN and continues;
+    // run scripts/dedupe-applications.js with the owner role as a fallback.
+    await safeAlter(
+        `DELETE FROM applications a
+          USING (
+            SELECT id, ROW_NUMBER() OVER (
+              PARTITION BY candidate_id, job_id
+              ORDER BY CASE status
+                WHEN 'placed'              THEN 8
+                WHEN 'selected'            THEN 7
+                WHEN 'interview_scheduled' THEN 6
+                WHEN 'interviewed'         THEN 6
+                WHEN 'pre_screened'        THEN 5
+                WHEN 'certified'           THEN 4
+                WHEN 'screening'           THEN 3
+                WHEN 'reviewing'           THEN 2
+                WHEN 'auto_assigned'       THEN 2
+                WHEN 'applied'             THEN 2
+                ELSE 1
+              END DESC, applied_at ASC
+            ) AS rn
+            FROM applications
+          ) d
+          WHERE a.id = d.id AND d.rn > 1`,
+        'dedupe applications (keep furthest-along per candidate+job)',
+    );
+
+    // Defensive: guarantee the unique index exists so new duplicates are
+    // blocked at the DB level (it already ships in schema.sql:186).
+    await safeAlter(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_unique ON applications(candidate_id, job_id)`,
+        'idx_applications_unique',
+    );
+
+    // Speeds up the smart-scheduler per-interviewer/day load seed query.
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_iv_interviewer_datetime ON interview_schedules(interviewer_id, scheduled_datetime)`,
+        'idx_iv_interviewer_datetime',
+    );
+
+    // Candidate-stage filtering (CV Manager / candidate list) is now hot.
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status)`,
+        'idx_candidates_status',
+    );
+
+    // ── Migration 025: recurring interview-reminder cadence ───────────────────
+    // The original reminder used a single reminder_sent_at marker (one-shot,
+    // 24h before). The recurring cadence sends a nudge on each of the final 3
+    // days before the interview + a distinct morning-of message, so it needs
+    // per-day tracking. last_reminder_date = the date (Asia/Colombo) of the most
+    // recent daily reminder (≤ one per day); dayof_reminder_sent_at marks the
+    // separate interview-day reminder. NOTE: on prod interview_schedules may be
+    // postgres-owned, so these ALTERs can be rejected ("must be owner") — that is
+    // logged WARN and the reminder sweep degrades to the legacy one-shot path
+    // (see interview-reminder.js). Run scripts/fix-interview-ownership.js to
+    // enable the full cadence.
+    const interviewReminderCols = [
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS last_reminder_date     DATE`,        'interview_schedules.last_reminder_date'],
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS reminder_count         SMALLINT DEFAULT 0`, 'interview_schedules.reminder_count'],
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS dayof_reminder_sent_at TIMESTAMPTZ`, 'interview_schedules.dayof_reminder_sent_at'],
+    ];
+    for (const [sql, label] of interviewReminderCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 037: interview outcome (passed / failed / pending_review) ────
+    // Structured hiring decision per interview (distinct from the 1–5 rating +
+    // free-text feedback). NOTE: on prod interview_schedules may be postgres-
+    // owned, so this ALTER can be rejected ("must be owner") — logged WARN; the
+    // routes degrade gracefully (interviewHasOutcomeColumn gate). Run
+    // scripts/fix-interview-ownership.js to enable persistence.
+    await safeAlter(
+        `ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS outcome VARCHAR(20)`,
+        'interview_schedules.outcome',
+    );
+
+    // ── Migration 026: job re-engagement waiting list ─────────────────────────
+    // When a candidate wanted a role we had no opening for (they land in
+    // general_pool with metadata.job_interest_stated), we proactively message
+    // them when a matching job is later activated. interest_notified_at de-dupes
+    // so a candidate is invited at most once per pool entry.
+    await safeAlter(
+        `ALTER TABLE general_pool ADD COLUMN IF NOT EXISTS interest_notified_at TIMESTAMPTZ`,
+        'general_pool.interest_notified_at',
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_general_pool_unnotified ON general_pool(interest_notified_at) WHERE interest_notified_at IS NULL`,
+        'idx_general_pool_unnotified',
+    );
+
+    // ── Migration 027: candidate_tasks (agent callback/follow-up tasks) ───────
+    // Mirrors lead_follow_ups but for recruitment candidates: an agent schedules
+    // "call back {candidate} on {due_at}". Surfaced in a due-tasks queue.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS candidate_tasks (
+            id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id   UUID         NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+            application_id UUID         REFERENCES applications(id) ON DELETE SET NULL,
+            due_at         TIMESTAMPTZ  NOT NULL,
+            note           TEXT,
+            task_type      VARCHAR(40)  NOT NULL DEFAULT 'callback',
+            status         VARCHAR(20)  NOT NULL DEFAULT 'pending',
+            outcome        TEXT,
+            assigned_to    UUID         REFERENCES users(id) ON DELETE SET NULL,
+            created_by     UUID         REFERENCES users(id) ON DELETE SET NULL,
+            completed_at   TIMESTAMPTZ,
+            created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'candidate_tasks table');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_due_pending ON candidate_tasks(due_at) WHERE status = 'pending'`, 'idx_candidate_tasks_due_pending');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_candidate ON candidate_tasks(candidate_id)`, 'idx_candidate_tasks_candidate');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_candidate_tasks_assignee ON candidate_tasks(assigned_to) WHERE status = 'pending'`, 'idx_candidate_tasks_assignee');
+
+    // ── Migration 028: in-call presence (multi-agent calling console) ─────────
+    // Lets an agent flag "I'm on a call with this candidate" so the other agents
+    // see it live and don't double-call. Manual toggle (external dialer, no API).
+    // Cleared on socket disconnect + a TTL sweep in server.js. recruitment_db only
+    // — the Python chatbot maps a different candidates table (chatbot_db) and never
+    // reads these columns.
+    const callPresenceCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS call_status     VARCHAR(20)`, 'candidates.call_status'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS call_agent_id   UUID REFERENCES users(id) ON DELETE SET NULL`, 'candidates.call_agent_id'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS call_started_at TIMESTAMPTZ`, 'candidates.call_started_at'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_on_call ON candidates(call_agent_id) WHERE call_status = 'on_call'`, 'idx_candidates_on_call'],
+    ];
+    for (const [sql, label] of callPresenceCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 029: call disposition + contacted markers + shared-pool claim ─
+    // `disposition` is the agent's call outcome / lead status (app-validated, no
+    // CHECK so other writers can't trip it). `last_contacted_at` is dedicated to
+    // AGENT contact — distinct from `last_contact_at`, which the bot/email/webhook
+    // bump on every inbound. `claimed_by` lets an agent claim a chat to themselves
+    // in the shared pool so the 5 agents don't collide.
+    const triageCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS disposition       VARCHAR(24)`, 'candidates.disposition'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS disposition_at    TIMESTAMPTZ`, 'candidates.disposition_at'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS disposition_by    UUID REFERENCES users(id) ON DELETE SET NULL`, 'candidates.disposition_by'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS last_contacted_at TIMESTAMPTZ`, 'candidates.last_contacted_at'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS contacted_by      UUID REFERENCES users(id) ON DELETE SET NULL`, 'candidates.contacted_by'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS claimed_by        UUID REFERENCES users(id) ON DELETE SET NULL`, 'candidates.claimed_by'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS claimed_at        TIMESTAMPTZ`, 'candidates.claimed_at'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_disposition ON candidates(disposition) WHERE disposition IS NOT NULL`, 'idx_candidates_disposition'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_claimed_by ON candidates(claimed_by) WHERE claimed_by IS NOT NULL`, 'idx_candidates_claimed_by'],
+    ];
+    for (const [sql, label] of triageCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 030: call_logs (agent call/remark engagement log) ───────────
+    // One row per logged call or standalone remark; powers the per-candidate call
+    // log and the per-agent engagement rollup. General CRUD actions stay in
+    // audit_logs — this table is specifically the calling-console engagement feed.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS call_logs (
+            id               UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id     UUID         NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+            agent_id         UUID         REFERENCES users(id) ON DELETE SET NULL,
+            outcome          VARCHAR(24),
+            disposition      VARCHAR(24),
+            remark           TEXT,
+            duration_seconds INTEGER,
+            called_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, 'call_logs table');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_call_logs_candidate  ON call_logs(candidate_id, called_at DESC)`, 'idx_call_logs_candidate');
+    await safeAlter(`CREATE INDEX IF NOT EXISTS idx_call_logs_agent_date ON call_logs(agent_id, called_at DESC)`, 'idx_call_logs_agent_date');
+
+    // ── Migration 031: link a call log to the job it assigned + the reason ──────
+    // When an agent advances a New candidate to Screening via the "Done" action
+    // they pick a job/project; `job_id` records that assignment so the call log
+    // can show "Assigned to <job> @ <project>". `reason` captures the structured
+    // not-interested reason (Salary too low / Wrong location / …). Both nullable —
+    // a plain remark-only log still works.
+    const callLogAssignmentCols = [
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS job_id         UUID REFERENCES jobs(id) ON DELETE SET NULL`, 'call_logs.job_id'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS application_id UUID REFERENCES applications(id) ON DELETE SET NULL`, 'call_logs.application_id'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS reason         VARCHAR(48)`, 'call_logs.reason'],
+        [`CREATE INDEX IF NOT EXISTS idx_call_logs_job ON call_logs(job_id) WHERE job_id IS NOT NULL`, 'idx_call_logs_job'],
+    ];
+    for (const [sql, label] of callLogAssignmentCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 032: status-vocabulary standardization (UPGRADES.md #1 + #5) ──
+    // Collapse the legacy application vocabulary onto the canonical 5, normalize
+    // the candidate vocabulary onto the canonical 7, re-bucket CV-less candidates
+    // back to New (the CV is the hard eligibility gate — #5), and retire
+    // conversation_stage as a separate vocabulary (mirror it to status).
+    //
+    // Canonical candidate.status : new, screening, certified, interview_scheduled,
+    //                              future_pool, merged, hired
+    // Canonical application.status: screening, certified, interview_scheduled,
+    //                              hired, rejected
+    //
+    // All UPDATEs are idempotent (they only match values they rewrite) and run via
+    // safeUpdate so a table-ownership WARN can never abort startup.
+
+    // (a) candidate-level 'rejected' is NOT a canonical candidate status — a
+    //     decline maps to future_pool (re-engageable). CV-less ones get pulled to
+    //     New by step (b) below, consistent with #5.
+    await safeUpdate(
+        `UPDATE candidates SET status = 'future_pool' WHERE status = 'rejected'`,
+        '032a candidates rejected → future_pool'
+    );
+
+    // (b) [REMOVED 2026-06-08] This step used to re-bucket every CV-less candidate
+    //     back to New. The CV hard-gate has been DROPPED (user decision — candidates
+    //     reflect their real application stage regardless of CV; almost all prod
+    //     candidates are agency-imported with offline CVs). Left in, this re-bucket
+    //     reverted advanced candidates to New on EVERY boot, wiping their true stage
+    //     (e.g. interview_scheduled 861 → 129). It is replaced by the self-healing
+    //     re-derivation in step (d) below.
+
+    // (c) collapse application.status legacy values onto the canonical 5.
+    await safeUpdate(
+        `UPDATE applications SET status = 'screening'
+          WHERE status IN ('applied','auto_assigned','reviewing')`,
+        '032c applications applied/auto_assigned/reviewing → screening'
+    );
+    await safeUpdate(
+        `UPDATE applications SET status = 'certified' WHERE status = 'pre_screened'`,
+        '032c applications pre_screened → certified'
+    );
+    await safeUpdate(
+        `UPDATE applications SET status = 'interview_scheduled'
+          WHERE status IN ('interviewed','selected')`,
+        '032c applications interviewed/selected → interview_scheduled'
+    );
+    await safeUpdate(
+        `UPDATE applications SET status = 'hired' WHERE status = 'placed'`,
+        '032c applications placed → hired'
+    );
+    await safeUpdate(
+        `UPDATE applications SET status = 'rejected' WHERE status = 'transferred'`,
+        '032c applications transferred → rejected'
+    );
+
+    // (d) Self-healing candidate-stage re-derivation (replaces the old 032b CV
+    //     re-bucket). Sets candidate.status (+ conversation_stage) to the FURTHEST
+    //     non-rejected application stage, regardless of CV. Idempotent — only
+    //     rewrites drifted rows — and runs every boot, so candidate.status can
+    //     never fall behind the Applications page again (the recurring "counts are
+    //     wrong / Interview Scheduled too low" bug). merged/hired are terminal;
+    //     candidates with no forward application keep their status (future_pool
+    //     parking preserved). This is the permanent form of the manual backfill.
+    await safeUpdate(
+        `UPDATE candidates c
+            SET status = v.s, conversation_stage = v.s, updated_at = NOW()
+           FROM (
+                 SELECT a.candidate_id,
+                        MAX(CASE
+                              WHEN a.status IN ('interview_scheduled','interviewed','selected','placed') THEN 3
+                              WHEN a.status IN ('certified','pre_screened') THEN 2
+                              WHEN a.status IN ('screening','applied','auto_assigned','reviewing') THEN 1
+                              ELSE 0 END) AS rnk
+                   FROM applications a
+                  GROUP BY a.candidate_id
+                ) r,
+                LATERAL (SELECT (CASE r.rnk WHEN 3 THEN 'interview_scheduled'
+                                            WHEN 2 THEN 'certified'
+                                            WHEN 1 THEN 'screening' END) AS s) v
+          WHERE c.id = r.candidate_id
+            AND r.rnk > 0
+            AND c.status NOT IN ('merged','hired')
+            AND c.status IS DISTINCT FROM v.s`,
+        '032d candidate.status re-derived from furthest application'
+    );
+
+    // NOTE: conversation_stage is intentionally NOT mass-mirrored here. It is no
+    // longer a status axis anywhere in the CRM (the active-chats + Messages filters
+    // that keyed off it are removed in this release), so the chatbot may keep using
+    // it as its own chat-flow indicator without conflicting with candidate.status.
+
+    // (e) observability: surface any value still outside the canonical sets so a
+    //     stray writer is caught in the deploy log (does not block startup).
+    try {
+        const strayCand = await query(
+            `SELECT status, COUNT(*)::int AS n FROM candidates
+              WHERE status IS NOT NULL
+                AND status NOT IN ('new','screening','certified','interview_scheduled','future_pool','merged','hired')
+              GROUP BY status`, []
+        );
+        if (strayCand.rows.length) {
+            logger.warn(`  migration: 032 ⚠ candidates with non-canonical status remain: ${JSON.stringify(strayCand.rows)}`);
+        }
+        const strayApp = await query(
+            `SELECT status, COUNT(*)::int AS n FROM applications
+              WHERE status IS NOT NULL
+                AND status NOT IN ('screening','certified','interview_scheduled','hired','rejected')
+              GROUP BY status`, []
+        );
+        if (strayApp.rows.length) {
+            logger.warn(`  migration: 032 ⚠ applications with non-canonical status remain: ${JSON.stringify(strayApp.rows)}`);
+        }
+    } catch (err) {
+        logger.warn(`  migration: 032e stray-status audit skipped: ${err.message.split('\n')[0]}`);
+    }
+
+    // ── Migration 033: integrity constraints (UPGRADES.md #1 + #2) ─────────────
+    // Best-effort CHECK constraints (added via safeAlter so an ownership failure
+    // is a WARN, not a crash). Application-level validation is the primary guard;
+    // these make the DB the backstop. Run AFTER 032 so existing rows validate.
+
+    // users.role: normalize any legacy values first, then constrain to the 4 roles.
+    await safeUpdate(
+        `UPDATE users SET role = 'project_handler' WHERE role = 'recruiter'`,
+        '033 users.role recruiter → project_handler'
+    );
+    await safeUpdate(
+        `UPDATE users SET role = 'sourcing_department' WHERE role = 'supervisor'`,
+        '033 users.role supervisor → sourcing_department'
+    );
+    await safeAlter(
+        `ALTER TABLE users ADD CONSTRAINT users_role_chk
+            CHECK (role IN ('admin','project_handler','marketing_agent','sourcing_department'))`,
+        '033 users_role_chk'
+    );
+
+    // Realign the column default so it can never violate the new CHECK (the
+    // legacy default 'applied' is no longer a permitted value).
+    await safeAlter(
+        `ALTER TABLE applications ALTER COLUMN status SET DEFAULT 'screening'`,
+        "033 applications.status default → screening"
+    );
+    await safeAlter(
+        `ALTER TABLE applications ADD CONSTRAINT applications_status_chk
+            CHECK (status IN ('screening','certified','interview_scheduled','hired','rejected'))`,
+        '033 applications_status_chk'
+    );
+    await safeAlter(
+        `ALTER TABLE candidates ADD CONSTRAINT candidates_status_chk
+            CHECK (status IS NULL OR status IN ('new','screening','certified','interview_scheduled','future_pool','merged','hired'))`,
+        '033 candidates_status_chk'
+    );
+
+    // ── Migration 034: per-user workspace preferences ────────────────────────
+    // A separate table (NOT a users column) on purpose: the `users` table is
+    // postgres-owned, so ALTER TABLE users fails for recruitment_user (see the
+    // 033 users_role_chk WARN). recruitment_user CAN create new tables, so the
+    // per-user prefs live here. Stores a free-form JSON blob namespaced by
+    // feature (e.g. { communications: {...}, ... }) — powers the persistent
+    // Messages workspace (#3.0) and future saved-views.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            user_id    UUID         PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            prefs      JSONB        NOT NULL DEFAULT '{}'::jsonb,
+            updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, '034 user_preferences table');
+
+    // ── Migration 035: profile-picture source flag (#6) ──────────────────────
+    // 'auto'  = set from a chatbot-detected person-photo (latest one refreshes it)
+    // 'manual'= an agent uploaded it → LOCKED, auto never overwrites.
+    // NULL    = no picture yet. candidates.photo_url already exists (migration 005).
+    await safeAlter(
+        `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS photo_source VARCHAR(10)`,
+        '035 candidates.photo_source',
+    );
+
+    // ── Migration 036: semantic-match embeddings (#4a) ───────────────────────
+    // Embeddings (OpenAI text-embedding-3-small, 1536 dims) stored as JSONB +
+    // a content hash to detect staleness. We compute cosine similarity in JS at
+    // shortlist time (tiny scale: ~900 CVs / ~14 jobs) — no pgvector needed, so
+    // no CREATE EXTENSION privilege is required.
+    const embedCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_embedding      JSONB`,        '036 candidates.cv_embedding'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_embedding_hash VARCHAR(64)`,  '036 candidates.cv_embedding_hash'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cv_embedding_at   TIMESTAMPTZ`,  '036 candidates.cv_embedding_at'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding      JSONB`,        '036 jobs.embedding'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding_hash VARCHAR(64)`,  '036 jobs.embedding_hash'],
+        [`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS embedding_at   TIMESTAMPTZ`,  '036 jobs.embedding_at'],
+    ];
+    for (const [sql, label] of embedCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 037: hot-path indexes for list/analytics performance ───────
+    // The Applications list filters/sorts on applications.status + applied_at;
+    // the active-chats + analytics queries scan communications.sent_at. These
+    // were the full-scan hot spots behind slow loads / laggy writes. Distinct
+    // from existing indexes: candidates(status) [024], communications(candidate_id,
+    // sent_at) [010] and the UNIQUE applications(candidate_id, job_id) [024] are
+    // already covered. safeAlter degrades to a WARN if a table is postgres-owned.
+    const perfIdx = [
+        [`CREATE INDEX IF NOT EXISTS idx_applications_status     ON applications(status)`,         '037 idx_applications_status'],
+        [`CREATE INDEX IF NOT EXISTS idx_applications_applied_at ON applications(applied_at DESC)`, '037 idx_applications_applied_at'],
+        [`CREATE INDEX IF NOT EXISTS idx_communications_sent_at  ON communications(sent_at DESC)`,  '037 idx_communications_sent_at'],
+    ];
+    for (const [sql, label] of perfIdx) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 038: WhatsApp reachability flag ────────────────────────────
+    // Set when an interview/notification send comes back "not a WhatsApp user"
+    // (Meta error 131026/131030). Used to sink unreachable candidates to the
+    // bottom of lists and to export a manual-call CSV — so no application is
+    // silently skipped when the candidate can't receive WhatsApp.
+    const reachabilityCols = [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS whatsapp_unreachable BOOLEAN NOT NULL DEFAULT FALSE`, '038 candidates.whatsapp_unreachable'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS whatsapp_last_error  TEXT`, '038 candidates.whatsapp_last_error'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS whatsapp_checked_at  TIMESTAMPTZ`, '038 candidates.whatsapp_checked_at'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_wa_unreachable ON candidates(whatsapp_unreachable)`, '038 idx_candidates_wa_unreachable'],
+    ];
+    for (const [sql, label] of reachabilityCols) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 040: call_logs.action_type ─────────────────────────────────
+    // Distinguish a genuine phone CALL from an agent ACTION (assign / certify /
+    // schedule interview / follow-up / not-interested / note). Before this every
+    // action was logged with a call `outcome`, so "calls logged" was inflated and
+    // the engagement log read as if every action was a call. NULL = legacy row
+    // (treated as 'call' for display). Indexed for the per-agent rollup.
+    await safeAlter(
+        `ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS action_type VARCHAR(24)`,
+        '040 call_logs.action_type'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_call_logs_agent_action ON call_logs(agent_id, action_type, called_at DESC)`,
+        '040 idx_call_logs_agent_action'
+    );
+
+    // ── Migration 039: future projects ────────────────────────────────────────
+    // A "future project" is a pipeline project an agent can transfer/assign a
+    // candidate into before it's officially active. Lightweight inline roles
+    // created under it use jobs.status='draft' (no extra column needed). Online-
+    // safe: ADD COLUMN ... DEFAULT FALSE is metadata-only on Postgres 11+.
+    await safeAlter(
+        `ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_future BOOLEAN NOT NULL DEFAULT FALSE`,
+        '039 projects.is_future'
+    );
+
+    // ── Migration 041: claim_sessions audit table ────────────────────────────
+    // Claim/release used to only flip candidates.claimed_by/claimed_at, so a
+    // release destroyed all history and engagement stats could never tell which
+    // calls/messages happened DURING a claim. claim_sessions records every claim
+    // window (who, when, how it ended). The partial unique index is the race
+    // guard: a candidate can have at most one OPEN session at a time.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS claim_sessions (
+            id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id   UUID         NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+            agent_id       UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            claimed_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            released_at    TIMESTAMPTZ,
+            released_by    UUID         REFERENCES users(id) ON DELETE SET NULL,
+            release_reason VARCHAR(32)
+        )
+    `, '041 claim_sessions table');
+    await safeAlter(
+        `CREATE UNIQUE INDEX IF NOT EXISTS uq_claim_sessions_open ON claim_sessions(candidate_id) WHERE released_at IS NULL`,
+        '041 uq_claim_sessions_open'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_claim_sessions_agent ON claim_sessions(agent_id, claimed_at DESC)`,
+        '041 idx_claim_sessions_agent'
+    );
+    // Seed: open a session for every chat that is claimed right now, so current
+    // holders keep an unbroken window across this deploy.
+    await safeUpdate(`
+        INSERT INTO claim_sessions (candidate_id, agent_id, claimed_at)
+        SELECT c.id, c.claimed_by, COALESCE(c.claimed_at, NOW())
+        FROM candidates c
+        WHERE c.claimed_by IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM claim_sessions cs WHERE cs.candidate_id = c.id AND cs.released_at IS NULL)
+    `, '041b seed open claim_sessions');
+
+    // ── Migration 042: claim stamping on call_logs + communications ──────────
+    // Write paths stamp the open claim_session id at INSERT time, freezing "did
+    // this agent hold the claim when they did this?" — engagement stats then
+    // filter on the stamp instead of reconstructing claim windows. No FK on
+    // purpose: the id is for audit joins only, inserts stay cheap.
+    await safeAlter(
+        `ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS claim_session_id UUID`,
+        '042 call_logs.claim_session_id'
+    );
+    await safeAlter(
+        `ALTER TABLE communications ADD COLUMN IF NOT EXISTS claim_session_id UUID`,
+        '042 communications.claim_session_id'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_communications_agent_claimed ON communications(sent_by, sent_at DESC) WHERE claim_session_id IS NOT NULL`,
+        '042 idx_communications_agent_claimed'
+    );
+    // Approximate backfill (user decision 2026-06-11): credit historic work that
+    // falls inside a CURRENTLY OPEN claim window. Released claims left no trace,
+    // so anything older stays unstamped — stats are exact from this deploy on.
+    await safeUpdate(`
+        UPDATE call_logs cl SET claim_session_id = cs.id
+        FROM claim_sessions cs
+        WHERE cl.claim_session_id IS NULL
+          AND cs.released_at IS NULL
+          AND cl.candidate_id = cs.candidate_id
+          AND cl.agent_id = cs.agent_id
+          AND cl.called_at >= cs.claimed_at
+    `, '042b backfill call_logs.claim_session_id');
+    await safeUpdate(`
+        UPDATE communications cm SET claim_session_id = cs.id
+        FROM claim_sessions cs
+        WHERE cm.claim_session_id IS NULL
+          AND cs.released_at IS NULL
+          AND cm.direction = 'outbound'
+          AND cm.sender_type = 'agent'
+          AND cm.sent_by = cs.agent_id
+          AND cm.candidate_id = cs.candidate_id
+          AND cm.sent_at >= cs.claimed_at
+    `, '042b backfill communications.claim_session_id');
+
+    // ── Migration 043: user_notifications (admin → agent nudges) ─────────────
+    // First PERSISTED per-user notification store (GET /api/notifications is
+    // otherwise derived read-only signals). Powers the admin "nudge a
+    // low-engagement agent" action: row here + live socket emit to agent:{id}.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS user_notifications (
+            id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id    UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            type       VARCHAR(32)  NOT NULL DEFAULT 'nudge',
+            title      VARCHAR(200) NOT NULL,
+            body       TEXT,
+            link       TEXT,
+            created_by UUID         REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            read_at    TIMESTAMPTZ
+        )
+    `, '043 user_notifications table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_user_notifications_user ON user_notifications(user_id, created_at DESC)`,
+        '043 idx_user_notifications_user'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_user_notifications_unread ON user_notifications(user_id) WHERE read_at IS NULL`,
+        '043 idx_user_notifications_unread'
+    );
+
+    // ── Migration 044: engagement_targets (per-agent daily goals) ────────────
+    // Admin-set daily expectations (calls / messages / pipeline actions) that
+    // power the target-progress bars on the Engagement scorecards — the
+    // "evaluate work against a known goal" half of the claim-aware stats.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS engagement_targets (
+            user_id        UUID         PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            daily_calls    INT          NOT NULL DEFAULT 0,
+            daily_messages INT          NOT NULL DEFAULT 0,
+            daily_actions  INT          NOT NULL DEFAULT 0,
+            updated_by     UUID         REFERENCES users(id) ON DELETE SET NULL,
+            updated_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, '044 engagement_targets table');
+
+    // ── Migration 045: pending_messages (deliver-on-reply queue) ─────────────
+    // WhatsApp drops free-form messages outside the 24h customer-service
+    // window. Instead of hard-failing those sends, we park them here and flush
+    // them the moment the candidate next messages in (the inbound sync hook
+    // calls services/pendingMessages.flushPendingForCandidate). communication_id
+    // points at the original transcript row so the same bubble upgrades from
+    // "queued" to real delivery ticks once the flush send succeeds.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS pending_messages (
+            id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            candidate_id     UUID        NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+            communication_id UUID,
+            kind             TEXT        NOT NULL DEFAULT 'agent',
+            message          TEXT        NOT NULL,
+            message_type     TEXT        DEFAULT 'text',
+            media_url        TEXT,
+            filename         TEXT,
+            status           TEXT        NOT NULL DEFAULT 'pending',
+            attempts         INT         NOT NULL DEFAULT 0,
+            created_by       UUID,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            sending_at       TIMESTAMPTZ,
+            sent_at          TIMESTAMPTZ,
+            expires_at       TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '7 days'
+        )
+    `, '045 pending_messages table');
+    // sending_at lets the flusher reclaim rows orphaned in 'sending' when the
+    // process died mid-send (a routine Cloud Run redeploy) — without it the
+    // queued message would be lost forever.
+    await safeAlter(
+        `ALTER TABLE pending_messages ADD COLUMN IF NOT EXISTS sending_at TIMESTAMPTZ`,
+        '045 pending_messages.sending_at'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_pending_messages_candidate ON pending_messages(candidate_id, status)`,
+        '045 idx_pending_messages_candidate'
+    );
+
+    // ── Migration 046: users.approved (registration approval gate) ───────────
+    // Self-registration must NOT let anyone pick their own role (privilege
+    // escalation). New sign-ups are created approved=false + is_active=false and
+    // an admin approves + assigns the real role. Existing users default to true
+    // so nobody is locked out by this deploy.
+    await safeAlter(
+        `ALTER TABLE users ADD COLUMN IF NOT EXISTS approved BOOLEAN NOT NULL DEFAULT true`,
+        '046 users.approved'
+    );
+
+    // ── Migration 047: candidates soft-remove (reject & remove quick action) ──
+    // The "Reject & remove" quick action hides a candidate from every list while
+    // keeping the row for records/audit (reversible by an admin). Distinct from
+    // 'Not interested' which parks the candidate in future_pool (re-engageable).
+    await safeAlter(
+        `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ`,
+        '047 candidates.removed_at'
+    );
+    await safeAlter(
+        `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS removed_by UUID`,
+        '047 candidates.removed_by'
+    );
+    await safeAlter(
+        `ALTER TABLE candidates ADD COLUMN IF NOT EXISTS removed_reason TEXT`,
+        '047 candidates.removed_reason'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_candidates_removed_at ON candidates(removed_at) WHERE removed_at IS NOT NULL`,
+        '047 idx_candidates_removed_at'
+    );
+
+    // ── Migration 048: new permission sections (engagement, control_tower) ────
+    // These pages existed but were gated under communications/projects, so they
+    // never appeared as their own rows in the Edit-User permission matrix.
+    await safeUpdate(`
+        INSERT INTO sections (key, name, icon, description, sort_order) VALUES
+            ('engagement',    'Engagement',    'Activity', 'Re-engagement, scorecards and agent activity', 85),
+            ('control_tower', 'Control Tower', 'Radar',    'Live recruitment ops overview',                55)
+        ON CONFLICT (key) DO NOTHING
+    `, '048 seed engagement + control_tower sections');
+
+    // ── Migration 049: permission_templates (reusable section-permission presets) ──
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS permission_templates (
+            id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+            name        VARCHAR(120) NOT NULL UNIQUE,
+            description TEXT,
+            permissions JSONB        NOT NULL,
+            created_by  UUID         REFERENCES users(id) ON DELETE SET NULL,
+            created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    `, '049 permission_templates table');
+
+    // ── Migration 050: one-shot backfill for permission OVERRIDE semantics ────
+    // effectiveSectionPerms() changed from additive (baseline OR custom) to
+    // override (custom row wins verbatim). Existing custom rows stored only the
+    // *extras* beyond baseline, so under override they'd silently DROP baseline
+    // access. Rewrite each existing custom row to its current effective value
+    // (baseline OR existing) ONCE, so the semantic flip preserves access. Guarded
+    // by a marker so a re-run can never re-inflate permissions an admin later
+    // revoked through the new full-control UI.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS migration_markers (
+            key        TEXT        PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `, 'migration_markers table');
+    try {
+        const BACKFILL_KEY = 'perm_override_backfill_v1';
+        const already = await query('SELECT 1 FROM migration_markers WHERE key = $1', [BACKFILL_KEY]);
+        if (already.rows.length === 0) {
+            const { roleDefault } = require('../middleware/sections');
+            const rowsRes = await query(`
+                SELECT usp.user_id, u.role, usp.section_key,
+                       usp.can_view, usp.can_create, usp.can_edit, usp.can_delete
+                FROM user_section_permissions usp
+                JOIN users u ON u.id = usp.user_id
+                WHERE u.role <> 'admin'
+            `, []);
+            let changed = 0;
+            for (const r of rowsRes.rows) {
+                const base = roleDefault(r.role, r.section_key);
+                const eff = {
+                    can_view:   !!base.can_view   || !!r.can_view,
+                    can_create: !!base.can_create || !!r.can_create,
+                    can_edit:   !!base.can_edit   || !!r.can_edit,
+                    can_delete: !!base.can_delete || !!r.can_delete,
+                };
+                if (eff.can_view !== r.can_view || eff.can_create !== r.can_create ||
+                    eff.can_edit !== r.can_edit || eff.can_delete !== r.can_delete) {
+                    await query(
+                        `UPDATE user_section_permissions
+                         SET can_view = $3, can_create = $4, can_edit = $5, can_delete = $6, updated_at = NOW()
+                         WHERE user_id = $1 AND section_key = $2`,
+                        [r.user_id, r.section_key, eff.can_view, eff.can_create, eff.can_edit, eff.can_delete]
+                    );
+                    changed++;
+                }
+            }
+            await query('INSERT INTO migration_markers (key) VALUES ($1) ON CONFLICT DO NOTHING', [BACKFILL_KEY]);
+            logger.info(`  migration: OK  — 050 perm override backfill (${rowsRes.rows.length} rows scanned, ${changed} rewritten)`);
+        } else {
+            logger.info('  migration: skip — 050 perm override backfill (already applied)');
+        }
+    } catch (err) {
+        logger.warn(`  migration: WARN — 050 perm override backfill: ${err.message.split('\n')[0]}`);
+    }
+
+    // ── Migration 051: remove the Marketing Hub permission section ────────────
+    // The Marketing Hub feature was removed from the app. Deleting the section
+    // row makes it disappear from the Edit-User permission matrix and the nav;
+    // the FK cascade clears any user_section_permissions rows that referenced it.
+    // The lead_* data tables are deliberately KEPT (the 3CX call webhook still
+    // writes to lead_call_events / marketing_leads).
+    await safeUpdate(
+        `DELETE FROM sections WHERE key = 'marketing_hub'`,
+        '051 remove marketing_hub section'
+    );
+
+    // ── Migration 052: unlink jobs when a project is deleted ──────────────────
+    // Deleting a project now DETACHES its jobs (project_id → NULL) instead of
+    // cascade-deleting them, so the jobs (and their applications / interviews)
+    // survive. jobs.project_id was NOT NULL with an ON DELETE RESTRICT FK
+    // (enforce_project_job_relationship.sql), which made the delete handler's
+    // `UPDATE jobs SET project_id = NULL` 500 on the not-null constraint — i.e.
+    // deleting any project that had jobs always failed. Make the column nullable
+    // and switch the FK to ON DELETE SET NULL.
+    await safeAlter(`ALTER TABLE jobs ALTER COLUMN project_id DROP NOT NULL`, '052 jobs.project_id drop NOT NULL');
+    await safeAlter(`ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_project_id_fkey`, '052 drop jobs_project_id_fkey');
+    await safeAlter(
+        `ALTER TABLE jobs ADD CONSTRAINT jobs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL`,
+        '052 re-add jobs_project_id_fkey ON DELETE SET NULL'
+    );
+
+    // ── Migration 053: structured Future Pool categorization on candidates ────
+    // The calling console's "Not interested" quick action became a structured
+    // "Future Pool" action with three categories: future_project (a desired but
+    // not-yet-created project — captures project name / job title / country),
+    // overage (over the age limit, kept for future roles) and not_interested
+    // (declined current projects). All three still move the candidate to the
+    // canonical future_pool status (apps rejected, re-engageable); these columns
+    // record WHY so pooled candidates are findable + assignable later. The decline
+    // call log is now action_type = 'future_pool' (no new call_logs column — the
+    // existing reason VARCHAR(48) holds a short summary).
+    for (const [sql, label] of [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_category     VARCHAR(32)`,  '053 candidates.future_pool_category'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_project_name VARCHAR(160)`, '053 candidates.future_pool_project_name'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_job_title    VARCHAR(160)`, '053 candidates.future_pool_job_title'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_country      VARCHAR(100)`, '053 candidates.future_pool_country'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_note         TEXT`,         '053 candidates.future_pool_note'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_at           TIMESTAMPTZ`,  '053 candidates.future_pool_at'],
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS future_pool_by           UUID`,         '053 candidates.future_pool_by'],
+        [`CREATE INDEX IF NOT EXISTS idx_candidates_future_pool_category ON candidates(future_pool_category) WHERE future_pool_category IS NOT NULL`, '053 idx_candidates_future_pool_category'],
+    ]) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 054: 3CX call-center integration ───────────────────────────
+    // Connect the desk to a 3CX PBX (see docs/3cx-integration-plan.md).
+    //   users.pbx_extension — maps a 3CX extension to a user so the call-journaling
+    //     webhook can attribute an inbound/outbound call to the right agent.
+    //   call_logs.external_call_id — the 3CX CallID; the unique index makes the
+    //     webhook idempotent so retried/duplicate deliveries don't double-log.
+    //   call_logs.source — 'manual' (agent-typed, existing behaviour) vs '3cx'
+    //     (auto-logged from the PBX); lets the timeline badge + analytics tell
+    //     PBX calls apart without changing any existing query (DEFAULT 'manual').
+    //   call_logs.recording_url — the 3CX call-recording link, when available.
+    for (const [sql, label] of [
+        [`ALTER TABLE users ADD COLUMN IF NOT EXISTS pbx_extension VARCHAR(20)`, '054 users.pbx_extension'],
+        [`CREATE UNIQUE INDEX IF NOT EXISTS uq_users_pbx_extension ON users(pbx_extension) WHERE pbx_extension IS NOT NULL`, '054 uq_users_pbx_extension'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS external_call_id VARCHAR(128)`, '054 call_logs.external_call_id'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS source           VARCHAR(16) DEFAULT 'manual'`, '054 call_logs.source'],
+        [`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS recording_url    TEXT`, '054 call_logs.recording_url'],
+        [`CREATE UNIQUE INDEX IF NOT EXISTS uq_call_logs_external_call_id ON call_logs(external_call_id) WHERE external_call_id IS NOT NULL`, '054 uq_call_logs_external_call_id'],
+    ]) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 055: candidate-centric counts + cross-project flag ──────────
+    // The "positions filled" counters and the Messages-vs-Applications certified
+    // mismatch both came from counting application ROWS. We keep the per-job
+    // application rows (UNIQUE(candidate_id, job_id) stays) and instead count
+    // candidates (COUNT(DISTINCT candidate_id)) everywhere — the two supporting
+    // indexes keep those aggregates and the cross-project detection fast.
+    //   candidates.cross_project_flagged — TRUE when a candidate has live
+    //     (non-rejected) applications across 2+ DISTINCT projects. Maintained by
+    //     candidate-stage.refreshCrossProjectFlag; surfaced as a "Multiple
+    //     projects" chip via candidates.tags.
+    for (const [sql, label] of [
+        [`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cross_project_flagged BOOLEAN DEFAULT FALSE`, '055 candidates.cross_project_flagged'],
+        [`CREATE INDEX IF NOT EXISTS idx_applications_candidate_status ON applications(candidate_id, status)`, '055 idx_applications_candidate_status'],
+        [`CREATE INDEX IF NOT EXISTS idx_applications_job_status ON applications(job_id, status)`, '055 idx_applications_job_status'],
+    ]) {
+        await safeAlter(sql, label);
+    }
+    // Backfill the flag for existing candidates (idempotent: WHERE excludes
+    // already-flagged rows) so the chip is correct without waiting for the next
+    // status write.
+    await safeUpdate(`
+        UPDATE candidates c SET cross_project_flagged = TRUE
+        WHERE COALESCE(c.cross_project_flagged, FALSE) = FALSE
+          AND (
+            SELECT COUNT(DISTINCT j.project_id)
+            FROM applications a JOIN jobs j ON j.id = a.job_id
+            WHERE a.candidate_id = c.id AND a.status <> 'rejected' AND j.project_id IS NOT NULL
+          ) >= 2
+    `, '055 backfill cross_project_flagged');
+    // And append the "Multiple projects" tag for those flagged rows (idempotent:
+    // the NOT ... = ANY guard means re-runs add nothing). tags is TEXT[].
+    await safeUpdate(`
+        UPDATE candidates
+        SET tags = array_append(COALESCE(tags, '{}'), 'Multiple projects')
+        WHERE cross_project_flagged = TRUE
+          AND NOT ('Multiple projects' = ANY(COALESCE(tags, '{}')))
+    `, '055 backfill Multiple projects tag');
+
+    // ── Migration 056: conversations-panel performance indexes ────────────────
+    // The /active-chats list (and the shared counts query) used DISTINCT ON
+    // subqueries that scanned communications + applications per candidate. The
+    // query is being rewritten to LEFT JOIN LATERAL ... LIMIT 1; these two
+    // indexes turn each lateral into a single index seek (10–30s → sub-second).
+    // CONCURRENTLY is safe here: applyMigrations() runs each statement via a bare
+    // pool.query (no surrounding transaction). If it ever fails it only WARNs
+    // (missing index = slow, not a crash). The COALESCE expression MUST be
+    // double-parenthesised for an expression index, and the LATERAL ORDER BY uses
+    // the identical expression so the planner picks the index.
+    await safeAlter(
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_communications_wa_cand_sentat ON communications(candidate_id, sent_at DESC) WHERE channel = 'whatsapp'`,
+        '056 idx_communications_wa_cand_sentat'
+    );
+    // Plain composite (NOT an expression index): COALESCE(updated_at, applied_at)
+    // forces a timestamp↔timestamptz cast that Postgres treats as non-IMMUTABLE, so
+    // an expression index is rejected. The candidate_id seek is what the lateral
+    // needs; ordering by applied_at DESC is a fine access path (the query's own
+    // ORDER BY COALESCE(...) still produces correct results regardless of index).
+    await safeAlter(
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_applications_cand_updated ON applications(candidate_id, applied_at DESC)`,
+        '056 idx_applications_cand_updated'
+    );
+
+    // ── Migration 057: separate callable phone vs WhatsApp number ─────────────
+    // candidates.phone is the canonical (WhatsApp-derived) unique key. contact_phone
+    // is a SECOND, optional number a recruiter can CALL (landline / family member)
+    // when WhatsApp doesn't reach. Nullable, no UNIQUE (it may equal phone or repeat).
+    await safeAlter(`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(32)`, '057 candidates.contact_phone');
+
+    // ── Migration 058: per-project interview config + reschedule audit ────────
+    //   projects.interview_config — JSONB blob. Shared fields: {location,
+    //     date_guidance, time_guidance, what_to_bring, dress_code, extra_notes,
+    //     slot_minutes, per_day_limit, workday_start_hour, workday_end_hour,
+    //     working_days[], skip_dates[]}.
+    //   PLUS days[] (date-specific interviews): [{id, date:'YYYY-MM-DD', location,
+    //     time_start:'HH:mm', time_end:'HH:mm', capacity:int|null, what_to_bring?,
+    //     dress_code?, notes?}]. When days[] is set, bulk-schedule distributes
+    //     candidates across the days (services/interview-days.js) and the bot's
+    //     reschedule picker offers the OTHER configured days; when absent, the
+    //     scheduling-fallback fields drive the legacy auto-slot allocator.
+    //     (days[] is JSON content — no schema migration; resolveInterviewDays
+    //     synthesizes a legacy single-day for back-compat.)
+    //   interview_schedules.reschedule_count / rescheduled_from_datetime — audit of
+    //     bot-driven candidate reschedules (feeds the interview-manager counters).
+    // NOTE: interview_schedules is postgres-owned on prod — the two ALTERs below may
+    // be rejected ("must be owner") and safeAlter will only WARN; reads of these
+    // columns must degrade gracefully (see routes/interviews.js column-existence cache).
+    for (const [sql, label] of [
+        [`ALTER TABLE projects ADD COLUMN IF NOT EXISTS interview_config JSONB`, '058 projects.interview_config'],
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS reschedule_count INTEGER DEFAULT 0`, '058 interview_schedules.reschedule_count'],
+        [`ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS rescheduled_from_datetime TIMESTAMP`, '058 interview_schedules.rescheduled_from_datetime'],
+    ]) {
+        await safeAlter(sql, label);
+    }
+
+    // ── Migration 059: claim-filter index ─────────────────────────────────────
+    // Claimed chats now leave the default All/New lists (filter claimed_by IS NULL),
+    // so a partial index on the claimed rows keeps that predicate fast.
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_candidates_claimed_by ON candidates(claimed_by) WHERE claimed_by IS NOT NULL`,
+        '059 idx_candidates_claimed_by'
+    );
+
+    // ── Migration 060: widen highest_qualification to TEXT ────────────────────
+    // It was created VARCHAR(255) by migration 005, but real qualification text
+    // (full degree/course descriptions, CV-parsed values) routinely exceeds 255
+    // chars. Editing a candidate with a long qualification threw "value too long
+    // for type character varying(255)" → every PUT /api/candidates/:id 500'd.
+    // Every other free-text candidate field (name/email/notes/skills) is already
+    // TEXT; align this one. varchar→text is a metadata-only change (no rewrite).
+    await safeAlter(
+        `ALTER TABLE candidates ALTER COLUMN highest_qualification TYPE TEXT`,
+        '060 candidates.highest_qualification -> TEXT'
+    );
+
+    // ── Migration 061: persist the candidate's interview-invite response ──────
+    // When a candidate taps Confirm / Reschedule / Can't-make-it on the WhatsApp
+    // interview template, we record the response here so the per-project
+    // scoreboard shows stable HISTORICAL totals (a count that doesn't vanish when
+    // an agent later clears the reschedule/can't-make task). Confirm also still
+    // sets status='confirmed'; this column adds reschedule/cant_make visibility.
+    //   values: 'confirmed' | 'reschedule' | 'cant_make' | NULL (no response yet)
+    // NOTE: interview_schedules is postgres-owned on prod — this ALTER may be
+    // rejected ("must be owner"); reads are guarded by interviewHasResponseColumn()
+    // in routes/interviews.js, so a missing column degrades gracefully.
+    await safeAlter(
+        `ALTER TABLE interview_schedules ADD COLUMN IF NOT EXISTS candidate_response VARCHAR(20)`,
+        '061 interview_schedules.candidate_response'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_interview_schedules_candidate_response ON interview_schedules(candidate_response)`,
+        '061 idx_interview_schedules_candidate_response'
+    );
+
+    // ── Migration 062: bulk interview-send audit (the "send report") ──────────
+    // One row per bulk-schedule run so an agent can re-open who failed and why
+    // (delivery_summary) and which applications were skipped — data that was
+    // previously only returned in the response and then lost.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS bulk_interview_sends (
+            id UUID PRIMARY KEY,
+            created_by UUID,
+            project_id UUID,
+            mode VARCHAR(20),
+            total_selected INTEGER DEFAULT 0,
+            scheduled_count INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            delivery_summary JSONB,
+            skipped JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `, '062 bulk_interview_sends table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_bulk_interview_sends_creator ON bulk_interview_sends(created_by, created_at DESC)`,
+        '062 idx_bulk_interview_sends_creator'
+    );
+
+    // ── Migration 063: bulk campaign (mass template blast) header ─────────────
+    // One row per campaign run. excluded_project_ids is the set of projects whose
+    // candidates are filtered OUT of the recipient universe. target_project_id /
+    // target_job_id are where a "Confirm my slot" tap creates the application +
+    // interview. daily_cap bounds how many template sends go out per rolling day
+    // (Meta messaging-tier safety). Counters + delivery_summary are the live
+    // rollup the progress UI polls.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name                 TEXT,
+            template_name        TEXT,
+            language             VARCHAR(12) DEFAULT 'en',
+            target_project_id    UUID,
+            target_job_id        UUID,
+            target_job_id_female UUID,
+            excluded_project_ids JSONB DEFAULT '[]'::jsonb,
+            status               VARCHAR(20) NOT NULL DEFAULT 'draft',
+            total                INTEGER NOT NULL DEFAULT 0,
+            sent                 INTEGER NOT NULL DEFAULT 0,
+            queued               INTEGER NOT NULL DEFAULT 0,
+            failed               INTEGER NOT NULL DEFAULT 0,
+            skipped              INTEGER NOT NULL DEFAULT 0,
+            daily_cap            INTEGER,
+            sent_today           INTEGER NOT NULL DEFAULT 0,
+            send_day             DATE,
+            delivery_summary     JSONB DEFAULT '{}'::jsonb,
+            last_error           TEXT,
+            created_by           UUID,
+            created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `, '063 campaigns table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status, created_at DESC)`,
+        '063 idx_campaigns_status'
+    );
+
+    // ── Migration 064: per-recipient campaign delivery ledger ─────────────────
+    // The send worker walks pending rows; UNIQUE(campaign_id, candidate_id) + the
+    // status guard make it idempotent and resumable (a re-run never double-sends).
+    // A button tap resolves its campaign via the candidate's most-recent row here.
+    await safeAlter(`
+        CREATE TABLE IF NOT EXISTS campaign_recipients (
+            id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            campaign_id         UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+            candidate_id        UUID NOT NULL,
+            phone               TEXT,
+            status              VARCHAR(16) NOT NULL DEFAULT 'pending',
+            reason              VARCHAR(32),
+            whatsapp_message_id TEXT,
+            attempts            INTEGER NOT NULL DEFAULT 0,
+            sent_at             TIMESTAMPTZ,
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (campaign_id, candidate_id)
+        )
+    `, '064 campaign_recipients table');
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_campaign_recipients_pending ON campaign_recipients(campaign_id, status)`,
+        '064 idx_campaign_recipients_pending'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_campaign_recipients_candidate ON campaign_recipients(candidate_id, created_at DESC)`,
+        '064 idx_campaign_recipients_candidate'
+    );
+
+    // ── Migration 065: CSV bulk-blast source + per-recipient delivery receipts ─
+    // A campaign can target an uploaded CSV of raw phone numbers (source='csv')
+    // rather than the candidate universe, so candidate_id may be NULL. delivered_at
+    // / read_at land Meta's status callbacks (via /status-sync) onto each recipient
+    // so the delivery report is TRUE receipt data, not just "API-accepted".
+    await safeAlter(
+        `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS source VARCHAR(16) DEFAULT 'candidates'`,
+        '065 campaigns.source'
+    );
+    await safeAlter(
+        `ALTER TABLE campaign_recipients ALTER COLUMN candidate_id DROP NOT NULL`,
+        '065 campaign_recipients.candidate_id nullable'
+    );
+    await safeAlter(
+        `ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ`,
+        '065 campaign_recipients.delivered_at'
+    );
+    await safeAlter(
+        `ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ`,
+        '065 campaign_recipients.read_at'
+    );
+    await safeAlter(
+        `CREATE INDEX IF NOT EXISTS idx_campaign_recipients_waid ON campaign_recipients(whatsapp_message_id)`,
+        '065 idx_campaign_recipients_waid'
     );
 
     logger.info('✅ Startup migrations complete.');

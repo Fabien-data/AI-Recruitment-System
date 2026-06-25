@@ -16,9 +16,7 @@
  *   app.use(auditMiddleware);
  */
 
-const { query } = require('../config/database');
-const { adaptQuery } = require('../utils/query-adapter');
-const logger = require('../utils/logger');
+const { insertAuditRow } = require('../utils/audit-writer');
 
 // Paths skipped for ALL methods (mutations + views).
 const SKIP_PATHS = [
@@ -112,71 +110,10 @@ function getIp(req) {
     );
 }
 
-// Tracks whether the Migration 021 columns on audit_logs are present. Detected
-// lazily on first failure and remembered so we don't repeatedly probe a schema
-// we already know is partial — this keeps audit logging working when the
-// ownership fix for audit_logs hasn't been applied yet.
-let hasMigration021Cols = true;
-
-async function writeAuditRow({ userId, sessionId, action, entityType, entityId, sectionKey, changes, ip, userAgent, durationMs }) {
-    // Try the full insert first. Fall back to the pre-021 column set if any
-    // of session_id / section_key / duration_ms aren't present yet.
-    if (hasMigration021Cols) {
-        try {
-            await query(
-                adaptQuery(`
-                    INSERT INTO audit_logs
-                        (user_id, action, entity_type, entity_id, changes, ip_address, user_agent, session_id, section_key, duration_ms)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                `),
-                [
-                    userId,
-                    action,
-                    entityType,
-                    entityId,
-                    JSON.stringify(changes),
-                    ip,
-                    userAgent,
-                    sessionId,
-                    sectionKey,
-                    durationMs,
-                ]
-            );
-            return;
-        } catch (err) {
-            const msg = (err.message || '').toLowerCase();
-            if (msg.includes('session_id') || msg.includes('section_key') || msg.includes('duration_ms') || msg.includes('column')) {
-                hasMigration021Cols = false;
-                logger.warn('audit-middleware: Migration 021 columns missing on audit_logs — falling back to legacy insert. Run scripts/fix-audit-ownership.js to restore full tracking.');
-            } else {
-                logger.warn('audit-middleware: write failed —', err.message);
-                return;
-            }
-        }
-    }
-
-    // Legacy fallback — works against pre-Migration-021 audit_logs schema.
-    try {
-        await query(
-            adaptQuery(`
-                INSERT INTO audit_logs
-                    (user_id, action, entity_type, entity_id, changes, ip_address, user_agent)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-            `),
-            [
-                userId,
-                action,
-                entityType,
-                entityId,
-                JSON.stringify(changes),
-                ip,
-                userAgent,
-            ]
-        );
-    } catch (err) {
-        logger.warn('audit-middleware: legacy write failed —', err.message);
-    }
-}
+// The tolerant insert (full 10-column → legacy 7-column fallback) lives in
+// utils/audit-writer so every audit write in the codebase shares the same
+// missing-column resilience.
+const writeAuditRow = insertAuditRow;
 
 module.exports = function auditMiddleware(req, res, next) {
     const isMutation = MUTATION_METHODS.has(req.method);

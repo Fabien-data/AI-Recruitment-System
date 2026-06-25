@@ -294,13 +294,13 @@ Cultural & linguistic rules for Sri Lankan users:
         },
         'singlish': {
             'registration_cost': (
-                "📋 *Registration Gattu saha Process*\n"
+                "📋 *Registration Gasthu saha Process*\n"
                 "Registration fee: LKR 5,000 (eka paarak vitharai).\n"
                 "Athulath: visa processing, medical test, gaman lekkam saha contract review.\n"
                 "📞 0117324324 call karanna registration start karanna."
             ),
             'how_to_apply': (
-                "📝 *Apply karanna kohomada?*\n"
+                "📝 *Apply karanne kohomada?*\n"
                 "1️⃣ CV eka denna (hari karapu! ✅)\n"
                 "2️⃣ Office ekata enna nam 0117324324 call karanna.\n"
                 "3️⃣ Medical saha visa eka api ekka karamu.\n"
@@ -1464,6 +1464,42 @@ Question:"""
     # ─────────────────────────────────────────────────────────────────────────
 
     STATUS_UPDATE_TEMPLATES = {
+        # Agent manually added this candidate from the Messages panel — a warm
+        # first-touch that opens the conversation and hands them to the bot intake
+        # (their first reply runs the normal intake flow). No job_title needed.
+        # Manual "Send re-engagement" nudge for a dormant chat. In-window this
+        # friendly check-in goes out free-form; out-of-window the approved
+        # dewan_reengage template is used (see _out_of_window_template).
+        "reengage": {
+            "en": "👋 Hi {name}, just checking in about your application with Dewan Consultants — are you still interested? Reply here and we'll continue where we left off. 🙂",
+            "si": "👋 ආයුබෝවන් {name}, Dewan Consultants සමඟ ඔබේ අයදුම්පත ගැන විමසීමට — ඔබ තවමත් උනන්දුද? මෙහි පිළිතුරු දෙන්න, අපි නැවතුණු තැනින් ඉදිරියට යමු. 🙂",
+            "ta": "👋 வணக்கம் {name}, Dewan Consultants உடனான உங்கள் விண்ணப்பம் குறித்து விசாரிக்க — நீங்கள் இன்னும் ஆர்வமாக உள்ளீர்களா? இங்கே பதிலளியுங்கள், நிறுத்திய இடத்திலிருந்து தொடர்வோம். 🙂",
+            "singlish": "👋 Hi {name}, oyage Dewan Consultants application eka gana check karanna — oya thama interest da? Methana reply karanna, api nawaththuna thanin issarahata yamu. 🙂",
+            "tanglish": "👋 Hi {name}, unga Dewan Consultants application gurinchi check panna — neenga innum interest-a? Inga reply pannunga, nirthina idathurundu thodarvom. 🙂",
+        },
+        "welcome": {
+            "en": "👋 Hi {name}! Welcome to Dewan Consultants — Sri Lanka's trusted overseas recruitment agency. We'd love to help you find a great job abroad. To get started, just reply here and I'll ask you a few quick questions. 🙂",
+            "si": "👋 ආයුබෝවන් {name}! Dewan Consultants වෙත සාදරයෙන් පිළිගනිමු — විදේශ රැකියා සඳහා ශ්‍රී ලංකාවේ විශ්වාසනීය ආයතනය. විදේශගත හොඳ රැකියාවක් සොයා ගැනීමට අපි ඔබට උදව් කරමු. ආරම්භ කිරීමට, මෙහි පිළිතුරු දෙන්න — මම ඔබට කෙටි ප්‍රශ්න කිහිපයක් අසන්නම්. 🙂",
+            "ta": "👋 வணக்கம் {name}! Dewan Consultants-க்கு வரவேற்கிறோம் — வெளிநாட்டு வேலைவாய்ப்புக்கான இலங்கையின் நம்பகமான நிறுவனம். வெளிநாட்டில் சிறந்த வேலையைக் கண்டுபிடிக்க உதவ விரும்புகிறோம். தொடங்க, இங்கே பதிலளியுங்கள் — சில விரைவான கேள்விகளைக் கேட்பேன். 🙂",
+            "singlish": "👋 Hello {name}! Dewan Consultants ekata aayubowan — overseas jobs walata Sri Lankawe trusted agency eka. Hodha overseas job ekak hoyaganna api oyata udaw karanawa. Patan ganna, methana reply karanna — mama poddak prashna ahannam. 🙂",
+            "tanglish": "👋 Hello {name}! Dewan Consultants-ku welcome — overseas jobs-ku Sri Lanka-vin trusted agency. Nalla overseas job kandupidikka help pannuvom. Start panna, inga reply pannunga — naan konjam questions kepen. 🙂",
+        },
+        # New → Screening: details + CV received, profile under review.
+        "application_complete": {
+            "en": "Hi {name}! ✅ We've received your full application for *{job_title}* — thank you! Our team is now reviewing your profile. We'll be in touch with the next steps soon. 🙌",
+            "si": "ආයුබෝවන් {name}! ✅ *{job_title}* සඳහා ඔබේ සම්පූර්ණ අයදුම්පත අපට ලැබුණා — ස්තුතියි! අපේ කණ්ඩායම දැන් ඔබේ පැතිකඩ සමාලෝචනය කරනවා. ඉදිරි පියවර ගැන ඉක්මනින් දන්වන්නම්. 🙌",
+            "ta": "வணக்கம் {name}! ✅ *{job_title}* பதவிக்கான உங்கள் முழு விண்ணப்பத்தைப் பெற்றோம் — நன்றி! எங்கள் குழு இப்போது உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்கிறது. அடுத்த படிகள் பற்றி விரைவில் தொடர்பு கொள்வோம். 🙌",
+            "singlish": "Hello {name}! ✅ Oyage *{job_title}* application eka sampurnayen apita labuna — thanks! Api team eka den oyage profile eka review karanawa. Next steps gana ikmanin kiyannm. 🙌",
+            "tanglish": "Hello {name}! ✅ Unga *{job_title}* application full-a kedaichuthu — nandri! Engal team ippo unga profile-a review pannuranga. Next steps pathi soon contact pannuvom. 🙌",
+        },
+        # (Auto-)assigned/selected to a job, awaiting agent certification.
+        "job_assignment": {
+            "en": "Hi {name}! 🎯 Good news — you've been *selected* for *{job_title}*! Our team will review and certify your profile, then arrange your interview. Keep your documents ready. 🙌",
+            "si": "ආයුබෝවන් {name}! 🎯 සුබ ආරංචියක් — *{job_title}* සඳහා ඔබව *තෝරාගෙන* ඇත! අපේ කණ්ඩායම ඔබේ පැතිකඩ සමාලෝචනය කර සහතික කර, සම්මුඛ පරීක්ෂණය සකසනවා. ලේඛන සූදානම්ව තබා ගන්න. 🙌",
+            "ta": "வணக்கம் {name}! 🎯 நல்ல செய்தி — *{job_title}* பதவிக்கு நீங்கள் *தேர்வு* செய்யப்பட்டுள்ளீர்கள்! எங்கள் குழு உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்து சான்றளித்து, நேர்காணலை ஏற்பாடு செய்யும். ஆவணங்களைத் தயாராக வைத்திருங்கள். 🙌",
+            "singlish": "Hello {name}! 🎯 Good news — oya *{job_title}* ekata *select* una! Api team eka oyage profile eka review karala certify karala, interview eka adjust karanawa. Documents ready karala thiyaganna. 🙌",
+            "tanglish": "Hello {name}! 🎯 Nalla news — *{job_title}* post-ku neenga *select* aagiteenga! Engal team unga profile-a review pannittu certify panni, interview arrange pannuvom. Documents ready-a vechukonga. 🙌",
+        },
         "shortlisted": {
             "en": "Hi {name}! Great news — your application for *{job_title}* has been *shortlisted*! Our team was impressed with your profile. We'll be in touch soon with next steps. Stay tuned! 🎉",
             "si": "ආයුබෝවන් {name}! සුබ ආරංචියක් — *{job_title}* සඳහා ඔබේ අයදුම්පත *කෙටි ලැයිස්තුගත* වී ඇත! අපි ඉක්මනින්ම ඊළඟ පියවර ගැන දන්වන්නම්. 🎉",
@@ -1472,11 +1508,11 @@ Question:"""
             "tanglish": "Hello {name}! Nalla news — unga *{job_title}* application *shortlist* aagirukku! Engal team ungal profile-a impressed. Next steps pathi soon solvom. 🎉",
         },
         "interview_scheduled": {
-            "en": "Hi {name}! Your interview for *{job_title}* has been scheduled for *{interview_date}*{location_text}. Please be prepared and on time. Good luck! 📋",
-            "si": "ආයුබෝවන් {name}! *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *{interview_date}*{location_text} දිනට නියමිතයි. කරුණාකර සූදානම්ව සිටින්න. සුභ පැතුම්! 📋",
-            "ta": "வணக்கம் {name}! *{job_title}* பதவிக்கான உங்கள் நேர்முகத் தேர்வு *{interview_date}*{location_text} அன்று திட்டமிடப்பட்டுள்ளது. தயவுசெய்து தயாராக இருங்கள். வாழ்த்துக்கள்! 📋",
-            "singlish": "Hello {name}! Oyage *{job_title}* interview eka *{interview_date}*{location_text} thiyenawa. Ready weela enna. Good luck! 📋",
-            "tanglish": "Hello {name}! Unga *{job_title}* interview *{interview_date}*{location_text} ku schedule panniyirukku. Ready-a irunga. Good luck! 📋",
+            "en": "Hi {name}! Your interview for *{job_title}* has been scheduled for *{interview_date}*{location_text}. Please be prepared and on time. Good luck! 📋{notes_text}",
+            "si": "ආයුබෝවන් {name}! *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *{interview_date}*{location_text} දිනට නියමිතයි. කරුණාකර සූදානම්ව සිටින්න. සුභ පැතුම්! 📋{notes_text}",
+            "ta": "வணக்கம் {name}! *{job_title}* பதவிக்கான உங்கள் நேர்முகத் தேர்வு *{interview_date}*{location_text} அன்று திட்டமிடப்பட்டுள்ளது. தயவுசெய்து தயாராக இருங்கள். வாழ்த்துக்கள்! 📋{notes_text}",
+            "singlish": "Hello {name}! Oyage *{job_title}* interview eka *{interview_date}*{location_text} thiyenawa. Ready weela enna. Good luck! 📋{notes_text}",
+            "tanglish": "Hello {name}! Unga *{job_title}* interview *{interview_date}*{location_text} ku schedule panniyirukku. Ready-a irunga. Good luck! 📋{notes_text}",
         },
         "hired": {
             "en": "Congratulations {name}! 🎊 You've been *selected* for the *{job_title}* position! Welcome to the team. Our HR team will contact you shortly with your offer details and next steps.",
@@ -1521,13 +1557,172 @@ Question:"""
             "tanglish": "Hello {name}, unga application *{old_job_title}*-ilirundhu *{new_job_title}*-ku *transfer* aagirukku. Profile-um documents-um automatic-a move aagirukku. Team next steps pathi contact pannuvanga. 🔄",
         },
         "interview_reminder": {
-            "en": "Hi {name}! ⏰ Friendly reminder — your interview for *{job_title}* is on *{interview_date}*{location_text}. Please be prepared, arrive on time, and bring your original documents. Good luck!",
-            "si": "ආයුබෝවන් {name}! ⏰ මතක් කිරීමක් — *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *{interview_date}*{location_text} දිනට නියමිතයි. කරුණාකර සූදානම්ව, වේලාවට පැමිණ, මුල් ලේඛන රැගෙන එන්න. සුභ පැතුම්!",
-            "ta": "வணக்கம் {name}! ⏰ நினைவூட்டல் — *{job_title}* பதவிக்கான உங்கள் நேர்முகத் தேர்வு *{interview_date}*{location_text} அன்று நடைபெறும். தயவுசெய்து தயாராக இருந்து, நேரத்திற்கு வந்து, அசல் ஆவணங்களைக் கொண்டு வாருங்கள். வாழ்த்துக்கள்!",
-            "singlish": "Hello {name}! ⏰ Reminder ekak — oyage *{job_title}* interview eka *{interview_date}*{location_text} thiyenawa. Ready weela, welawata enna, original documents aran enna. Good luck!",
-            "tanglish": "Hello {name}! ⏰ Reminder — unga *{job_title}* interview *{interview_date}*{location_text} ku irukku. Ready-a irundhu, time-ku vandhu, original documents kondu vaanga. Good luck!",
+            "en": "Hi {name}! ⏰ Friendly reminder — your interview for *{job_title}* is on *{interview_date}*{location_text}. Please be prepared, arrive on time, and bring your original documents. Good luck!{notes_text}",
+            "si": "ආයුබෝවන් {name}! ⏰ මතක් කිරීමක් — *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *{interview_date}*{location_text} දිනට නියමිතයි. කරුණාකර සූදානම්ව, වේලාවට පැමිණ, මුල් ලේඛන රැගෙන එන්න. සුභ පැතුම්!{notes_text}",
+            "ta": "வணக்கம் {name}! ⏰ நினைவூட்டல் — *{job_title}* பதவிக்கான உங்கள் நேர்முகத் தேர்வு *{interview_date}*{location_text} அன்று நடைபெறும். தயவுசெய்து தயாராக இருந்து, நேரத்திற்கு வந்து, அசல் ஆவணங்களைக் கொண்டு வாருங்கள். வாழ்த்துக்கள்!{notes_text}",
+            "singlish": "Hello {name}! ⏰ Reminder ekak — oyage *{job_title}* interview eka *{interview_date}*{location_text} thiyenawa. Ready weela, welawata enna, original documents aran enna. Good luck!{notes_text}",
+            "tanglish": "Hello {name}! ⏰ Reminder — unga *{job_title}* interview *{interview_date}*{location_text} ku irukku. Ready-a irundhu, time-ku vandhu, original documents kondu vaanga. Good luck!{notes_text}",
+        },
+        "interview_day_reminder": {
+            "en": "Hi {name}! 📅 *Today* is your interview for *{job_title}* — *{interview_date}*{location_text}. Please leave in good time, arrive 15 minutes early, and bring your original documents. Best of luck! 🍀{notes_text}",
+            "si": "ආයුබෝවන් {name}! 📅 *අද* තමයි *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය — *{interview_date}*{location_text}. කරුණාකර කල්තියා පිටත්ව, මිනිත්තු 15කට පෙර පැමිණ, මුල් ලේඛන රැගෙන එන්න. සුභ පැතුම්! 🍀{notes_text}",
+            "ta": "வணக்கம் {name}! 📅 *இன்று* தான் *{job_title}* பதவிக்கான உங்கள் நேர்காணல் — *{interview_date}*{location_text}. தயவுசெய்து சரியான நேரத்தில் புறப்பட்டு, 15 நிமிடங்கள் முன்னதாக வந்து, அசல் ஆவணங்களைக் கொண்டு வாருங்கள். வாழ்த்துக்கள்! 🍀{notes_text}",
+            "singlish": "Hello {name}! 📅 *Aje* thamai oyage *{job_title}* interview eka — *{interview_date}*{location_text}. Kalthiya pitath wela, miniththu 15kata kalin enna, original documents aran enna. Good luck! 🍀{notes_text}",
+            "tanglish": "Hello {name}! 📅 *Inniki* thaan unga *{job_title}* interview — *{interview_date}*{location_text}. Sariyana neram-la kelambi, 15 minutes munnadi vandhu, original documents kondu vaanga. Good luck! 🍀{notes_text}",
+        },
+        "job_now_available": {
+            "en": "🎉 Hi {name}! Good news — you earlier asked us about a *{job_title}* role, and we now have an opening that matches! 🙌 Would you like to apply? Just reply *YES* and we'll continue your application right away.",
+            "si": "🎉 ආයුබෝවන් {name}! සුබ ආරංචියක් — ඔබ කලින් *{job_title}* රැකියාවක් ගැන විමසුවා, දැන් ඒකට ගැලපෙන පුරප්පාඩුවක් තිබෙනවා! 🙌 අයදුම් කරන්න කැමතිද? *YES* කියලා reply කරන්න, අපි ඔබේ අයදුම්පත ඉදිරියට ගෙනියමු.",
+            "ta": "🎉 வணக்கம் {name}! நல்ல செய்தி — நீங்கள் முன்பு *{job_title}* வேலை பற்றி கேட்டீர்கள், இப்போது அதற்கு பொருந்தும் வேலை ஒன்று உள்ளது! 🙌 விண்ணப்பிக்க விரும்புகிறீர்களா? *YES* என்று பதிலளியுங்கள், உங்கள் விண்ணப்பத்தை தொடர்வோம்.",
+            "singlish": "🎉 Hello {name}! Good news — oya kalin *{job_title}* job ekak gana ahuwa, dan ekata match wena opening ekak tiyenawa! 🙌 Apply karanna kamathida? *YES* kiyala reply karanna, api oyage application eka issarahata aragena yamu.",
+            "tanglish": "🎉 Hello {name}! Nalla news — neenga munnadi *{job_title}* job pathi kettenga, ippo athukku match aagura opening irukku! 🙌 Apply panna virumbureengala? *YES*-nu reply pannunga, unga application-a continue pannuvom.",
+        },
+        "interview_rescheduled": {
+            "en": "🔄 Hi {name}, your interview for *{job_title}* has been *rescheduled* to *{interview_date}*{location_text}. Please note the new time — see you then!{notes_text}",
+            "si": "🔄 ආයුබෝවන් {name}, *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *{interview_date}*{location_text} දිනට *නැවත නියම* කර ඇත. කරුණාකර නව වේලාව සටහන් කරගන්න!{notes_text}",
+            "ta": "🔄 வணக்கம் {name}, *{job_title}* பதவிக்கான உங்கள் நேர்காணல் *{interview_date}*{location_text} க்கு *மறுதிட்டமிடப்பட்டுள்ளது*. புதிய நேரத்தைக் குறித்துக்கொள்ளுங்கள்!{notes_text}",
+            "singlish": "🔄 Hello {name}, oyage *{job_title}* interview eka *{interview_date}*{location_text} ekata *reschedule* kara thiyenawa. Aluth welawa note karaganna!{notes_text}",
+            "tanglish": "🔄 Hello {name}, unga *{job_title}* interview *{interview_date}*{location_text} ku *reschedule* aagirukku. Pudhu time-a note pannunga!{notes_text}",
+        },
+        "interview_cancelled": {
+            "en": "Hi {name}, unfortunately your interview for *{job_title}* has been *cancelled*. Our team will be in touch about next steps. Sorry for any inconvenience.",
+            "si": "ආයුබෝවන් {name}, අවාසනාවන්ත ලෙස *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *අවලංගු* කර ඇත. ඊළඟ පියවර ගැන අපේ කණ්ඩායම සම්බන්ධ වෙයි. ඇතිවූ අපහසුතාවයට සමාව.",
+            "ta": "வணக்கம் {name}, துரதிர்ஷ்டவசமாக *{job_title}* பதவிக்கான உங்கள் நேர்காணல் *ரத்து* செய்யப்பட்டுள்ளது. அடுத்த படிகள் குறித்து எங்கள் குழு தொடர்பு கொள்ளும். சிரமத்திற்கு வருந்துகிறோம்.",
+            "singlish": "Hello {name}, apahasuthavata *{job_title}* interview eka *cancel* una. Next steps gana api team eka contact karanawa. Sorry for the inconvenience.",
+            "tanglish": "Hello {name}, kavalaiyaaga unga *{job_title}* interview *cancel* aagiduchu. Next steps pathi engal team contact pannuvanga. Sorry for the inconvenience.",
         },
     }
+
+    # When the recruiter supplies a custom interview-details block (venue, office,
+    # maps, checklist), that block becomes the FULL message body. These short
+    # localized headers carry only name / job / date / venue; the recruiter's block
+    # (already translated, links preserved) follows. This avoids duplicating the
+    # stock "please bring documents" prep line in the default interview template.
+    INTERVIEW_INVITE_HEADER = {
+        "en": "Hi {name}! 📌 You're invited to an interview for *{job_title}* on *{interview_date}*{location_text}.\n\n{interview_notes}",
+        "si": "ආයුබෝවන් {name}! 📌 *{job_title}* සඳහා ඔබේ සම්මුඛ පරීක්ෂණය *{interview_date}*{location_text} දිනට නියමිතයි.\n\n{interview_notes}",
+        "ta": "வணக்கம் {name}! 📌 *{job_title}* பதவிக்கான உங்கள் நேர்காணல் *{interview_date}*{location_text} அன்று நடைபெறும்.\n\n{interview_notes}",
+        "singlish": "Hello {name}! 📌 Oyage *{job_title}* interview eka *{interview_date}*{location_text} thiyenawa.\n\n{interview_notes}",
+        "tanglish": "Hello {name}! 📌 Unga *{job_title}* interview *{interview_date}*{location_text} ku schedule panniyirukku.\n\n{interview_notes}",
+    }
+
+    # One-line summaries used as {{2}} of the GENERIC out-of-window status
+    # template (TEMPLATE_STATUS_UPDATE). Meta forbids newlines/tabs/4+ spaces in
+    # template parameters, so these are deliberately compact single-liners; the
+    # full free-form status text is queued backend-side and auto-delivers when
+    # the candidate replies to the template. Languages match the template
+    # variants registered in Meta (en/si/ta — singlish/tanglish resolve to en).
+    STATUS_PARAM_SUMMARY = {
+        "welcome": {
+            "en": "Welcome to Dewan Consultants — reply to this message to start your job application.",
+            "si": "Dewan Consultants වෙත සාදරයෙන් පිළිගනිමු — ඔබේ රැකියා අයදුම්පත ආරම්භ කිරීමට මෙම පණිවිඩයට පිළිතුරු දෙන්න.",
+            "ta": "Dewan Consultants-க்கு வரவேற்கிறோம் — உங்கள் வேலை விண்ணப்பத்தைத் தொடங்க இந்த செய்திக்கு பதிலளியுங்கள்.",
+        },
+        "application_complete": {
+            "en": "We received your full application for the {job_title} position — our team is reviewing your profile.",
+            "si": "{job_title} සඳහා ඔබේ සම්පූර්ණ අයදුම්පත අපට ලැබුණා — අපේ කණ්ඩායම ඔබේ පැතිකඩ සමාලෝචනය කරමින් සිටී.",
+            "ta": "{job_title} பதவிக்கான உங்கள் முழு விண்ணப்பத்தைப் பெற்றோம் — எங்கள் குழு உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்கிறது.",
+        },
+        "job_assignment": {
+            "en": "You have been selected for the {job_title} position — our team will review and certify your profile next.",
+            "si": "{job_title} සඳහා ඔබව තෝරාගෙන ඇත — අපේ කණ්ඩායම ඔබේ පැතිකඩ සමාලෝචනය කර සහතික කරයි.",
+            "ta": "{job_title} பதவிக்கு நீங்கள் தேர்வு செய்யப்பட்டுள்ளீர்கள் — எங்கள் குழு உங்கள் சுயவிவரத்தை மதிப்பாய்வு செய்து சான்றளிக்கும்.",
+        },
+        "shortlisted": {
+            "en": "Your application for the {job_title} position has been shortlisted — we will be in touch with next steps.",
+            "si": "{job_title} සඳහා ඔබේ අයදුම්පත කෙටි ලැයිස්තුගත වී ඇත — ඉදිරි පියවර ගැන අපි දන්වන්නෙමු.",
+            "ta": "{job_title} பதவிக்கான உங்கள் விண்ணப்பம் குறுகிய பட்டியலில் சேர்க்கப்பட்டுள்ளது — அடுத்த படிகள் பற்றி தொடர்பு கொள்வோம்.",
+        },
+        "certified": {
+            "en": "You have been certified for the {job_title} position — our team will contact you with next steps.",
+            "si": "ඔබව {job_title} තනතුර සඳහා සහතික කර ඇත — ඉදිරි පියවර ගැන අපේ කණ්ඩායම සම්බන්ධ වෙයි.",
+            "ta": "{job_title} பதவிக்கு நீங்கள் சான்றளிக்கப்பட்டுள்ளீர்கள் — அடுத்த படிகள் பற்றி எங்கள் குழு தொடர்பு கொள்ளும்.",
+        },
+        "prescreening_certified": {
+            "en": "You have been certified for the {job_title} position — your pre-screening is on {prescreening_datetime}.",
+            "si": "ඔබව {job_title} තනතුර සඳහා සහතික කර ඇත — ඔබේ පෙර-පරීක්ෂාව {prescreening_datetime} දිනට නියමිතයි.",
+            "ta": "{job_title} பதவிக்கு நீங்கள் சான்றளிக்கப்பட்டுள்ளீர்கள் — உங்கள் முன்-தேர்வு {prescreening_datetime} அன்று நடைபெறும்.",
+        },
+        "hired": {
+            "en": "Congratulations — you have been selected for the {job_title} position! Our HR team will contact you with your offer details.",
+            "si": "සුභ පැතුම් — {job_title} තනතුරට ඔබව තෝරාගෙන ඇත! අපේ HR කණ්ඩායම ඔබව සම්බන්ධ කරගනී.",
+            "ta": "வாழ்த்துக்கள் — {job_title} பதவிக்கு நீங்கள் தேர்வு செய்யப்பட்டுள்ளீர்கள்! எங்கள் HR குழு உங்களைத் தொடர்பு கொள்ளும்.",
+        },
+        "rejected_with_alternatives": {
+            "en": "Your application for the {job_title} position was not successful this time, but we have other opportunities that may suit you.",
+            "si": "{job_title} සඳහා මෙවර ඔබේ අයදුම්පත සාර්ථක නොවුණා, නමුත් ඔබට ගැලපෙන වෙනත් අවස්ථා අප සතුව ඇත.",
+            "ta": "{job_title} பதவிக்கான உங்கள் விண்ணப்பம் இந்த முறை வெற்றி பெறவில்லை, ஆனால் உங்களுக்குப் பொருந்தும் வேறு வாய்ப்புகள் உள்ளன.",
+        },
+        "general_pool": {
+            "en": "We don't have a matching position right now, but you are in our talent pool — we will reach out when a suitable opening appears.",
+            "si": "දැනට ගැලපෙන තනතුරක් නැත, නමුත් ඔබ අපේ දක්ෂතා කණ්ඩායමේ සිටී — සුදුසු අවස්ථාවක් ලැබුණු විට අපි සම්බන්ධ වෙමු.",
+            "ta": "தற்போது பொருந்தும் பதவி இல்லை, ஆனால் நீங்கள் எங்கள் திறமைக் குழுவில் உள்ளீர்கள் — பொருத்தமான வாய்ப்பு வந்ததும் தொடர்பு கொள்வோம்.",
+        },
+        "transferred": {
+            "en": "Your application has been transferred from {old_job_title} to {new_job_title} — our team will be in touch with next steps.",
+            "si": "ඔබේ අයදුම්පත {old_job_title} සිට {new_job_title} වෙත මාරු කර ඇත — ඉදිරි පියවර ගැන අපේ කණ්ඩායම දන්වයි.",
+            "ta": "உங்கள் விண்ணப்பம் {old_job_title} இலிருந்து {new_job_title} க்கு மாற்றப்பட்டுள்ளது — அடுத்த படிகள் பற்றி எங்கள் குழு தொடர்பு கொள்ளும்.",
+        },
+        "interview_scheduled": {
+            "en": "Your interview for the {job_title} position is scheduled for {interview_date}.",
+            "si": "{job_title} සඳහා ඔබේ සම්මුඛ පරීක්ෂණය {interview_date} දිනට නියමිතයි.",
+            "ta": "{job_title} பதவிக்கான உங்கள் நேர்காணல் {interview_date} அன்று திட்டமிடப்பட்டுள்ளது.",
+        },
+        "interview_reminder": {
+            "en": "Reminder — your interview for the {job_title} position is on {interview_date}.",
+            "si": "මතක් කිරීමක් — {job_title} සඳහා ඔබේ සම්මුඛ පරීක්ෂණය {interview_date} දිනට නියමිතයි.",
+            "ta": "நினைவூட்டல் — {job_title} பதவிக்கான உங்கள் நேர்காணல் {interview_date} அன்று நடைபெறும்.",
+        },
+        "interview_day_reminder": {
+            "en": "Today is your interview for the {job_title} position — {interview_date}. Please arrive 15 minutes early.",
+            "si": "අද ඔබේ {job_title} සම්මුඛ පරීක්ෂණය — {interview_date}. මිනිත්තු 15කට පෙර පැමිණෙන්න.",
+            "ta": "இன்று உங்கள் {job_title} நேர்காணல் — {interview_date}. 15 நிமிடங்கள் முன்னதாக வாருங்கள்.",
+        },
+        "interview_rescheduled": {
+            "en": "Your interview for the {job_title} position has been rescheduled to {interview_date}.",
+            "si": "{job_title} සඳහා ඔබේ සම්මුඛ පරීක්ෂණය {interview_date} දිනට නැවත නියම කර ඇත.",
+            "ta": "{job_title} பதவிக்கான உங்கள் நேர்காணல் {interview_date} க்கு மறுதிட்டமிடப்பட்டுள்ளது.",
+        },
+        "interview_cancelled": {
+            "en": "Your interview for the {job_title} position has been cancelled — our team will contact you about next steps.",
+            "si": "{job_title} සඳහා ඔබේ සම්මුඛ පරීක්ෂණය අවලංගු කර ඇත — ඊළඟ පියවර ගැන අපේ කණ්ඩායම සම්බන්ධ වෙයි.",
+            "ta": "{job_title} பதவிக்கான உங்கள் நேர்காணல் ரத்து செய்யப்பட்டுள்ளது — அடுத்த படிகள் பற்றி எங்கள் குழு தொடர்பு கொள்ளும்.",
+        },
+        "job_now_available": {
+            "en": "A {job_title} opening matching your interest is now available — reply YES to apply.",
+            "si": "ඔබ විමසූ {job_title} රැකියාවට ගැලපෙන පුරප්පාඩුවක් දැන් තිබේ — අයදුම් කිරීමට YES ලෙස පිළිතුරු දෙන්න.",
+            "ta": "உங்கள் விருப்பத்துக்கு பொருந்தும் {job_title} வாய்ப்பு இப்போது உள்ளது — விண்ணப்பிக்க YES என்று பதிலளியுங்கள்.",
+        },
+    }
+
+    @classmethod
+    def get_status_param_summary(
+        cls,
+        status: str,
+        lang_code: str,
+        job_title: str = "",
+        interview_date: Optional[str] = None,
+        prescreening_datetime: Optional[str] = None,
+        old_job_title: Optional[str] = None,
+        new_job_title: Optional[str] = None,
+    ) -> Optional[str]:
+        """One-line, template-parameter-safe summary of a status update, in the
+        language of the Meta template variant (en/si/ta). None if the status has
+        no summary (caller then falls back to free-form)."""
+        per_status = cls.STATUS_PARAM_SUMMARY.get(status)
+        if not per_status:
+            return None
+        template = per_status.get(lang_code) or per_status.get("en", "")
+        try:
+            return template.format(
+                job_title=job_title or "",
+                interview_date=interview_date or "TBD",
+                prescreening_datetime=prescreening_datetime or "TBD",
+                old_job_title=old_job_title or "",
+                new_job_title=new_job_title or job_title or "",
+            )
+        except Exception:
+            return None
 
     @classmethod
     def get_status_update_message(
@@ -1538,6 +1733,7 @@ Question:"""
         job_title: str,
         interview_date: Optional[str] = None,
         interview_location: Optional[str] = None,
+        interview_notes: Optional[str] = None,
         alternative_jobs: Optional[list] = None,
         prescreening_datetime: Optional[str] = None,
         prescreening_location: Optional[str] = None,
@@ -1572,12 +1768,37 @@ Question:"""
             job_list = "\n".join(f"  • {j}" for j in alternative_jobs[:5])
             alternatives_text = f"\n\n{job_list}"
 
-        # Build certification notes text (recruiter-facing context shown to candidate)
+        # Build the notes block shown to the candidate. A given status carries
+        # only one kind of note: certification context (certified/prescreening)
+        # or interview instructions (interview_scheduled/reminder). Interview
+        # notes are recruiter instructions (dress code, documents to bring, …),
+        # already translated into the candidate's language by the caller.
         notes_text = ""
         if certification_notes and certification_notes.strip():
             notes_text = f"\n\n_Note: {certification_notes.strip()}_"
+        elif interview_notes and interview_notes.strip():
+            notes_text = f"\n\n📋 {interview_notes.strip()}"
 
         name = candidate_name.strip().split()[0] if candidate_name.strip() else "there"
+
+        # Custom interview body: the recruiter supplied the full details block, so use
+        # it as the message body under a short localized header (decided with the user:
+        # "use as the full body"). Only applies to the interview invite.
+        if status == "interview_scheduled" and interview_notes and interview_notes.strip():
+            htmpl = None
+            for try_lang in fallback_chain:
+                if try_lang in cls.INTERVIEW_INVITE_HEADER:
+                    htmpl = cls.INTERVIEW_INVITE_HEADER[try_lang]
+                    break
+            if htmpl is None:
+                htmpl = cls.INTERVIEW_INVITE_HEADER.get("en", "")
+            return htmpl.format(
+                name=name,
+                job_title=job_title,
+                interview_date=interview_date or "TBD",
+                location_text=location_text,
+                interview_notes=interview_notes.strip(),
+            )
 
         return template.format(
             name=name,

@@ -7,6 +7,8 @@ import {
 } from 'lucide-react'
 import { getCandidate } from '../../api'
 import { getDocumentCategory, resolveDocumentUrl, isImageDocument, PENDING_URL } from '../../utils/documents'
+import { Modal } from '../ui/Modal'
+import { DocumentPreview } from '../documents/DocumentPreview'
 
 // Documents & CVs panel that sits in the Communications right sidebar.
 // Lists every CV the candidate has uploaded plus any additional documents
@@ -25,7 +27,8 @@ export function ConversationDocumentsPanel({ candidateId, defaultExpanded = true
   const cvs = candidate?.cvs || []
   const cvList = cvs.filter((cv) => getDocumentCategory(cv) === 'cv')
     .sort((a, b) => new Date(b.uploaded_at || 0) - new Date(a.uploaded_at || 0))
-  const extraList = cvs.filter((cv) => getDocumentCategory(cv) === 'additional')
+  // Everything non-CV (passport / certificate / photo / other) is a supporting doc.
+  const extraList = cvs.filter((cv) => getDocumentCategory(cv) !== 'cv')
     .sort((a, b) => new Date(b.uploaded_at || 0) - new Date(a.uploaded_at || 0))
 
   const totalCount = cvList.length + extraList.length
@@ -102,8 +105,10 @@ function DocumentRow({ cv }) {
   const name = cv.file_name || (isImage ? 'image' : 'document')
   const uploadedAt = cv.uploaded_at ? new Date(cv.uploaded_at) : null
   const Icon = isImage ? ImageIcon : FileText
+  const [previewOpen, setPreviewOpen] = useState(false)
 
   return (
+    <>
     <div className="group flex items-start gap-2.5 rounded-xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/40 hover:bg-white dark:hover:bg-zinc-800/60 transition-colors p-2.5">
       <div className={`rounded-lg p-1.5 flex-shrink-0 ${isImage ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'}`}>
         <Icon size={14} />
@@ -132,15 +137,14 @@ function DocumentRow({ cv }) {
       </div>
       {!pending && (
         <div className="flex items-center gap-1 flex-shrink-0">
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            type="button"
+            onClick={() => setPreviewOpen(true)}
             className="inline-flex items-center justify-center rounded-md w-7 h-7 text-zinc-600 dark:text-zinc-400 hover:bg-primary-50 hover:text-primary-700 dark:hover:bg-primary-950/40 dark:hover:text-primary-300 transition-colors"
-            title="Open in new tab"
+            title="Preview"
           >
             <Eye size={13} />
-          </a>
+          </button>
           <a
             href={url}
             download={name}
@@ -152,5 +156,9 @@ function DocumentRow({ cv }) {
         </div>
       )}
     </div>
+    <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} title={name} size="2xl">
+      <DocumentPreview cv={cv} fileName={name} className="h-[70vh]" />
+    </Modal>
+    </>
   )
 }

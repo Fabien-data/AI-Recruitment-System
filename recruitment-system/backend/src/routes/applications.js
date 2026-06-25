@@ -3,16 +3,61 @@ const router = express.Router();
 const { query, withTransaction, generateUUID } = require('../config/database');
 const { adaptQuery, isMySQL } = require('../utils/query-adapter');
 const { authenticate } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { calculateMatchScore } = require('../config/openai');
 const notifications = require('../services/notifications');
 const { syncJobAsync } = require('./chatbot-sync');
+const {
+    syncCandidateStage,
+    setCandidateStage,
+    normalizeApplicationStatus,
+    APPLICATION_STATUS_SET,
+    emitApplicationChanged,
+} = require('../services/candidate-stage');
 const logger = require('../utils/logger');
+const {
+    buildConversationFilters,
+    buildCandidateStatusCountsSql,
+    shapeCountsRow,
+} = require('../services/conversation-counts');
+
+// CV is no longer a hard eligibility gate (user decision 2026-06-08): staff can
+// assign and advance any candidate regardless of whether a CV is on file (almost
+// all candidates are agency-imported with offline CVs). The old screeningGate()
+// 422 helper has been removed along with its call sites.
+
+// Candidate-level per-status totals — the SAME canonical counts the Messages tabs
+// show, so the Applications page's "Candidates by stage" strip reads identically
+// to the Conversations panel. Reuses the shared conversation-counts builder (same
+// population gate + same bucketing) so the two surfaces can never drift. Defined
+// before the `/:id` routes so the literal path isn't shadowed.
+router.get('/status-totals', authenticate, requireSection('applications', 'view'), async (req, res, next) => {
+    try {
+        const params = [];
+        const addParam = (value) => { params.push(value); return isMySQL ? '?' : `$${params.length}`; };
+        const filters = buildConversationFilters({
+            query: { project_id: req.query.project_id },
+            userId: req.user.id,
+            addParam,
+            includeStatusBucket: false,
+        });
+        const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+        // No claim/search params here → DEFAULT claim scope: the New count excludes
+        // claimed candidates (mirrors the Messages New tab), every other stage +
+        // total include claimed so the strip reads the full pipeline (user 2026-06-15).
+        const sql = buildCandidateStatusCountsSql({ whereClause, includeHired: true, hideClaimedFromNew: true });
+        const result = await query(sql, params);
+        res.json(shapeCountsRow(result.rows[0], { includeHired: true }));
+    } catch (error) {
+        next(error);
+    }
+});
 
 /**
  * Get all applications with filters
  * MySQL + PostgreSQL compatible
  */
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('applications', 'view'), async (req, res, next) => {
     try {
         const {
             job_id,
@@ -21,11 +66,13 @@ router.get('/', authenticate, async (req, res, next) => {
             project_id,
             date_from,
             date_to,
+            search,
             page,
             limit,
         } = req.query;
         const params = [];
-        let whereClause = ' WHERE 1=1';
+        // Hide applications of soft-removed candidates ("Reject & remove").
+        let whereClause = ' WHERE 1=1 AND c.removed_at IS NULL';
 
         if (job_id) {
             whereClause += isMySQL ? ' AND a.job_id = ?' : ` AND a.job_id = $${params.length + 1}`;
@@ -38,6 +85,13 @@ router.get('/', authenticate, async (req, res, next) => {
         if (status) {
             whereClause += isMySQL ? ' AND a.status = ?' : ` AND a.status = $${params.length + 1}`;
             params.push(status);
+        } else if (!candidate_id) {
+            // Default list view: hide closed (rejected) applications. Moving a
+            // candidate to Future Pool rejects their application, which should drop
+            // it out of the active Applications list. Still reachable via the
+            // "Rejected" status filter, and a candidate-scoped query (candidate_id)
+            // keeps the full history.
+            whereClause += " AND a.status <> 'rejected'";
         }
         if (project_id) {
             whereClause += isMySQL ? ' AND j.project_id = ?' : ` AND j.project_id = $${params.length + 1}`;
@@ -54,6 +108,30 @@ router.get('/', authenticate, async (req, res, next) => {
                 ? ' AND DATE(a.applied_at) <= DATE(?)'
                 : ` AND CAST(a.applied_at AS DATE) <= CAST($${params.length + 1} AS DATE)`;
             params.push(date_to);
+        }
+        // Candidate name / phone / email search. Digit-normalized so a phone
+        // typed with/without country code, spaces or '+' still matches the
+        // stored number (mirrors candidates.js search).
+        if (search) {
+            // Strip non-digits AND a local-format leading zero: SL numbers are
+            // stored as 94XXXXXXXXX, but recruiters type 0XXXXXXXXX — without
+            // dropping the leading 0 the digit substring never matches.
+            const digits = String(search).replace(/\D/g, '').replace(/^0+/, '');
+            if (isMySQL) {
+                if (digits) {
+                    whereClause += " AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR REPLACE(REPLACE(REPLACE(c.phone, ' ', ''), '-', ''), '+', '') LIKE ?)";
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${digits}%`);
+                } else {
+                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)';
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+                }
+            } else if (digits) {
+                whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR regexp_replace(c.phone, '\\D', '', 'g') ILIKE $${params.length + 2})`;
+                params.push(`%${search}%`, `%${digits}%`);
+            } else {
+                whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1})`;
+                params.push(`%${search}%`);
+            }
         }
 
         const safePage = Math.max(parseInt(page, 10) || 1, 1);
@@ -85,6 +163,7 @@ router.get('/', authenticate, async (req, res, next) => {
         const countSql = `SELECT COUNT(*) AS total
                           FROM applications a
                           JOIN jobs j ON a.job_id = j.id
+                          JOIN candidates c ON a.candidate_id = c.id
                           ${whereClause}`;
         const countResult = await query(countSql, params);
         const total = parseInt(countResult.rows?.[0]?.total, 10) || 0;
@@ -105,12 +184,15 @@ router.get('/', authenticate, async (req, res, next) => {
 /**
  * Create application
  */
-router.post('/', authenticate, async (req, res, next) => {
+router.post('/', authenticate, requireSection('applications', 'create'), async (req, res, next) => {
     try {
         const { candidate_id, job_id } = req.body;
         if (!candidate_id || !job_id) {
             return res.status(400).json({ error: 'Candidate ID and Job ID are required' });
         }
+
+        // CV gate removed (2026-06-08): a candidate may be assigned to a job
+        // regardless of whether a CV is on file.
 
         const candidateResult = await query(
             adaptQuery('SELECT c.*, cv.parsed_data FROM candidates c LEFT JOIN cv_files cv ON c.id = cv.candidate_id WHERE c.id = $1 LIMIT 1'),
@@ -134,11 +216,40 @@ router.post('/', authenticate, async (req, res, next) => {
             } catch (e) { logger.warn('Match score failed:', e.message); }
         }
 
+        // Idempotent insert: a (candidate_id, job_id) pair is unique. Under a
+        // race/retry, return the existing application instead of erroring (no
+        // more duplicate applications). adaptQuery cannot translate ON CONFLICT,
+        // so branch explicitly per dialect.
         const appId = generateUUID();
-        await query(
-            adaptQuery("INSERT INTO applications (id, candidate_id, job_id, match_score, status) VALUES ($1, $2, $3, $4, 'applied')"),
-            [appId, candidate_id, job_id, matchScore]
-        );
+        let application;
+        let created = false;
+        if (isMySQL) {
+            await query(
+                "INSERT INTO applications (id, candidate_id, job_id, match_score, status) VALUES (?, ?, ?, ?, 'screening') ON DUPLICATE KEY UPDATE match_score = VALUES(match_score)",
+                [appId, candidate_id, job_id, matchScore]
+            );
+            const existing = await query(
+                'SELECT * FROM applications WHERE candidate_id = ? AND job_id = ? LIMIT 1',
+                [candidate_id, job_id]
+            );
+            application = existing.rows[0];
+            created = application && application.id === appId;
+        } else {
+            const ins = await query(
+                "INSERT INTO applications (id, candidate_id, job_id, match_score, status) VALUES ($1, $2, $3, $4, 'screening') ON CONFLICT (candidate_id, job_id) DO NOTHING RETURNING *",
+                [appId, candidate_id, job_id, matchScore]
+            );
+            if (ins.rows.length > 0) {
+                application = ins.rows[0];
+                created = true;
+            } else {
+                const existing = await query(
+                    'SELECT * FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1',
+                    [candidate_id, job_id]
+                );
+                application = existing.rows[0];
+            }
+        }
 
         // If this candidate was sitting in future_pool (General Pool view),
         // a manual assignment means they belong in active screening now.
@@ -154,8 +265,14 @@ router.post('/', authenticate, async (req, res, next) => {
             }
         }
 
-        const inserted = await query(adaptQuery('SELECT * FROM applications WHERE id = $1'), [appId]);
-        res.status(201).json(inserted.rows[0]);
+        // New application → candidate moves into screening (or stays 'new' if no
+        // CV on file yet). Derived centrally so candidate.status stays in sync.
+        syncCandidateStage(candidate_id).catch(() => {});
+        // Push to the Applications page even when the stage doesn't move (e.g. the
+        // candidate was already screening) — candidate_stage_changed wouldn't fire.
+        emitApplicationChanged({ candidate_id, application_id: application?.id, job_id, status: application?.status, created });
+
+        res.status(created ? 201 : 200).json(application);
     } catch (error) {
         if (error.message && error.message.toLowerCase().includes('duplicate')) {
             return res.status(400).json({ error: 'Application already exists' });
@@ -167,31 +284,37 @@ router.post('/', authenticate, async (req, res, next) => {
 /**
  * Update application status  auto-sends WhatsApp/SMS/email notifications
  */
-// Lifecycle transition map. Mirrors frontend constants/lifecycle.js so the
-// backend can reject impossible jumps (e.g. applied → selected) regardless
-// of what the UI sends. `placed` is terminal in the post-deployment sense
-// so it intentionally has no successors here.
+// Lifecycle transition map over the CANONICAL 5 application statuses (UPGRADES.md
+// #1). Mirrors frontend constants/lifecycle.js so the backend can reject
+// impossible jumps regardless of what the UI sends. `hired` and `rejected` are
+// terminal. Current status is normalized first, so a not-yet-migrated legacy row
+// still resolves to a valid canonical state.
 const VALID_TRANSITIONS = {
-    applied:             ['certified', 'rejected', 'screening'],
     screening:           ['certified', 'rejected'],
-    certified:           ['pre_screened', 'rejected'],
-    pre_screened:        ['interview_scheduled', 'rejected'],
-    interview_scheduled: ['selected', 'rejected', 'interviewed'],
-    interviewed:         ['selected', 'rejected'],
-    selected:            ['placed', 'rejected'],
+    certified:           ['interview_scheduled', 'rejected'],
+    interview_scheduled: ['hired', 'rejected'],
+    hired:               [],
     rejected:            [],
-    placed:              [],
 };
 
-router.put('/:id', authenticate, async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('applications', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const {
-            status, rejection_reason, interview_datetime, interview_location,
+            rejection_reason, interview_datetime, interview_location,
             interview_notes, certification_notes, prescreening_datetime,
             prescreening_location, prescreening_notes, prescreening_rating,
             notify_channels = ['whatsapp']
         } = req.body;
+
+        // Normalize any (legacy) status onto the canonical 5 and reject unknowns,
+        // so only the standardized vocabulary is ever persisted (#1).
+        let status = req.body.status ? normalizeApplicationStatus(req.body.status) : null;
+        if (status && !APPLICATION_STATUS_SET.has(status)) {
+            return res.status(400).json({
+                error: `Invalid application status "${req.body.status}". Allowed: ${[...APPLICATION_STATUS_SET].join(', ')}.`,
+            });
+        }
 
         const effDt = prescreening_datetime || interview_datetime;
         const effLoc = prescreening_location || interview_location;
@@ -202,13 +325,13 @@ router.put('/:id', authenticate, async (req, res, next) => {
         let currentStatus = null;
         if (status) {
             const currentRes = await query(
-                adaptQuery('SELECT status FROM applications WHERE id = $1'),
+                adaptQuery('SELECT status, candidate_id FROM applications WHERE id = $1'),
                 [id],
             );
             if (currentRes.rows.length === 0) {
                 return res.status(404).json({ error: 'Application not found' });
             }
-            currentStatus = currentRes.rows[0].status;
+            currentStatus = normalizeApplicationStatus(currentRes.rows[0].status);
             const allowed = VALID_TRANSITIONS[currentStatus] || [];
             // Same-state writes are a no-op upstream — let them through so
             // recruiters can re-trigger notifications without an error.
@@ -217,6 +340,8 @@ router.put('/:id', authenticate, async (req, res, next) => {
                     error: `Invalid lifecycle transition: ${currentStatus} → ${status}. Allowed next states: ${allowed.join(', ') || '(none, terminal)'}.`,
                 });
             }
+            // CV gate removed (2026-06-08): an application may be advanced to any
+            // valid next stage regardless of whether a CV is on file.
         }
 
         const setClauses = [];
@@ -228,9 +353,6 @@ router.put('/:id', authenticate, async (req, res, next) => {
             if (status === 'certified') {
                 setClauses.push('certified_at = NOW()');
                 setClauses.push(`certified_by = ${p()}`); values.push(req.user.id);
-            }
-            if (status === 'pre_screened') {
-                setClauses.push('prescreening_completed_at = NOW()');
             }
         }
         if (certification_notes)  { setClauses.push(`certification_notes = ${p()}`); values.push(certification_notes); }
@@ -255,6 +377,26 @@ router.put('/:id', authenticate, async (req, res, next) => {
         const appResult = await query(adaptQuery('SELECT * FROM applications WHERE id = $1'), [id]);
         if (appResult.rows.length === 0) return res.status(404).json({ error: 'Application not found' });
         const application = appResult.rows[0];
+
+        // Re-derive the candidate's canonical stage from this status change.
+        if (status) syncCandidateStage(application.candidate_id).catch(() => {});
+        // Live-refresh the Applications page even when the derived stage is
+        // unchanged (e.g. reviewing → screening both map to 'screening').
+        if (status) emitApplicationChanged({ candidate_id: application.candidate_id, application_id: application.id, job_id: application.job_id, status: application.status });
+
+        // 'hired' is a protected/terminal CANDIDATE status that syncCandidateStage
+        // never derives (it only computes the 4 pipeline stages) — promote the
+        // candidate explicitly on placement so it isn't lost.
+        if (status === 'hired') {
+            try {
+                await query(
+                    adaptQuery("UPDATE candidates SET status = 'hired', conversation_stage = 'hired', updated_at = NOW() WHERE id = $1"),
+                    [application.candidate_id]
+                );
+            } catch (hireErr) {
+                logger.warn(`Failed to mark candidate ${application.candidate_id} hired: ${hireErr.message}`);
+            }
+        }
 
         if (status === 'certified' && effDt) {
             const existingInterview = await query(
@@ -285,17 +427,17 @@ router.put('/:id', authenticate, async (req, res, next) => {
             }
         }
 
-        // Approval cascade: when status transitions to selected/placed, the
-        // derived positions_filled count on the job increases. If the job is
+        // Approval cascade: when an application transitions to 'hired' (placed),
+        // the derived positions_filled count on the job increases. If the job is
         // now fully staffed, flip its status to 'complete' and re-sync the
         // chatbot KB so the bot stops offering it. Audit-logged for traceability.
-        if (status === 'selected' || status === 'placed') {
+        if (status === 'hired') {
             try {
                 const fillCheck = await query(
                     adaptQuery(`
                         SELECT j.id AS job_id, j.status AS job_status, j.positions_available,
                                (SELECT COUNT(*)::int FROM applications a
-                                WHERE a.job_id = j.id AND a.status IN ('selected','placed')) AS filled
+                                WHERE a.job_id = j.id AND a.status = 'hired') AS filled
                         FROM jobs j
                         WHERE j.id = $1
                     `),
@@ -347,10 +489,9 @@ router.put('/:id', authenticate, async (req, res, next) => {
             try {
                 switch (status) {
                     case 'certified':
-                        // Certify is now just the status flip + "you've been
-                        // certified, pre-screen coming next" message. Optional
-                        // prescreening_datetime is still supported for the
-                        // legacy bundled flow but no longer required.
+                        // Certify is the status flip + "you've been certified"
+                        // message. Optional prescreening_datetime is still
+                        // supported for the legacy bundled flow but not required.
                         if (prescreening_datetime && prescreening_location) {
                             notification = await notifications.sendPreScreeningNotification(
                                 application.candidate_id, jobTitle, prescreening_datetime, prescreening_location, channels);
@@ -359,15 +500,12 @@ router.put('/:id', authenticate, async (req, res, next) => {
                                 application.candidate_id, jobTitle, certification_notes, channels);
                         }
                         break;
-                    case 'pre_screened':
-                        notification = await notifications.sendPreScreenedPassedNotification(
-                            application.candidate_id, jobTitle, channels);
-                        break;
                     case 'interview_scheduled':
                         if (effDt && effLoc)
                             notification = await notifications.sendInterviewNotification(application.candidate_id, jobTitle, effDt, effLoc, channels);
                         break;
-                    case 'selected':
+                    case 'hired':
+                        // Placement — congratulate the candidate (was 'selected').
                         notification = await notifications.sendSelectionNotification(application.candidate_id, jobTitle, channels);
                         break;
                     case 'rejected':
@@ -390,7 +528,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
 /**
  * Reject application  move candidate to general pool + notify
  */
-router.post('/:id/reject-to-pool', authenticate, async (req, res, next) => {
+router.post('/:id/reject-to-pool', authenticate, requireSection('applications', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { rejection_reason, notify_channels = ['whatsapp'] } = req.body;
@@ -406,10 +544,9 @@ router.post('/:id/reject-to-pool', authenticate, async (req, res, next) => {
             adaptQuery("UPDATE applications SET status = 'rejected', rejection_reason = $1 WHERE id = $2"),
             [rejection_reason || 'Moved to general pool', id]
         );
-        await query(
-            adaptQuery("UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1"),
-            [application.candidate_id]
-        );
+        // Move the candidate to the future pool — routed through setCandidateStage
+        // so the CV gate applies (a CV-less candidate falls back to New, #5).
+        await setCandidateStage(application.candidate_id, 'future_pool');
 
         const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
         let notification = { success: [], failed: [] };
@@ -432,9 +569,60 @@ router.post('/:id/reject-to-pool', authenticate, async (req, res, next) => {
 });
 
 /**
+ * Batch reject-to-pool — bulk version for the accept-applications inbox (#3.1).
+ * Rejects each application + moves its candidate to future_pool (CV-gated via
+ * setCandidateStage) + notifies. Mirrors POST /:id/reject-to-pool per item.
+ */
+router.post('/batch-reject-to-pool', authenticate, requireSection('applications', 'edit'), async (req, res, next) => {
+    try {
+        const { application_ids, rejection_reason, notify_channels = ['whatsapp'] } = req.body;
+        if (!Array.isArray(application_ids) || application_ids.length === 0) {
+            return res.status(400).json({ error: 'application_ids array is required' });
+        }
+        const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
+        const results = { success: [], failed: [] };
+
+        for (const appId of application_ids) {
+            try {
+                const appResult = await query(
+                    adaptQuery('SELECT candidate_id FROM applications WHERE id = $1'),
+                    [appId],
+                );
+                if (appResult.rows.length === 0) {
+                    results.failed.push({ application_id: appId, error: 'not found' });
+                    continue;
+                }
+                const candidateId = appResult.rows[0].candidate_id;
+                await query(
+                    adaptQuery("UPDATE applications SET status = 'rejected', rejection_reason = $1 WHERE id = $2"),
+                    [rejection_reason || 'Moved to general pool', appId],
+                );
+                await setCandidateStage(candidateId, 'future_pool');
+                let notification = { success: [], failed: [] };
+                try {
+                    notification = await notifications.sendGeneralPoolNotification(candidateId, channels);
+                } catch (e) {
+                    notification.failed.push({ channel: 'all', error: e.message });
+                }
+                results.success.push({ application_id: appId, candidate_id: candidateId, notification });
+            } catch (err) {
+                results.failed.push({ application_id: appId, error: err.message });
+            }
+        }
+
+        res.json({
+            processed: application_ids.length,
+            success_count: results.success.length,
+            failed_count: results.failed.length,
+            results,
+        });
+    } catch (error) { next(error); }
+});
+
+/**
  * Transfer application to a different job
  */
-router.post('/:id/transfer', authenticate, async (req, res, next) => {
+router.post('/:id/transfer', authenticate, requireSection('applications', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { target_job_id, transfer_reason } = req.body;
@@ -447,6 +635,19 @@ router.post('/:id/transfer', authenticate, async (req, res, next) => {
         const targetJobResult = await query(adaptQuery('SELECT id, title FROM jobs WHERE id = $1'), [target_job_id]);
         if (targetJobResult.rows.length === 0) return res.status(404).json({ error: 'Target job not found' });
 
+        // Guard against creating a duplicate (candidate_id, job_id) pair — the
+        // candidate may already have an application for the target job.
+        const dupCheck = await query(
+            adaptQuery('SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1'),
+            [originalApp.candidate_id, target_job_id]
+        );
+        if (dupCheck.rows.length > 0) {
+            return res.status(409).json({
+                error: 'Candidate already has an application for the target job',
+                application_id: dupCheck.rows[0].id,
+            });
+        }
+
         const newAppId = generateUUID();
 
         await withTransaction(async (conn) => {
@@ -455,17 +656,26 @@ router.post('/:id/transfer', authenticate, async (req, res, next) => {
                 ? (sql, p) => conn.execute(sql, p)
                 : (sql, p) => conn.query(sql, p);
 
+            // New application for the target job enters at 'screening'; the old
+            // one is closed as 'rejected' (canonical — was 'transferred'/'reviewing').
             await exec(
-                adaptQuery("INSERT INTO applications (id, candidate_id, job_id, status, transferred_from_job_id, transfer_reason) VALUES ($1, $2, $3, 'reviewing', $4, $5)"),
+                adaptQuery("INSERT INTO applications (id, candidate_id, job_id, status, transferred_from_job_id, transfer_reason) VALUES ($1, $2, $3, 'screening', $4, $5)"),
                 [newAppId, originalApp.candidate_id, target_job_id, originalApp.job_id, transfer_reason || null]
             );
             await exec(
-                adaptQuery("UPDATE applications SET status = 'transferred', updated_at = NOW() WHERE id = $1"),
+                adaptQuery("UPDATE applications SET status = 'rejected', updated_at = NOW() WHERE id = $1"),
                 [id]
             );
         });
 
         const newApp = await query(adaptQuery('SELECT * FROM applications WHERE id = $1'), [newAppId]);
+
+        // The new (reviewing) application resets the candidate's furthest stage.
+        syncCandidateStage(originalApp.candidate_id).catch(() => {});
+        // Transfer closes one app and opens another at the same stage, so the
+        // candidate's furthest stage often doesn't move — push application_changed
+        // so both the source job's list and the target's refresh live.
+        emitApplicationChanged({ candidate_id: originalApp.candidate_id, application_id: newAppId, job_id: target_job_id, status: 'screening' });
 
         // Notify candidate that their application has been moved
         const channels = Array.isArray(req.body.notify_channels) ? req.body.notify_channels : ['whatsapp'];
@@ -492,12 +702,8 @@ router.post('/:id/transfer', authenticate, async (req, res, next) => {
  * Cascades to interview_schedules rows that reference this application,
  * so the call works regardless of FK ON DELETE setting.
  */
-router.delete('/:id', authenticate, async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('applications', 'delete'), async (req, res, next) => {
     try {
-        if (req.user?.role !== 'admin') {
-            return res.status(403).json({ error: 'Only admins can delete applications' });
-        }
-
         const { id } = req.params;
 
         const appResult = await query(
@@ -544,7 +750,7 @@ router.delete('/:id', authenticate, async (req, res, next) => {
 /**
  * Batch certify multiple applications at once
  */
-router.post('/batch-certify', authenticate, async (req, res, next) => {
+router.post('/batch-certify', authenticate, requireSection('applications', 'edit'), async (req, res, next) => {
     try {
         const {
             application_ids,
@@ -591,6 +797,9 @@ router.post('/batch-certify', authenticate, async (req, res, next) => {
                 );
                 const app = appResult.rows[0];
 
+                // Certified → candidate stage advances to Certified.
+                if (app?.candidate_id) syncCandidateStage(app.candidate_id).catch(() => {});
+
                 let perCandidateNotification = { success: [], failed: [] };
                 try {
                     if (prescreening_datetime && prescreening_location) {
@@ -627,7 +836,7 @@ router.post('/batch-certify', authenticate, async (req, res, next) => {
 /**
  * AI-powered candidate matching for a job
  */
-router.get('/match/:job_id', authenticate, async (req, res, next) => {
+router.get('/match/:job_id', authenticate, requireSection('applications', 'view'), async (req, res, next) => {
     try {
         const { job_id } = req.params;
 
@@ -638,7 +847,7 @@ router.get('/match/:job_id', authenticate, async (req, res, next) => {
         const candidatesResult = await query(
             adaptQuery(`SELECT c.*, cv.parsed_data FROM candidates c
                         JOIN cv_files cv ON c.id = cv.candidate_id
-                        WHERE cv.ocr_status = 'completed' AND c.status NOT IN ('hired','rejected')
+                        WHERE cv.ocr_status = 'completed' AND c.status NOT IN ('hired','merged')
                         AND cv.parsed_data IS NOT NULL
                         AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.candidate_id = c.id AND a.job_id = $1)`),
             [job_id]

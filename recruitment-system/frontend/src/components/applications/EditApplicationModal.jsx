@@ -5,17 +5,12 @@ import toast from 'react-hot-toast'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { updateApplication } from '../../api'
+import { APPLICATION_STATUSES, STATUS_LABELS, getStatusLabel, normalizeStatus } from '../../constants/lifecycle'
 
-const STATUS_OPTIONS = [
-  { value: 'applied',             label: 'Applied' },
-  { value: 'screening',           label: 'Screening' },
-  { value: 'certified',           label: 'Certified' },
-  { value: 'interview_scheduled', label: 'Interview Scheduled' },
-  { value: 'interviewed',         label: 'Interviewed' },
-  { value: 'selected',            label: 'Selected' },
-  { value: 'rejected',            label: 'Rejected' },
-  { value: 'placed',              label: 'Placed' },
-]
+const STATUS_OPTIONS = APPLICATION_STATUSES.map((value) => ({
+  value,
+  label: STATUS_LABELS[value] || getStatusLabel(value),
+}))
 
 function toLocalDateTimeInputValue(iso) {
   if (!iso) return ''
@@ -28,7 +23,7 @@ function toLocalDateTimeInputValue(iso) {
 export function EditApplicationModal({ open, onClose, application }) {
   const queryClient = useQueryClient()
 
-  const [status, setStatus] = useState('applied')
+  const [status, setStatus] = useState('screening')
   const [interviewDt, setInterviewDt] = useState('')
   const [interviewLoc, setInterviewLoc] = useState('')
   const [interviewNotes, setInterviewNotes] = useState('')
@@ -36,7 +31,7 @@ export function EditApplicationModal({ open, onClose, application }) {
 
   useEffect(() => {
     if (!open || !application) return
-    setStatus(application.status || 'applied')
+    setStatus(normalizeStatus(application.status) || 'screening')
     setInterviewDt(toLocalDateTimeInputValue(application.interview_datetime))
     setInterviewLoc(application.interview_location || '')
     setInterviewNotes(application.interview_notes || '')
@@ -56,7 +51,7 @@ export function EditApplicationModal({ open, onClose, application }) {
     },
   })
 
-  const isInterviewLike = ['certified', 'interview_scheduled', 'interviewed'].includes(status)
+  const isInterviewLike = ['certified', 'interview_scheduled'].includes(status)
   const isRejected = status === 'rejected'
 
   const handleSubmit = (e) => {
@@ -67,7 +62,11 @@ export function EditApplicationModal({ open, onClose, application }) {
       return
     }
     const payload = { status }
-    if (interviewDt)   payload.interview_datetime = new Date(interviewDt).toISOString()
+    // Send the literal wall-clock the recruiter typed (YYYY-MM-DDTHH:mm), NOT a
+    // UTC instant. toISOString() shifted it by the browser↔Sri Lanka offset, so the
+    // candidate's WhatsApp invite showed the wrong time. `interviewDt` is already a
+    // naive datetime-local string — forward it verbatim to match the schedule panels.
+    if (interviewDt)   payload.interview_datetime = interviewDt
     if (interviewLoc)  payload.interview_location = interviewLoc
     if (interviewNotes) payload.interview_notes = interviewNotes
     if (rejectionReason) payload.rejection_reason = rejectionReason

@@ -17,6 +17,7 @@ import { UrgencyPill } from '../components/jobs/UrgencyPill'
 import { DomainPill } from '../components/jobs/DomainPill'
 import { CountryFlag } from '../components/jobs/CountryFlag'
 import { useAuthStore } from '../stores/authStore'
+import { getStatusLabel, getStatusColor, normalizeStatus } from '../constants/lifecycle'
 import { format } from 'date-fns'
 
 function fmtDate(value) {
@@ -396,7 +397,9 @@ export default function JobDetail() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50 truncate group-hover:text-primary-600 dark:group-hover:text-primary-400">{candidate.name}</p>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">{item.application_status || 'applied'}</p>
+                    <span className={`mt-0.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getStatusColor(normalizeStatus(item.application_status) || 'screening')}`}>
+                      {getStatusLabel(normalizeStatus(item.application_status) || 'screening')}
+                    </span>
                   </div>
                   <span className={`text-xs font-bold flex-shrink-0 rounded-full ring-1 ring-inset px-2 py-0.5 ${scoreClass}`}>
                     {score}%

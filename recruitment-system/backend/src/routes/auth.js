@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../config/database');
 const { generateToken, authenticate, JWT_SECRET } = require('../middleware/auth');
 const { loadPerms } = require('../middleware/sections');
+const { insertAuditRow } = require('../utils/audit-writer');
 const logger = require('../utils/logger');
 
 function getIp(req) {
@@ -17,24 +18,37 @@ function getIp(req) {
 }
 
 async function recordAudit({ userId, sessionId, action, sectionKey = null, changes = null, ip = null, userAgent = null }) {
-    try {
-        await pool.query(
-            `INSERT INTO audit_logs
-                (user_id, action, entity_type, entity_id, changes, ip_address, user_agent, session_id, section_key)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-            [userId, action, 'session', null, changes ? JSON.stringify(changes) : null, ip, userAgent, sessionId, sectionKey]
-        );
-    } catch (err) {
-        logger.warn(`auth audit write failed (${action}):`, err.message);
-    }
+    // Tolerant writer: falls back to the legacy column set when the prod
+    // audit_logs table is missing the Migration 021 columns, so login/logout
+    // rows are never silently lost.
+    await insertAuditRow({
+        userId,
+        sessionId,
+        action,
+        entityType: 'session',
+        sectionKey,
+        changes,
+        ip,
+        userAgent,
+    }).catch((err) => {
+        logger.warn(`auth audit write failed (${action}):`, err?.message);
+    });
 }
 
 /**
- * User registration (admin only in production)
+ * Self-registration.
+ *
+ * SECURITY: the request body's `role` is IGNORED — letting a sign-up pick its
+ * own role allowed anyone to register as admin. New accounts are created
+ * pending (approved=false, is_active=false) with the least-privileged role; an
+ * admin approves them and assigns the real role before they can log in.
+ *
+ * Bootstrap exception: if the system has NO users yet (fresh install), the first
+ * registration becomes an active admin so the instance can be set up.
  */
 router.post('/register', async (req, res, next) => {
     try {
-        const { email, password, full_name, role = 'project_handler' } = req.body;
+        const { email, password, full_name, phone } = req.body;
 
         if (!email || !password || !full_name) {
             return res.status(400).json({ error: 'Email, password, and full name are required' });
@@ -44,26 +58,38 @@ router.post('/register', async (req, res, next) => {
             'SELECT id FROM users WHERE email = $1',
             [email]
         );
-
         if (existingUser.rows.length > 0) {
             return res.status(400).json({ error: 'User with this email already exists' });
         }
 
+        // Fresh-install bootstrap: the very first account becomes the admin.
+        const userCount = await pool.query('SELECT COUNT(*)::int AS n FROM users');
+        const isBootstrap = (userCount.rows[0]?.n || 0) === 0;
+
         const password_hash = await bcrypt.hash(password, 10);
+        const role = isBootstrap ? 'admin' : 'marketing_agent'; // least-privileged default; admin reassigns on approval
+        const isActive = isBootstrap;
+        const approved = isBootstrap;
 
         const result = await pool.query(
-            `INSERT INTO users (email, password_hash, full_name, role)
-             VALUES ($1, $2, $3, $4)
+            `INSERT INTO users (email, password_hash, full_name, phone, role, is_active, approved)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id, email, full_name, role, created_at`,
-            [email, password_hash, full_name, role]
+            [email, password_hash, full_name, phone || null, role, isActive, approved]
         );
-
         const user = result.rows[0];
-        const token = generateToken(user.id);
 
-        res.status(201).json({
-            user,
-            token
+        if (isBootstrap) {
+            // Auto-login the first admin.
+            const token = generateToken(user.id);
+            return res.status(201).json({ user, token, bootstrap: true });
+        }
+
+        // Pending approval — no token, cannot log in until an admin approves.
+        logger.info(`New registration pending approval: ${email}`);
+        return res.status(201).json({
+            pending: true,
+            message: 'Your account has been created and is awaiting administrator approval. You will be able to sign in once an admin approves your access.',
         });
     } catch (error) {
         next(error);
@@ -82,8 +108,10 @@ router.post('/login', async (req, res, next) => {
             return res.status(400).json({ error: 'Email and password are required' });
         }
 
+        // Look the user up by email first so we can distinguish a wrong password
+        // from a pending/deactivated account and give an honest message.
         const result = await pool.query(
-            'SELECT * FROM users WHERE email = $1 AND is_active = true',
+            'SELECT * FROM users WHERE email = $1',
             [email]
         );
 
@@ -95,6 +123,14 @@ router.post('/login', async (req, res, next) => {
         const isValid = await bcrypt.compare(password, user.password_hash);
         if (!isValid) {
             return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        // Pending admin approval, or deactivated — block with a clear reason.
+        if (user.approved === false) {
+            return res.status(403).json({ error: 'Your account is awaiting administrator approval.' });
+        }
+        if (user.is_active === false) {
+            return res.status(403).json({ error: 'Your account has been deactivated. Contact an administrator.' });
         }
 
         const ip = getIp(req);

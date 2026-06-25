@@ -155,6 +155,31 @@ def init_db():
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN cv_sync_status VARCHAR(20)"))
                 if "age" not in cols:
                     conn.execute(text("ALTER TABLE candidates ADD COLUMN age INTEGER"))
+
+            # Proactive follow-up columns — same set on both dialects. `cols` was
+            # populated above for whichever branch ran.
+            if "last_inbound_at" not in cols:
+                conn.execute(text("ALTER TABLE candidates ADD COLUMN last_inbound_at TIMESTAMP"))
+            if "followup_count" not in cols:
+                conn.execute(text("ALTER TABLE candidates ADD COLUMN followup_count INTEGER DEFAULT 0"))
+            if "last_followup_at" not in cols:
+                conn.execute(text("ALTER TABLE candidates ADD COLUMN last_followup_at TIMESTAMP"))
+            if "followup_stopped" not in cols:
+                conn.execute(text("ALTER TABLE candidates ADD COLUMN followup_stopped BOOLEAN DEFAULT FALSE"))
+
+            # One-time backfill so the existing stuck backlog is reachable by the
+            # follow-up sweep: seed last_inbound_at from each candidate's most
+            # recent conversation turn. Only fills NULLs, so it's a no-op once
+            # done (and for rows with no conversations).
+            try:
+                conn.execute(text(
+                    "UPDATE candidates SET last_inbound_at = ("
+                    "  SELECT MAX(c.timestamp) FROM conversations c"
+                    "  WHERE c.candidate_id = candidates.id"
+                    ") WHERE last_inbound_at IS NULL"
+                ))
+            except Exception as backfill_err:
+                logger.warning(f"last_inbound_at backfill skipped: {backfill_err}")
     except Exception as schema_err:
         logger.warning(f"Schema self-heal skipped/failed: {schema_err}")
 

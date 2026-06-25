@@ -1,15 +1,128 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore, useRole } from '../stores/authStore'
+import { getNotifications, markNotificationsRead } from '../api'
+import { useRealtime } from '../hooks/useRealtime'
+import { notify } from './ui/Toast'
 import {
   LayoutDashboard, Users, Briefcase, FileText, MessageSquare, LogOut, Menu, X, Bell,
   FileSearch, Database, FolderKanban, CalendarDays, BarChart2, BookOpen, ShieldCheck, Megaphone,
+  AlertTriangle, Activity, PanelLeft, Radar,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { twMerge } from 'tailwind-merge'
 import { ThemeToggle } from './ui/ThemeToggle'
 import { TopProgressBar } from './ui/TopProgressBar'
 import { Logo } from './ui/Logo'
+import { CommandPalette } from './CommandPalette'
+
+// Header notification bell — opens a dropdown of live-aggregated actionable
+// signals (interventions, recent applications, today's interviews). Polls
+// every 60s; the red dot shows only when there's something to act on.
+function NotificationBell() {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const { data } = useQuery({
+    queryKey: ['notifications'],
+    queryFn: getNotifications,
+    refetchInterval: 60000,
+    refetchOnWindowFocus: true,
+  })
+  const items = data?.items || []
+  const unread = data?.unread_count || 0
+
+  // Live personal notifications (admin nudges) — the backend emits
+  // `user_notification` to this user's private agent:{id} room; show it
+  // immediately as a toast and refresh the bell (60s polling is the fallback).
+  useRealtime({
+    handlers: {
+      user_notification: (p, qc) => {
+        qc.invalidateQueries({ queryKey: ['notifications'] })
+        notify.info({ title: p?.title || 'Notification', message: p?.body || '' })
+      },
+    },
+  })
+
+  // Opening the panel marks persisted items read (clears the red dot for
+  // nudges; derived signals have no read state and are untouched).
+  useEffect(() => {
+    if (!open) return
+    const ids = items.filter((n) => n.id && n.read === false).map((n) => n.id)
+    if (ids.length === 0) return
+    markNotificationsRead({ ids })
+      .then(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }))
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  const iconFor = (type) => {
+    switch (type) {
+      case 'intervention': return <AlertTriangle size={15} className="text-amber-500" />
+      case 'interview': return <CalendarDays size={15} className="text-indigo-500" />
+      case 'certification': return <ShieldCheck size={15} className="text-emerald-500" />
+      case 'flag': return <AlertTriangle size={15} className="text-rose-500" />
+      case 'cv_stuck': return <FileText size={15} className="text-amber-500" />
+      case 'nudge': return <Megaphone size={15} className="text-violet-500" />
+      default: return <FileText size={15} className="text-emerald-500" />
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-label="Notifications"
+        onClick={() => setOpen((o) => !o)}
+        className="relative p-2.5 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-600 dark:text-zinc-300 hover:text-primary-600 dark:hover:text-primary-400 rounded-2xl shadow-sm hover:shadow-md transition-all ease-out duration-300"
+      >
+        <Bell size={18} />
+        {unread > 0 && (
+          <span className="absolute top-2 right-2.5 flex h-2.5 w-2.5">
+            <span className="animate-ping-soft absolute inline-flex h-full w-full rounded-full bg-accent-500 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-accent-gradient shadow-glow-red" />
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          {/* Fixed (not absolute) so the panel escapes the content column's
+              `overflow-hidden`, which previously clipped it out of view (B003). */}
+          <div className="fixed top-20 right-4 lg:right-12 w-80 max-h-96 overflow-y-auto rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xl z-50">
+            <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
+              <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Notifications</span>
+              {unread > 0 && <span className="text-xs text-zinc-500 dark:text-zinc-400">{unread} new</span>}
+            </div>
+            {items.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">You're all caught up.</div>
+            ) : (
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {items.map((n, i) => (
+                  <li key={i}>
+                    <button
+                      type="button"
+                      onClick={() => { setOpen(false); if (n.link) navigate(n.link) }}
+                      className="w-full text-left px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 flex gap-3"
+                    >
+                      <span className="mt-0.5 shrink-0">{iconFor(n.type)}</span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">{n.title}</span>
+                        {n.subtitle && <span className="block text-xs text-zinc-500 dark:text-zinc-400 truncate">{n.subtitle}</span>}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 // Each nav item is tagged with its `section` key so the nav builder can filter
 // by section_permissions for custom (non-admin) users.
@@ -23,11 +136,13 @@ const BASE_NAV = [
 ]
 
 const FULL_NAV_EXTRAS = [
+  { to: '/engagement', label: 'Engagement', icon: Activity, section: 'engagement' },
   { to: '/cv-manager', label: 'CV Manager', icon: FileSearch, section: 'cv_manager' },
   { to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' },
   { to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' },
+  { to: '/control-tower', label: 'Control Tower', icon: Radar, section: 'control_tower' },
   { to: '/knowledge-base', label: 'Knowledge Base', icon: BookOpen, section: 'knowledge_base' },
-  { to: '/general-pool', label: 'General Pool', icon: Database, section: 'general_pool' },
+  { to: '/general-pool', label: 'Future Pool', icon: Database, section: 'general_pool' },
 ]
 
 /**
@@ -45,15 +160,18 @@ function buildNav(role, sectionPermissions = []) {
   // Step 1: role-default candidate set (same as historical behaviour)
   let items
   if (role === 'marketing_agent') {
+    // Onboard-from-chat role: candidate intake + messaging (Marketing Hub removed).
     items = [
       { to: '/', label: 'Overview', icon: LayoutDashboard, end: true, section: 'dashboard' },
-      { to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' },
+      { to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' },
+      { to: '/cv-manager', label: 'CV Manager', icon: FileSearch, section: 'cv_manager' },
+      { to: '/candidates', label: 'Candidates', icon: Users, section: 'candidates' },
+      { to: '/jobs', label: 'Jobs', icon: Briefcase, section: 'jobs' },
     ]
   } else {
     items = [...BASE_NAV]
     if (role === 'admin' || role === 'sourcing_department') {
       items.push(...FULL_NAV_EXTRAS)
-      items.push({ to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' })
     } else {
       items.push({ to: '/communications', label: 'Messages', icon: MessageSquare, section: 'communications' })
       items.push({ to: '/analytics', label: 'Analytics', icon: BarChart2, section: 'analytics' })
@@ -65,9 +183,7 @@ function buildNav(role, sectionPermissions = []) {
   // by can_view to hide everything else.
   if (role !== 'admin' && sectionPermissions.length > 0) {
     const knownToCatalogue = new Map(
-      [...BASE_NAV, ...FULL_NAV_EXTRAS,
-        { to: '/marketing-hub', label: 'Marketing Hub', icon: Megaphone, section: 'marketing_hub' },
-      ].map(it => [it.section, it])
+      [...BASE_NAV, ...FULL_NAV_EXTRAS].map(it => [it.section, it])
     )
     // Union: existing role-default items + any extra section the user has access to.
     const sectionsAllowed = new Set(
@@ -107,6 +223,22 @@ export default function Layout() {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // Full-screen conversations: on /communications the sidebar collapses to just
+  // the hamburger so the panel gets the whole width. Elsewhere the user's manual
+  // collapse preference applies. When collapsed, the sidebar opens as an overlay.
+  const isMessages = location.pathname.startsWith('/communications')
+  const [manualCollapsed, setManualCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebarCollapsed') === '1' } catch { return false }
+  })
+  const collapsed = isMessages || manualCollapsed
+  const toggleCollapsed = () => {
+    setManualCollapsed((v) => {
+      const next = !v
+      try { localStorage.setItem('sidebarCollapsed', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }
+
   const navItems = buildNav(role, sectionPermissions)
 
   const handleLogout = async () => {
@@ -122,6 +254,8 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen bg-zinc-50 dark:bg-zinc-950 font-sans overflow-hidden selection:bg-primary-600 selection:text-white transition-colors">
+      {/* Global ⌘K command palette — self-registers its hotkey, renders nothing until opened (#3.0) */}
+      <CommandPalette />
       <TopProgressBar />
 
       <AnimatePresence>
@@ -130,7 +264,7 @@ export default function Layout() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-30 bg-primary-950/40 backdrop-blur-sm lg:hidden"
+            className={twMerge('fixed inset-0 z-30 bg-primary-950/40 backdrop-blur-sm', collapsed ? '' : 'lg:hidden')}
             onClick={() => setSidebarOpen(false)}
             aria-hidden="true"
           />
@@ -140,9 +274,10 @@ export default function Layout() {
       {/* Floating Sidebar */}
       <aside
         className={twMerge(
-          'fixed lg:static inset-y-0 left-0 z-40 w-72 h-[calc(100vh-2rem)] my-4 ml-4 lg:my-4 lg:ml-4 flex flex-col bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          'fixed inset-y-0 left-0 z-40 w-72 h-[calc(100vh-2rem)] my-4 ml-4 lg:my-4 lg:ml-4 flex flex-col bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800/70 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          collapsed ? '' : 'lg:static',
           'before:content-[""] before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-brand-gradient before:rounded-l-3xl',
-          sidebarOpen ? 'translate-x-0' : '-translate-x-[120%] lg:translate-x-0'
+          sidebarOpen ? 'translate-x-0' : (collapsed ? '-translate-x-[120%]' : '-translate-x-[120%] lg:translate-x-0')
         )}
       >
         {/* Logo */}
@@ -151,7 +286,7 @@ export default function Layout() {
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
-            className="lg:hidden p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            className={twMerge('p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors', collapsed ? '' : 'lg:hidden')}
           >
             <X size={20} />
           </button>
@@ -234,10 +369,22 @@ export default function Layout() {
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-2.5 text-zinc-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 rounded-2xl shadow-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+              aria-label="Open menu"
+              className={twMerge('p-2.5 text-zinc-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 rounded-2xl shadow-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors', collapsed ? '' : 'lg:hidden')}
             >
               <Menu size={20} />
             </button>
+            {!isMessages && (
+              <button
+                type="button"
+                onClick={toggleCollapsed}
+                aria-label={manualCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                title={manualCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                className="hidden lg:inline-flex p-2.5 text-zinc-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 rounded-2xl shadow-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <PanelLeft size={20} />
+              </button>
+            )}
             <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 tracking-tight truncate">
               {pageTitle}
             </h2>
@@ -245,21 +392,16 @@ export default function Layout() {
 
           <div className="flex items-center gap-3 shrink-0">
             <ThemeToggle />
-            <button
-              type="button"
-              aria-label="Notifications"
-              className="relative p-2.5 bg-white dark:bg-zinc-900 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-600 dark:text-zinc-300 hover:text-primary-600 dark:hover:text-primary-400 rounded-2xl shadow-sm hover:shadow-md transition-all ease-out duration-300"
-            >
-              <Bell size={18} />
-              <span className="absolute top-2 right-2.5 flex h-2.5 w-2.5">
-                <span className="animate-ping-soft absolute inline-flex h-full w-full rounded-full bg-accent-500 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-accent-gradient shadow-glow-red" />
-              </span>
-            </button>
+            <NotificationBell />
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto px-4 lg:px-12 pb-12 w-full custom-scrollbar">
+        <main className={twMerge(
+          'flex-1 w-full',
+          isMessages
+            ? 'overflow-hidden px-2 lg:px-4 pb-4'
+            : 'overflow-y-auto px-4 lg:px-12 pb-12 custom-scrollbar'
+        )}>
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
@@ -267,7 +409,7 @@ export default function Layout() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -10, scale: 0.998 }}
               transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-              className="max-w-[1400px] mx-auto w-full h-full"
+              className={twMerge('w-full h-full', isMessages ? '' : 'max-w-[1400px] mx-auto')}
             >
               <Outlet />
             </motion.div>

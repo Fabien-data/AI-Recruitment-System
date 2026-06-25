@@ -31,8 +31,16 @@ RECRUITMENT_API_URL = os.getenv("RECRUITMENT_API_URL", "http://localhost:3000")
 CHATBOT_API_KEY = os.getenv("CHATBOT_API_KEY", "")
 SYNC_ENABLED = os.getenv("RECRUITMENT_SYNC_ENABLED", "true").lower() == "true"
 
-# "START:job_abc123" — case insensitive, allows most URL-safe chars in the ref
+# Legacy whole-message trigger: "START:job_abc123" — case insensitive, allows
+# most URL-safe chars in the ref. Kept for ad links generated before the
+# friendly-message format and for manual/test paths.
 _START_PATTERN = re.compile(r'^START:([A-Za-z0-9_\-]{3,100})$', re.IGNORECASE)
+
+# Embedded ref token inside a friendly pre-filled message, e.g.
+# "Hi! 👋 I'd like to apply for the Security Officer position in Qatar.
+#  [ref:security_3f9a12b4]". Searched anywhere in the text so the candidate
+# sees natural wording while the chatbot still gets a deterministic job id.
+_EMBEDDED_REF_PATTERN = re.compile(r'\[ref:([A-Za-z0-9_\-]{3,100})\]', re.IGNORECASE)
 
 
 class AdContextService:
@@ -47,16 +55,28 @@ class AdContextService:
         Returns the ad_ref if this message is a Meta ad click trigger,
         or None if it's a normal message.
 
+        Two formats are recognised:
+          - Legacy whole-message token: "START:job_3f9a12b4"
+          - Friendly message with an embedded "[ref:...]" token (current ad
+            links): "Hi! I'd like to apply for the Security Officer position
+            in Qatar. [ref:job_3f9a12b4]"
+
         Example:
             >>> is_ad_trigger("START:job_3f9a12b4")
+            'job_3f9a12b4'
+            >>> is_ad_trigger("Hi! I'd like to apply ... [ref:job_3f9a12b4]")
             'job_3f9a12b4'
             >>> is_ad_trigger("Hello, I want to apply")
             None
         """
         if not message_text:
             return None
-        match = _START_PATTERN.match(message_text.strip())
-        return match.group(1) if match else None
+        text = message_text.strip()
+        start_match = _START_PATTERN.match(text)
+        if start_match:
+            return start_match.group(1)
+        embedded_match = _EMBEDDED_REF_PATTERN.search(text)
+        return embedded_match.group(1) if embedded_match else None
 
     async def detect_and_load(
         self,

@@ -39,11 +39,16 @@ import {
 } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
-import { Modal } from '../components/ui/Modal'
+import { Modal, ConfirmModal } from '../components/ui/Modal'
 import { Skeleton } from '../components/ui/Skeleton'
 import { apiClient } from '../api'
 import { updateApplication, transferApplication, getJobs, rejectToPool, batchCertifyApplications, batchAutoAssign } from '../api'
+import { resolveDocumentUrl, PENDING_URL } from '../utils/documents'
+import { useRole } from '../stores/authStore'
+import { normalizeStatus, getStatusLabel } from '../constants/lifecycle'
+import SmartShortlist from '../components/SmartShortlist'
 import toast from 'react-hot-toast'
+import Papa from 'papaparse'
 
 // API functions for auto-assign
 const getJobCandidates = (jobId) =>
@@ -65,6 +70,31 @@ export default function JobCandidates() {
     const [statusFilter, setStatusFilter] = useState('')
     const [selectedIds, setSelectedIds] = useState(new Set())
     const [showBatchCertifyModal, setShowBatchCertifyModal] = useState(false)
+    const [showBulkReject, setShowBulkReject] = useState(false)
+
+    // E8 — bulk-reject the selected candidates to the general pool. Reuses the
+    // single-candidate rejectToPool endpoint per id (no new backend needed).
+    const bulkRejectMutation = useMutation({
+        mutationFn: () => Promise.allSettled(
+            Array.from(selectedIds).map(id =>
+                rejectToPool(id, {
+                    rejection_reason: 'Bulk action — moved to general pool',
+                    notify_channels: ['whatsapp'],
+                })
+            )
+        ),
+        onSuccess: (results) => {
+            const ok = results.filter(r => r.status === 'fulfilled').length
+            const failed = results.length - ok
+            if (failed > 0) toast.error(`${ok} moved to pool, ${failed} failed`)
+            else toast.success(`${ok} candidate${ok === 1 ? '' : 's'} moved to general pool`)
+            setShowBulkReject(false)
+            setSelectedIds(new Set())
+            queryClient.invalidateQueries({ queryKey: ['job-candidates', jobId] })
+            queryClient.invalidateQueries({ queryKey: ['general-pool'] })
+        },
+        onError: (err) => toast.error(err?.response?.data?.error || 'Bulk reject failed'),
+    })
 
     const { data, isLoading, error } = useQuery({
         queryKey: ['job-candidates', jobId],
@@ -80,11 +110,38 @@ export default function JobCandidates() {
             if (statusFilter === 'excellent') return c.match_score >= 80
             if (statusFilter === 'good') return c.match_score >= 60 && c.match_score < 80
             if (statusFilter === 'fair') return c.match_score >= 50 && c.match_score < 60
-            if (statusFilter === 'certified') return c.application_status === 'certified'
-            if (statusFilter === 'pending') return ['auto_assigned', 'applied', 'reviewing'].includes(c.application_status)
+            if (statusFilter === 'certified') return normalizeStatus(c.application_status) === 'certified'
+            if (statusFilter === 'pending') return normalizeStatus(c.application_status) === 'screening'
             return true
         })
         : candidates
+
+    // B008 — pipeline-specific report: export this job's candidate pipeline
+    // (stage, match score, CV status) to CSV for offline review / sharing.
+    const exportPipelineReport = () => {
+        if (!candidates.length) { toast.error('No candidates to export'); return }
+        const rows = candidates.map(c => ({
+            name: c.candidate?.name || '',
+            phone: c.candidate?.phone || '',
+            email: c.candidate?.email || '',
+            match_score_pct: c.match_score,
+            stage: getStatusLabel(c.application_status),
+            has_cv: c.candidate?.cv_uploaded === false ? 'No' : 'Yes',
+            source: c.candidate?.source || '',
+            applied_at: c.applied_at || '',
+            certified_at: c.certified_at || '',
+        }))
+        const csv = Papa.unparse(rows)
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `pipeline_${(job?.title || 'job').replace(/[^a-z0-9]+/gi, '_').toLowerCase()}.csv`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        URL.revokeObjectURL(url)
+    }
 
     if (isLoading) {
         return (
@@ -140,6 +197,9 @@ export default function JobCandidates() {
                         </div>
                     </div>
                     <div className="flex gap-2">
+                        <Button variant="secondary" onClick={exportPipelineReport} className="gap-1">
+                            <Download size={16} /> Export Report
+                        </Button>
                         <Button variant="secondary" onClick={() => navigate(`/jobs/${jobId}`)}>
                             View Job Details
                         </Button>
@@ -198,6 +258,11 @@ export default function JobCandidates() {
             {candidates.length === 0 && (
                 <EmptyPipelineBanner jobId={jobId} onScanned={() => queryClient.invalidateQueries({ queryKey: ['job-candidates', jobId] })} />
             )}
+
+            {/* Smart Shortlist (#4a) — collapsible, read-only semantic best
+                matches. Lazily fetches only when expanded. Suggestion-only;
+                does not touch the assigned-candidate pipeline below. */}
+            <SmartShortlist jobId={jobId} />
 
             {/* Candidates List */}
             <div className="card overflow-hidden">
@@ -279,6 +344,14 @@ export default function JobCandidates() {
                         <CheckCircle size={14} className="mr-1" />
                         Batch Certify
                     </Button>
+                    <Button
+                        size="sm"
+                        onClick={() => setShowBulkReject(true)}
+                        className="bg-red-500 hover:bg-red-400 text-white border-0"
+                    >
+                        <UserX size={14} className="mr-1" />
+                        Reject to Pool
+                    </Button>
                     <button onClick={() => setSelectedIds(new Set())} className="text-zinc-400 dark:text-zinc-500 hover:text-white text-sm">
                         Clear
                     </button>
@@ -301,6 +374,17 @@ export default function JobCandidates() {
                     }}
                 />
             )}
+
+            {/* Bulk reject confirmation (E8) */}
+            <ConfirmModal
+                open={showBulkReject}
+                onClose={() => setShowBulkReject(false)}
+                onConfirm={() => bulkRejectMutation.mutate()}
+                loading={bulkRejectMutation.isPending}
+                danger
+                title="Reject selected candidates?"
+                message={`Move ${selectedIds.size} candidate${selectedIds.size === 1 ? '' : 's'} to the general pool and notify them via WhatsApp?`}
+            />
 
             {/* Candidate Quick View Modal */}
             {selectedCandidate && !showCertifyModal && !showTransferModal && !showRejectModal && (
@@ -437,21 +521,21 @@ function EmptyPipelineBanner({ jobId, onScanned }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// ApproveModal — sets application.status='selected'. Backend cascade
-// auto-completes the job when the last seat fills (see applications.js).
+// ApproveModal — sets application.status='hired' (final placement). Backend
+// cascade auto-completes the job when the last seat fills (see applications.js).
 // ──────────────────────────────────────────────────────────────────────────
 function ApproveModal({ data, job, positionsRemaining, onClose, onSuccess }) {
     const candidate = data.candidate || {}
     const [submitting, setSubmitting] = useState(false)
 
-    const disabled = job.status !== 'active' || positionsRemaining <= 0 || data.application_status === 'selected'
+    const disabled = job.status !== 'active' || positionsRemaining <= 0 || normalizeStatus(data.application_status) === 'hired'
 
     const handleApprove = async () => {
         if (disabled) return
         setSubmitting(true)
         try {
             await updateApplication(data.application_id, {
-                status: 'selected',
+                status: 'hired',
                 notify_channels: ['whatsapp'],
             })
             toast.success(`${candidate.name} approved for ${job.title}`)
@@ -486,7 +570,7 @@ function ApproveModal({ data, job, positionsRemaining, onClose, onSuccess }) {
                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
                         {job.status !== 'active'
                             ? `Job is ${job.status}. Set it back to Active before approving.`
-                            : data.application_status === 'selected'
+                            : normalizeStatus(data.application_status) === 'hired'
                                 ? 'This candidate has already been approved.'
                                 : 'No positions remain on this job.'}
                     </div>
@@ -662,6 +746,12 @@ function BatchCertifyModal({ selectedIds, candidates, onClose, onSuccess }) {
 
 function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCertify, onTransfer, onReject, onApprove, onPreScreen, onSchedule }) {
     const { candidate, match_score, match_details, application_status, certified_at } = data
+    // Surface the auto-match gate behind a 0% score (no CV / gender mismatch /
+    // no scorable criteria) and any "verify manually" flag (E1/E2/E3).
+    const blockingReason = match_score === 0
+        ? (match_details || []).find(d => ['cv', 'gender', 'insufficient_criteria'].includes(d.factor))?.detail
+        : null
+    const verifyFlag = (match_details || []).find(d => d.factor === 'gender' && /verify/i.test(d.detail || ''))
 
     const getScoreColor = (score) => {
         if (score >= 80) return 'text-green-600 bg-green-100'
@@ -701,13 +791,13 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                         <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
                                 <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 truncate">{candidate.name}</h3>
-                                {application_status === 'certified' && (
+                                {normalizeStatus(application_status) === 'certified' && (
                                     <span className="inline-flex items-center gap-1 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
                                         <CheckCircle2 size={12} />
                                         Certified
                                     </span>
                                 )}
-                                {application_status === 'rejected' && (
+                                {normalizeStatus(application_status) === 'rejected' && (
                                     <span className="inline-flex items-center gap-1 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
                                         <XCircle size={12} />
                                         General Pool
@@ -760,6 +850,17 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
                         {match_score}%
                     </div>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{getScoreLabel(match_score)} Match</p>
+                    <div className="flex flex-col items-center gap-1 mt-1">
+                        {candidate.cv_uploaded === false && (
+                            <span className="inline-flex items-center rounded-full bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 px-2 py-0.5 text-[10px] font-semibold">No CV</span>
+                        )}
+                        {verifyFlag && (
+                            <span className="inline-flex items-center rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 px-2 py-0.5 text-[10px] font-semibold" title={verifyFlag.detail}>Verify gender</span>
+                        )}
+                        {blockingReason && (
+                            <p className="text-[10px] text-rose-500 max-w-[9rem] leading-tight">{blockingReason}</p>
+                        )}
+                    </div>
                 </div>
 
                 {/* Actions — driven by lifecycle status */}
@@ -784,38 +885,31 @@ function CandidateRow({ data, job, isSelected, onToggleSelect, onSelect, onCerti
     )
 }
 
-// Status-aware action button cluster. Mirrors the candidate lifecycle the
-// product spec describes: Applied → Certified → Pre Screened → Scheduled →
-// Selected | Rejected. Each step exposes only the legal next actions so
-// recruiters can't skip steps or trigger the wrong notification by accident.
+// Status-aware action button cluster. Mirrors the canonical candidate lifecycle:
+// Screening → Certified → Interview Scheduled → Hired | Rejected. Each step
+// exposes only the legal next actions so recruiters can't skip steps or trigger
+// the wrong notification by accident. `status` is normalized first so legacy
+// rows (applied/pre_screened/selected/placed/…) bucket onto the canonical set.
 function LifecycleActions({ status, certifiedAt, onCertify, onPreScreen, onSchedule, onApprove, onTransfer, onReject }) {
-    if (status === 'selected' || status === 'placed') {
+    // Marketing agents source candidates but must not run interviews (B010);
+    // the backend also rejects the request if this gate is bypassed.
+    const { isMarketingAgent } = useRole()
+    const s = normalizeStatus(status)
+    if (s === 'hired') {
         return (
             <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1 px-2 font-medium">
                 <Award size={12} /> Approved
             </span>
         )
     }
-    if (status === 'rejected') {
+    if (s === 'rejected') {
         return (
             <span className="text-xs text-red-500 flex items-center gap-1 px-2">
                 <XCircle size={12} /> Moved to Pool
             </span>
         )
     }
-    if (status === 'pre_screened') {
-        return (
-            <>
-                <Button size="sm" onClick={onSchedule} className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white">
-                    <Calendar size={14} /> Schedule Interview
-                </Button>
-                <Button variant="danger" size="sm" onClick={onReject} className="gap-1" style={{ backgroundColor: '#ef4444', color: 'white', border: 'none' }}>
-                    <UserX size={14} /> Reject
-                </Button>
-            </>
-        )
-    }
-    if (status === 'interview_scheduled' || status === 'interviewed') {
+    if (s === 'interview_scheduled') {
         return (
             <>
                 <Button size="sm" onClick={onApprove} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white">
@@ -827,12 +921,20 @@ function LifecycleActions({ status, certifiedAt, onCertify, onPreScreen, onSched
             </>
         )
     }
-    if (status === 'certified') {
+    if (s === 'certified') {
+        // Canonical `certified` covers both the just-certified and the
+        // pre-screened sub-stages (pre_screened folds into certified), so both
+        // forward actions stay reachable here to preserve the stepper UX.
         return (
             <>
                 <Button size="sm" onClick={onPreScreen} className="gap-1 bg-teal-600 hover:bg-teal-700 text-white">
                     <CheckCircle2 size={14} /> Mark Pre-Screened
                 </Button>
+                {!isMarketingAgent && (
+                    <Button size="sm" onClick={onSchedule} className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white">
+                        <Calendar size={14} /> Schedule Interview
+                    </Button>
+                )}
                 <span className="text-xs text-green-600 flex items-center gap-1 px-2 font-medium">
                     <CheckCircle2 size={12} />
                     Certified {certifiedAt && new Date(certifiedAt).toLocaleDateString()}
@@ -843,7 +945,7 @@ function LifecycleActions({ status, certifiedAt, onCertify, onPreScreen, onSched
             </>
         )
     }
-    // Default = applied / auto_assigned / reviewing / screening
+    // Default = screening (legacy applied / auto_assigned / reviewing)
     return (
         <>
             <Button variant="secondary" size="sm" onClick={onCertify} className="gap-1">
@@ -861,6 +963,12 @@ function LifecycleActions({ status, certifiedAt, onCertify, onPreScreen, onSched
 
 function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, onReject }) {
     const { candidate, match_score, match_details, application_status } = data
+
+    // Backend already resolves cv_url to an https GCS link; null = no CV.
+    const cvUrl = (() => {
+        const u = resolveDocumentUrl({ file_url: candidate.cv_url })
+        return u && u !== PENDING_URL ? u : null
+    })()
 
     const getScoreColor = (score) => {
         if (score >= 80) return 'text-green-600 bg-green-50 border-green-200'
@@ -918,17 +1026,22 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
                                         <span className="text-sm text-zinc-500 dark:text-zinc-400">({detail.detail})</span>
                                     )}
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <div className="w-24 bg-gray-200 rounded-full h-2">
-                                        <div
-                                            className={`h-2 rounded-full ${parseFloat(detail.score) > 10 ? 'bg-green-500' : parseFloat(detail.score) > 5 ? 'bg-amber-500' : 'bg-red-400'}`}
-                                            style={{ width: `${Math.min(100, (parseFloat(detail.score) / 20) * 100)}%` }}
-                                        />
+                                {Number.isFinite(parseFloat(detail.score)) ? (
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-24 bg-gray-200 rounded-full h-2">
+                                            <div
+                                                className={`h-2 rounded-full ${parseFloat(detail.score) > 10 ? 'bg-green-500' : parseFloat(detail.score) > 5 ? 'bg-amber-500' : 'bg-red-400'}`}
+                                                style={{ width: `${Math.min(100, (parseFloat(detail.score) / 20) * 100)}%` }}
+                                            />
+                                        </div>
+                                        <span className="text-sm font-medium w-12 text-right">
+                                            {parseFloat(detail.score).toFixed(0)}pts
+                                        </span>
                                     </div>
-                                    <span className="text-sm font-medium w-12 text-right">
-                                        {parseFloat(detail.score).toFixed(0)}pts
-                                    </span>
-                                </div>
+                                ) : (
+                                    // Informational factors (e.g. "gender unknown — verify") carry no points.
+                                    <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">flag</span>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -951,52 +1064,35 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
                 {/* CV Preview */}
                 <div>
                     <h4 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-3">CV / Documents</h4>
-                    <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            <FileText className="text-primary-500" size={24} />
-                            <div>
-                                <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                                    {candidate.cv_filename || `${candidate.name}_CV.pdf`}
-                                </span>
-                                <p className="text-xs text-zinc-500 dark:text-zinc-400">Uploaded via {candidate.source}</p>
+                    {cvUrl ? (
+                        <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 flex items-center justify-between">
+                            <div className="flex items-center gap-3 min-w-0">
+                                <FileText className="text-primary-500 shrink-0" size={24} />
+                                <div className="min-w-0">
+                                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300 block truncate">
+                                        {candidate.cv_filename || `${candidate.name}_CV`}
+                                    </span>
+                                    <p className="text-xs text-zinc-500 dark:text-zinc-400">Uploaded via {candidate.source}</p>
+                                </div>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                                <Button variant="secondary" size="sm" className="gap-1" onClick={() => window.open(cvUrl, '_blank', 'noopener,noreferrer')}>
+                                    <Eye size={14} />
+                                    Preview
+                                </Button>
+                                <a href={cvUrl} download={candidate.cv_filename || undefined} target="_blank" rel="noopener noreferrer">
+                                    <Button variant="secondary" size="sm" className="gap-1">
+                                        <Download size={14} />
+                                        Download
+                                    </Button>
+                                </a>
                             </div>
                         </div>
-                        <div className="flex gap-2">
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                className="gap-1"
-                                onClick={() => {
-                                    if (candidate.cv_url) {
-                                        window.open(candidate.cv_url, '_blank')
-                                    } else {
-                                        toast.error('CV not available')
-                                    }
-                                }}
-                            >
-                                <Eye size={14} />
-                                Preview
-                            </Button>
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                className="gap-1"
-                                onClick={() => {
-                                    if (candidate.cv_url) {
-                                        const link = document.createElement('a')
-                                        link.href = candidate.cv_url
-                                        link.download = candidate.cv_filename || 'cv.pdf'
-                                        link.click()
-                                    } else {
-                                        toast.error('CV not available for download')
-                                    }
-                                }}
-                            >
-                                <Download size={14} />
-                                Download
-                            </Button>
+                    ) : (
+                        <div className="p-4 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 text-sm text-zinc-500 dark:text-zinc-400">
+                            No CV uploaded for this candidate.
                         </div>
-                    </div>
+                    )}
                 </div>
 
                 {/* Alternative Jobs Panel */}
@@ -1015,7 +1111,7 @@ function CandidateQuickViewModal({ data, job, onClose, onCertify, onTransfer, on
                 {/* Actions */}
                 <div className="flex justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                     <Button variant="secondary" onClick={onClose}>Close</Button>
-                    {application_status !== 'certified' && application_status !== 'rejected' && (
+                    {normalizeStatus(application_status) !== 'certified' && normalizeStatus(application_status) !== 'rejected' && (
                         <>
                             <button
                                 onClick={onReject}
@@ -1667,10 +1763,11 @@ function TransferModal({ data, currentJob, onClose }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// MarkPreScreenedModal — records the outcome of the in-person pre-screen
-// and transitions certified → pre_screened. The chatbot sends the candidate
-// a "you passed pre-screening" WhatsApp via the new pre_screened_passed
-// notification template.
+// MarkPreScreenedModal — records the outcome of the in-person pre-screen.
+// Pre-screen is a sub-stage of the canonical `certified` status, so this writes
+// status 'certified' (a same-state no-op upstream) while attaching the
+// prescreening notes/rating. The chatbot sends the candidate a "you passed
+// pre-screening" WhatsApp via the pre_screened_passed notification template.
 // ──────────────────────────────────────────────────────────────────────────
 function MarkPreScreenedModal({ data, job, onClose }) {
     const queryClient = useQueryClient()
@@ -1681,7 +1778,7 @@ function MarkPreScreenedModal({ data, job, onClose }) {
 
     const mutation = useMutation({
         mutationFn: () => updateApplication(data.application_id, {
-            status: 'pre_screened',
+            status: 'certified',
             prescreening_notes: notes || undefined,
             prescreening_rating: rating || undefined,
             notify_channels: notifyWhatsApp ? ['whatsapp'] : [],
@@ -1785,6 +1882,7 @@ function ScheduleInterviewModal({ data, job, onClose }) {
     const [time, setTime] = useState('')
     const [location, setLocation] = useState('')
     const [duration, setDuration] = useState(30)
+    const [description, setDescription] = useState('')
     const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
 
     const mutation = useMutation({
@@ -1798,6 +1896,7 @@ function ScheduleInterviewModal({ data, job, onClose }) {
                 scheduled_datetime: scheduledDatetime,
                 location: location || null,
                 duration_minutes: Number(duration) || 30,
+                description: description.trim() || null,
                 notify_channels: channels.length > 0 ? channels : ['whatsapp'],
             }).then((res) => res.data)
         },
@@ -1875,6 +1974,20 @@ function ScheduleInterviewModal({ data, job, onClose }) {
                         onChange={(e) => setDuration(e.target.value)}
                         className="input w-full"
                     />
+                </div>
+
+                <div>
+                    <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Extra details for the candidate (optional)</label>
+                    <textarea
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        rows={3}
+                        placeholder="e.g., Bring your portfolio. Ask for Mr. Perera at reception. Parking at Gate B."
+                        className="input w-full resize-y"
+                    />
+                    {notifyWhatsApp && (
+                        <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Included in the WhatsApp invitation.</p>
+                    )}
                 </div>
 
                 <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">

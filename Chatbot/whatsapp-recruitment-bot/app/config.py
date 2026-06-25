@@ -92,6 +92,80 @@ class Settings(BaseSettings):
     enable_cv_priority_interrupt: bool = True
     handoff_confusion_threshold: int = 3
 
+    # ── Proactive follow-up nudges (stuck-candidate re-engagement) ───────────
+    # Dark-launched: keep False until the Meta WhatsApp templates are approved,
+    # then flip to True. Out-of-24h-window nudges REQUIRE an approved template
+    # (free-form is silently dropped by Meta after 24h of candidate silence).
+    enable_followup_nudges: bool = False
+    # Approved Meta template names (register these in WhatsApp Business Manager).
+    followup_template_missing_info: str = "dewan_followup_missing_info"
+    # Quiet hours in Asia/Colombo — never send proactive nudges in this window.
+    followup_quiet_start_hour: int = 21   # 21:00
+    followup_quiet_end_hour: int = 8      # 08:00
+    # Smart send-time: prefer each candidate's typical active hour (from their
+    # last inbound message) instead of blasting everyone the moment they're due.
+    followup_smart_send_time: bool = True
+
+    # Approved Meta templates for proactive STATUS messages sent OUTSIDE the 24h
+    # window (interview reminders, job re-engagement). In-window sends still use
+    # rich free-form text. Leave EMPTY until the template is approved by Meta —
+    # empty means "always free-form" (today's behavior, no regression). Set the
+    # env vars (TEMPLATE_INTERVIEW_REMINDER=…) once approved to light up
+    # out-of-window delivery.
+    # Interview INVITE template (the "you have an interview" first message). Needed
+    # to reach candidates outside the 24h window — the #1 cause of "can't send the
+    # interview message". Empty = free-form only (dropped out-of-window, but now
+    # reported as out_of_window so the candidate lands in the manual-call CSV).
+    template_interview_scheduled: str = ""
+    template_interview_reminder: str = ""
+    template_interview_day_reminder: str = ""
+    template_job_now_available: str = ""
+    # Rich interview INVITE template with three quick-reply buttons (Confirm /
+    # Reschedule / Can't make it) declared ON the template, so they deliver
+    # OUT-OF-WINDOW (the common case). Body params: [first_name, job_title,
+    # date_time, location, what_to_bring, dress_code]. When empty, the
+    # interview_scheduled path falls back to template_interview_scheduled (no
+    # buttons) — so leaving this unset is a safe no-op until the template is approved.
+    template_interview_invite: str = ""
+    # Bulk-campaign template (the UAE walk-in blast) — a STATIC promotional body
+    # with three quick-reply buttons (Confirm my slot / Suggest to a friend / Not
+    # Interested) declared ON the template, so it delivers OUT-OF-WINDOW (the whole
+    # point of a mass send). No body params (fully static). Set
+    # TEMPLATE_CAMPAIGN_WALKIN=<approved name> once Meta approves it; the campaign
+    # runner / referral flow read it as the fallback template name.
+    template_campaign_walkin: str = ""
+    # Out-of-window teasers that re-open the 24h window after a candidate taps
+    # Reschedule / Can't-make-it (the actual slot/job lists are sent in-window as
+    # interactive lists). Body params: reschedule_options=[first_name];
+    # cant_make_job_offer=[first_name, job_title].
+    template_interview_reschedule_options: str = ""
+    template_cant_make_job_offer: str = ""
+    # Welcome/intro template for candidates an agent ADDS manually from the
+    # Messages panel. These numbers have never messaged in, so they're outside
+    # the 24h window and a free-form welcome is dropped by Meta — only this
+    # approved template can open the conversation. Body param: [first_name].
+    # Empty = free-form only (delivers only if the candidate is already in-window;
+    # otherwise reported out_of_window). Set TEMPLATE_WELCOME=… once approved.
+    template_welcome: str = ""
+    # GENERIC status-update template — the out-of-window fallback for every
+    # proactive status that has no specific template above (certified,
+    # application_complete, job_assignment, shortlisted, hired, general_pool,
+    # rejected_with_alternatives, prescreening_certified, interview_rescheduled,
+    # interview_cancelled, transferred). Body params: [first_name, one_line_summary].
+    # The full free-form text is queued backend-side and auto-delivers when the
+    # candidate replies to the template.
+    template_status_update: str = ""
+    # Agent-takeover re-engagement template — sent when an agent writes to a
+    # candidate outside the 24h window. Body param: [first_name] ("we have an
+    # update / a message waiting — reply to receive it"). The agent's actual
+    # message is queued backend-side and auto-delivers on the candidate's reply.
+    template_reengage: str = ""
+    # Apology + onboarding-restart template for candidates wrongly told a role
+    # was unavailable, re-engaged OUTSIDE the 24h window. In-window remediation
+    # uses free-form text (see scripts/remediate_ad_declines.py); this is only
+    # needed for the out-of-window pass. Leave EMPTY until approved by Meta.
+    apology_restart_template: str = ""
+
     # AI-driven intake feature flag. When True, every webhook turn routes
     # through app/llm/conversation_agent.run_turn (the new GPT-5.5 brain).
     # When False, the legacy ad_intake_flow state machine + run_ai_supervisor

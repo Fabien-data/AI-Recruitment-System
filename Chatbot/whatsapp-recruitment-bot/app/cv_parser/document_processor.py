@@ -44,6 +44,11 @@ class ProcessingResult:
     extraction_confidence: float = 0.0
     error_message: Optional[str] = None
     warnings: list = None
+    # For image uploads: what kind of document the vision pre-flight saw —
+    # 'cv' (parse it fully) | 'id' | 'passport' | 'certificate' | 'photo'
+    # (store as a supporting document, no field extraction). Selfies / non-docs
+    # are rejected before a result is built. Non-image docs default to 'cv'.
+    document_category: str = "cv"
     
     def __post_init__(self):
         if self.warnings is None:
@@ -153,14 +158,41 @@ class DocumentProcessor:
         ext = Path(filename).suffix.lower()
         
         try:
-            if ext in self.SUPPORTED_IMAGE and use_intelligent_extraction and image_url:
-                if not self._is_cv_image(image_url):
-                    logger.warning("Image rejected by pre-flight check — not a CV: %s", image_url[:60])
+            if ext in self.SUPPORTED_IMAGE and use_intelligent_extraction:
+                # Use the downloaded bytes (base64 data URL) for vision — the
+                # WhatsApp media URL is auth-gated and OpenAI cannot fetch it, so
+                # relying on image_url silently failed. Bytes always work.
+                #
+                # Classify the image rather than a binary CV/not-CV gate: real CVs
+                # get full extraction, while ID/passport/certificate/CV-photos are
+                # still stored as supporting documents (never silently dropped).
+                # Only genuine non-documents (random/unrelated photos) are rejected.
+                # A person-photo/selfie is NOT rejected (#6): it flows through as a
+                # classified image so the orchestrator can route it to the candidate's
+                # profile picture instead of dropping it.
+                category = self._classify_document_image(file_content, image_url)
+                if category == "other":
+                    logger.warning("Image rejected by pre-flight check — not a document or photo (%s)", category)
                     return ProcessingResult(
                         success=False,
                         error_message="not_cv_image",
+                        document_category=category,
                     )
-                vision_extracted = self._extract_structured_from_image_url(image_url)
+                if category != "cv":
+                    # Document-like, a person-photo, or a selfie — store/route it,
+                    # skip CV field extraction. Orchestrator decides: photo/selfie →
+                    # profile picture; id/passport/certificate → supporting document.
+                    logger.info("Image classified as '%s' — non-CV image", category)
+                    return ProcessingResult(
+                        success=True,
+                        extracted_data=None,
+                        raw_text=None,
+                        text_source="vision_document",
+                        text_confidence=0.9,
+                        extraction_confidence=1.0,
+                        document_category=category,
+                    )
+                vision_extracted = self._extract_structured_from_image(file_content, image_url)
                 if vision_extracted:
                     warnings = vision_extracted.warnings.copy()
                     if vision_extracted.missing_critical_fields:
@@ -175,6 +207,7 @@ class DocumentProcessor:
                         text_confidence=0.92,
                         extraction_confidence=vision_extracted.overall_confidence,
                         warnings=warnings,
+                        document_category="cv",
                     )
 
             # Step 1: Extract raw text based on file type
@@ -242,14 +275,35 @@ class DocumentProcessor:
                 error_message=f"Processing error: {str(e)}"
             )
 
-    def _is_cv_image(self, image_url: str) -> bool:
+    def _image_content_part(self, image_bytes: Optional[bytes], image_url: Optional[str], detail: str = "high") -> Dict[str, Any]:
+        """Build a GPT-4o vision image part, preferring base64 bytes (always
+        fetchable) over the auth-gated WhatsApp media URL."""
+        if image_bytes:
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": detail}}
+        return {"type": "image_url", "image_url": {"url": image_url, "detail": detail}}
+
+    # Categories the vision pre-flight may return. Anything document-like is
+    # stored; only selfie/other are dropped. Unknown answers fail safe to 'cv'
+    # so a real CV is never lost.
+    _DOC_CATEGORIES = {"cv", "id", "passport", "certificate", "photo", "selfie", "other"}
+
+    def _classify_document_image(self, image_bytes: Optional[bytes], image_url: Optional[str] = None) -> str:
         """
-        Pre-flight check: ask GPT-4o Vision whether the image looks like a CV/resume.
-        Returns True if it is (or if the check cannot be performed — fail-safe).
-        Returns False for selfies, group photos, or unrelated images.
+        Pre-flight: ask GPT-4o Vision what kind of document the image is.
+
+        Returns one of: 'cv' (CV/resume → full extraction), 'id' | 'passport' |
+        'certificate' | 'photo' (a profile/passport-size photo of a person that is
+        still a document the recruiter wants → store as a supporting document), or
+        'selfie' | 'other' (casual photo / unrelated → reject, not stored).
+
+        Fail-safe: if the check can't run or errors, returns 'cv' so a genuine CV
+        is never dropped (decision: never lose a real CV).
         """
         if not self.intelligent_extractor or not getattr(self.intelligent_extractor, "openai_client", None):
-            return True  # can't verify — allow through
+            return "cv"  # can't verify — treat as CV
+        if not image_bytes and not image_url:
+            return "cv"
         try:
             response = self.intelligent_extractor.openai_client.chat.completions.create(
                 model="gpt-4o",
@@ -260,28 +314,37 @@ class DocumentProcessor:
                             {
                                 "type": "text",
                                 "text": (
-                                    "Does this image contain a CV, resume, or professional document "
-                                    "showing personal or employment details? Reply with ONLY the word YES or NO."
+                                    "Classify this image for a recruitment system. Reply with ONLY ONE word:\n"
+                                    "cv — a CV/resume or a document listing work experience/skills/education\n"
+                                    "id — a national ID / NIC / driving licence\n"
+                                    "passport — a passport page / bio-data page\n"
+                                    "certificate — a certificate, diploma, or qualification document\n"
+                                    "photo — a passport-size / portrait photo of a person (headshot)\n"
+                                    "selfie — a casual self-photo or snapshot\n"
+                                    "other — anything else (memes, screenshots, scenery, products)\n"
+                                    "Prefer 'cv' if the image clearly shows a CV/resume."
                                 ),
                             },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": image_url, "detail": "low"},
-                            },
+                            self._image_content_part(image_bytes, image_url, detail="low"),
                         ],
                     }
                 ],
                 max_tokens=5,
             )
-            answer = (response.choices[0].message.content or "").strip().upper()
-            return answer.startswith("YES")
+            answer = (response.choices[0].message.content or "").strip().lower()
+            for cat in self._DOC_CATEGORIES:
+                if answer.startswith(cat):
+                    return cat
+            return "cv"  # unrecognised answer — fail safe to CV
         except Exception as exc:
-            logger.warning("CV image pre-flight check failed: %s — proceeding as CV", exc)
-            return True  # fail-safe: allow through if check errors
+            logger.warning("Document image pre-flight check failed: %s — proceeding as CV", exc)
+            return "cv"  # fail-safe: never drop a real CV
 
-    def _extract_structured_from_image_url(self, image_url: str) -> Optional[ExtractedCVData]:
+    def _extract_structured_from_image(self, image_bytes: Optional[bytes], image_url: Optional[str] = None) -> Optional[ExtractedCVData]:
         """
-        Route CV photos directly to GPT-4o Vision and request structured JSON.
+        Route CV photos directly to GPT-4o Vision and request the FULL structured
+        field set (same shape as text extraction) so image CVs carry as much
+        detail as PDFs — name, age, height, experience, employer, skills, etc.
         """
         if not self.intelligent_extractor or not getattr(self.intelligent_extractor, "openai_client", None):
             return None
@@ -300,19 +363,18 @@ class DocumentProcessor:
                             {
                                 "type": "text",
                                 "text": (
-                                    "Extract all recruitment data (Name, Phone, Passport, Experience, Skills) "
-                                    "from this image of a CV. The text may be blurry or poorly lit. "
-                                    "Be highly tolerant of typos. Return JSON with keys: "
-                                    "name, phone, passport, experience, skills, raw_text, confidence, missing_critical_fields."
+                                    "Extract ALL recruitment data from this image of a CV/document. The text "
+                                    "may be blurry, handwritten, or in Sinhala/Tamil/English. Be highly tolerant "
+                                    "of typos. Return JSON with these keys (use null/[] when absent): "
+                                    "name, email, phone, age (number), height_cm (number), nationality, "
+                                    "current_job_title, current_company, previous_employer, "
+                                    "total_experience_years (number), highest_qualification, "
+                                    "technical_skills (array), soft_skills (array), languages_spoken (array), "
+                                    "certifications (array), licenses (string), country, raw_text, "
+                                    "confidence (0-1), missing_critical_fields (array)."
                                 ),
                             },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": image_url,
-                                    "detail": "high",
-                                },
-                            },
+                            self._image_content_part(image_bytes, image_url, detail="high"),
                         ],
                     },
                 ],
@@ -320,48 +382,65 @@ class DocumentProcessor:
             )
 
             payload = self._clean_and_parse_json(response.choices[0].message.content or "")
-            name = (payload.get("name") or "").strip() or None
-            phone = (payload.get("phone") or "").strip() or None
-            passport = (payload.get("passport") or "").strip() or None
-            experience = payload.get("experience")
-            if experience is None:
-                experience = payload.get("experience_years")
-            skills = payload.get("skills")
-            if isinstance(skills, str):
-                skills = [s.strip() for s in skills.split(",") if s.strip()]
-            if not isinstance(skills, list):
-                skills = []
 
+            def _s(key):
+                v = payload.get(key)
+                return (str(v).strip() or None) if v not in (None, "") else None
+
+            def _f(key):
+                v = payload.get(key)
+                try:
+                    return float(v) if v not in (None, "") else None
+                except Exception:
+                    return None
+
+            def _list(key):
+                v = payload.get(key)
+                if isinstance(v, str):
+                    v = [s.strip() for s in v.split(",") if s.strip()]
+                return v if isinstance(v, list) else []
+
+            name = _s("name")
+            phone = _s("phone")
+            age_val = _f("age")
             confidence = float(payload.get("confidence", 0.8) or 0.8)
-            missing_critical_fields = payload.get("missing_critical_fields")
-            if not isinstance(missing_critical_fields, list):
-                missing_critical_fields = []
+            missing = payload.get("missing_critical_fields")
+            if not isinstance(missing, list):
+                missing = []
             if not phone:
-                missing_critical_fields.append("phone")
-            missing_critical_fields = list(dict.fromkeys(missing_critical_fields))
+                missing.append("phone")
+            missing = list(dict.fromkeys(missing))
 
-            total_exp = None
-            try:
-                if experience is not None:
-                    total_exp = float(experience)
-            except Exception:
-                total_exp = None
+            licenses = _s("licenses")
+            certs = _list("certifications")
+            if licenses and licenses not in certs:
+                certs = certs + [licenses]
 
             return ExtractedCVData(
                 full_name=name,
                 full_name_confidence=confidence if name else 0.0,
+                email=_s("email"),
                 phone=phone,
                 phone_confidence=confidence if phone else 0.0,
-                expected_salary=passport,
-                expected_salary_confidence=confidence if passport else 0.0,
-                total_experience_years=total_exp,
-                total_experience_years_confidence=confidence if total_exp is not None else 0.0,
-                technical_skills=skills,
-                raw_text=(payload.get("raw_text") or "").strip() or None,
+                age=int(age_val) if age_val is not None else None,
+                age_confidence=confidence if age_val is not None else 0.0,
+                height_cm=_f("height_cm"),
+                height_cm_confidence=confidence if _f("height_cm") is not None else 0.0,
+                nationality=_s("nationality"),
+                current_job_title=_s("current_job_title"),
+                current_company=_s("current_company") or _s("previous_employer"),
+                total_experience_years=_f("total_experience_years"),
+                total_experience_years_confidence=confidence if _f("total_experience_years") is not None else 0.0,
+                highest_qualification=_s("highest_qualification"),
+                technical_skills=_list("technical_skills"),
+                soft_skills=_list("soft_skills"),
+                languages_spoken=_list("languages_spoken"),
+                certifications=certs,
+                raw_text=_s("raw_text"),
                 extraction_method="vision_gpt4o_json",
                 extraction_timestamp=datetime.utcnow().isoformat(),
                 overall_confidence=max(0.0, min(confidence, 1.0)),
-                missing_critical_fields=missing_critical_fields,
+                missing_critical_fields=missing,
                 warnings=["Vision extraction used for image CV input"],
             )
         except Exception as exc:

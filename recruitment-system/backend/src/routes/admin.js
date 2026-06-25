@@ -25,6 +25,7 @@ const { pool } = require('../config/database');
 const { authenticate, authorize, ROLES } = require('../middleware/auth');
 const { loadPerms } = require('../middleware/sections');
 const { computeUserKpi } = require('../services/kpi');
+const { insertAuditRow } = require('../utils/audit-writer');
 const logger = require('../utils/logger');
 
 const ADMIN_ONLY = [authenticate, authorize(ROLES.ADMIN)];
@@ -48,11 +49,11 @@ router.get('/stats', ...ADMIN_ONLY, async (req, res, next) => {
             pool.query("SELECT COUNT(*) AS total FROM projects WHERE status IN ('planning','active')"),
             pool.query(
                 `SELECT COUNT(*) AS total FROM applications
-                 WHERE status IN ('selected','placed')
+                 WHERE status = 'hired'
                    AND applied_at >= NOW() - INTERVAL '30 days'`
             ),
             pool.query(
-                "SELECT COUNT(*) AS total FROM candidates WHERE intervention_needed = true"
+                "SELECT COUNT(*) AS total FROM candidates WHERE requires_human IS TRUE OR is_human_handoff IS TRUE"
             ),
             pool.query(
                 `SELECT
@@ -108,9 +109,9 @@ router.get('/users', ...ADMIN_ONLY, async (req, res, next) => {
 
         params.push(parseInt(limit), offset);
         const usersRes = await pool.query(
-            `SELECT id, email, full_name, role, phone, is_active, created_at, last_login_at
+            `SELECT id, email, full_name, role, phone, pbx_extension, is_active, approved, created_at, last_login_at
              FROM users ${whereClause}
-             ORDER BY created_at DESC
+             ORDER BY approved ASC, created_at DESC
              LIMIT $${params.length - 1} OFFSET $${params.length}`,
             params
         );
@@ -138,7 +139,7 @@ router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
     try {
         const {
             email, password, full_name, role = ROLES.PROJECT_HANDLER, phone,
-            section_permissions,
+            pbx_extension, section_permissions,
         } = req.body;
 
         if (!email || !password || !full_name) {
@@ -160,10 +161,10 @@ router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
         await client.query('BEGIN');
 
         const result = await client.query(
-            `INSERT INTO users (email, password_hash, full_name, role, phone)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING id, email, full_name, role, phone, is_active, created_at`,
-            [email, password_hash, full_name, role, phone || null]
+            `INSERT INTO users (email, password_hash, full_name, role, phone, pbx_extension)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING id, email, full_name, role, phone, pbx_extension, is_active, created_at`,
+            [email, password_hash, full_name, role, phone || null, pbx_extension ? String(pbx_extension).trim().slice(0, 20) : null]
         );
         const newUser = result.rows[0];
 
@@ -201,7 +202,7 @@ router.post('/users', ...ADMIN_ONLY, async (req, res, next) => {
 router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { role, is_active, full_name, phone } = req.body;
+        const { role, is_active, full_name, phone, approved, pbx_extension } = req.body;
 
         // Prevent admin from deactivating themselves
         if (id === req.user.id && is_active === false) {
@@ -212,6 +213,24 @@ router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
             const validRoles = Object.values(ROLES);
             if (!validRoles.includes(role)) {
                 return res.status(400).json({ error: `role must be one of: ${validRoles.join(', ')}` });
+            }
+        }
+
+        // Guard: never demote or deactivate the LAST active administrator —
+        // doing so would lock everyone out of the admin panel.
+        const targetRes = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
+        if (targetRes.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        const demotingLastAdmin = targetRes.rows[0].role === ROLES.ADMIN &&
+            ((role !== undefined && role !== ROLES.ADMIN) || is_active === false);
+        if (demotingLastAdmin) {
+            const adminCount = await pool.query(
+                `SELECT COUNT(*)::int AS n FROM users WHERE role = $1 AND is_active = true`,
+                [ROLES.ADMIN]
+            );
+            if ((adminCount.rows[0]?.n || 0) <= 1) {
+                return res.status(400).json({ error: 'Cannot demote or deactivate the last active administrator' });
             }
         }
 
@@ -234,6 +253,20 @@ router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
             params.push(phone);
             setClauses.push(`phone = $${params.length}`);
         }
+        // 3CX extension mapping (empty string clears it). See docs/3cx-integration-plan.md.
+        if (pbx_extension !== undefined) {
+            params.push(pbx_extension ? String(pbx_extension).trim().slice(0, 20) : null);
+            setClauses.push(`pbx_extension = $${params.length}`);
+        }
+        // Approving a pending registration: also activate so they can log in.
+        if (approved !== undefined) {
+            params.push(approved);
+            setClauses.push(`approved = $${params.length}`);
+            if (approved === true && is_active === undefined) {
+                params.push(true);
+                setClauses.push(`is_active = $${params.length}`);
+            }
+        }
 
         if (setClauses.length === 0) {
             return res.status(400).json({ error: 'No fields to update' });
@@ -242,7 +275,7 @@ router.put('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
         params.push(id);
         const result = await pool.query(
             `UPDATE users SET ${setClauses.join(', ')} WHERE id = $${params.length}
-             RETURNING id, email, full_name, role, phone, is_active, created_at, last_login_at`,
+             RETURNING id, email, full_name, role, phone, pbx_extension, is_active, approved, created_at, last_login_at`,
             params
         );
 
@@ -264,6 +297,21 @@ router.delete('/users/:id', ...ADMIN_ONLY, async (req, res, next) => {
 
         if (id === req.user.id) {
             return res.status(400).json({ error: 'Cannot deactivate your own account' });
+        }
+
+        // Guard: never deactivate the last active administrator.
+        const targetRes = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
+        if (targetRes.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        if (targetRes.rows[0].role === ROLES.ADMIN) {
+            const adminCount = await pool.query(
+                `SELECT COUNT(*)::int AS n FROM users WHERE role = $1 AND is_active = true`,
+                [ROLES.ADMIN]
+            );
+            if ((adminCount.rows[0]?.n || 0) <= 1) {
+                return res.status(400).json({ error: 'Cannot deactivate the last active administrator' });
+            }
         }
 
         const result = await pool.query(
@@ -360,33 +408,39 @@ router.put('/users/:id/permissions', ...ADMIN_ONLY, async (req, res, next) => {
         const user = userRes.rows[0];
 
         await client.query('BEGIN');
-        // Replace strategy: delete then re-insert the supplied rows.
+        // Replace strategy: delete then re-insert the supplied rows. Under the
+        // OVERRIDE model every supplied row is stored VERBATIM — including
+        // all-false rows, which now mean "revoke this section" (previously they
+        // were dropped as equivalent to no row). The frontend sends the full
+        // matrix, so the stored set is the absolute source of truth. The
+        // dashboard view bit is always coerced on so a user is never trapped.
         await client.query('DELETE FROM user_section_permissions WHERE user_id = $1', [user.id]);
         for (const p of permissions) {
             if (!p?.section_key) continue;
-            const hasAny = VALID_PERM_KEYS.some(k => !!p[k]);
-            if (!hasAny) continue; // skip "all-false" rows — they're equivalent to NO row
+            const canView = p.section_key === 'dashboard' ? true : !!p.can_view;
             await client.query(
                 `INSERT INTO user_section_permissions
                     (user_id, section_key, can_view, can_create, can_edit, can_delete)
                  VALUES ($1, $2, $3, $4, $5, $6)`,
-                [user.id, p.section_key, !!p.can_view, !!p.can_create, !!p.can_edit, !!p.can_delete]
+                [user.id, p.section_key, canView, !!p.can_create, !!p.can_edit, !!p.can_delete]
             );
         }
-        // Audit the change so it shows up in activity feeds.
-        await client.query(
-            `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, changes, ip_address, user_agent, session_id, section_key)
-             VALUES ($1, 'update', 'user_permissions', $2, $3, $4, $5, $6, 'dashboard')`,
-            [
-                req.user.id,
-                user.id,
-                JSON.stringify({ target_user_id: user.id, permissions }),
-                req.ip || null,
-                req.headers['user-agent'] || null,
-                req.user.session_id || null,
-            ]
-        );
         await client.query('COMMIT');
+
+        // Audit the change so it shows up in activity feeds — AFTER commit and
+        // fire-and-forget: the permissions save must never fail because of the
+        // audit_logs schema (prod was 500ing on the missing session_id column).
+        insertAuditRow({
+            userId: req.user.id,
+            sessionId: req.user.session_id || null,
+            action: 'update',
+            entityType: 'user_permissions',
+            entityId: user.id,
+            sectionKey: 'dashboard',
+            changes: { target_user_id: user.id, permissions },
+            ip: req.ip || null,
+            userAgent: req.headers['user-agent'] || null,
+        }).catch(() => {});
 
         const effective = await loadPerms(user.id, user.role);
         res.json({ user, permissions: effective });
@@ -395,6 +449,73 @@ router.put('/users/:id/permissions', ...ADMIN_ONLY, async (req, res, next) => {
         next(error);
     } finally {
         client.release();
+    }
+});
+
+// ── Permission Templates ─────────────────────────────────────────────────────
+// Reusable named presets of a full section-permission matrix, so an admin can
+// save the current grid and re-apply it when creating/editing another user.
+
+router.get('/permission-templates', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const result = await pool.query(
+            `SELECT t.id, t.name, t.description, t.permissions, t.created_at,
+                    u.full_name AS created_by_name
+             FROM permission_templates t
+             LEFT JOIN users u ON u.id = t.created_by
+             ORDER BY t.name ASC`
+        );
+        res.json(result.rows);
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.post('/permission-templates', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const { name, description, permissions } = req.body || {};
+        if (!name || !String(name).trim()) {
+            return res.status(400).json({ error: 'name is required' });
+        }
+        if (!Array.isArray(permissions)) {
+            return res.status(400).json({ error: 'permissions must be an array' });
+        }
+        // Normalise to the canonical row shape so applying a template later is safe.
+        const clean = permissions
+            .filter((p) => p && p.section_key)
+            .map((p) => ({
+                section_key: p.section_key,
+                can_view: !!p.can_view,
+                can_create: !!p.can_create,
+                can_edit: !!p.can_edit,
+                can_delete: !!p.can_delete,
+            }));
+        const result = await pool.query(
+            `INSERT INTO permission_templates (name, description, permissions, created_by)
+             VALUES ($1, $2, $3::jsonb, $4)
+             ON CONFLICT (name) DO UPDATE SET
+                description = EXCLUDED.description,
+                permissions = EXCLUDED.permissions,
+                updated_at  = NOW()
+             RETURNING id, name, description, permissions, created_at`,
+            [String(name).trim(), description || null, JSON.stringify(clean), req.user.id]
+        );
+        res.status(201).json(result.rows[0]);
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.delete('/permission-templates/:id', ...ADMIN_ONLY, async (req, res, next) => {
+    try {
+        const result = await pool.query(
+            'DELETE FROM permission_templates WHERE id = $1 RETURNING id',
+            [req.params.id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Template not found' });
+        res.json({ message: 'Template deleted', id: result.rows[0].id });
+    } catch (error) {
+        next(error);
     }
 });
 

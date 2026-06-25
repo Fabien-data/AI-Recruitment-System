@@ -8,8 +8,12 @@
     "start": "node src/server.js",
     "backfill:cv-urls": "node scripts/backfill-chatbot-cv-urls.js",
     "backfill:cv-urls:apply": "node scripts/backfill-chatbot-cv-urls.js --apply",
+    "backfill:country-codes": "node scripts/backfill-country-codes.js",
+    "backfill:country-codes:apply": "node scripts/backfill-country-codes.js --apply",
     "integration:verify": "node scripts/verify-chatbot-integration.js",
     "integration:verify:strict": "node scripts/verify-chatbot-integration.js --strict",
+    "seed:agents": "node scripts/seed-agents.js",
+    "seed:agents:apply": "node scripts/seed-agents.js --apply",
     "test": "jest",
     "migrate": "node src/database/migrate.js",
     "migrate:mysql": "echo 'Import database/schema-mysql.sql via phpMyAdmin'"

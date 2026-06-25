@@ -26,7 +26,11 @@ from app.services.cv_service import cv_service
 from app.services.language_service import language_service
 from app.services.handoff_service import handoff_service
 from app.services.intent_service import looks_like_faq_question
-from app.services.job_matching_service import job_matching_service
+from app.services.job_matching_service import (
+    _COUNTRY_ALIASES,
+    _canon_country,
+    job_matching_service,
+)
 from app.services.recruitment_sync import recruitment_sync
 from app.services.vacancy_service import vacancy_service
 from app.nlp.language_detector import detect_language_switch_request
@@ -172,6 +176,25 @@ class IntakeOrchestrator:
                     )
                     return self._route_to_ad_flow_with_context(db, candidate, state, context)
 
+        # Ad arrival that did NOT confidently resolve to a live job (no token, no
+        # referral match, no confident body match). NEVER dead-end the candidate
+        # in the generic AI decline path — run the branded multilingual
+        # onboarding anyway and capture them into the talent pool. Gated to the
+        # first turn (ad_processed) and to messages that clearly came from an ad
+        # (intent text or a Meta referral object).
+        if (
+            not state.get("ad_processed")
+            and (
+                self._looks_like_ad_intent(message_text)
+                or meta_referral_service.is_referral(referral_data)
+            )
+        ):
+            logger.info(
+                "Ad-intent with no confident job match — routing to branded "
+                "no-match onboarding (phone=%s)", phone_number,
+            )
+            return await self._route_ad_intent_no_match(db, candidate, state, message_text)
+
         # Detect whether this message is an explicit language-switch request so
         # the lock can be updated; otherwise the existing lock is preserved.
         is_explicit_switch = bool(detect_language_switch_request(message_text or ""))
@@ -207,7 +230,7 @@ class IntakeOrchestrator:
                 # If the AI requested the language selector, surface the
                 # interactive payload to the webhook layer so it can render
                 # buttons instead of plain text.
-                if turn_result.get("interactive", {}).get("kind") == "language_selector":
+                if (turn_result.get("interactive") or {}).get("kind") == "language_selector":
                     job_title = (state.get("ad_context") or {}).get("job_title") or ""
                     country = ""
                     countries = (state.get("ad_context") or {}).get("countries") or []
@@ -541,6 +564,70 @@ class IntakeOrchestrator:
             }
             return _not_cv_msgs.get(locked_language, _not_cv_msgs["en"])
 
+        # --- 1b. Non-CV document (ID / passport / certificate / photo) ---
+        # Store it as a supporting document and acknowledge, but DON'T treat it as
+        # a CV: no cv_uploaded flag (so it can't satisfy the New→Screening CV gate)
+        # and no application-complete flow. The recruiter still sees it in CV
+        # Manager + the conversation via cv_files.parsed_data.__document_category.
+        doc_category = extracted.pop("_document_category", "cv") if isinstance(extracted, dict) else "cv"
+
+        # --- 1b-i. Person photo / selfie → profile picture (#6), NOT a document ---
+        # Route a headshot/selfie to candidates.photo_url (photo_source='auto');
+        # the backend skips it if a recruiter manually set+locked the avatar. We do
+        # NOT persist it as a cv_files document and do NOT set cv_uploaded, so it
+        # can't satisfy the CV gate.
+        if doc_category in ("photo", "selfie"):
+            try:
+                await recruitment_sync.push_profile_photo(
+                    candidate,
+                    media_content,
+                    mime_type="image/jpeg",
+                    filename=media_filename or "photo.jpg",
+                )
+            except Exception as exc:
+                logger.warning("Profile-photo sync failed: %s", exc)
+            locked_language = state.get("locked_language") or "en"
+            _photo_ack = {
+                "en": "Thanks! I've saved that as your profile photo. If you haven't shared your CV/resume yet, please send it so we can continue.",
+                "si": "ස්තූතියි! එය ඔබගේ පැතිකඩ ඡායාරූපය ලෙස සුරැකුවා. ඔබ තවම CV එක එවා නැත්නම්, කරුණාකර එය එවන්න.",
+                "ta": "நன்றி! அதை உங்கள் சுயவிவரப் படமாக சேமித்தேன். நீங்கள் இன்னும் CV அனுப்பவில்லை என்றால், தயவுசெய்து அனுப்பவும்.",
+                "singlish": "Sthuthi! Eka oyage profile photo eka widihata save kara. CV eka thamath naehe nam, karunakara eka evanna.",
+                "tanglish": "Nandri! Adha unga profile photo-a save pannitten. CV innum anuppala na, please anuppunga.",
+            }
+            return _photo_ack.get(locked_language, _photo_ack["en"])
+
+        # --- 1b-ii. Other supporting document (ID / passport / certificate) ---
+        if doc_category != "cv":
+            cv_blob = dict(extracted.get("cv_parsed_data") or {}) if isinstance(extracted, dict) else {}
+            cv_blob["__document_category"] = doc_category
+            state["cv_parsed_data"] = cv_blob
+            ext_data = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
+            ext_data["cv_parsed_data"] = cv_blob
+            candidate.extracted_data = ext_data
+            self._save_agent_state(candidate, state)
+            db.commit()
+
+            saved_doc_path = _persist_media_bytes(media_content, media_type, media_filename, candidate.id)
+            if saved_doc_path:
+                try:
+                    candidate.resume_file_path = saved_doc_path
+                except Exception:    # noqa: BLE001 — column may not exist on legacy schema
+                    pass
+                try:
+                    await recruitment_sync.push(candidate, db, cv_path=saved_doc_path)
+                except Exception as exc:
+                    logger.warning("Supporting-document sync failed: %s", exc)
+
+            locked_language = state.get("locked_language") or "en"
+            _doc_ack = {
+                "en": "Thanks, I've saved your document. If you haven't shared your CV/resume yet, please send it so we can continue.",
+                "si": "ස්තූතියි, ඔබගේ ලේඛනය සුරැකුවා. ඔබ තවම CV එක එවා නැත්නම්, කරුණාකර එය එවන්න.",
+                "ta": "நன்றி, உங்கள் ஆவணத்தை சேமித்தேன். நீங்கள் இன்னும் CV அனுப்பவில்லை என்றால், தயவுசெய்து அனுப்பவும்.",
+                "singlish": "Sthuthi, oyage document eka save una. CV eka thamath naehe nam, karunakara eka evanna.",
+                "tanglish": "Nandri, unga document save aachu. CV innum anuppala na, please anuppunga.",
+            }
+            return _doc_ack.get(locked_language, _doc_ack["en"])
+
         # --- 2. Gate on extraction confidence — ignore low-quality extractions ---
         _CONFIDENCE_MIN = 0.55
         extraction_confidence = extracted.pop("_extraction_confidence", 1.0) or 1.0
@@ -559,6 +646,11 @@ class IntakeOrchestrator:
         state["step"] = "cv_received"
         collected = state.get("collected_data") if isinstance(state.get("collected_data"), dict) else {}
 
+        # Pull the full structured CV blob out before the field merge so it's not
+        # flattened into collected_data; it's forwarded verbatim to the backend
+        # as cv_parsed_data → stored in cv_files.parsed_data for the CV Manager.
+        cv_full = extracted.pop("cv_parsed_data", None) if isinstance(extracted, dict) else None
+
         for key, value in extracted.items():
             if key.startswith("_"):
                 continue  # skip internal sentinel keys
@@ -575,12 +667,25 @@ class IntakeOrchestrator:
 
         state["collected_data"] = collected
 
+        # Persist the full CV extraction blob so recruitment_sync forwards it as
+        # cv_parsed_data (→ cv_files.parsed_data + candidate.metadata enrichment).
+        if cv_full:
+            state["cv_parsed_data"] = cv_full
+            ext_data = candidate.extracted_data if isinstance(candidate.extracted_data, dict) else {}
+            ext_data["cv_parsed_data"] = cv_full
+            candidate.extracted_data = ext_data
+
         # --- 4. Update candidate model columns from CV ---
         if extracted.get("name") and not candidate.name:
             candidate.name = extracted["name"]
         if extracted.get("experience_years") is not None and candidate.experience_years is None:
             try:
                 candidate.experience_years = int(float(extracted["experience_years"]))
+            except Exception:
+                pass
+        if extracted.get("age") is not None and getattr(candidate, "age", None) in (None, 0):
+            try:
+                candidate.age = int(float(extracted["age"]))
             except Exception:
                 pass
 
@@ -605,14 +710,24 @@ class IntakeOrchestrator:
                 state["cv_file_url"] = media_url
 
         # --- 4b. Immediate sync — don't wait for user confirmation ---
-        # Only mark cv_synced=True on actual success so deferred syncs retry.
+        # Only mark cv_synced=True when the CV file was actually persisted AND
+        # the push succeeded. If the local persist failed (saved_cv_path is None),
+        # the backend gets no multipart and creates no cv_files row — so the CV
+        # would be invisible in the dashboard. Leave cv_synced False in that case
+        # so deferred syncs retry instead of silently dropping the document
+        # (bugs B001–B003).
         if not state.get("cv_synced"):
             try:
                 synced = await recruitment_sync.push(candidate, db, cv_path=saved_cv_path)
-                if synced:
+                if synced and saved_cv_path:
                     state["cv_synced"] = True
                     self._save_agent_state(candidate, state)
                     db.commit()
+                elif synced and not saved_cv_path:
+                    logger.warning(
+                        "CV candidate data synced but file was not persisted/uploaded "
+                        "(saved_cv_path is None) — leaving cv_synced False to retry."
+                    )
             except Exception as exc:
                 logger.warning("Immediate CV sync failed: %s", exc)
 
@@ -660,6 +775,15 @@ class IntakeOrchestrator:
         # state machine for this conversation.
         if ad_intake_flow.is_active(state) and not ad_intake_flow.is_complete(state):
             completion = ad_intake_flow.completion_message(state, locked_language)
+            # No-match ad arrivals carry a SYNTHETIC ad context (no backend job),
+            # so nothing else would sync them. Capture into the general/talent
+            # pool here so the lead is never lost — keep the branded completion
+            # message as the user-facing reply.
+            if (state.get("ad_context") or {}).get("synthetic"):
+                try:
+                    await self._route_general_pool_signup(db, candidate, state)
+                except Exception as exc:    # noqa: BLE001
+                    logger.warning("Synthetic ad-flow pool capture failed: %s", exc)
             self._save_agent_state(candidate, state)
             db.commit()
             return completion
@@ -1067,6 +1191,109 @@ class IntakeOrchestrator:
                 return self._route_to_ad_flow_with_context(db, candidate, state, context)
 
         return self._build_referral_disambiguation_list(state, match)
+
+    def _extract_ad_prefill_entities(self, text: str) -> tuple[Optional[str], Optional[str]]:
+        """Best-effort parse of an ad pre-fill message into (job_role, country).
+
+        Used when a candidate clearly arrived from an ad but no live job could be
+        confidently matched, so we can still personalise the branded onboarding
+        and tag the talent-pool lead. Both parts are optional — the flow proceeds
+        with sensible defaults when parsing fails. Reuses the shared city↔country
+        alias map so "Dubai" → "United Arab Emirates" (kept in sync with the
+        brain's CITY↔COUNTRY hard rule).
+        """
+        if not text:
+            return None, None
+        low = text.strip().lower()
+
+        # Country / city → canonical country. Longest alias first so multi-word
+        # cities ("abu dhabi") win over partials.
+        country: Optional[str] = None
+        for alias in sorted(_COUNTRY_ALIASES.keys(), key=len, reverse=True):
+            if alias in low:
+                country = _COUNTRY_ALIASES[alias].title()
+                break
+        if not country:
+            for c in ("united arab emirates", "saudi arabia", "qatar", "kuwait",
+                      "oman", "bahrain", "greece"):
+                if c in low:
+                    country = _canon_country(c).title()
+                    break
+
+        # Role: the phrase after "apply for / interested in / applying for", or
+        # the phrase immediately before "position / job / role / vacancy".
+        role: Optional[str] = None
+        m = re.search(
+            r"\b(?:apply for|applying for|interested in|application for)\s+"
+            r"(?:this |the |a |an )?(.+?)\s*"
+            r"(?:position|job|role|vacanc|opening|\bin\b|[.,!?]|$)",
+            low,
+        )
+        if not m:
+            m = re.search(r"\b(.+?)\s+(?:position|job|role|vacancy)\b", low)
+        if m:
+            role = m.group(1).strip(" -")
+            role = re.sub(r"\s*[-–]\s*(?:male|female)\s*$", "", role).strip()
+            role = re.sub(r"^(?:this|the|a|an)\s+", "", role).strip()
+            if not role or len(role) > 60:
+                role = None
+        if role:
+            role = " ".join(w if w.isupper() else w.capitalize() for w in role.split())
+        return role, country
+
+    async def _route_ad_intent_no_match(
+        self,
+        db: Session,
+        candidate,
+        state: Dict[str, Any],
+        message_text: str,
+    ) -> Any:
+        """Ad arrival with no confidently-matched live job. Never dead-end: run
+        the branded multilingual onboarding anyway, seed the requested
+        role/country, and capture the lead into the talent pool at completion.
+
+        Mirrors ``_route_to_ad_flow_with_context`` but with a SYNTHETIC context
+        (no backend job_id), so the deterministic ``ad_intake_flow`` personalises
+        the welcome + runs field collection while the brain still treats it as a
+        cold-path conversation for FAQ grounding (``job_id`` is None)."""
+        state["ad_processed"] = True
+        job_role, country = self._extract_ad_prefill_entities(message_text)
+
+        collected = state.setdefault("collected_data", {})
+        asked_questions = state.setdefault("asked_questions", [])
+        if job_role and not collected.get("job_role"):
+            collected["job_role"] = job_role
+            if "job_role" not in asked_questions:
+                asked_questions.append("job_role")
+        if country and not collected.get("country"):
+            collected["country"] = country
+            collected.setdefault("countries", [country])
+            if "countries" not in asked_questions:
+                asked_questions.append("countries")
+
+        state["ad_context"] = {
+            "job_id": None,
+            "job_title": job_role or "",
+            "countries": [country] if country else [],
+            "synthetic": True,
+            "source": "ad_intent_no_match",
+        }
+        state["step"] = "ad_landed"
+
+        locked = state.get("locked_language")
+        if locked:
+            reply = ad_intake_flow.welcome_and_first_prompt(
+                state, locked,
+                {"job_title": job_role or "", "country": country or ""},
+            )
+        else:
+            reply = ad_intake_flow.language_selector_payload(
+                state, job_title=job_role or "", country=country or "",
+            )
+
+        self._save_agent_state(candidate, state)
+        db.commit()
+        return reply
 
     def _route_to_ad_flow_with_context(
         self,

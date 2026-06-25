@@ -1,21 +1,121 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { getProject, getProjectCandidates, getProjectStats, exportProjectCsv } from '../api'
+import { getProject, getProjectCandidates, getProjectStats, exportProjectCsv, getAdLinks, generateAdLink } from '../api'
 import {
   ArrowLeft, FolderKanban, MapPin, Calendar, Users, Briefcase,
   DollarSign, Home, Bus, Utensils, FileText, Plane, Phone, Mail, MapPinned, Plus, User, Download,
-  HeartPulse, UtensilsCrossed, CheckCircle2, Clock, Award, XCircle, TrendingUp, Building2,
+  HeartPulse, UtensilsCrossed, CheckCircle2, Clock, Award, XCircle, TrendingUp, Building2, Megaphone, Pencil,
+  List, LayoutGrid,
 } from 'lucide-react'
+import toast from 'react-hot-toast'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
 import { Skeleton } from '../components/ui/Skeleton'
 import { Button } from '../components/ui/Button'
 import { CreateJobModal } from '../components/CreateJobModal'
+import { EditProjectModal } from '../components/EditProjectModal'
+import { AdLinkCard } from '../components/AdLinkModal'
+import ProjectKanban from '../components/ProjectKanban'
 import { format } from 'date-fns'
 import { useAuthStore } from '../stores/authStore'
-import { STATUS_LABELS, STATUS_COLORS } from '../constants/lifecycle'
+import { getStatusLabel, getStatusColor, normalizeStatus } from '../constants/lifecycle'
+
+// Project = Meta campaign. This panel lets the team build the whole campaign's
+// ads in one place: one row per job, each with its generate button or its live
+// ad link (message template / destination URL / QR / click+conversion stats).
+function ProjectCampaignPanel({ project, projectId, canManage }) {
+  const queryClient = useQueryClient()
+  const jobs = Array.isArray(project?.jobs) ? project.jobs : []
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['ad-links', { project_id: projectId }],
+    queryFn: () => getAdLinks({ project_id: projectId }),
+    enabled: !!projectId,
+  })
+  const links = Array.isArray(data?.data) ? data.data : []
+  const linksByJob = links.reduce((acc, link) => {
+    (acc[link.job_id] ||= []).push(link)
+    return acc
+  }, {})
+
+  const generate = useMutation({
+    mutationFn: (job) =>
+      generateAdLink({
+        job_id: job.id,
+        project_id: projectId,
+        campaign_name: project?.title || undefined,
+      }),
+    onSuccess: () => {
+      toast.success('Ad link generated — the bot now knows this job')
+      queryClient.invalidateQueries({ queryKey: ['ad-links'] })
+    },
+    onError: (e) => {
+      if (e.response?.status === 409) {
+        toast.error(`That code is already used by "${e.response.data?.existing_campaign || 'another campaign'}"`)
+      } else {
+        toast.error(e.response?.data?.error || 'Failed to generate ad link')
+      }
+    },
+  })
+
+  return (
+    <Card>
+      <div className="flex items-center gap-2 mb-1">
+        <Megaphone size={18} className="text-primary-600" />
+        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Meta Ad Campaign</h2>
+      </div>
+      <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
+        Run one Meta campaign for this project, with one ad per job. Generate each job's link, then paste its
+        message template into the ad — the bot reads the hidden ref to route the candidate to the right role.
+      </p>
+
+      {jobs.length === 0 ? (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 py-4">Add a job to this project to start its campaign.</p>
+      ) : isLoading ? (
+        <div className="space-y-2">
+          {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-lg" />)}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {jobs.map((job) => {
+            const jobLinks = linksByJob[job.id] || []
+            return (
+              <div key={job.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div className="min-w-0">
+                    <Link to={`/jobs/${job.id}`} className="font-medium text-zinc-900 dark:text-zinc-50 hover:text-primary-600 truncate block">
+                      {job.title}
+                    </Link>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {jobLinks.length > 0 ? `${jobLinks.length} ad${jobLinks.length > 1 ? 's' : ''}` : 'No ad link yet'}
+                    </p>
+                  </div>
+                  {canManage && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => generate.mutate(job)}
+                      loading={generate.isLoading && generate.variables?.id === job.id}
+                    >
+                      <Megaphone size={14} /> {jobLinks.length > 0 ? 'New link' : 'Generate link'}
+                    </Button>
+                  )}
+                </div>
+                {jobLinks.length > 0 && (
+                  <div className="space-y-3">
+                    {jobLinks.map((link) => <AdLinkCard key={link.ad_ref} link={link} />)}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Card>
+  )
+}
 
 function ProjectCandidateList({ projectId, jobFilter }) {
   const params = jobFilter ? { job_id: jobFilter, limit: 8 } : { limit: 8 }
@@ -68,7 +168,7 @@ function ProjectCandidateList({ projectId, jobFilter }) {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium leading-tight text-zinc-900 dark:text-zinc-50 break-words group-hover:text-primary-600">{c.name}</p>
                   <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400 break-words">
-                    {STATUS_LABELS[c.application_status] || c.application_status || c.status || 'Applied'}
+                    {getStatusLabel(normalizeStatus(c.application_status || c.status))}
                   </p>
                 </div>
                 {c.match_score != null && (
@@ -159,11 +259,11 @@ function OverviewStatCard({ icon: Icon, label, value, tone = 'blue' }) {
   )
 }
 
-// Compact lifecycle pill (Applied / Certified / Pre Screened / ...).
+// Compact lifecycle pill (Screening / Certified / Interview Scheduled / ...).
 function LifecyclePill({ status, count }) {
   return (
-    <div className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${STATUS_COLORS[status] || 'bg-zinc-50 text-zinc-700 border-zinc-200'}`}>
-      <span className="text-xs font-medium">{STATUS_LABELS[status] || status}</span>
+    <div className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${getStatusColor(status)}`}>
+      <span className="text-xs font-medium">{getStatusLabel(status)}</span>
       <span className="text-sm font-bold tabular-nums">{count || 0}</span>
     </div>
   )
@@ -205,7 +305,11 @@ export default function ProjectDetail() {
   const { id } = useParams()
   const { user } = useAuthStore()
   const [candidatesJobFilter, setCandidatesJobFilter] = useState('')
+  const [candidatesView, setCandidatesView] = useState('list') // 'list' | 'board'
   const [isJobModalOpen, setIsJobModalOpen] = useState(false)
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  // Mirrors the backend PUT /api/projects/:id authorization.
+  const canManageProject = ['admin', 'sourcing_department', 'project_handler'].includes(user?.role)
 
   const { data: project, isLoading, error } = useQuery({
     queryKey: ['project', id],
@@ -315,6 +419,16 @@ export default function ProjectDetail() {
           <div className="flex sm:items-end items-start gap-2">
             <ProgressRing percent={completionRate} size={120} strokeWidth={10} />
             <div className="flex flex-col gap-2">
+              {canManageProject && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="inline-flex items-center gap-1 bg-white/15 text-white hover:bg-white/25 border-white/20"
+                  onClick={() => setIsEditOpen(true)}
+                >
+                  <Pencil size={15} /> Edit
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 size="sm"
@@ -329,11 +443,12 @@ export default function ProjectDetail() {
       </motion.div>
 
       {/* Top stats grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
         <OverviewStatCard icon={Briefcase} label="Total Jobs" value={stats.total_jobs || 0} tone="blue" />
         <OverviewStatCard icon={Users} label="Candidates" value={stats.unique_candidates || 0} tone="purple" />
         <OverviewStatCard icon={FileText} label="Applications" value={stats.total_applications || 0} tone="amber" />
         <OverviewStatCard icon={Calendar} label="Interviews" value={stats.interviews_count || 0} tone="indigo" />
+        <OverviewStatCard icon={Award} label="Certified" value={stats.certified_count || 0} tone="purple" />
         <OverviewStatCard icon={Award} label="Hired" value={stats.placed_count || stats.selected_count || 0} tone="emerald" />
       </div>
 
@@ -469,8 +584,10 @@ export default function ProjectDetail() {
               <div className="space-y-3">
                 {project.jobs.map((job) => {
                   const filled = Number(job.positions_filled) || 0
+                  const certified = Number(job.certified_count) || 0
                   const total = Number(job.positions_available) || 1
                   const pct = Math.min(100, Math.round((filled / Math.max(1, total)) * 100))
+                  const certPct = Math.min(100, Math.round((certified / Math.max(1, total)) * 100))
                   const bar = pct >= 100 ? 'from-emerald-500 to-emerald-600' : pct >= 60 ? 'from-amber-400 to-amber-500' : 'from-primary-500 to-primary-600'
                   return (
                     <Link
@@ -487,15 +604,32 @@ export default function ProjectDetail() {
                           <Briefcase size={14} /> {job.category}
                         </span>
                         <span>{job.candidate_count || 0} candidates</span>
-                        <span className="ml-auto text-xs tabular-nums font-semibold text-zinc-700 dark:text-zinc-200">
-                          {filled} / {total} filled
-                        </span>
                       </div>
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
-                        <div
-                          className={`h-full rounded-full bg-gradient-to-r ${bar} transition-all duration-500`}
-                          style={{ width: `${pct}%` }}
-                        />
+                      <div className="space-y-1.5">
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] mb-0.5">
+                            <span className="text-zinc-500 dark:text-zinc-400">Certified</span>
+                            <span className="tabular-nums font-semibold text-zinc-700 dark:text-zinc-200">{certified} / {total}</span>
+                          </div>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-violet-500 to-violet-600 transition-all duration-500"
+                              style={{ width: `${certPct}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] mb-0.5">
+                            <span className="text-zinc-500 dark:text-zinc-400">Placed</span>
+                            <span className="tabular-nums font-semibold text-zinc-700 dark:text-zinc-200">{filled} / {total}</span>
+                          </div>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                            <div
+                              className={`h-full rounded-full bg-gradient-to-r ${bar} transition-all duration-500`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     </Link>
                   )
@@ -519,11 +653,45 @@ export default function ProjectDetail() {
             )}
           </Card>
 
+          {/* Meta Ad Campaign — one ad per job under this project's campaign */}
+          <ProjectCampaignPanel
+            project={project}
+            projectId={id}
+            canManage={user?.role === 'admin' || user?.role === 'sourcing_department'}
+          />
+
           {/* Candidates */}
           <Card>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Candidates</h2>
               <div className="flex flex-wrap items-center justify-end gap-3">
+                {/* List / Board view toggle */}
+                <div className="inline-flex rounded-lg border border-zinc-200 dark:border-zinc-700 p-0.5 bg-zinc-50 dark:bg-zinc-800/60">
+                  <button
+                    type="button"
+                    onClick={() => setCandidatesView('list')}
+                    aria-pressed={candidatesView === 'list'}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      candidatesView === 'list'
+                        ? 'bg-white dark:bg-zinc-900 text-primary-600 shadow-sm'
+                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    <List size={14} /> List
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCandidatesView('board')}
+                    aria-pressed={candidatesView === 'board'}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      candidatesView === 'board'
+                        ? 'bg-white dark:bg-zinc-900 text-primary-600 shadow-sm'
+                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
+                    }`}
+                  >
+                    <LayoutGrid size={14} /> Board
+                  </button>
+                </div>
                 {project.jobs && project.jobs.length > 1 && (
                   <select
                     value={candidatesJobFilter}
@@ -544,7 +712,11 @@ export default function ProjectDetail() {
                 </Link>
               </div>
             </div>
-            <ProjectCandidateList projectId={id} jobFilter={candidatesJobFilter} />
+            {candidatesView === 'board' ? (
+              <ProjectKanban projectId={id} jobFilter={candidatesJobFilter} />
+            ) : (
+              <ProjectCandidateList projectId={id} jobFilter={candidatesJobFilter} />
+            )}
           </Card>
         </div>
 
@@ -558,11 +730,14 @@ export default function ProjectDetail() {
             </div>
             <div className="grid grid-cols-1 gap-2">
               {[
-                { status: 'applied',             count: stats.applied_count },
+                // One pill per CANONICAL application status. The backend's legacy
+                // stats keys now collapse onto canonical values (pre_screened_count ==
+                // certified_count, selected_count == interview_count), so we read each
+                // canonical count once — no duplicate Certified / Interview Scheduled
+                // pills — and filter /applications by the canonical status directly.
+                { status: 'screening',           count: stats.applied_count },
                 { status: 'certified',           count: stats.certified_count },
-                { status: 'pre_screened',        count: stats.pre_screened_count },
-                { status: 'interview_scheduled', count: stats.interview_count },
-                { status: 'selected',            count: stats.selected_count },
+                { status: 'interview_scheduled', count: stats.interview_scheduled ?? stats.interview_count },
                 { status: 'rejected',            count: stats.rejected_count },
               ].map(({ status, count }) => (
                 <Link
@@ -648,6 +823,12 @@ export default function ProjectDetail() {
         projectId={id}
         isOpen={isJobModalOpen}
         onClose={() => setIsJobModalOpen(false)}
+      />
+
+      <EditProjectModal
+        isOpen={isEditOpen}
+        project={project}
+        onClose={() => setIsEditOpen(false)}
       />
     </div>
   )

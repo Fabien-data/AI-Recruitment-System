@@ -26,14 +26,20 @@ export const useAuthStore = create(
         return user
       },
 
-      register: async ({ email, password, full_name, role }) => {
+      register: async ({ email, password, full_name, phone }) => {
+        // Role is assigned by an admin on approval — never sent from here.
         const data = await apiClient
-          .post('/api/auth/register', { email, password, full_name, role })
+          .post('/api/auth/register', { email, password, full_name, phone })
           .then(res => res.data)
+        // Pending approval: no token, do not authenticate. The caller routes to
+        // the login page with the "awaiting approval" message.
+        if (data?.pending || !data?.token) {
+          return data
+        }
         const { user, token } = data
         set({ user, token, isAuthenticated: true, sectionPermissions: [] })
         apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`
-        return user
+        return data
       },
 
       logout: async () => {
@@ -106,8 +112,6 @@ export function useRole() {
     hasFullAnalytics: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT,
     // Admin dashboard access
     hasAdminDashboard: role === ROLES.ADMIN,
-    // Marketing Hub access
-    hasMarketingHub: role === ROLES.ADMIN || role === ROLES.SOURCING_DEPARTMENT || role === ROLES.MARKETING_AGENT,
   }
 }
 
@@ -122,6 +126,8 @@ export function useSectionAccess(sectionKey, action = 'view') {
   const role = useAuthStore((s) => s.user?.role)
   const perms = useAuthStore((s) => s.sectionPermissions) || []
   if (role === ROLES.ADMIN) return true
+  // Dashboard is universal for any authenticated user (mirrors backend floor).
+  if (sectionKey === 'dashboard' && action === 'view') return true
   const row = perms.find((p) => p.section_key === sectionKey)
   if (!row) return false
   return !!row[`can_${action}`]

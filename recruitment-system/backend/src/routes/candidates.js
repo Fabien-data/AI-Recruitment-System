@@ -2,11 +2,22 @@ const express = require('express');
 const router = express.Router();
 const { query, generateUUID } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { adaptQuery, isMySQL } = require('../utils/query-adapter');
 const { normalizePhone } = require('../utils/phone');
 const axios = require('axios');
 const logger = require('../utils/logger');
 const { resolveCvAccessUrl } = require('../utils/cv-url');
+const { openai, createChatCompletion } = require('../config/openai');
+const notifications = require('../services/notifications');
+const {
+    syncCandidateStage,
+    setCandidateStage,
+    emitStageChanged,
+    emitApplicationChanged,
+    CANDIDATE_STATUS_SET,
+} = require('../services/candidate-stage');
+const { logAgentAction } = require('../services/activity-log');
 
 function parseCandidateMetadata(metadata) {
     if (!metadata) return {};
@@ -77,7 +88,7 @@ function normalizeAgeInput(value) {
  * Get all candidates with filters and pagination
  * Compatible with both MySQL and PostgreSQL
  */
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const {
             page = 1,
@@ -90,19 +101,46 @@ router.get('/', authenticate, async (req, res, next) => {
             project_ids,
             job_id,
             intervention_needed,
+            has_cv,
+            date_from,
+            date_to,
             sort_by,
             sort_order,
+            removed,
+            future_pool_category,
+            future_pool_country,
         } = req.query;
 
         const offset = (page - 1) * limit;
 
         const params = [];
         // Table alias `c` so we can join latest application info below.
-        let whereClause = ' WHERE 1=1';
+        // Soft-removed candidates ("Reject & remove") are hidden by default;
+        // ?removed=only surfaces them so an admin can review/restore.
+        let whereClause = String(removed) === 'only'
+            ? ' WHERE 1=1 AND c.removed_at IS NOT NULL'
+            : ' WHERE 1=1 AND c.removed_at IS NULL';
 
         if (status) {
             whereClause += isMySQL ? ' AND c.status = ?' : ` AND c.status = $${params.length + 1}`;
             params.push(status);
+        }
+
+        // Future Pool drill-down: narrow the pool by why a candidate was parked
+        // (future_project / overage / not_interested) and by the desired country
+        // captured for a future project — so an admin can find "future_project ·
+        // Qatar" candidates and bulk-assign them when the real project exists.
+        if (future_pool_category) {
+            whereClause += isMySQL ? ' AND c.future_pool_category = ?' : ` AND c.future_pool_category = $${params.length + 1}`;
+            params.push(String(future_pool_category).toLowerCase());
+        }
+        if (future_pool_country) {
+            // Country is free-typed both when pooling and when filtering, so match
+            // case/space-insensitively ("qatar" / "Qatar " ⇒ "Qatar").
+            whereClause += isMySQL
+                ? ' AND LOWER(TRIM(c.future_pool_country)) = ?'
+                : ` AND LOWER(TRIM(c.future_pool_country)) = $${params.length + 1}`;
+            params.push(String(future_pool_country).trim().toLowerCase());
         }
 
         if (source) {
@@ -155,31 +193,60 @@ router.get('/', authenticate, async (req, res, next) => {
         }
 
         if (search) {
-            // Strip non-digits to also match phone numbers stored with/without country code/spaces.
-            const digits = String(search).replace(/\D/g, '');
+            // Strip non-digits, plus a local-format leading zero: SL numbers are
+            // stored as 94XXXXXXXXX but recruiters type 0XXXXXXXXX — keeping the
+            // leading 0 makes the digit substring miss the stored number.
+            const digits = String(search).replace(/\D/g, '').replace(/^0+/, '');
+            // Search now also covers skills + the metadata JSON (so recruiters can
+            // find candidates by skill, licence, previous employer, country, etc.).
             if (isMySQL) {
                 if (digits) {
-                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR REPLACE(REPLACE(REPLACE(c.phone, \' \', \'\'), \'-\', \'\'), \'+\', \'\') LIKE ?)';
-                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${digits}%`);
+                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR c.skills LIKE ? OR c.metadata LIKE ? OR REPLACE(REPLACE(REPLACE(c.phone, \' \', \'\'), \'-\', \'\'), \'+\', \'\') LIKE ?)';
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${digits}%`);
                 } else {
-                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)';
-                    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+                    whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR c.skills LIKE ? OR c.metadata LIKE ?)';
+                    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
                 }
             } else {
                 if (digits) {
-                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR regexp_replace(c.phone, '\\D', '', 'g') ILIKE $${params.length + 2})`;
+                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR c.skills ILIKE $${params.length + 1} OR c.metadata::text ILIKE $${params.length + 1} OR regexp_replace(c.phone, '\\D', '', 'g') ILIKE $${params.length + 2})`;
                     params.push(`%${search}%`, `%${digits}%`);
                 } else {
-                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1})`;
+                    whereClause += ` AND (c.name ILIKE $${params.length + 1} OR c.phone ILIKE $${params.length + 1} OR c.email ILIKE $${params.length + 1} OR c.skills ILIKE $${params.length + 1} OR c.metadata::text ILIKE $${params.length + 1})`;
                     params.push(`%${search}%`);
                 }
             }
         }
 
         if (intervention_needed !== undefined) {
+            // Prod candidates table has NO `intervention_needed` column — human
+            // handoff is tracked by requires_human / is_human_handoff (mirrors
+            // notifications.js). Querying the old column 500s on every poll.
             const asBool = String(intervention_needed).toLowerCase() === 'true';
-            whereClause += isMySQL ? ' AND c.intervention_needed = ?' : ` AND c.intervention_needed = $${params.length + 1}`;
-            params.push(asBool);
+            const cond = '(c.requires_human IS TRUE OR c.is_human_handoff IS TRUE)';
+            whereClause += asBool ? ` AND ${cond}` : ` AND NOT ${cond}`;
+        }
+
+        // Has-CV: a candidate "has a CV" if the cv_uploaded flag is set OR a
+        // cv_files row exists (the flag and the files table can disagree —
+        // 45 flagged vs 33 with files in prod — so check both). No params.
+        if (has_cv !== undefined && has_cv !== '') {
+            const wantsCv = String(has_cv).toLowerCase() === 'true';
+            const cvCondition = '(c.cv_uploaded IS TRUE OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = c.id))';
+            whereClause += wantsCv ? ` AND ${cvCondition}` : ` AND NOT ${cvCondition}`;
+        }
+
+        // Date-added range on c.created_at. date_to is made inclusive of the
+        // whole day by comparing against the next day's start.
+        if (date_from) {
+            whereClause += isMySQL ? ' AND c.created_at >= ?' : ` AND c.created_at >= $${params.length + 1}`;
+            params.push(date_from);
+        }
+        if (date_to) {
+            whereClause += isMySQL
+                ? ' AND c.created_at < DATE_ADD(?, INTERVAL 1 DAY)'
+                : ` AND c.created_at < ($${params.length + 1}::date + INTERVAL '1 day')`;
+            params.push(date_to);
         }
 
         // Allowed sort keys → SQL expressions (post-join column refs)
@@ -189,6 +256,9 @@ router.get('/', authenticate, async (req, res, next) => {
             job_title:     'la.job_title',
             project_title: 'la.project_title',
             status:        'c.status',
+            // Sort by WhatsApp reachability so "can't reach on WhatsApp" candidates
+            // can be pushed to the bottom (ASC) for manual-call follow-up.
+            whatsapp_unreachable: 'COALESCE(c.whatsapp_unreachable, FALSE)',
         };
         const sortCol = SORT_MAP[String(sort_by || '').toLowerCase()] || 'c.created_at';
         const sortDir = String(sort_order || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
@@ -262,7 +332,22 @@ router.get('/', authenticate, async (req, res, next) => {
 /**
  * Get candidate by ID with full details
  */
-router.get('/:id', authenticate, async (req, res, next) => {
+/**
+ * GET /api/candidates/duplicates — MUST be registered before "/:id", otherwise
+ * the literal "duplicates" path is captured by the :id param route (which then
+ * fails the UUID lookup with a 500). This activates the existing
+ * duplicate-detection service + the "Scan for Duplicates" UI.
+ */
+router.get('/duplicates', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
+    try {
+        const { min_confidence = 0.5, limit = 100 } = req.query;
+        const { findDuplicates } = require('../services/duplicate-detection');
+        const pairs = await findDuplicates(parseFloat(min_confidence), parseInt(limit, 10));
+        res.json(pairs);
+    } catch (err) { next(err); }
+});
+
+router.get('/:id', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const placeholder = isMySQL ? '?' : '$1';
@@ -331,6 +416,29 @@ router.get('/:id', authenticate, async (req, res, next) => {
             [id]
         );
 
+        // Get interviews (for the onboarding checklist, #3.1) — degrade to [] if
+        // the interview_schedules table/column isn't present on this DB.
+        let interviewsRows = [];
+        try {
+            const interviewsResult = await query(
+                isMySQL
+                    ? `SELECT iv.id, iv.scheduled_datetime, iv.status, iv.location, a.job_id
+                       FROM interview_schedules iv JOIN applications a ON iv.application_id = a.id
+                       WHERE a.candidate_id = ? ORDER BY iv.scheduled_datetime DESC`
+                    : `SELECT iv.id, iv.scheduled_datetime, iv.status, iv.location, a.job_id
+                       FROM interview_schedules iv JOIN applications a ON iv.application_id = a.id
+                       WHERE a.candidate_id = $1 ORDER BY iv.scheduled_datetime DESC`,
+                [id]
+            );
+            interviewsRows = interviewsResult.rows || [];
+        } catch (e) {
+            // Degrade to [] so the candidate page still loads (e.g. if the
+            // interview_schedules table isn't present on this DB), but log it so
+            // a real query error isn't fully silent.
+            logger.warn(`candidate ${id} interviews query failed (degrading to []): ${e.message}`);
+            interviewsRows = [];
+        }
+
         const enrichedCvs = (cvsResult.rows || []).map((cv) => {
             const resolved = resolveCvAccessUrl(cv);
             const parsedData = cv?.parsed_data && typeof cv.parsed_data === 'string'
@@ -339,8 +447,11 @@ router.get('/:id', authenticate, async (req, res, next) => {
                 })()
                 : cv?.parsed_data;
 
-            const documentCategory = parsedData?.__document_category === 'additional'
-                ? 'additional'
+            // Preserve specific document types (passport/certificate/photo) so the
+            // UI can label them; anything else is treated as the primary CV.
+            const dc = String(parsedData?.__document_category || '').toLowerCase();
+            const documentCategory = ['passport', 'certificate', 'photo', 'id', 'additional'].includes(dc)
+                ? dc
                 : 'cv';
 
             return {
@@ -356,7 +467,8 @@ router.get('/:id', authenticate, async (req, res, next) => {
             ...candidate,
             cvs: enrichedCvs,
             applications: applicationsResult.rows,
-            communications: communicationsResult.rows
+            communications: communicationsResult.rows,
+            interviews: interviewsRows
         });
     } catch (error) {
         next(error);
@@ -366,7 +478,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 /**
  * Create new candidate manually
  */
-router.post('/', authenticate, async (req, res, next) => {
+router.post('/', authenticate, requireSection('candidates', 'create'), async (req, res, next) => {
     try {
         const {
             name,
@@ -382,7 +494,12 @@ router.post('/', authenticate, async (req, res, next) => {
             return res.status(400).json({ error: 'Name and phone are required' });
         }
 
-        const normalizedPhone = normalizePhone(phone) || String(phone).trim();
+        // Reject rather than store a raw, un-normalised value — a raw "+94…"/"94…"
+        // variant slipping in is exactly what forks a candidate into two chats.
+        const normalizedPhone = normalizePhone(phone);
+        if (!normalizedPhone) {
+            return res.status(400).json({ error: 'Please enter a valid phone number, e.g. +94771234567 or 0771234567.' });
+        }
 
         const ageInput = normalizeAgeInput(age);
         if (ageInput.invalid) {
@@ -429,17 +546,164 @@ router.post('/', authenticate, async (req, res, next) => {
 });
 
 /**
+ * Create a candidate AND send the auto-welcome, all from the Messages panel.
+ *
+ * Creates the candidate at status='new', optionally attaches a job, then fires
+ * the `welcome` notification — which sends the WhatsApp via the chatbot AND logs
+ * the outbound communications row, so the candidate appears immediately in the
+ * Messages "New" tab and is handed to the bot's intake flow. The welcome may be
+ * undeliverable for a brand-new (never-messaged) number outside the 24h window
+ * unless an approved welcome template is configured (TEMPLATE_WELCOME) — the
+ * `welcome` result surfaces that (sent / out_of_window / failed).
+ */
+router.post('/with-welcome', authenticate, requireSection('candidates', 'create'), async (req, res, next) => {
+    try {
+        const {
+            name,
+            phone,
+            email,
+            source = 'manual',
+            preferred_language = 'en',
+            notes,
+            age,
+            job_id,
+        } = req.body;
+
+        if (!name || !phone) {
+            return res.status(400).json({ error: 'Name and phone are required' });
+        }
+
+        // Reject rather than store a raw, un-normalised value — a raw "+94…"/"94…"
+        // variant slipping in is exactly what forks a candidate into two chats.
+        const normalizedPhone = normalizePhone(phone);
+        if (!normalizedPhone) {
+            return res.status(400).json({ error: 'Please enter a valid phone number, e.g. +94771234567 or 0771234567.' });
+        }
+        const ageInput = normalizeAgeInput(age);
+        if (ageInput.invalid) {
+            return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
+        }
+        const metadata = parseCandidateMetadata(req.body?.metadata);
+        if (ageInput.hasValue) {
+            if (ageInput.age === null) delete metadata.age; else metadata.age = ageInput.age;
+        }
+        const metadataPayload = Object.keys(metadata).length ? metadata : null;
+
+        // 1) Create the candidate (status='new').
+        let candidate;
+        if (isMySQL) {
+            const id = generateUUID();
+            await query(
+                `INSERT INTO candidates (id, name, phone, email, source, preferred_language, notes, metadata, status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new')`,
+                [id, name, normalizedPhone, email, source, preferred_language, notes, metadataPayload ? JSON.stringify(metadataPayload) : null]
+            );
+            const r = await query('SELECT * FROM candidates WHERE id = ?', [id]);
+            candidate = r.rows[0];
+        } else {
+            const r = await query(
+                `INSERT INTO candidates (name, phone, email, source, preferred_language, notes, metadata, status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'new')
+                 RETURNING *`,
+                [name, normalizedPhone, email, source, preferred_language, notes, metadataPayload]
+            );
+            candidate = r.rows[0];
+        }
+
+        // 2) Optionally attach a job (idempotent), so the lead is already on a role.
+        if (job_id) {
+            try {
+                const jobRes = await query(adaptQuery('SELECT id FROM jobs WHERE id = $1'), [job_id]);
+                if (jobRes.rows.length > 0) {
+                    const newAppId = generateUUID();
+                    if (isMySQL) {
+                        await query(
+                            "INSERT INTO applications (id, candidate_id, job_id, status) VALUES (?, ?, ?, 'screening') ON DUPLICATE KEY UPDATE job_id = VALUES(job_id)",
+                            [newAppId, candidate.id, job_id]
+                        );
+                    } else {
+                        await query(
+                            "INSERT INTO applications (id, candidate_id, job_id, status) VALUES ($1, $2, $3, 'screening') ON CONFLICT (candidate_id, job_id) DO NOTHING",
+                            [newAppId, candidate.id, job_id]
+                        );
+                    }
+                    try { await syncCandidateStage(candidate.id); } catch (_e) { /* best-effort */ }
+                    try { emitApplicationChanged({ candidate_id: candidate.id }); } catch (_e) { /* best-effort */ }
+                }
+            } catch (e) {
+                logger.warn(`with-welcome: job attach failed for ${candidate.id}: ${e.message}`);
+            }
+        }
+
+        // 3) Send the welcome — this logs the outbound communications row, so the
+        // candidate shows up in the Messages list, and (chatbot side) seeds the
+        // intake conversation state.
+        let welcome = { success: [], failed: [] };
+        try {
+            welcome = await notifications.sendNotification({
+                candidateId: candidate.id,
+                type: 'welcome',
+                data: { name },
+                channels: ['whatsapp'],
+            });
+        } catch (e) {
+            logger.error(`with-welcome: notification failed for ${candidate.id}: ${e.message}`);
+            welcome.failed.push({ channel: 'all', error: e.message });
+        }
+
+        const fresh = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [candidate.id]);
+        return res.status(201).json({ candidate: fresh.rows[0] || candidate, welcome });
+    } catch (error) {
+        if (error.message.includes('duplicate') || error.message.includes('Duplicate')) {
+            return res.status(400).json({ error: 'Candidate with this phone or email already exists' });
+        }
+        next(error);
+    }
+});
+
+/**
  * Update candidate
  */
-router.put('/:id', authenticate, async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = req.body;
 
-        const allowedFields = ['name', 'phone', 'email', 'source', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
+        // Enforce the canonical 7-value candidate vocabulary on any direct status
+        // write (#1) — no ad-hoc status word can be persisted here.
+        if (Object.prototype.hasOwnProperty.call(updates, 'status')
+            && updates.status != null && !CANDIDATE_STATUS_SET.has(updates.status)) {
+            return res.status(400).json({
+                error: `Invalid candidate status "${updates.status}". Allowed: ${[...CANDIDATE_STATUS_SET].join(', ')}.`,
+            });
+        }
+
+        // Don't rewrite `phone` when the number isn't actually changing. Edits
+        // always send phone (it's required in the modal), and the handler stores
+        // normalizePhone(phone). For a candidate whose phone was saved in a
+        // non-canonical form (e.g. "+94…" vs "94…" — the dual-chat residue),
+        // re-normalising it on every save collides with another candidate row
+        // that already holds the canonical number (unique constraint
+        // candidates_phone_key), which 500'd the whole edit. Skip the rewrite when
+        // the normalised new value matches the normalised stored value, so editing
+        // any other field never trips the constraint.
+        if (Object.prototype.hasOwnProperty.call(updates, 'phone') && updates.phone) {
+            try {
+                const cur = await query(adaptQuery('SELECT phone FROM candidates WHERE id = $1'), [id]);
+                const curPhone = cur.rows[0] && cur.rows[0].phone;
+                if (curPhone && normalizePhone(updates.phone) === normalizePhone(curPhone)) {
+                    delete updates.phone;
+                }
+            } catch (_) { /* fall through — the 23505 handler below still guards a real collision */ }
+        }
+
+        const allowedFields = ['name', 'phone', 'contact_phone', 'email', 'source', 'status', 'preferred_language', 'notes', 'tags', 'skills', 'experience_years', 'highest_qualification'];
+        // Profile fields stored inside the metadata JSON (like age) rather than
+        // as flat columns — avoids schema churn on the production-only DB.
+        const META_KEYS = ['age', 'height_cm', 'nationality', 'country', 'licenses', 'previous_employer', 'english_level', 'english_proficiency'];
         const setClause = [];
         const values = [];
-        const hasAgeInPayload = Object.prototype.hasOwnProperty.call(updates, 'age');
+        const metaKeysInPayload = META_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(updates, k));
 
         Object.keys(updates).forEach(key => {
             if (allowedFields.includes(key)) {
@@ -451,6 +715,11 @@ router.put('/:id', authenticate, async (req, res, next) => {
                 // Normalize phone on edit so search/dedupe stay consistent
                 if (key === 'phone' && updates[key]) {
                     values.push(normalizePhone(updates[key]) || String(updates[key]).trim());
+                } else if (key === 'contact_phone') {
+                    // Separate CALLABLE number (may be a landline) — store trimmed as
+                    // typed, normalize only as a best-effort fallback for mobiles.
+                    const v = updates[key];
+                    values.push(v ? (normalizePhone(v) || String(v).trim()) : null);
                 } else if (key === 'tags' && isMySQL && Array.isArray(updates[key])) {
                     values.push(JSON.stringify(updates[key]));
                 } else {
@@ -459,7 +728,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
             }
         });
 
-        if (hasAgeInPayload) {
+        if (metaKeysInPayload.length > 0) {
             const placeholder = isMySQL ? '?' : '$1';
             const existingCandidateResult = await query(
                 `SELECT metadata FROM candidates WHERE id = ${placeholder}`,
@@ -471,15 +740,30 @@ router.put('/:id', authenticate, async (req, res, next) => {
             }
 
             const metadata = parseCandidateMetadata(existingCandidateResult.rows[0]?.metadata);
-            const ageInput = normalizeAgeInput(updates.age);
-            if (ageInput.invalid) {
-                return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
-            }
 
-            if (ageInput.age === null) {
-                delete metadata.age;
-            } else {
-                metadata.age = ageInput.age;
+            for (const key of metaKeysInPayload) {
+                const raw = updates[key];
+                if (key === 'age') {
+                    const ageInput = normalizeAgeInput(raw);
+                    if (ageInput.invalid) {
+                        return res.status(400).json({ error: 'Age must be a number between 1 and 120' });
+                    }
+                    if (ageInput.age === null) delete metadata.age; else metadata.age = ageInput.age;
+                } else if (key === 'height_cm') {
+                    if (raw === null || String(raw).trim() === '') {
+                        delete metadata.height_cm;
+                    } else {
+                        const h = Number.parseInt(String(raw), 10);
+                        if (!Number.isFinite(h) || h <= 0 || h > 300) {
+                            return res.status(400).json({ error: 'Height (cm) must be a number between 1 and 300' });
+                        }
+                        metadata.height_cm = h;
+                    }
+                } else {
+                    // nationality, english_level — free text; empty clears it.
+                    const val = raw === null ? '' : String(raw).trim();
+                    if (!val) delete metadata[key]; else metadata[key] = val;
+                }
             }
 
             if (isMySQL) {
@@ -532,6 +816,95 @@ router.put('/:id', authenticate, async (req, res, next) => {
             }
         }
     } catch (error) {
+        // A genuine phone collision with ANOTHER candidate (two records for the
+        // same person). Surface an actionable 409 instead of a raw 500 so the
+        // agent knows to merge the duplicate rather than seeing "Internal server
+        // error" with no clue.
+        if (error && (error.code === '23505' || /candidates_phone_key|unique constraint/i.test(error.message || ''))) {
+            return res.status(409).json({
+                error: 'Another candidate already uses this phone number. Open or merge that duplicate candidate instead of editing this one.',
+            });
+        }
+        next(error);
+    }
+});
+
+/**
+ * Set the candidate's pipeline stage from CV Manager.
+ *
+ * candidates.status is auto-derived from applications.status, so writing it
+ * directly (the old behaviour) never showed up on the Applications page and was
+ * clobbered by the next syncCandidateStage(). Instead we write the chosen stage
+ * THROUGH to all of the candidate's active (non-terminal) applications — the
+ * source of truth — then re-derive candidate.status from them. Stages without
+ * an application equivalent (new / future_pool) or candidates with no active
+ * applications fall back to a direct candidate.status write. The cascade itself
+ * lives in setCandidateStage() (services/candidate-stage.js) so the calling
+ * console can reuse it.
+ */
+const VALID_CANDIDATE_STAGES = new Set([
+    'new', 'screening', 'certified', 'interview_scheduled', 'future_pool',
+]);
+
+// Stage → candidate notification type for `notify` status changes. certified
+// and interview_scheduled are intentionally absent: those carry notes / a date
+// and must go through the Certify / Schedule-interview dialogs (which notify
+// with the full context). 'new' never messages the candidate.
+const STAGE_NOTIFY_TYPE = {
+    screening: 'application_complete',
+    certified: 'certified',
+    future_pool: 'general_pool',
+};
+
+router.put('/:id/stage', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { stage, notify } = req.body;
+        if (!VALID_CANDIDATE_STAGES.has(stage)) {
+            return res.status(400).json({ error: 'Invalid stage' });
+        }
+
+        const candRes = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        // CV gate removed (2026-06-08): a candidate may be moved to any stage
+        // regardless of whether a CV is on file.
+
+        // Cascade through applications + re-derive candidate.status, and broadcast
+        // the live `candidate_stage_changed` event (shared with the calling console).
+        const { updatedApplications: updatedApps } = await setCandidateStage(id, stage);
+
+        // Optionally notify the candidate of the new stage (user decision
+        // 2026-06-11: status changes from the kept controls should not be silent).
+        let notification = null;
+        const notifyType = STAGE_NOTIFY_TYPE[stage];
+        if (notify && notifyType) {
+            // Resolve the job title for the message from the latest application.
+            let jobTitle = '';
+            try {
+                const appRes = await query(
+                    adaptQuery(`SELECT j.title FROM applications a JOIN jobs j ON a.job_id = j.id
+                                WHERE a.candidate_id = $1 ORDER BY a.applied_at DESC LIMIT 1`),
+                    [id]
+                );
+                jobTitle = appRes.rows[0]?.title || '';
+            } catch (_e) { /* best-effort */ }
+            try {
+                notification = await notifications.sendNotification({
+                    candidateId: id,
+                    type: notifyType,
+                    data: { job_title: jobTitle },
+                    channels: ['whatsapp'],
+                });
+            } catch (e) {
+                logger.error(`stage notify failed for ${id} (${notifyType}): ${e.message}`);
+                notification = { success: [], failed: [{ channel: 'all', error: e.message }] };
+            }
+        }
+
+        const fresh = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [id]);
+        return res.json({ success: true, candidate: fresh.rows[0], updated_applications: updatedApps, notification });
+    } catch (error) {
         next(error);
     }
 });
@@ -539,13 +912,15 @@ router.put('/:id', authenticate, async (req, res, next) => {
 /**
  * Resolve AI intervention flag after human takeover
  */
-router.post('/:id/resolve-intervention', authenticate, async (req, res, next) => {
+router.post('/:id/resolve-intervention', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const placeholder = isMySQL ? '?' : '$1';
+        // Clear the real handoff flags (requires_human / is_human_handoff +
+        // escalation_reason) — there is no intervention_needed column in prod.
         const updateSql = isMySQL
-            ? 'UPDATE candidates SET intervention_needed = FALSE, intervention_reason = NULL, updated_at = NOW() WHERE id = ?'
-            : 'UPDATE candidates SET intervention_needed = FALSE, intervention_reason = NULL, updated_at = NOW() WHERE id = $1 RETURNING id';
+            ? 'UPDATE candidates SET requires_human = FALSE, is_human_handoff = FALSE, escalation_reason = NULL, updated_at = NOW() WHERE id = ?'
+            : 'UPDATE candidates SET requires_human = FALSE, is_human_handoff = FALSE, escalation_reason = NULL, updated_at = NOW() WHERE id = $1 RETURNING id';
 
         const updated = await query(updateSql, [id]);
         if ((!isMySQL && updated.rows.length === 0) || (isMySQL && updated.rowCount === 0)) {
@@ -561,9 +936,415 @@ router.post('/:id/resolve-intervention', authenticate, async (req, res, next) =>
 });
 
 /**
+ * Advance a candidate from New → Screening.
+ *
+ * Hard gate (locked decision): a CV/resume must be on file AND the candidate
+ * must be attached to a job (an applications row). On success, the candidate
+ * moves to status='screening' and the "application complete" WhatsApp is sent.
+ * Certification (Screening → Certified) is a separate, agent-driven action that
+ * lives in Applications/Projects.
+ */
+router.post('/:id/screening', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { note, notify_channels = ['whatsapp'] } = req.body || {};
+
+        const gateResult = await query(
+            adaptQuery(`
+                SELECT c.id, c.name, c.phone, c.status, c.notes,
+                       (c.cv_uploaded IS TRUE
+                        OR EXISTS (SELECT 1 FROM cv_files f WHERE f.candidate_id = c.id)) AS has_cv,
+                       EXISTS (SELECT 1 FROM applications a WHERE a.candidate_id = c.id) AS has_application
+                FROM candidates c
+                WHERE c.id = $1
+            `),
+            [id]
+        );
+        if (gateResult.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        const row = gateResult.rows[0];
+        const truthy = (v) => v === true || v === 1 || v === '1' || v === 't' || v === 'true';
+        const hasCv = truthy(row.has_cv);
+        const hasApp = truthy(row.has_application);
+
+        // CV gate removed (2026-06-08): a CV is no longer required to move to
+        // Screening. The candidate must still be attached to a job (you can't
+        // screen someone for nothing).
+        if (!hasApp) {
+            return res.status(422).json({
+                error: 'Assign the candidate to a job before moving them to Screening.',
+                code: 'screening_gate',
+                has_cv: hasCv,
+                has_application: hasApp,
+            });
+        }
+
+        // Move to screening; keep conversation_stage unified.
+        await query(
+            adaptQuery("UPDATE candidates SET status = 'screening', conversation_stage = 'screening', updated_at = NOW() WHERE id = $1"),
+            [id]
+        );
+        emitStageChanged(id, 'screening');
+
+        // Optional internal note — append to candidate notes for an audit trail.
+        if (note && String(note).trim()) {
+            const prev = row.notes ? `${row.notes}\n` : '';
+            await query(
+                adaptQuery('UPDATE candidates SET notes = $1 WHERE id = $2'),
+                [`${prev}[Screening] ${String(note).trim()}`, id]
+            );
+        }
+
+        // Resolve the job title from the latest application for the message.
+        let jobTitle = 'your applied position';
+        try {
+            const appRes = await query(
+                adaptQuery(`
+                    SELECT j.title FROM applications a
+                    JOIN jobs j ON a.job_id = j.id
+                    WHERE a.candidate_id = $1
+                    ORDER BY a.applied_at DESC LIMIT 1
+                `),
+                [id]
+            );
+            if (appRes.rows.length > 0 && appRes.rows[0].title) jobTitle = appRes.rows[0].title;
+        } catch (e) {
+            logger.warn(`Screening: job title lookup failed for ${id}: ${e.message}`);
+        }
+
+        const channels = Array.isArray(notify_channels) ? notify_channels : ['whatsapp'];
+        let notification = { success: [], failed: [] };
+        try {
+            notification = await notifications.sendApplicationCompleteNotification(id, jobTitle, channels);
+        } catch (notifErr) {
+            logger.error(`Screening notification failed for ${id}: ${notifErr.message}`);
+            notification.failed.push({ channel: 'all', error: notifErr.message });
+        }
+
+        const updated = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [id]);
+        res.json({ ...normalizeCandidateRecord(updated.rows[0]), notification });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * (Re)send the welcome / re-engagement message to an EXISTING candidate, from the
+ * Messages takeover panel. Routes through the chatbot (status='welcome'): in the
+ * 24h window it's free-form; outside it, the approved welcome template (if
+ * TEMPLATE_WELCOME is configured) — the only way to reopen a dormant chat. Logs
+ * the outbound communications row, so it appears in the transcript with an honest
+ * delivery tick. Does NOT reset the candidate's stage or bot state.
+ */
+router.post('/:id/send-welcome', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const candRes = await query(adaptQuery('SELECT id, name, phone FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        const cand = candRes.rows[0];
+        if (!cand.phone) return res.status(400).json({ error: 'Candidate has no phone number' });
+
+        let welcome = { success: [], failed: [] };
+        try {
+            welcome = await notifications.sendNotification({
+                candidateId: id,
+                type: 'welcome',
+                data: { name: cand.name || '' },
+                channels: ['whatsapp'],
+            });
+        } catch (e) {
+            logger.error(`send-welcome failed for ${id}: ${e.message}`);
+            welcome.failed.push({ channel: 'all', error: e.message });
+        }
+        const waEntry = welcome.success?.find?.((s) => s.channel === 'whatsapp');
+        const reason = welcome.failed?.[0]?.reason || null;
+        // `queued` = parked in pending_messages (out-of-window, no template yet);
+        // it will auto-deliver on the candidate's next reply.
+        return res.json({ welcome, sent: !!waEntry && !waEntry.queued, queued: !!waEntry?.queued, reason });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Manual "Send re-engagement" to an EXISTING candidate, from the Messages panel.
+ * Routes through the chatbot (status='reengage'): in the 24h window it's a
+ * friendly free-form check-in; outside it, the approved dewan_reengage template
+ * (the nudge that prompts the candidate to reply and reopen the chat). Mirrors
+ * send-welcome — does NOT change the candidate's stage or bot state.
+ */
+router.post('/:id/reengage', authenticate, requireSection('communications', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const candRes = await query(adaptQuery('SELECT id, name, phone FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        const cand = candRes.rows[0];
+        if (!cand.phone) return res.status(400).json({ error: 'Candidate has no phone number' });
+
+        let result = { success: [], failed: [] };
+        try {
+            result = await notifications.sendNotification({
+                candidateId: id,
+                type: 'reengage',
+                data: { name: cand.name || '' },
+                channels: ['whatsapp'],
+            });
+        } catch (e) {
+            logger.error(`reengage failed for ${id}: ${e.message}`);
+            result.failed.push({ channel: 'all', error: e.message });
+        }
+        const waEntry = result.success?.find?.((s) => s.channel === 'whatsapp');
+        const reason = result.failed?.[0]?.reason || null;
+        return res.json({ result, sent: !!waEntry && !waEntry.queued, queued: !!waEntry?.queued, reason });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * "Reject & remove" — hide a candidate from every list while KEEPING the row
+ * for records/audit (reversible). Stronger than 'Not interested' (future_pool,
+ * which stays re-engageable). Rejects active applications, cancels pending
+ * tasks, and releases any claim so the candidate fully drops out of the working
+ * views. Admin-only — "Reject & remove" is a destructive, admin-reserved action
+ * (the Messages panel only shows the button to admins; enforce it here too).
+ */
+router.post('/:id/remove', authenticate, authorize('admin'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body || {};
+        const candRes = await query(adaptQuery('SELECT id, name FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        await query(
+            adaptQuery(`UPDATE candidates
+                        SET removed_at = NOW(), removed_by = $2, removed_reason = $3,
+                            claimed_by = NULL, claimed_at = NULL, updated_at = NOW()
+                        WHERE id = $1`),
+            [id, req.user.id, reason || null]
+        );
+        // Close out active applications + any pending follow-up tasks.
+        await query(
+            adaptQuery(`UPDATE applications
+                        SET status = 'rejected',
+                            rejection_reason = COALESCE($2, rejection_reason),
+                            updated_at = NOW()
+                        WHERE candidate_id = $1 AND status NOT IN ('rejected','hired')`),
+            [id, reason || 'Removed from system']
+        ).catch(() => {});
+        await query(
+            adaptQuery(`UPDATE candidate_tasks SET status = 'cancelled'
+                        WHERE candidate_id = $1 AND status = 'pending'`),
+            [id]
+        ).catch(() => {});
+
+        try {
+            // Distinct action_type so a removal is NOT folded into the engagement
+            // "Future Pool" metric (which counts future_pool + legacy not_interested)
+            // — a removed candidate is the opposite of pooled.
+            await logAgentAction({
+                candidateId: id, agentId: req.user?.id, actionType: 'removed',
+                remark: `Rejected & removed from system${reason ? ` — ${reason}` : ''}`,
+            });
+        } catch (_e) { /* best-effort */ }
+
+        // Tell the live lists to drop this candidate.
+        try {
+            const { getIO } = require('../utils/websocket');
+            const io = getIO();
+            if (io) io.emit('candidate_removed', { candidate_id: id, ts: new Date().toISOString() });
+        } catch (_e) { /* best-effort */ }
+
+        return res.json({ ok: true, removed: true });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Restore a soft-removed candidate (undo "Reject & remove"). Clears removed_at;
+ * status/applications are left as-is for the agent to re-triage.
+ */
+router.post('/:id/restore', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const r = await query(
+            adaptQuery(`UPDATE candidates
+                        SET removed_at = NULL, removed_by = NULL, removed_reason = NULL, updated_at = NOW()
+                        WHERE id = $1 RETURNING id`),
+            [id]
+        );
+        if (r.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        return res.json({ ok: true, restored: true });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Ensure an application exists for (candidate, job).
+ *
+ * Resolves the application_id a New/Screening lead needs before an interview can
+ * be scheduled (POST /api/interviews requires one). Idempotent: reuses the
+ * existing application for that job, or creates one at 'screening'. On creation,
+ * re-derives the candidate stage and broadcasts so the lists update live.
+ */
+router.post('/:id/ensure-application', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { job_id } = req.body || {};
+        if (!job_id) return res.status(400).json({ error: 'job_id is required' });
+
+        const candRes = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+        const jobRes = await query(adaptQuery('SELECT id FROM jobs WHERE id = $1'), [job_id]);
+        if (jobRes.rows.length === 0) return res.status(400).json({ error: 'Invalid job_id' });
+
+        const newAppId = generateUUID();
+        let created = false;
+        if (isMySQL) {
+            await query(
+                "INSERT INTO applications (id, candidate_id, job_id, status) VALUES (?, ?, ?, 'screening') ON DUPLICATE KEY UPDATE job_id = VALUES(job_id)",
+                [newAppId, id, job_id]
+            );
+        } else {
+            const ins = await query(
+                "INSERT INTO applications (id, candidate_id, job_id, status) VALUES ($1, $2, $3, 'screening') ON CONFLICT (candidate_id, job_id) DO NOTHING RETURNING id",
+                [newAppId, id, job_id]
+            );
+            created = ins.rows.length > 0;
+        }
+        const appRes = await query(
+            adaptQuery('SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1'),
+            [id, job_id]
+        );
+        const applicationId = appRes.rows[0]?.id || null;
+
+        if (created) {
+            try { await syncCandidateStage(id); } catch (_e) { /* best-effort */ }
+            try { emitApplicationChanged({ candidate_id: id }); } catch (_e) { /* best-effort */ }
+        }
+        return res.json({ application_id: applicationId, created });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Certify a candidate and (by default) notify them.
+ *
+ * Surface-agnostic: called from the Messages call-log "Certified" popup AND the
+ * CV Manager review modal's "Certify & notify" button. Cascades the candidate to
+ * `certified` (setCandidateStage → applications + re-derive + socket) and sends
+ * the WhatsApp `certified` message via the chatbot (which also logs the outbound
+ * communications row). The plain status dropdowns must NOT call this — they stay
+ * message-less; only the explicit certify action sends.
+ */
+router.post('/:id/certify', authenticate, requireSection('candidates', 'edit'), async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const {
+            certification_notes,
+            translate_notes,
+            job_id,
+            role_title,
+            send_message = true,
+            channels = ['whatsapp'],
+        } = req.body || {};
+
+        const candRes = await query(adaptQuery('SELECT id, name, phone FROM candidates WHERE id = $1'), [id]);
+        if (candRes.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
+
+        // If a specific job was named, make sure an application exists for it so
+        // the certified status attaches to that role (idempotent upsert).
+        let selectedJobTitle = '';
+        if (job_id) {
+            const jobRes = await query(adaptQuery('SELECT id, title FROM jobs WHERE id = $1'), [job_id]);
+            if (jobRes.rows.length === 0) return res.status(400).json({ error: 'Invalid job_id' });
+            selectedJobTitle = jobRes.rows[0].title || '';
+            const newAppId = generateUUID();
+            if (isMySQL) {
+                await query(
+                    "INSERT INTO applications (id, candidate_id, job_id, status) VALUES (?, ?, ?, 'screening') ON DUPLICATE KEY UPDATE job_id = VALUES(job_id)",
+                    [newAppId, id, job_id]
+                );
+            } else {
+                await query(
+                    "INSERT INTO applications (id, candidate_id, job_id, status) VALUES ($1, $2, $3, 'screening') ON CONFLICT (candidate_id, job_id) DO NOTHING",
+                    [newAppId, id, job_id]
+                );
+            }
+        }
+
+        // Cascade to certified (updates non-terminal applications + re-derives
+        // candidate.status + emits candidate_stage_changed).
+        const { updatedApplications } = await setCandidateStage(id, 'certified');
+
+        // Resolve a job title for the message body. Priority:
+        //   1. role_title — an explicit title the agent typed
+        //   2. the job the agent just picked in the Certify dialog (job_id) — this
+        //      is the role they're certifying FOR, so the message must name THIS
+        //      job. The most-recent-application fallback below is ambiguous once a
+        //      candidate has several active applications: setCandidateStage bumps
+        //      them all to the same updated_at, so ORDER BY can return an OLD role
+        //      (e.g. a previous position instead of the new AMAYA one just assigned).
+        //   3. fallback: the candidate's latest active application title
+        let jobTitle = role_title && String(role_title).trim() ? String(role_title).trim() : '';
+        if (!jobTitle && selectedJobTitle) jobTitle = selectedJobTitle;
+        if (!jobTitle) {
+            try {
+                const jt = await query(
+                    adaptQuery(`
+                        SELECT j.title FROM applications a
+                        JOIN jobs j ON a.job_id = j.id
+                        WHERE a.candidate_id = $1 AND a.status NOT IN ('rejected','transferred','merged')
+                        ORDER BY COALESCE(a.updated_at, a.applied_at) DESC LIMIT 1
+                    `),
+                    [id]
+                );
+                if (jt.rows.length && jt.rows[0].title) jobTitle = jt.rows[0].title;
+            } catch (e) {
+                logger.warn(`Certify: job title lookup failed for ${id}: ${e.message}`);
+            }
+        }
+        if (!jobTitle) jobTitle = 'your applied position';
+
+        let notification = null;
+        if (send_message !== false) {
+            const chans = Array.isArray(channels) ? channels : ['whatsapp'];
+            try {
+                notification = await notifications.sendCertificationNotification(
+                    id, jobTitle, certification_notes || '', chans, translate_notes === true
+                );
+            } catch (e) {
+                logger.error(`Certify notification failed for ${id}: ${e.message}`);
+                notification = { success: [], failed: [{ channel: 'all', error: e.message }] };
+            }
+        }
+
+        // Record in the engagement timeline as a "certify" action (not a call).
+        const sentOk = notification?.success?.some?.((s) => s.channel === 'whatsapp');
+        const remark = send_message === false
+            ? `Certified for ${jobTitle}`
+            : `Certified for ${jobTitle} — ${sentOk ? 'message sent' : 'message not delivered'}`;
+        await logAgentAction({ candidateId: id, agentId: req.user.id, actionType: 'certify', remark, jobId: job_id || null });
+
+        const fresh = await query(adaptQuery('SELECT * FROM candidates WHERE id = $1'), [id]);
+        return res.json({
+            candidate_status: 'certified',
+            candidate: fresh.rows[0],
+            updated_applications: updatedApplications,
+            notification,
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
  * Delete candidate
  */
-router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('candidates', 'delete'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const placeholder = isMySQL ? '?' : '$1';
@@ -594,23 +1375,10 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) =
 // ── Duplicate detection routes ─────────────────────────────────────────────────
 
 /**
- * GET /api/candidates/duplicates
- * Returns potential duplicate pairs with confidence scores.
- */
-router.get('/duplicates', authenticate, async (req, res, next) => {
-    try {
-        const { min_confidence = 0.5, limit = 100 } = req.query;
-        const { findDuplicates } = require('../services/duplicate-detection');
-        const pairs = await findDuplicates(parseFloat(min_confidence), parseInt(limit, 10));
-        res.json(pairs);
-    } catch (err) { next(err); }
-});
-
-/**
  * POST /api/candidates/merge
  * Merges merge_id into keep_id — migrates all data, soft-deletes the duplicate.
  */
-router.post('/merge', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
+router.post('/merge', authenticate, requireSection('candidates', 'delete'), async (req, res, next) => {
     try {
         const { keep_id, merge_id } = req.body;
         if (!keep_id || !merge_id) {
@@ -659,7 +1427,7 @@ const photoUpload = multer({
 router.post(
     '/:id/photo',
     authenticate,
-    authorize('admin', 'sourcing_department', 'project_handler'),
+    requireSection('cv_manager', 'edit'),
     photoUpload.single('photo'),
     async (req, res, next) => {
         try {
@@ -672,8 +1440,11 @@ router.post(
             const placeholder = isMySQL ? '?' : '$1';
             const idPlaceholder = isMySQL ? '?' : '$2';
 
+            // A manual upload always wins and LOCKS the picture (#6): photo_source
+            // = 'manual' so the chatbot's auto person-photo detection never
+            // overwrites a recruiter's chosen avatar.
             const result = await query(
-                `UPDATE candidates SET photo_url = ${placeholder} WHERE id = ${idPlaceholder} RETURNING id, photo_url`,
+                `UPDATE candidates SET photo_url = ${placeholder}, photo_source = 'manual' WHERE id = ${idPlaceholder} RETURNING id, photo_url, photo_source`,
                 [photoUrl, id]
             );
 
@@ -681,7 +1452,100 @@ router.post(
                 return res.status(404).json({ error: 'Candidate not found' });
             }
 
-            res.json({ photo_url: result.rows[0].photo_url });
+            res.json({ photo_url: result.rows[0].photo_url, photo_source: result.rows[0].photo_source });
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+// ── Document upload (CV / passport / certificate / photo / other) ───────────────
+// Admin-side upload so recruiters can add a new CV or supporting documents
+// directly from the CV Manager. Mirrors the photo multer config. A 'cv' upload
+// also flips candidates.cv_uploaded so the Screening gate + auto-assign work.
+const DOC_TYPES = ['cv', 'passport', 'certificate', 'photo', 'id', 'additional', 'other'];
+
+const documentUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            const uploadDir = process.env.UPLOAD_DIR
+                ? path.join(process.env.UPLOAD_DIR, 'documents')
+                : path.join(__dirname, '../../uploads/documents');
+            require('fs').mkdirSync(uploadDir, { recursive: true });
+            cb(null, uploadDir);
+        },
+        filename: (req, file, cb) => {
+            const ext = path.extname(file.originalname) || '';
+            cb(null, `candidate_${req.params.id}_${Date.now()}${ext}`);
+        },
+    }),
+    limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
+});
+
+/**
+ * POST /api/candidates/:id/documents
+ * Upload a CV or supporting document for a candidate. Form fields:
+ *   file     — the document (multipart)
+ *   doc_type — one of DOC_TYPES (defaults to 'cv')
+ */
+router.post(
+    '/:id/documents',
+    authenticate,
+    requireSection('cv_manager', 'create'),
+    documentUpload.single('file'),
+    async (req, res, next) => {
+        try {
+            const { id } = req.params;
+            if (!req.file) {
+                return res.status(400).json({ error: 'No file uploaded' });
+            }
+
+            const docType = DOC_TYPES.includes(String(req.body.doc_type || '').toLowerCase())
+                ? String(req.body.doc_type).toLowerCase()
+                : 'cv';
+
+            const candCheck = await query(adaptQuery('SELECT id FROM candidates WHERE id = $1'), [id]);
+            if (candCheck.rows.length === 0) {
+                return res.status(404).json({ error: 'Candidate not found' });
+            }
+
+            const fileUrl = `/uploads/documents/${req.file.filename}`;
+            const ext = (path.extname(req.file.originalname) || '').replace('.', '').toLowerCase() || null;
+            const isCv = docType === 'cv';
+            // Non-CV docs are tagged via parsed_data.__document_category so the
+            // GET enrichment labels them (passport / certificate / photo / …).
+            const parsedData = isCv ? null : JSON.stringify({ __document_category: docType });
+            const cvId = generateUUID();
+
+            // A freshly uploaded CV becomes the primary; demote prior ones.
+            if (isCv) {
+                await query(adaptQuery('UPDATE cv_files SET is_primary = FALSE WHERE candidate_id = $1'), [id]);
+            }
+
+            await query(
+                adaptQuery(`
+                    INSERT INTO cv_files
+                        (id, candidate_id, file_url, file_name, file_type, ocr_status, parsed_data, is_primary, uploaded_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                `),
+                [cvId, id, fileUrl, req.file.originalname, ext, isCv ? 'pending' : 'completed', parsedData, isCv]
+            );
+
+            // Mark the candidate as having a CV so the Screening gate + matcher pass.
+            if (isCv) {
+                await query(
+                    adaptQuery("UPDATE candidates SET cv_uploaded = TRUE, cv_status = 'completed', updated_at = NOW() WHERE id = $1"),
+                    [id]
+                );
+            }
+
+            res.status(201).json({
+                success: true,
+                cv_id: cvId,
+                document_category: docType,
+                file_url: fileUrl,
+                file_name: req.file.originalname,
+            });
         } catch (error) {
             next(error);
         }
@@ -769,5 +1633,106 @@ async function _notifyChatbotStatusChange(candidate, newStatus) {
         logger.warn(`Failed to notify chatbot of status change for ${candidate.id}: ${err.message}`);
     }
 }
+
+// ── POST /api/candidates/cv/:cvId/reparse — Auto-OCR / re-extract a stored CV ─
+// Re-runs extraction on a CV whose parsed_data is thin/empty. Images go to
+// GPT-4o vision (file_url is a public GCS URL); documents are re-parsed from
+// their stored raw/OCR text. Updates cv_files.parsed_data + enriches metadata.
+const CV_REPARSE_PROMPT = 'Extract recruitment data from this CV/document and return JSON with keys '
+    + '(use null/[] when absent): full_name, email, phone, age (number), height_cm (number), '
+    + 'nationality, current_job_title, current_company, previous_employer, total_experience_years (number), '
+    + 'highest_qualification, technical_skills (array), soft_skills (array), languages_spoken (array), '
+    + 'certifications (array), licenses (string), country, '
+    + 'document_type (one of: cv, passport, certificate, photo, other), raw_text, overall_confidence (0-1).';
+
+router.post('/cv/:cvId/reparse', authenticate, requireSection('cv_manager', 'edit'), async (req, res) => {
+    const { cvId } = req.params;
+    try {
+        const sql = isMySQL ? 'SELECT * FROM cv_files WHERE id = ? LIMIT 1' : 'SELECT * FROM cv_files WHERE id = $1 LIMIT 1';
+        const result = await query(sql, [cvId]);
+        if (!result.rows.length) return res.status(404).json({ error: 'CV not found' });
+        const cv = result.rows[0];
+        const existingParsed = parseCandidateMetadata(cv.parsed_data);
+        const resolved = resolveCvAccessUrl(cv);
+        const fileUrl = (resolved && resolved.url) || cv.file_url;
+        const nameLower = String(cv.file_name || cv.file_url || '').toLowerCase();
+        const isImage = (cv.file_type && String(cv.file_type).includes('image')) || /\.(jpg|jpeg|png|webp|gif|bmp)\b/.test(nameLower);
+
+        let parsedJson = null;
+        if (isImage && fileUrl && /^https?:\/\//.test(fileUrl)) {
+            const resp = await openai.chat.completions.create({
+                model: 'gpt-4o',
+                messages: [
+                    { role: 'system', content: 'You are an expert CV parser. Return valid JSON only.' },
+                    { role: 'user', content: [
+                        { type: 'text', text: CV_REPARSE_PROMPT },
+                        { type: 'image_url', image_url: { url: fileUrl, detail: 'high' } },
+                    ] },
+                ],
+                response_format: { type: 'json_object' },
+            });
+            try { parsedJson = JSON.parse(resp.choices[0].message.content || '{}'); } catch { parsedJson = null; }
+        } else {
+            const text = cv.ocr_text || existingParsed.raw_text || '';
+            if (!text || String(text).length < 20) {
+                return res.status(422).json({ error: 'No image or extractable text available to re-parse', code: 'no_source' });
+            }
+            const content = await createChatCompletion(
+                [
+                    { role: 'system', content: 'You are an expert CV parser. Return valid JSON only.' },
+                    { role: 'user', content: `${CV_REPARSE_PROMPT}\n\nCV TEXT:\n${String(text).slice(0, 15000)}` },
+                ],
+                { model: 'gpt-4o', response_format: { type: 'json_object' }, max_tokens: 1500 }
+            );
+            try { parsedJson = JSON.parse(content || '{}'); } catch { parsedJson = null; }
+        }
+        if (!parsedJson || typeof parsedJson !== 'object') {
+            return res.status(502).json({ error: 'Re-parse produced no data' });
+        }
+
+        const merged = {
+            ...existingParsed,
+            ...parsedJson,
+            __document_category: existingParsed.__document_category
+                || (parsedJson.document_type && parsedJson.document_type !== 'cv' ? parsedJson.document_type : 'cv'),
+        };
+        const upSQL = isMySQL
+            ? "UPDATE cv_files SET parsed_data = ?, ocr_status = 'completed' WHERE id = ?"
+            : "UPDATE cv_files SET parsed_data = $1, ocr_status = 'completed' WHERE id = $2";
+        await query(upSQL, [JSON.stringify(merged), cvId]);
+
+        // Enrich candidate metadata — fill blanks only, never clobber.
+        try {
+            const cSQL = isMySQL ? 'SELECT metadata, skills FROM candidates WHERE id = ? LIMIT 1' : 'SELECT metadata, skills FROM candidates WHERE id = $1 LIMIT 1';
+            const cRes = await query(cSQL, [cv.candidate_id]);
+            if (cRes.rows.length) {
+                const meta = parseCandidateMetadata(cRes.rows[0].metadata);
+                const setIf = (k, v) => { if (v !== undefined && v !== null && v !== '' && (meta[k] === undefined || meta[k] === null || meta[k] === '')) meta[k] = v; };
+                const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined);
+                setIf('age', num(parsedJson.age));
+                setIf('height_cm', num(parsedJson.height_cm));
+                setIf('experience_years', num(parsedJson.total_experience_years));
+                setIf('previous_employer', parsedJson.previous_employer || parsedJson.current_company);
+                setIf('licenses', parsedJson.licenses || (Array.isArray(parsedJson.certifications) ? parsedJson.certifications.join(', ') : undefined));
+                setIf('country', parsedJson.country || parsedJson.nationality);
+                const metaUp = isMySQL ? 'UPDATE candidates SET metadata = ? WHERE id = ?' : 'UPDATE candidates SET metadata = $1::jsonb WHERE id = $2';
+                await query(metaUp, [JSON.stringify(meta), cv.candidate_id]);
+                const skillsArr = [].concat(parsedJson.technical_skills || [], parsedJson.soft_skills || []).filter(Boolean);
+                if (skillsArr.length && !cRes.rows[0].skills) {
+                    const sUp = isMySQL ? 'UPDATE candidates SET skills = ? WHERE id = ?' : 'UPDATE candidates SET skills = $1 WHERE id = $2';
+                    await query(sUp, [skillsArr.slice(0, 20).join(', '), cv.candidate_id]);
+                }
+            }
+        } catch (metaErr) {
+            logger.warn(`Re-parse metadata enrich skipped: ${metaErr.message}`);
+        }
+
+        logger.info(`Re-parsed CV ${cvId} (candidate ${cv.candidate_id})`);
+        return res.json({ success: true, cv_id: cvId, parsed_data: merged });
+    } catch (error) {
+        logger.error(`CV re-parse error for ${cvId}: ${error.message}`);
+        return res.status(500).json({ error: 'Re-parse failed', detail: error.message });
+    }
+});
 
 module.exports = router;

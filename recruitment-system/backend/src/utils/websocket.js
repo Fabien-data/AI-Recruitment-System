@@ -15,6 +15,7 @@
  *   handoff_start  — candidate is now under human control
  *   handoff_end    — candidate handed back to bot
  *   agent_typing   — an agent is composing a reply
+ *   call_status_changed — an agent started/ended a phone call with a candidate
  *
  * Events received from agents:
  *   join_candidate   — subscribe to a candidate's chat room
@@ -57,7 +58,7 @@ function initWebSocket(httpServer) {
     });
 
     // ── JWT Authentication middleware ──────────────────────────────────────────
-    _io.use((socket, next) => {
+    _io.use(async (socket, next) => {
         const token =
             socket.handshake.auth?.token ||
             socket.handshake.headers?.authorization?.split(' ')[1];
@@ -69,7 +70,20 @@ function initWebSocket(httpServer) {
             const secret = process.env.JWT_SECRET;
             if (!secret) return next(new Error('JWT_SECRET not configured'));
             const decoded = jwt.verify(token, secret);
-            socket.user = decoded; // { id, email, role, ... }
+            // The JWT only carries { userId, sessionId } — resolve the canonical
+            // user so socket.user.id == users.id == candidates.call_agent_id. The
+            // agent:{id} room join and the disconnect presence cleanup both key off
+            // socket.user.id, so without this they'd silently no-op (id undefined).
+            const userId = decoded.userId || decoded.id;
+            let user = { id: userId, userId, sessionId: decoded.sessionId };
+            try {
+                const { query } = require('../config/database');
+                const r = await query('SELECT id, email, full_name, role FROM users WHERE id = $1', [userId]);
+                if (r.rows && r.rows[0]) user = { ...r.rows[0], userId, sessionId: decoded.sessionId };
+            } catch (dbErr) {
+                logger.debug(`socket user lookup skipped (using token id): ${dbErr.message}`);
+            }
+            socket.user = user; // { id, email, full_name, role, userId, sessionId }
             next();
         } catch (err) {
             next(new Error('Invalid or expired token'));
@@ -117,8 +131,40 @@ function initWebSocket(httpServer) {
         });
 
         // ── Disconnect ────────────────────────────────────────────────────────
-        socket.on('disconnect', (reason) => {
+        socket.on('disconnect', async (reason) => {
             logger.debug(`WebSocket disconnected: user=${userEmail} reason=${reason}`);
+            // Release any in-call presence this agent held so other agents aren't
+            // blocked by a stale "📞 on call" badge after a tab close / drop.
+            // (A server.js TTL sweep is the backstop for hard crashes.)
+            if (!userId) return;
+            try {
+                // Keep presence if the agent still has another live socket (2nd tab).
+                const remaining = await _io.in(`agent:${userId}`).fetchSockets();
+                if (remaining.length > 0) return;
+
+                const { query } = require('../config/database');
+                const found = await query(
+                    `SELECT id FROM candidates WHERE call_status = 'on_call' AND call_agent_id = $1`,
+                    [userId]
+                );
+                if (!found.rows || found.rows.length === 0) return;
+
+                await query(
+                    `UPDATE candidates SET call_status = NULL, call_agent_id = NULL, call_started_at = NULL
+                     WHERE call_status = 'on_call' AND call_agent_id = $1`,
+                    [userId]
+                );
+                for (const r of found.rows) {
+                    _io.emit('call_status_changed', {
+                        candidate_id: r.id,
+                        on_call: false,
+                        ts: new Date().toISOString(),
+                    });
+                }
+                logger.debug(`Cleared ${found.rows.length} in-call presence row(s) for agent ${userId} on disconnect`);
+            } catch (err) {
+                logger.debug(`disconnect call-presence cleanup skipped: ${err.message}`);
+            }
         });
     });
 

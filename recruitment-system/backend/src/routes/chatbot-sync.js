@@ -261,13 +261,16 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
         // 1. Create or update candidate by phone
         let candidate;
         if (Candidate && typeof Candidate.upsert === 'function') {
+            // NOTE: job_interest and preferred_country are NOT columns on the
+            // candidates table — job interest is stored on the applications row
+            // and mirrored into candidates.metadata below. Writing them as
+            // columns 500s the whole sync.
             [candidate] = await Candidate.upsert({
                 phone,
                 name: resolvedCandidateName,
                 experience_years: experience_years !== undefined && experience_years !== null ? experience_years : null,
                 status: 'screening',
-                job_interest: resolvedJobInterest,
-                ...(country && { preferred_country: country }),
+                source: 'whatsapp',
                 ...(preferred_language && { preferred_language }),
                 ...(email && { email }),
             });
@@ -285,14 +288,12 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                         SET name = $1,
                             experience_years = $2,
                             status = 'screening',
-                            job_interest = $3,
                             updated_at = NOW()
-                        WHERE id = $4
+                        WHERE id = $3
                     `),
                     [
                         resolvedCandidateName,
                         experience_years !== undefined && experience_years !== null ? experience_years : null,
-                        resolvedJobInterest,
                         candidateId,
                     ]
                 );
@@ -325,15 +326,14 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                 await query(
                     adaptQuery(`
                         INSERT INTO candidates
-                            (id, phone, name, experience_years, status, job_interest)
-                        VALUES ($1, $2, $3, $4, 'screening', $5)
+                            (id, phone, name, experience_years, status, source)
+                        VALUES ($1, $2, $3, $4, 'screening', 'whatsapp')
                     `),
                     [
                         candidateId,
                         phone,
                         resolvedCandidateName,
                         experience_years !== undefined && experience_years !== null ? experience_years : null,
-                        resolvedJobInterest,
                     ]
                 );
 
@@ -345,6 +345,27 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                 } catch (_err) {}
 
                 candidate = { id: candidateId };
+            }
+        }
+
+        // 1b. Mirror job_interest + destination country into candidates.metadata
+        // (these are NOT candidate columns). Best-effort: never fail the sync.
+        if (candidate && candidate.id) {
+            try {
+                const metaPatch = {};
+                if (resolvedJobInterest && resolvedJobInterest !== 'General') {
+                    metaPatch.job_interest = resolvedJobInterest;
+                    metaPatch.job_interest_stated = resolvedJobInterest;
+                }
+                if (country) metaPatch.destination_country = country;
+                if (Object.keys(metaPatch).length > 0) {
+                    const mergeSQL = isMySQL
+                        ? 'UPDATE candidates SET metadata = JSON_MERGE_PATCH(COALESCE(metadata, JSON_OBJECT()), CAST($1 AS JSON)) WHERE id = $2'
+                        : "UPDATE candidates SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb WHERE id = $2";
+                    await query(adaptQuery(mergeSQL), [JSON.stringify(metaPatch), candidate.id]);
+                }
+            } catch (metaErr) {
+                logger.warn(`[${traceId}] metadata merge skipped: ${metaErr.message}`);
             }
         }
 
@@ -360,32 +381,38 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
             }
         }
 
-        // 3. Attach the CV file if it exists
+        // 3. Attach the CV file if it exists. Best-effort: a cv_files schema
+        // mismatch must not 500 the whole sync (the candidate row already
+        // landed) — log loud so we still notice.
         if (req.file) {
-            // Sanitise filename to prevent path-traversal attacks
-            const safeOriginalName = path.basename(req.file.originalname || 'cv_upload');
-            if (CVFile && typeof CVFile.create === 'function') {
-                await CVFile.create({
-                    candidate_id: candidate.id,
-                    file_path: req.file.path,
-                    original_name: safeOriginalName,
-                    ocr_status: 'pending',
-                });
-            } else {
-                await query(
-                    adaptQuery(`
-                        INSERT INTO cv_files
-                            (id, candidate_id, file_url, file_name, file_type, ocr_status)
-                        VALUES ($1, $2, $3, $4, $5, 'pending')
-                    `),
-                    [
-                        randomUUID(),
-                        candidate.id,
-                        req.file.path,
-                        safeOriginalName,
-                        req.file.mimetype || 'application/octet-stream',
-                    ]
-                );
+            try {
+                // Sanitise filename to prevent path-traversal attacks
+                const safeOriginalName = path.basename(req.file.originalname || 'cv_upload');
+                if (CVFile && typeof CVFile.create === 'function') {
+                    await CVFile.create({
+                        candidate_id: candidate.id,
+                        file_path: req.file.path,
+                        original_name: safeOriginalName,
+                        ocr_status: 'pending',
+                    });
+                } else {
+                    await query(
+                        adaptQuery(`
+                            INSERT INTO cv_files
+                                (id, candidate_id, file_url, file_name, file_type, ocr_status, is_primary)
+                            VALUES ($1, $2, $3, $4, $5, 'pending', TRUE)
+                        `),
+                        [
+                            randomUUID(),
+                            candidate.id,
+                            req.file.path,
+                            safeOriginalName,
+                            req.file.mimetype || 'application/octet-stream',
+                        ]
+                    );
+                }
+            } catch (cvErr) {
+                logger.error(`[${traceId}] CV file persist failed (sync continues):`, cvErr);
             }
         }
 
@@ -434,7 +461,7 @@ router.post('/intake', upload.single('cv_file'), async (req, res) => {
                     await query(
                         adaptQuery(`
                             INSERT INTO applications (id, candidate_id, job_id, status, metadata)
-                            VALUES ($1, $2, $3, 'applied', $4)
+                            VALUES ($1, $2, $3, 'screening', $4)
                         `),
                         [
                             applicationId,

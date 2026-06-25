@@ -14,6 +14,7 @@ from app import crud
 from app.models import Candidate, MessageType
 from app.schemas import ConversationCreate, CandidateUpdate
 from app.database import SessionLocal
+from app.utils.phone import normalize_phone_or_raw
 from app.utils.meta_client import meta_client
 from app.services.vacancy_service import vacancy_service
 from app.llm.agent_router import RouterAction
@@ -296,7 +297,11 @@ class ToolHandler:
                 'success': False,
                 'message': "Missing required fields for profile submission"
             }
-        
+
+        # Canonicalise so the lookup + any new row key on the same E.164 form as
+        # the agent-added / inbound rows (prevents a +94 vs 94 duplicate).
+        phone_number = normalize_phone_or_raw(phone_number)
+
         try:
             # Get or create candidate in database
             if candidate_id:
@@ -304,10 +309,8 @@ class ToolHandler:
                     Candidate.id == candidate_id
                 ).first()
             else:
-                candidate = self.db.query(Candidate).filter(
-                    Candidate.phone_number == phone_number
-                ).first()
-            
+                candidate = crud.get_candidate_by_phone(self.db, phone_number)
+
             if not candidate:
                 # Create new candidate
                 candidate = Candidate(

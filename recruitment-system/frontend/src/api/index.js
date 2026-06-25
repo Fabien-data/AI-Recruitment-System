@@ -39,8 +39,39 @@ export const getCandidate = (id) =>
 export const createCandidate = (data) =>
   apiClient.post('/api/candidates', data).then(res => res.data)
 
+// Create a candidate AND auto-send the welcome (appears in Messages "New" + hands
+// to the bot intake flow). Returns { candidate, welcome }.
+export const createCandidateWithWelcome = (data) =>
+  apiClient.post('/api/candidates/with-welcome', data).then(res => res.data)
+
+// (Re)send the welcome / re-engagement message to an EXISTING candidate from the
+// takeover panel. Returns { welcome, sent, reason }.
+export const sendCandidateWelcome = (id) =>
+  apiClient.post(`/api/candidates/${id}/send-welcome`).then(res => res.data)
+
+// Manual re-engagement nudge: in-window = friendly check-in, out-of-window =
+// approved dewan_reengage template. Returns { result, sent, queued, reason }.
+export const sendCandidateReengage = (id) =>
+  apiClient.post(`/api/candidates/${id}/reengage`).then(res => res.data)
+
 export const updateCandidate = (id, data) =>
   apiClient.put(`/api/candidates/${id}`, data).then(res => res.data)
+
+// Set the candidate's pipeline stage — writes through to the candidate's active
+// applications (the source of truth) so the change reflects on the Applications
+// page and survives candidate-stage re-derivation.
+export const setCandidateStage = (id, stage, notify = false) =>
+  apiClient.put(`/api/candidates/${id}/stage`, { stage, notify }).then(res => res.data)
+
+// Certify a candidate AND (by default) send the WhatsApp "certified" message.
+// data: { certification_notes?, translate_notes?, job_id?, role_title?, send_message?, channels? }
+export const certifyCandidate = (id, data = {}) =>
+  apiClient.post(`/api/candidates/${id}/certify`, data).then(res => res.data)
+
+// Resolve/create the application a New/Screening lead needs before scheduling an
+// interview. data: { job_id }. Returns { application_id, created }.
+export const ensureApplication = (id, data) =>
+  apiClient.post(`/api/candidates/${id}/ensure-application`, data).then(res => res.data)
 
 export const deleteCandidate = (id) =>
   apiClient.delete(`/api/candidates/${id}`).then(res => res.data)
@@ -48,12 +79,95 @@ export const deleteCandidate = (id) =>
 export const resolveCandidateIntervention = (id) =>
   apiClient.post(`/api/candidates/${id}/resolve-intervention`).then(res => res.data)
 
+// Re-run AI extraction on a stored CV/document (Auto-OCR / re-parse fallback).
+export const reparseCv = (cvId) =>
+  apiClient.post(`/api/candidates/cv/${cvId}/reparse`).then(res => res.data)
+
+// Advance a candidate New → Screening (hard-gated on CV + a job). Sends the
+// "application complete" WhatsApp. data: { note?, notify_channels? }
+export const screenCandidate = (id, data = {}) =>
+  apiClient.post(`/api/candidates/${id}/screening`, data).then(res => res.data)
+
+// Upload a CV or supporting document for a candidate.
+export const uploadCandidateDocument = (id, file, docType = 'cv') => {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('doc_type', docType)
+  return apiClient.post(`/api/candidates/${id}/documents`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(res => res.data)
+}
+
+// Semantic auto-shortlist for a job (#4a) — ranked candidates + "why matched"
+export const getJobShortlist = (jobId, limit = 20) =>
+  apiClient.get(`/api/auto-assign/job/${jobId}/shortlist`, { params: { limit } }).then(res => res.data)
+
+export const runEmbedBackfill = (limit = 1000) =>
+  apiClient.post('/api/auto-assign/embed-backfill', { limit }).then(res => res.data)
+
+// Global ⌘K search (#3.0) + sourcing control tower (#3.3)
+export const globalSearch = (q) =>
+  apiClient.get('/api/search', { params: { q } }).then(res => res.data)
+
+export const getControlTowerHealth = (days = 2) =>
+  apiClient.get('/api/control-tower', { params: { days } }).then(res => res.data)
+
+// Per-role "My Work Today" landing queue (#3.0–3.4)
+export const getWorkToday = () =>
+  apiClient.get('/api/me/work-today').then(res => res.data)
+
+// CV-chase: new leads with no CV on file — the #1 conversion leak (#7)
+export const getAwaitingCv = () =>
+  apiClient.get('/api/engagement/awaiting-cv').then(res => res.data)
+
+// Per-user workspace preferences (persistent Messages workspace #3.0, saved views)
+export const getMyPreferences = () =>
+  apiClient.get('/api/preferences').then(res => res.data)
+
+export const updateMyPreferences = (patch) =>
+  apiClient.put('/api/preferences', patch).then(res => res.data)
+
 // Jobs
 export const getJobs = (params) =>
   apiClient.get('/api/jobs', { params }).then(res => res.data)
 
 export const getJob = (id) =>
   apiClient.get(`/api/jobs/${id}`).then(res => res.data)
+
+// ── Bulk campaign (mass WhatsApp template blast from the Messages page) ───────
+export const previewCampaign = (data) =>
+  apiClient.post('/api/communications/campaigns/preview', data).then(res => res.data)
+
+export const createCampaign = (data) =>
+  apiClient.post('/api/communications/campaigns', data).then(res => res.data)
+
+export const getCampaign = (id) =>
+  apiClient.get(`/api/communications/campaigns/${id}`).then(res => res.data)
+
+export const pauseCampaign = (id) =>
+  apiClient.post(`/api/communications/campaigns/${id}/pause`).then(res => res.data)
+
+export const resumeCampaign = (id) =>
+  apiClient.post(`/api/communications/campaigns/${id}/resume`).then(res => res.data)
+
+// ── CSV bulk blast (upload numbers → pick template → send to all) ────────────
+export const listCampaignTemplates = () =>
+  apiClient.get('/api/communications/campaigns/templates').then(res => res.data)
+
+export const previewCampaignNumbers = (phones) =>
+  apiClient.post('/api/communications/campaigns/preview-numbers', { phones }).then(res => res.data)
+
+export const createCsvCampaign = (data) =>
+  apiClient.post('/api/communications/campaigns/from-csv', data).then(res => res.data)
+
+export const getCampaignDelivery = (id) =>
+  apiClient.get(`/api/communications/campaigns/${id}/delivery`).then(res => res.data)
+
+export const getCampaignFailures = (id) =>
+  apiClient.get(`/api/communications/campaigns/${id}/failures`).then(res => res.data)
+
+export const retryCampaignFailed = (id) =>
+  apiClient.post(`/api/communications/campaigns/${id}/retry-failed`).then(res => res.data)
 
 export const createJob = (data) =>
   apiClient.post('/api/jobs', data).then(res => res.data)
@@ -143,6 +257,11 @@ export const getKnowledgeDocumentChunks = (id) =>
 export const getApplications = (params) =>
   apiClient.get('/api/applications', { params }).then(res => res.data)
 
+// Candidate-level per-status totals (same canonical counts as the Messages tabs)
+// for the Applications "Candidates by stage" strip. Optional { project_id }.
+export const getApplicationStatusTotals = (params) =>
+  apiClient.get('/api/applications/status-totals', { params }).then(res => res.data)
+
 export const createApplication = (data) =>
   apiClient.post('/api/applications', data).then(res => res.data)
 
@@ -157,6 +276,16 @@ export const deleteApplication = (id) =>
 
 export const getMatchingCandidates = (jobId) =>
   apiClient.get(`/api/applications/match/${jobId}`).then(res => res.data)
+
+// Bulk application import (project-by-project from Excel/CSV).
+// validate = dry-run (JSON only); commit = one batch (multipart with CV files).
+export const validateBulkImport = (data) =>
+  apiClient.post('/api/applications/bulk-import/validate', data).then(res => res.data)
+
+export const commitBulkImportBatch = (formData) =>
+  apiClient.post('/api/applications/bulk-import/commit', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(res => res.data)
 
 // Communications
 export const getCommunications = (candidateId) =>
@@ -183,6 +312,10 @@ export const batchAutoAssign = (threshold = 50, status = 'new') =>
 
 export const getGeneralPool = (params) =>
   apiClient.get('/api/auto-assign/pool', { params }).then(res => res.data)
+
+// Semantic "best-fit jobs" for one candidate (Future-Pool backup plan).
+export const getCandidateJobMatches = (candidateId, params) =>
+  apiClient.get(`/api/auto-assign/candidate/${candidateId}/job-matches`, { params }).then(res => res.data)
 
 // Projects
 export const getProjects = (params) =>
@@ -237,6 +370,10 @@ export const certifyApplication = (applicationId, data) =>
 export const getNotificationHistory = (candidateId) =>
   apiClient.get(`/api/communications/candidate/${candidateId}/notifications`).then(res => res.data)
 
+// Header notification bell — live-aggregated actionable signals
+export const getNotifications = () =>
+  apiClient.get('/api/notifications').then(res => res.data)
+
 // Bulk Communication
 export const sendBulkCommunication = (data) =>
   apiClient.post('/api/communications/send-bulk', data).then(res => res.data)
@@ -245,9 +382,30 @@ export const sendBulkCommunication = (data) =>
 export const batchCertifyApplications = (data) =>
   apiClient.post('/api/applications/batch-certify', data).then(res => res.data)
 
-// Interviews
+export const batchRejectToPool = (data) =>
+  apiClient.post('/api/applications/batch-reject-to-pool', data).then(res => res.data)
+
+// Interviews — list returns { data, total, limit, offset } (paginated). params:
+// { status?, project_id?, job_id?, interviewer_id?, candidate_name?,
+//   candidate_phone?, outcome?, date_from?, date_to?, limit?, offset? }
 export const getInterviews = (params) =>
   apiClient.get('/api/interviews', { params }).then(res => res.data)
+
+// Server-side interview stat aggregates (accurate across ALL rows, not just the
+// current page). Same filters as the list.
+export const getInterviewStats = (params) =>
+  apiClient.get('/api/interviews/stats', { params }).then(res => res.data)
+
+// Per-project interview scoreboard: { projects: [{ project_id, project_title,
+// total, confirmed, rescheduled, cant_make, no_answer, ... }] }. Same filters
+// as the list, so a date/venue/day scope flows through.
+export const getInterviewsByProject = (params) =>
+  apiClient.get('/api/interviews/by-project', { params }).then(res => res.data)
+
+// Per-interview-day capacity for a project: [{ day_id, date, location, capacity,
+// booked, remaining }]. Used to surface remaining/capacity + block overbooking.
+export const getInterviewDayCapacity = (params) =>
+  apiClient.get('/api/interviews/day-capacity', { params }).then(res => res.data)
 
 export const getUpcomingInterviews = () =>
   apiClient.get('/api/interviews/upcoming').then(res => res.data)
@@ -266,6 +424,54 @@ export const deleteInterview = (id) =>
 
 export const sendInterviewReminder = (id, data) =>
   apiClient.post(`/api/interviews/${id}/remind`, data).then(res => res.data)
+
+// Schedulers (project handlers / sourcing / admin) eligible to be interviewers.
+export const getInterviewers = () =>
+  apiClient.get('/api/interviews/interviewers').then(res => res.data)
+
+// Bulk schedule. body for fixed mode: { application_ids, scheduled_datetime, location, ... }
+// for smart mode: { application_ids, mode:'smart', start_date, interviewer_id(s), per_day_limit, slot_minutes }
+export const bulkScheduleInterviews = (data) =>
+  apiClient.post('/api/interviews/bulk-schedule', data).then(res => res.data)
+
+// Smart-schedule preview — returns the day-by-day allocation without writing.
+export const previewInterviewAllocation = (data) =>
+  apiClient.post('/api/interviews/bulk-schedule', { ...data, mode: 'smart', dry_run: true }).then(res => res.data)
+
+// Bulk-send audit reports (who failed and why), persisted per bulk run.
+export const getInterviewSendReports = (params) =>
+  apiClient.get('/api/interviews/send-reports', { params }).then(res => res.data)
+export const getInterviewSendReport = (id) =>
+  apiClient.get(`/api/interviews/send-reports/${id}`).then(res => res.data)
+
+// Applications still awaiting their interview message ("Quick select 100").
+// params: { project_id?, limit? } → { total_pending, returned, application_ids, applications }
+export const getPendingInterviewSends = (params) =>
+  apiClient.get('/api/interviews/pending-send', { params }).then(res => res.data)
+
+// Re-send the interview WhatsApp to already-scheduled interviews. body: { interview_ids }
+export const bulkNotifyInterviews = (data) =>
+  apiClient.post('/api/interviews/bulk-notify', data).then(res => res.data)
+
+// All notifiable interview IDs matching the current filters — powers
+// "Select all in project" across pages. params: same filters as the list
+// (+ notifiable). Returns { ids, total, capped }.
+export const getInterviewIds = (params) =>
+  apiClient.get('/api/interviews/ids', { params }).then(res => res.data)
+
+// Bulk status / reschedule / reassign for selected interviews.
+// body: { interview_ids, status?, scheduled_datetime?, interviewer_id?, location?, notify? }
+export const bulkUpdateInterviews = (data) =>
+  apiClient.post('/api/interviews/bulk-update', data).then(res => res.data)
+
+// Export the current filtered interview list as a CSV blob. Same params as list.
+export const exportInterviewsCsv = (params) =>
+  apiClient.get('/api/interviews/export.csv', { params, responseType: 'blob' }).then(res => res.data)
+
+// CSV of candidates we couldn't reach on WhatsApp (for manual calling).
+// Returns a Blob; callers trigger a download. params: { project_id? }
+export const downloadUnreachableCsv = (params) =>
+  apiClient.get('/api/interviews/unreachable.csv', { params, responseType: 'blob' }).then(res => res.data)
 
 // Analytics
 export const getAnalyticsOverview = (params) =>
@@ -330,6 +536,16 @@ export const getUserPermissions = (userId) =>
 export const updateUserPermissions = (userId, permissions) =>
   apiClient.put(`/api/admin/users/${userId}/permissions`, { permissions }).then(res => res.data)
 
+// Reusable permission templates (presets of a full section-permission matrix).
+export const getPermissionTemplates = () =>
+  apiClient.get('/api/admin/permission-templates').then(res => res.data)
+
+export const savePermissionTemplate = ({ name, description, permissions }) =>
+  apiClient.post('/api/admin/permission-templates', { name, description, permissions }).then(res => res.data)
+
+export const deletePermissionTemplate = (id) =>
+  apiClient.delete(`/api/admin/permission-templates/${id}`).then(res => res.data)
+
 export const getUserActivity = (userId, params) =>
   apiClient.get(`/api/admin/users/${userId}/activity`, { params }).then(res => res.data)
 
@@ -345,91 +561,64 @@ export const getGlobalActivity = (params) =>
 export const logoutBackend = () =>
   apiClient.post('/api/auth/logout').then(res => res.data)
 
-// ── Marketing Hub ──────────────────────────────────────────────────────────
-export const getLeads = (params) =>
-  apiClient.get('/api/marketing-hub/leads', { params }).then(res => res.data)
+// ── Engagement / re-engagement (stuck candidates, analytics, digest) ──────────
+export const getStuckCandidates = (params) =>
+  apiClient.get('/api/engagement/stuck', { params }).then(res => res.data)
 
-export const getLead = (id) =>
-  apiClient.get(`/api/marketing-hub/leads/${id}`).then(res => res.data)
+export const getEngagementAnalytics = (params) =>
+  apiClient.get('/api/engagement/analytics', { params }).then(res => res.data)
 
-export const createLead = (data) =>
-  apiClient.post('/api/marketing-hub/leads', data).then(res => res.data)
+export const getDailyDigest = () =>
+  apiClient.get('/api/engagement/daily-digest').then(res => res.data)
 
-export const updateLead = (id, data) =>
-  apiClient.patch(`/api/marketing-hub/leads/${id}`, data).then(res => res.data)
+export const getAgentCallActivity = (params) =>
+  apiClient.get('/api/engagement/call-logs', { params }).then(res => res.data)
 
-export const deleteLead = (id) =>
-  apiClient.delete(`/api/marketing-hub/leads/${id}`).then(res => res.data)
+// Personal scorecard: current + previous window stats (trend deltas) + leftover
+// claimed chats. Admins may pass agent_id for the team drill-down.
+export const getMyScorecard = (params) =>
+  apiClient.get('/api/engagement/my-scorecard', { params }).then(res => res.data)
 
-export const uploadLeadDocument = (leadId, file, docType = 'other') => {
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('doc_type', docType)
-  return apiClient.post(`/api/marketing-hub/leads/${leadId}/documents`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  }).then(res => res.data)
-}
+// Admin → agent engagement nudge (persisted notification + live socket ping)
+export const nudgeUser = (data) =>
+  apiClient.post('/api/engagement/nudge', data).then(res => res.data)
 
-export const deleteLeadDocument = (docId) =>
-  apiClient.delete(`/api/marketing-hub/documents/${docId}`).then(res => res.data)
+// Per-day claim-aware activity series (sparklines, streaks)
+export const getActivitySeries = (params) =>
+  apiClient.get('/api/engagement/activity-series', { params }).then(res => res.data)
 
-export const convertLead = (id, data = {}) =>
-  apiClient.post(`/api/marketing-hub/leads/${id}/convert`, data).then(res => res.data)
+// Admin-set daily goals per agent (target-progress bars)
+export const getEngagementTargets = () =>
+  apiClient.get('/api/engagement/targets').then(res => res.data)
 
-export const searchJobsForLead = (q, limit = 10) =>
-  apiClient.get('/api/marketing-hub/job-search', { params: { q, limit } }).then(res => res.data)
+export const setEngagementTarget = (userId, data) =>
+  apiClient.put(`/api/engagement/targets/${userId}`, data).then(res => res.data)
 
-export const getMarketingCountries = () =>
-  apiClient.get('/api/marketing-hub/countries').then(res => res.data)
+export const markNotificationsRead = (data) =>
+  apiClient.post('/api/notifications/mark-read', data).then(res => res.data)
 
-export const getLeadSources = () =>
-  apiClient.get('/api/marketing-hub/lead-sources').then(res => res.data)
+export const getCandidateTimeline = (id) =>
+  apiClient.get(`/api/engagement/candidates/${id}/timeline`).then(res => res.data)
 
-export const getLeadFollowUps = (leadId) =>
-  apiClient.get(`/api/marketing-hub/leads/${leadId}/follow-ups`).then(res => res.data)
+export const getCandidateNextAction = (id) =>
+  apiClient.get(`/api/engagement/candidates/${id}/next-action`).then(res => res.data)
 
-export const createLeadFollowUp = (leadId, data) =>
-  apiClient.post(`/api/marketing-hub/leads/${leadId}/follow-ups`, data).then(res => res.data)
+export const bulkNudgeCandidates = (candidateIds) =>
+  apiClient.post('/api/engagement/bulk-nudge', { candidate_ids: candidateIds }).then(res => res.data)
 
-export const updateLeadFollowUp = (id, data) =>
-  apiClient.patch(`/api/marketing-hub/follow-ups/${id}`, data).then(res => res.data)
+// ── Candidate callback tasks ──────────────────────────────────────────────────
+export const getCandidateTasks = (params) =>
+  apiClient.get('/api/candidate-tasks', { params }).then(res => res.data)
 
-export const getDueFollowUps = () =>
-  apiClient.get('/api/marketing-hub/follow-ups/due').then(res => res.data)
+export const getDueCandidateTasks = (params) =>
+  apiClient.get('/api/candidate-tasks/due', { params }).then(res => res.data)
 
-export const getLeadTemplates = () =>
-  apiClient.get('/api/marketing-hub/templates').then(res => res.data)
+export const createCandidateTask = (data) =>
+  apiClient.post('/api/candidate-tasks', data).then(res => res.data)
 
-export const sendLeadTemplate = (leadId, template_key, channel) =>
-  apiClient.post(`/api/marketing-hub/leads/${leadId}/send-template`, { template_key, channel }).then(res => res.data)
+export const updateCandidateTask = (id, data) =>
+  apiClient.patch(`/api/candidate-tasks/${id}`, data).then(res => res.data)
 
-// ── Marketing Hub Analytics ───────────────────────────────────────────────
-export const getMarketingOverview = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/overview', { params: { range } }).then(res => res.data)
-
-export const getMarketingFunnel = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/funnel', { params: { range } }).then(res => res.data)
-
-export const getMarketingBySource = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/by-source', { params: { range } }).then(res => res.data)
-
-export const getMarketingByAgent = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/by-agent', { params: { range } }).then(res => res.data)
-
-export const getMarketingTimeseries = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/timeseries', { params: { range } }).then(res => res.data)
-
-export const getMarketingCohort = (range = '90d') =>
-  apiClient.get('/api/marketing-hub/analytics/cohort', { params: { range } }).then(res => res.data)
-
-export const getMarketingTimeToStage = (range = '30d') =>
-  apiClient.get('/api/marketing-hub/analytics/time-to-stage', { params: { range } }).then(res => res.data)
-
-export const exportMarketingLeadsCsv = async (range = '30d') => {
-  const response = await apiClient.get('/api/marketing-hub/analytics/export.csv', {
-    params: { range },
-    responseType: 'blob',
-  })
-  downloadBlobResponse(response, `marketing_leads_${range}.csv`)
-}
+export const deleteCandidateTask = (id) =>
+  apiClient.delete(`/api/candidate-tasks/${id}`).then(res => res.data)
 

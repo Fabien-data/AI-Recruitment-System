@@ -19,6 +19,60 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _meta_reason_from_code(code, subcode=None) -> str:
+    """Map a Meta WhatsApp Cloud API error code to a coarse, actionable reason.
+
+    Reasons consumed downstream (recruitment backend → unreachable flag / CSV):
+      • no_whatsapp    — number is not a reachable WhatsApp user (flag + manual call)
+      • out_of_window  — >24h since the candidate last messaged; only a template can reach them
+      • token_expired  — META_ACCESS_TOKEN invalid/expired (rotate + redeploy)
+      • rate_limited   — Meta throttling; safe to retry later
+      • other          — anything else
+    """
+    try:
+        code = int(code) if code is not None else None
+    except (ValueError, TypeError):
+        code = None
+    if code == 190:
+        return "token_expired"
+    # 131047 "Re-engagement message", 470 legacy 24h-expiry, 131051 unsupported-after-window
+    if code in (131047, 470):
+        return "out_of_window"
+    # 131026 "Message undeliverable" (recipient not on WhatsApp / can't receive), 131030 not-in-allowed-list
+    if code in (131026, 131030):
+        return "no_whatsapp"
+    # 4 app-rate-limit, 80007 biz-rate-limit, 130429 cloud-api-rate-limit, 131056 pair-rate-limit
+    if code in (4, 80007, 130429, 131056):
+        return "rate_limited"
+    return "other"
+
+
+def _classify_meta_error(exc) -> Dict[str, Any]:
+    """Extract Meta error code/subcode from an httpx error (status error carries the
+    JSON body; a bare network error doesn't) and map to a coarse reason. Always
+    returns a dict containing an "error" key so existing `"error" in result` checks
+    keep working, plus structured code/subcode/reason for the new flagging path."""
+    code = subcode = fbtrace = None
+    message = str(exc)
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            err = (resp.json() or {}).get("error", {}) or {}
+            code = err.get("code")
+            subcode = err.get("error_subcode")
+            message = err.get("message", message) or message
+            fbtrace = err.get("fbtrace_id")
+        except Exception:
+            pass
+    return {
+        "error": message,
+        "code": code,
+        "subcode": subcode,
+        "fbtrace_id": fbtrace,
+        "reason": _meta_reason_from_code(code, subcode),
+    }
+
+
 class MetaWhatsAppClient:
     """
     Client for Meta WhatsApp Business API.
@@ -41,6 +95,10 @@ class MetaWhatsAppClient:
     @property
     def api_version(self):
         return settings.meta_api_version
+
+    @property
+    def whatsapp_business_account_id(self):
+        return settings.meta_whatsapp_business_account_id
 
     @property
     def base_url(self):
@@ -148,44 +206,98 @@ class MetaWhatsAppClient:
                 return result
             
         except httpx.HTTPError as e:
+            err = _classify_meta_error(e)
             logger.error(
-                f"Failed to send message to {to_number}: {e} | "
-                f"text_sample={safe_text[:60]!r} | encoding=utf-8"
+                f"Failed to send message to {to_number}: code={err.get('code')} "
+                f"reason={err.get('reason')} msg={err.get('error')!r} | text_sample={safe_text[:60]!r}"
             )
-            return {"error": str(e)}
+            return err
     
+    async def send_media_by_link(
+        self,
+        to_number: str,
+        media_type: str,
+        link: str,
+        caption: Optional[str] = None,
+        filename: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Send a media message (image/document/audio/video) by public link.
+
+        Used by the agent-message path so an agent's media reply goes out on the
+        chatbot's WhatsApp identity (the working token), not the backend's.
+        Returns the Meta API response, or a classified error dict on failure.
+        """
+        url = f"{self.base_url}/{self.phone_number_id}/messages"
+        headers = self._whatsapp_headers()
+
+        mtype = (media_type or "document").lower()
+        if mtype not in ("image", "document", "audio", "video"):
+            mtype = "document"
+        media_obj = {"link": link}
+        # Caption is supported on image/video/document; audio takes none.
+        if caption and mtype in ("image", "video", "document"):
+            media_obj["caption"] = str(caption)
+        if mtype == "document" and filename:
+            media_obj["filename"] = filename
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": mtype,
+            mtype: media_obj,
+        }
+        binary_data = self._json_bytes(payload)
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=binary_data, headers=headers, timeout=20.0)
+                response.raise_for_status()
+                result = response.json()
+                logger.info(f"Media ({mtype}) sent to {to_number}: {result.get('messages', [{}])[0].get('id', 'unknown')}")
+                return result
+        except httpx.HTTPError as e:
+            err = _classify_meta_error(e)
+            logger.error(f"Failed to send media to {to_number}: code={err.get('code')} reason={err.get('reason')}")
+            return err
+
     async def send_template_message(
         self,
         to_number: str,
         template_name: str,
         language_code: str = "en",
-        components: Optional[list] = None
+        components: Optional[list] = None,
+        _allow_lang_fallback: bool = True,
     ) -> Dict[str, Any]:
         """
         Send a template message via WhatsApp API asynchronously.
         Useful for initiating conversations or sending notifications.
-        
+
         Args:
             to_number: Recipient's phone number
             template_name: Approved template name
             language_code: Template language code
             components: Template components (header, body parameters)
-            
+            _allow_lang_fallback: on Meta error 132001 (template not approved in
+                this language) retry once in English, so an approved en variant
+                still reaches Sinhala/Tamil candidates until their localized
+                variant is approved. The si/ta variant takes over automatically
+                once Meta approves it — no code change needed.
+
         Returns:
             API response as dictionary
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
-        
+
         headers = self._whatsapp_headers()
-        
+
         template = {
             "name": template_name,
             "language": {"code": language_code}
         }
-        
+
         if components:
             template["components"] = components
-        
+
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -193,7 +305,7 @@ class MetaWhatsAppClient:
             "type": "template",
             "template": template
         }
-        
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -203,15 +315,57 @@ class MetaWhatsAppClient:
                     timeout=30.0,
                 )
                 response.raise_for_status()
-                
+
                 result = response.json()
                 logger.info(f"Template message sent to {to_number}")
                 return result
-            
+
         except httpx.HTTPError as e:
-            logger.error(f"Failed to send template message to {to_number}: {e}")
-            return {"error": str(e)}
-    
+            err = _classify_meta_error(e)
+            # 132001 = template name/language pair doesn't exist or isn't approved.
+            # If we asked for a non-English variant, retry in English (which is the
+            # one we register/approve first).
+            if (
+                _allow_lang_fallback
+                and language_code != "en"
+                and str(err.get("code")) == "132001"
+            ):
+                logger.warning(
+                    f"Template {template_name} not available in '{language_code}' for "
+                    f"{to_number} — retrying in English"
+                )
+                return await self.send_template_message(
+                    to_number, template_name, language_code="en",
+                    components=components, _allow_lang_fallback=False,
+                )
+            logger.error(
+                f"Failed to send template message to {to_number}: code={err.get('code')} "
+                f"reason={err.get('reason')} msg={err.get('error')!r}"
+            )
+            return err
+
+    async def list_message_templates(self) -> Dict[str, Any]:
+        """List this WABA's message templates (for the campaign template picker).
+        Returns the raw Graph response {"data": [...]} or a classified error dict.
+        Each template carries name/status/category/language/components — the BODY
+        component's {{n}} count is the variable count."""
+        waba = self.whatsapp_business_account_id
+        if not waba:
+            return {"error": "META_WHATSAPP_BUSINESS_ACCOUNT_ID not set", "data": []}
+        url = f"{self.base_url}/{waba}/message_templates"
+        params = {"fields": "name,status,category,language,components", "limit": 200}
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url, headers=self._whatsapp_headers(), params=params, timeout=30.0
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            err = _classify_meta_error(e)
+            logger.error(f"Failed to list templates: code={err.get('code')} reason={err.get('reason')}")
+            return {**err, "data": []}
+
     async def download_media(self, media_id: str) -> Optional[bytes]:
         """
         Download media file from Meta asynchronously.
@@ -256,7 +410,24 @@ class MetaWhatsAppClient:
 
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else "unknown"
-            logger.error(f"Failed to download media {media_id}: HTTP {status}")
+            # Surface the Meta error body — an expired/invalid access token returns
+            # code 190 ("Cannot parse access token"). Without this the CV silently
+            # fails to download and never appears in the dashboard (bugs B001–B003).
+            meta_detail = ""
+            try:
+                err = (e.response.json() or {}).get("error", {})
+                if err:
+                    meta_detail = (
+                        f" code={err.get('code')} message=\"{err.get('message')}\""
+                        f" fbtrace_id={err.get('fbtrace_id')}"
+                    )
+                    if err.get("code") == 190:
+                        meta_detail += (
+                            " — META_ACCESS_TOKEN is invalid/expired; rotate it and redeploy."
+                        )
+            except Exception:
+                pass
+            logger.error(f"Failed to download media {media_id}: HTTP {status}{meta_detail}")
             return None
         except httpx.HTTPError as e:
             logger.error(f"Failed to download media {media_id}: {e}")
@@ -455,10 +626,14 @@ class MetaWhatsAppClient:
                 logger.info(f"Interactive buttons sent to {to_number}")
                 return result
         except httpx.HTTPError as e:
-            logger.error(f"Failed to send interactive buttons to {to_number}: {e}")
+            err = _classify_meta_error(e)
+            logger.error(
+                f"Failed to send interactive buttons to {to_number}: code={err.get('code')} "
+                f"reason={err.get('reason')} msg={err.get('error')!r}"
+            )
             if not allow_text_fallback:
-                return {"error": str(e)}
-            # Fallback: send as plain text
+                return err
+            # Fallback: send as plain text (also returns a classified error if it fails)
             def _btn_title(btn: Any) -> str:
                 if isinstance(btn, dict):
                     return str(btn.get("title", ""))

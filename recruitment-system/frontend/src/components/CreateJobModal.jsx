@@ -1,13 +1,83 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createJob, createProjectJob, getProjects } from '../api'
+import { Megaphone } from 'lucide-react'
+import { createJob, createProjectJob, getProjects, generateAdLink, getAdLinks } from '../api'
 import { Modal } from '../components/ui/Modal'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
+import { AdLinkCard } from './AdLinkModal'
 import { CountrySelect } from '../components/jobs/CountrySelect'
 import { URGENCY_OPTIONS } from '../components/jobs/UrgencyPill'
 import { defaultDomainForCountry } from '../constants/countries'
 import toast from 'react-hot-toast'
+
+// Post-save step: once a job exists it can have an ad link (the generate API
+// JOINs `jobs`), so we surface link generation right after creation instead of
+// making the recruiter hunt for it on the Job Detail page later.
+function PostCreateAdLink({ job, onDone }) {
+  const queryClient = useQueryClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['ad-links', job.id],
+    queryFn: () => getAdLinks({ job_id: job.id }),
+    enabled: Boolean(job?.id),
+  })
+  const links = Array.isArray(data?.data) ? data.data : []
+  const missingProject = !job.project_id
+
+  const generate = useMutation({
+    mutationFn: () =>
+      generateAdLink({ job_id: job.id, project_id: job.project_id }),
+    onSuccess: () => {
+      toast.success('Ad link generated — the bot now knows this job')
+      queryClient.invalidateQueries({ queryKey: ['ad-links'] })
+      queryClient.invalidateQueries({ queryKey: ['job'] })
+    },
+    onError: (e) => {
+      if (e.response?.status === 409) {
+        toast.error(`That code is already used by "${e.response.data?.existing_campaign || 'another campaign'}"`)
+      } else {
+        toast.error(e.response?.data?.error || 'Failed to generate ad link')
+      }
+    },
+  })
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start gap-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/50 p-4">
+        <Megaphone className="mt-0.5 h-5 w-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+        <div className="text-sm text-emerald-900 dark:text-emerald-200">
+          <p className="font-semibold">“{job.title}” created.</p>
+          <p className="mt-1 text-emerald-800/80 dark:text-emerald-300/80">
+            Generate a Meta ad link so a candidate who taps this job's ad lands straight in its chat — the message
+            template carries a hidden <span className="font-mono">[ref:…]</span> token the bot reads to know the role.
+          </p>
+        </div>
+      </div>
+
+      {missingProject ? (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          This job has no linked project, so an ad link can’t be generated yet.
+        </p>
+      ) : (
+        <div className="flex justify-end">
+          <Button onClick={() => generate.mutate()} loading={generate.isLoading}>
+            <Megaphone size={16} /> Generate ad link
+          </Button>
+        </div>
+      )}
+
+      {isLoading ? (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
+      ) : (
+        links.map((link) => <AdLinkCard key={link.ad_ref} link={link} />)
+      )}
+
+      <div className="flex justify-end gap-3 pt-4 border-t">
+        <Button type="button" variant="secondary" onClick={onDone}>Done</Button>
+      </div>
+    </div>
+  )
+}
 
 const JOB_CATEGORIES = [
   'Security',
@@ -27,6 +97,8 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
   const queryClient = useQueryClient()
   const allowProjectSelection = !projectId
   const [selectedProjectId, setSelectedProjectId] = useState('')
+  // When set, the modal swaps the form for the post-create ad-link step.
+  const [createdJob, setCreatedJob] = useState(null)
 
   const { data: projectsData } = useQuery({
     queryKey: ['projects', { limit: 200 }],
@@ -93,7 +165,7 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       }
       return createJob({ ...data, project_id: selectedProjectId })
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       // TanStack Query v5: invalidateQueries requires { queryKey } object.
       // The old v3-style array argument was a silent no-op, which is why
       // the project detail page never refreshed when a job was added.
@@ -107,7 +179,10 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
       queryClient.invalidateQueries({ queryKey: ['projects'] })
       toast.success('Job created successfully')
-      onClose()
+      // Swap the form for the ad-link step instead of closing, so the
+      // recruiter can generate the Meta ad link for the job they just made.
+      // The API returns the created job; ensure project_id is present.
+      setCreatedJob({ ...data, project_id: data?.project_id || linkedProjectId })
       resetForm()
     },
     onError: (error) => {
@@ -148,6 +223,12 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
     if (allowProjectSelection) {
       setSelectedProjectId('')
     }
+  }
+
+  // Clear the post-create step on close so the next open starts on the form.
+  const handleClose = () => {
+    setCreatedJob(null)
+    onClose()
   }
 
   const handleSubmit = (e) => {
@@ -199,6 +280,9 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
     const { required_fields_schema_text, ...rest } = formData
     const dataToSubmit = {
       ...rest,
+      // Normalize to lowercase so typed and previously-selected categories stay
+      // consistent (the old <select> stored lowercase values).
+      category: formData.category.trim().toLowerCase(),
       requirements: cleanedRequirements,
       required_fields_schema: requiredFieldsSchema,
     }
@@ -226,10 +310,23 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
     }))
   }
 
+  if (createdJob) {
+    return (
+      <Modal
+        open={isOpen}
+        onClose={handleClose}
+        title="Job created — set up its ad"
+        size="xl"
+      >
+        <PostCreateAdLink job={createdJob} onDone={handleClose} />
+      </Modal>
+    )
+  }
+
   return (
     <Modal
       open={isOpen}
-      onClose={onClose}
+      onClose={handleClose}
       title="Create New Job Position"
       size="xl"
     >
@@ -282,17 +379,20 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Category <span className="text-red-500">*</span>
               </label>
-              <select
+              <input
+                type="text"
+                list="job-category-options"
                 value={formData.category}
                 onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                placeholder="Select or type a category"
                 className="input w-full"
                 required
-              >
-                <option value="">Select category</option>
-                {JOB_CATEGORIES.map(cat => (
-                  <option key={cat} value={cat.toLowerCase()}>{cat}</option>
+              />
+              <datalist id="job-category-options">
+                {JOB_CATEGORIES.filter(cat => cat !== 'Other').map(cat => (
+                  <option key={cat} value={cat} />
                 ))}
-              </select>
+              </datalist>
             </div>
           </div>
 
@@ -587,7 +687,7 @@ export function CreateJobModal({ projectId, isOpen, onClose }) {
           <Button
             type="button"
             variant="secondary"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={createMutation.isLoading}
           >
             Cancel

@@ -4,8 +4,9 @@ import { Link } from 'react-router-dom'
 import { getProjects, createProject, deleteProject } from '../api'
 import {
   FolderKanban, Plus, Trash2, Users, Briefcase, Building2, Globe2, Tag,
-  Calendar, BarChart3, Activity, PauseCircle, CheckCircle2, Eye, X,
+  Calendar, BarChart3, Activity, PauseCircle, CheckCircle2, Eye, X, Pencil,
 } from 'lucide-react'
+import { EditProjectModal } from '../components/EditProjectModal'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
@@ -33,6 +34,7 @@ export default function Projects() {
   const [priorityFilter, setPriorityFilter] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [editingProject, setEditingProject] = useState(null)
   const [countrySearch, setCountrySearch] = useState('')
 
   // Form state for new project
@@ -229,6 +231,8 @@ export default function Projects() {
   const projectsList = data?.data || []
   const canCreateProject = user?.role === 'admin' || user?.role === 'supervisor'
   const canDeleteProject = user?.role === 'admin'
+  // Mirrors the backend PUT /api/projects/:id authorization.
+  const canEditProject = ['admin', 'sourcing_department', 'project_handler'].includes(user?.role)
 
   return (
     <div className="p-6 lg:p-8 animate-fade-in">
@@ -364,8 +368,10 @@ export default function Projects() {
                   ? JSON.parse(project.countries)
                   : project.countries
                 const filled = project.filled_positions || 0
+                const certified = project.certified_count || 0
                 const total = project.total_positions || 0
                 const pct = total > 0 ? Math.min(100, Math.round((filled / total) * 100)) : 0
+                const certPct = total > 0 ? Math.min(100, Math.round((certified / total) * 100)) : 0
                 const barTone = pct >= 100 ? 'from-emerald-500 to-emerald-600' : pct >= 60 ? 'from-amber-400 to-amber-500' : 'from-primary-500 to-primary-600'
                 const accent =
                   project.status === 'active' ? 'emerald'
@@ -438,14 +444,25 @@ export default function Projects() {
                     </Table.Td>
                     <Table.Td><Badge status={project.status} /></Table.Td>
                     <Table.Td><Badge status={project.priority} /></Table.Td>
-                    <Table.Td align="right" className="min-w-[140px]">
-                      <div className="flex flex-col items-end gap-1">
-                        <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{filled} / {total || 0}</span>
-                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
-                          <div
-                            className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
-                            style={{ width: `${pct}%` }}
-                          />
+                    <Table.Td align="right" className="min-w-[150px]">
+                      <div className="flex flex-col items-end gap-1.5">
+                        <div className="w-full flex flex-col items-end gap-0.5">
+                          <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Certified <span className="font-semibold text-zinc-700 dark:text-zinc-200 tabular-nums">{certified} / {total || 0}</span></span>
+                          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-violet-500 to-violet-600 transition-all duration-500"
+                              style={{ width: `${certPct}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div className="w-full flex flex-col items-end gap-0.5">
+                          <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Placed <span className="font-semibold text-zinc-700 dark:text-zinc-200 tabular-nums">{filled} / {total || 0}</span></span>
+                          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+                            <div
+                              className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
                         </div>
                       </div>
                     </Table.Td>
@@ -471,6 +488,16 @@ export default function Projects() {
                           <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
                             <Briefcase size={11} /> {project.job_count}
                           </span>
+                        )}
+                        {canEditProject && (
+                          <button
+                            type="button"
+                            onClick={() => setEditingProject(project)}
+                            className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-950/40 transition-colors"
+                            title="Edit project"
+                          >
+                            <Pencil size={14} />
+                          </button>
                         )}
                         {canDeleteProject && (
                           <button
@@ -856,19 +883,6 @@ export default function Projects() {
                 contact_info: { ...formData.contact_info, address: e.target.value }
               })}
             />
-          </div>
-
-          {/* Actions */}
-          <div className="flex justify-end gap-3 pt-6 border-t-2 border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 -mx-6 -mb-6 px-6 py-4 rounded-b-xl sticky bottom-0">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                setModalOpen(false)
-                resetForm()
-              }}
-            >
-              Cancel
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Special Details</label>
               <textarea
@@ -882,6 +896,19 @@ export default function Projects() {
                 })}
               />
             </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-3 pt-6 border-t-2 border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 -mx-6 -mb-6 px-6 py-4 rounded-b-xl sticky bottom-0">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setModalOpen(false)
+                resetForm()
+              }}
+            >
+              Cancel
             </Button>
             <Button type="submit" loading={createMutation.isLoading}>
               Create Project
@@ -889,6 +916,13 @@ export default function Projects() {
           </div>
         </form>
       </Modal>
+
+      {/* Edit Project Modal */}
+      <EditProjectModal
+        isOpen={!!editingProject}
+        project={editingProject}
+        onClose={() => setEditingProject(null)}
+      />
     </div>
   )
 }

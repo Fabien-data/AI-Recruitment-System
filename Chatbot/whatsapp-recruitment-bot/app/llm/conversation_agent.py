@@ -83,27 +83,71 @@ def _required_fields_for(state: Dict[str, Any]) -> List[str]:
     return ["name", "experience_years"]
 
 
-# Cap on how many advertised jobs we list in the system prompt. Bounds token
-# spend if many campaigns run at once; the cross-suggestion ranker still
-# considers the full cache, so a deeper match isn't lost by this display cap.
-_ACTIVE_JOBS_PROMPT_CAP = 10
+# Cap on how many active jobs we list in the system prompt. Bounds token spend
+# if a very large number of jobs is ever open at once. Kept comfortably above
+# the realistic active-job count so EVERY open role is visible to the brain.
+#
+# History: this was 10, sorted newest-first. With 14 active jobs the two
+# (older) "Security Officer - Dubai" roles fell to ranks 13-14 and were
+# truncated out of ACTIVE_JOBS, so the bot truthfully (but wrongly) told ad
+# clickers "we don't have a Security Officer position" while still offering the
+# newer Cook role. Raising the cap restores full visibility; if the agency ever
+# runs more than this many simultaneously, switch to a candidate-relevance
+# selector (include roles matching the stated city/role first, then newest).
+_ACTIVE_JOBS_PROMPT_CAP = 50
 
 
-def _active_jobs_summary() -> List[Dict[str, Any]]:
-    """Return the active+advertised jobs from the in-memory cache (newest first).
+def _relevance_focus(state: Dict[str, Any], user_message: str) -> str:
+    """Lowercased haystack of what the candidate is asking for this turn — their
+    message plus any role/country already captured — used to float matching jobs
+    to the TOP of ACTIVE_JOBS (see _job_relevance)."""
+    cd = state.get("collected_data") or {}
+    parts = [user_message or "", str(cd.get("job_role") or "")]
+    cs = cd.get("countries")
+    if isinstance(cs, list):
+        parts.extend(str(x) for x in cs)
+    elif cs:
+        parts.append(str(cs))
+    return " ".join(parts).lower()
 
-    The cache is populated from /api/chatbot/jobs which only returns jobs with
-    a live ad campaign, so this is the set the bot may discuss with cold
-    candidates and suggest as alternatives.
+
+def _job_relevance(job: Dict[str, Any], focus: str) -> int:
+    """Cheap token-overlap score of a job against the candidate's stated interest.
+    Higher = better match (role words weighted over place words)."""
+    if not focus:
+        return 0
+    score = 0
+    title_cat = ((job.get("title") or "") + " " + (job.get("category") or "")).lower()
+    place = ((job.get("location") or "") + " " + " ".join(str(x) for x in (job.get("countries") or []))).lower()
+    for w in {w for w in title_cat.replace("-", " ").split() if len(w) >= 4}:
+        if w in focus:
+            score += 2
+    for w in {w for w in place.replace("-", " ").split() if len(w) >= 4}:
+        if w in focus:
+            score += 1
+    return score
+
+
+def _active_jobs_summary(focus_text: str = "") -> List[Dict[str, Any]]:
+    """Return the active jobs from the in-memory cache, MATCHES-FIRST then newest.
+
+    The cache is populated from /api/chatbot/jobs (active jobs). When the
+    candidate names a role/city (focus_text), matching jobs are floated to the
+    top so the model can't overlook a role buried at the bottom of a long list —
+    the bug where it told a candidate "no Security Officer" while two such Dubai
+    roles sat last in the list. All jobs are still included (cap 50); only the
+    ORDER changes, which is what drives the model's attention.
     """
     cache = get_job_cache() or {}
+    # Show every active job the bot knows about. Ad presence is metadata
+    # (has_active_ad) used for ranking/attribution, NOT a visibility gate —
+    # gating on it made the bot claim "no active jobs" for un-adned roles.
     active = [
         j for j in cache.values()
         if (j.get("status") or "").lower() == "active"
-        and j.get("has_active_ad", True)
     ]
     active.sort(
-        key=lambda j: j.get("created_at") or j.get("updated_at") or "",
+        key=lambda j: (_job_relevance(j, focus_text), j.get("created_at") or j.get("updated_at") or ""),
         reverse=True,
     )
     out = []
@@ -113,6 +157,9 @@ def _active_jobs_summary() -> List[Dict[str, Any]]:
             "title": j.get("title"),
             "category": j.get("category"),
             "countries": j.get("countries") or [],
+            # location is the CITY (e.g. "Dubai"); candidates often name the city,
+            # not the country. Surfacing it lets the brain match "Dubai" → this job.
+            "location": j.get("location"),
             "requirements": j.get("requirements") or {},
             "positions_available": j.get("positions_available"),
         })
@@ -145,11 +192,12 @@ def _build_history(db: Any, candidate_id: Any) -> List[Dict[str, str]]:
         text = (getattr(conv, "message_text", "") or "").strip()
         if not text:
             continue
-        direction = (getattr(conv, "direction", "") or "").lower()
-        if direction in ("outbound", "bot", "assistant"):
-            role = "assistant"
-        else:
-            role = "user"
+        # The chatbot Conversation model stores the sender in message_type
+        # (USER/BOT enum), not a `direction` column. Read it correctly so bot
+        # turns are replayed as assistant turns rather than all-user.
+        mt = getattr(conv, "message_type", None)
+        mt_val = str(getattr(mt, "value", mt) or "").lower()
+        role = "assistant" if mt_val in ("bot", "assistant", "outbound") else "user"
         out.append({"role": role, "content": text})
     return out
 
@@ -249,7 +297,10 @@ async def run_turn(
     turn_number = state["turn_counter"]
 
     required = _required_fields_for(state)
-    active_jobs = _active_jobs_summary()
+    # Float the role/place the candidate just named to the top of ACTIVE_JOBS so
+    # the model reliably sees it (fixes "we don't have Security Officer" when two
+    # such roles existed but sat at the bottom of a long, food-prep-heavy list).
+    active_jobs = _active_jobs_summary(_relevance_focus(state, user_message))
     current_job = _current_job_for(state)
     mismatch_hint = await _build_mismatch_hint(state, current_job)
 
@@ -381,14 +432,12 @@ async def run_turn(
     override_reason: Optional[str] = None
     if final_text:
         final_text, override_reason = _apply_no_repeat_guard(final_text, state, required)
+        # override_reason (e.g. "silent_pivot:age->email") is kept for
+        # diagnostics/telemetry ONLY. It must NEVER be appended to the
+        # user-facing reply — doing so leaked "(Internal: next field …)" into
+        # live WhatsApp messages.
         if override_reason and override_reason.startswith("silent_pivot:"):
-            # Append the next-field hint inline so the candidate isn't stuck.
-            _, _, transition = override_reason.partition(":")
-            _, _, next_field = transition.partition("->")
-            final_text = (
-                f"{final_text.rstrip(' ?.')}.\n"
-                f"(Internal: next field to ask is {next_field}.)"
-            )
+            logger.info("no-repeat guard: %s (candidate=%s)", override_reason, getattr(candidate, "id", "?"))
 
     # Track the question we just asked (best-effort: field name picked from
     # the next missing slot). If the agent didn't ask anything because it

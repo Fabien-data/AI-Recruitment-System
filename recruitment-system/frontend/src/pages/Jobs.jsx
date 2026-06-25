@@ -6,7 +6,7 @@ import { motion } from 'framer-motion'
 import {
   Briefcase, FolderKanban, Plus, Sparkles, UploadCloud, RefreshCw, Loader2,
   Search, MoreHorizontal, Pencil, Trash2, Eye, Users, MapPin,
-  Calendar, MapPinned, Clock, Send, X,
+  Calendar, MapPinned, Clock, Send, X, FileText,
 } from 'lucide-react'
 import { getJobs, extractJobFlyers, refreshJobKnowledgeBase, apiClient } from '../api'
 import { Modal } from '../components/ui/Modal'
@@ -28,6 +28,7 @@ import { CountrySelect } from '../components/jobs/CountrySelect'
 import { CountryFlag } from '../components/jobs/CountryFlag'
 import { useAuthStore } from '../stores/authStore'
 import { useViewMode, ViewToggle } from '../components/ui/ViewToggle'
+import { normalizeStatus } from '../constants/lifecycle'
 import toast from 'react-hot-toast'
 
 const MAX_FLYERS_PER_BATCH = 20
@@ -478,6 +479,7 @@ export default function Jobs() {
                 <Table.Th icon={FolderKanban}>Project</Table.Th>
                 <Table.Th>Region</Table.Th>
                 <Table.Th>Status</Table.Th>
+                <Table.Th align="right">Pipeline</Table.Th>
                 <Table.Th align="right">Positions</Table.Th>
                 <Table.Th align="right">Actions</Table.Th>
               </Table.Tr>
@@ -537,6 +539,19 @@ export default function Jobs() {
                     </Table.Td>
                     <Table.Td>
                       <Badge status={job.status} />
+                    </Table.Td>
+                    <Table.Td align="right" className="min-w-[150px]">
+                      <div className="flex items-center justify-end gap-3 text-xs tabular-nums">
+                        <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400" title="Applied">
+                          <Users size={12} /> {job.applied_count ?? 0}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400" title="Pending review">
+                          <Clock size={12} /> {job.pending_count ?? 0}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="CV uploaded">
+                          <FileText size={12} /> {job.cv_uploaded_count ?? 0}
+                        </span>
+                      </div>
                     </Table.Td>
                     <Table.Td align="right" className="min-w-[140px]">
                       <div className="flex flex-col items-end gap-1">
@@ -599,6 +614,26 @@ export default function Jobs() {
   )
 }
 
+// Compact pipeline stat tile shown on each job card. Counts come from the
+// jobs list/detail endpoints (applied_count / pending_count / cv_uploaded_count
+// derived in job-queries.js), so no extra per-card request is needed.
+function JobStat({ icon: Icon, label, value, tone }) {
+  const tones = {
+    blue: 'text-blue-600 dark:text-blue-400',
+    amber: 'text-amber-600 dark:text-amber-400',
+    emerald: 'text-emerald-600 dark:text-emerald-400',
+  }
+  return (
+    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/60 py-1.5 px-1 text-center">
+      <div className={`inline-flex items-center gap-1 ${tones[tone] || ''}`}>
+        <Icon size={12} />
+        <span className="text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">{value}</span>
+      </div>
+      <p className="text-[10px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400 leading-tight">{label}</p>
+    </div>
+  )
+}
+
 // Card view for a single job. The whole card is a clickable shortcut into
 // the job's View Candidates page; nested links/buttons (project tag,
 // actions menu, details link) call e.stopPropagation() so they keep their
@@ -607,8 +642,10 @@ export default function Jobs() {
 function JobCard({ job, isAdmin, index = 0, onEdit, onDelete, onSchedule }) {
   const navigate = useNavigate()
   const filled = job.positions_filled ?? 0
+  const certified = job.certified_count ?? 0
   const available = job.positions_available ?? 1
   const pct = Math.min(100, Math.round((filled / Math.max(1, available)) * 100))
+  const certPct = Math.min(100, Math.round((certified / Math.max(1, available)) * 100))
   const barTone = pct >= 100
     ? 'from-emerald-500 to-emerald-600'
     : pct >= 60
@@ -685,17 +722,39 @@ function JobCard({ job, isAdmin, index = 0, onEdit, onDelete, onSchedule }) {
           <DomainPill domain={job.domain} />
         </div>
 
-        <div>
-          <div className="flex items-center justify-between text-xs mb-1">
-            <span className="text-zinc-500 dark:text-zinc-400">Positions filled</span>
-            <span className="font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">{filled} / {available}</span>
+        {/* Two progress bars: Certified (passed screening) and Placed (hired). */}
+        <div className="space-y-2">
+          <div>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="text-zinc-500 dark:text-zinc-400">Certified</span>
+              <span className="font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">{certified} / {available}</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-violet-500 to-violet-600 transition-all duration-500"
+                style={{ width: `${certPct}%` }}
+              />
+            </div>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
-            <div
-              className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
-              style={{ width: `${pct}%` }}
-            />
+          <div>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="text-zinc-500 dark:text-zinc-400">Placed</span>
+              <span className="font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">{filled} / {available}</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
+              <div
+                className={`h-full rounded-full bg-gradient-to-r ${barTone} transition-all duration-500`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
           </div>
+        </div>
+
+        {/* Pipeline analytics — applied / pending review / CV uploaded */}
+        <div className="grid grid-cols-3 gap-2">
+          <JobStat icon={Users} label="Applied" value={job.applied_count ?? 0} tone="blue" />
+          <JobStat icon={Clock} label="Pending" value={job.pending_count ?? 0} tone="amber" />
+          <JobStat icon={FileText} label="CV Uploaded" value={job.cv_uploaded_count ?? 0} tone="emerald" />
         </div>
 
         <div className="mt-auto inline-flex items-center justify-center gap-1.5 rounded-xl bg-primary-50 dark:bg-primary-950/40 text-primary-700 dark:text-primary-300 px-3 py-2 text-sm font-medium">
@@ -716,6 +775,7 @@ function JobScheduleInterviewModal({ job, onClose }) {
   const [time, setTime] = useState('')
   const [location, setLocation] = useState('')
   const [duration, setDuration] = useState(30)
+  const [description, setDescription] = useState('')
   const [notifyWhatsApp, setNotifyWhatsApp] = useState(true)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [hasInitializedSelection, setHasInitializedSelection] = useState(false)
@@ -727,19 +787,20 @@ function JobScheduleInterviewModal({ job, onClose }) {
   })
 
   // Pre-select the candidates a handler is most likely to schedule next:
-  // anyone who has cleared pre-screening or been certified. Falls back to
-  // every active (non-rejected, non-selected) candidate if nothing matches,
-  // so the modal isn't blank on a fresh job. Only runs once per modal open.
+  // anyone certified or already at the interview-scheduled stage. Falls back to
+  // every active (non-terminal: not hired, not rejected) candidate if nothing
+  // matches, so the modal isn't blank on a fresh job. Only runs once per modal
+  // open. normalizeStatus folds legacy rows onto the canonical vocabulary.
   useEffect(() => {
     if (hasInitializedSelection || isLoading || !data?.candidates) return
-    const PREFERRED = new Set(['pre_screened', 'certified'])
-    const TERMINAL = new Set(['selected', 'placed', 'rejected', 'transferred'])
+    const PREFERRED = new Set(['certified', 'interview_scheduled'])
+    const TERMINAL = new Set(['hired', 'rejected'])
     let prefill = (data.candidates || [])
-      .filter((c) => PREFERRED.has(c.application_status))
+      .filter((c) => PREFERRED.has(normalizeStatus(c.application_status)))
       .map((c) => c.application_id)
     if (prefill.length === 0) {
       prefill = (data.candidates || [])
-        .filter((c) => !TERMINAL.has(c.application_status))
+        .filter((c) => !TERMINAL.has(normalizeStatus(c.application_status)))
         .map((c) => c.application_id)
     }
     setSelectedIds(new Set(prefill))
@@ -765,6 +826,7 @@ function JobScheduleInterviewModal({ job, onClose }) {
         scheduled_datetime: `${date}T${time}`,
         location: location || null,
         duration_minutes: Number(duration) || 30,
+        description: description.trim() || null,
         notify_channels: channels.length > 0 ? channels : ['whatsapp'],
       }).then((r) => r.data)
     },
@@ -911,6 +973,22 @@ function JobScheduleInterviewModal({ job, onClose }) {
             onChange={(e) => setDuration(e.target.value)}
             className="input w-full"
           />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+            Description / Instructions (optional)
+          </label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="Dress code, documents to bring, where to report, who to ask for…"
+            className="input w-full"
+          />
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Sent to each candidate, translated into their chosen language.
+          </p>
         </div>
 
         <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer">

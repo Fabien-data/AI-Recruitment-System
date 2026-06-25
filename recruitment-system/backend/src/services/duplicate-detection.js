@@ -12,6 +12,7 @@
 const { query } = require('../config/database');
 const { adaptQuery } = require('../utils/query-adapter');
 const logger = require('../utils/logger');
+const { normalizePhone: canonicalPhone } = require('../utils/phone');
 
 /**
  * Levenshtein distance between two strings (case-insensitive)
@@ -41,15 +42,15 @@ function levenshtein(a, b) {
 }
 
 /**
- * Strip country code / spaces / formatting from phone number
+ * Canonicalise a phone number to the SAME E.164 form used at storage time
+ * (utils/phone.js), so duplicate detection compares apples to apples. The old
+ * implementation stripped the country code — a different key than storage — which
+ * meant a "+94..." row and a "94..." row could slip past detection. Returns ''
+ * (falsy) when the number can't be normalised, preserving the truthiness checks
+ * in calculateConfidence.
  */
 function normalizePhone(phone) {
-    if (!phone) return '';
-    let p = phone.replace(/[\s\-().+]/g, '');
-    // Strip leading country codes (94 for Sri Lanka, 1 for US/CA, etc.)
-    if (p.startsWith('94') && p.length > 9) p = p.slice(2);
-    if (p.startsWith('0') && p.length > 9) p = p.slice(1);
-    return p;
+    return canonicalPhone(phone) || '';
 }
 
 /**

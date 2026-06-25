@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { query, generateUUID } = require('../config/database');
+const { query, generateUUID, withTransaction } = require('../config/database');
 const { isMySQL } = require('../utils/query-adapter');
 const { authenticate, authorize } = require('../middleware/auth');
-const { syncJobAsync } = require('./chatbot-sync');
+const { requireSection } = require('../middleware/sections');
+const { syncJobAsync, syncJobDeleteAsync } = require('./chatbot-sync');
 const chatbotOutbox = require('../services/chatbot-outbox');
 const { buildProjectPayload } = require('../services/chatbot-payloads');
 const logger = require('../utils/logger');
@@ -40,6 +41,15 @@ async function _enqueueProjectDelete(projectId) {
     } catch (err) {
         logger.warn(`Project outbox delete enqueue failed for ${projectId}: ${err.message}`);
     }
+}
+
+// Date columns are DATE in Postgres, which rejects '' with "invalid input
+// syntax for type date". The UI sends '' for un-filled optional dates, so map
+// empty/blank strings to null before they reach the query.
+function emptyToNull(value) {
+    if (value === undefined || value === null) return null;
+    if (typeof value === 'string' && value.trim() === '') return null;
+    return value;
 }
 
 function normalizeProjectPayload(body = {}) {
@@ -91,7 +101,7 @@ function normalizeProjectPayload(body = {}) {
 /**
  * Get all projects with filters
  */
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const {
             page = 1,
@@ -193,37 +203,38 @@ router.get('/', authenticate, async (req, res, next) => {
         );
         const total = parseInt(countResult.rows[0].count);
 
-        // Get paginated results
+        // Get paginated results. Team/job counts AND the progress numbers are
+        // derived LIVE here (one round-trip) instead of trusting the stale
+        // projects.filled_positions column, which the app never writes:
+        //   filled_positions     = hired applications across the project's jobs
+        //   interviews_scheduled = rows in interview_schedules under the project
+        //   total_positions stays the admin-set headcount target from p.*.
+        // The derived count uses a DISTINCT alias (derived_filled) so it never
+        // collides with the stale p.filled_positions column — the map below then
+        // overwrites filled_positions with it explicitly (no column-order luck).
+        const selectCols = `SELECT p.*,
+                   (SELECT COUNT(DISTINCT pa.user_id) FROM project_assignments pa WHERE pa.project_id = p.id) AS team_count,
+                   (SELECT COUNT(*) FROM jobs j WHERE j.project_id = p.id) AS job_count,
+                   (SELECT COUNT(DISTINCT a.candidate_id) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id AND a.status = 'hired') AS derived_filled,
+                   (SELECT COUNT(DISTINCT a.candidate_id) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id) AS total_applications,
+                   (SELECT COUNT(DISTINCT a.candidate_id) FROM applications a JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id AND a.status = 'certified') AS certified_count,
+                   (SELECT COUNT(*) FROM interview_schedules s JOIN applications a ON s.application_id = a.id JOIN jobs j ON a.job_id = j.id WHERE j.project_id = p.id) AS interviews_scheduled
+               FROM projects p${whereClause}`;
         const listQuery = isMySQL
-            ? `SELECT * FROM projects${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`
-            : `SELECT * FROM projects${whereClause} ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+            ? `${selectCols} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+            : `${selectCols} ORDER BY p.created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
 
         const listResult = await query(listQuery, [...params, parseInt(limit), parseInt(offset)]);
 
-        // Get team member count for each project
-        const projectsWithCounts = await Promise.all(
-            listResult.rows.map(async (project) => {
-                const teamCountResult = await query(
-                    isMySQL
-                        ? 'SELECT COUNT(DISTINCT user_id) as count FROM project_assignments WHERE project_id = ?'
-                        : 'SELECT COUNT(DISTINCT user_id) as count FROM project_assignments WHERE project_id = $1',
-                    [project.id]
-                );
-
-                const jobCountResult = await query(
-                    isMySQL
-                        ? 'SELECT COUNT(*) as count FROM jobs WHERE project_id = ?'
-                        : 'SELECT COUNT(*) as count FROM jobs WHERE project_id = $1',
-                    [project.id]
-                );
-
-                return {
-                    ...project,
-                    team_count: parseInt(teamCountResult.rows[0].count),
-                    job_count: parseInt(jobCountResult.rows[0].count)
-                };
-            })
-        );
+        const projectsWithCounts = listResult.rows.map((project) => ({
+            ...project,
+            team_count: parseInt(project.team_count, 10) || 0,
+            job_count: parseInt(project.job_count, 10) || 0,
+            filled_positions: parseInt(project.derived_filled, 10) || 0,
+            total_applications: parseInt(project.total_applications, 10) || 0,
+            certified_count: parseInt(project.certified_count, 10) || 0,
+            interviews_scheduled: parseInt(project.interviews_scheduled, 10) || 0,
+        }));
 
         res.json({
             data: projectsWithCounts,
@@ -242,7 +253,7 @@ router.get('/', authenticate, async (req, res, next) => {
 /**
  * Get project by ID with detailed information
  */
-router.get('/:id', authenticate, async (req, res, next) => {
+router.get('/:id', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
@@ -273,38 +284,51 @@ router.get('/:id', authenticate, async (req, res, next) => {
         const teamResult = await query(teamQuery, [id]);
 
         // Get jobs linked to this project
+        // Per-job counts are candidate-centric (COUNT(DISTINCT candidate_id)) so the
+        // per-job Certified / Placed mini-bars on ProjectDetail agree with the jobs
+        // list (job-queries CERTIFIED_JOIN/POSITIONS_FILLED_JOIN) and Messages.
         const jobsQuery = isMySQL
-            ? `SELECT j.*, COUNT(a.id) as candidate_count 
-               FROM jobs j 
-               LEFT JOIN applications a ON j.id = a.job_id 
-               WHERE j.project_id = ? 
-               GROUP BY j.id 
+            ? `SELECT j.*, COUNT(a.id) as candidate_count,
+                      COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                      COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as positions_filled
+               FROM jobs j
+               LEFT JOIN applications a ON j.id = a.job_id
+               WHERE j.project_id = ?
+               GROUP BY j.id
                ORDER BY j.created_at DESC`
-            : `SELECT j.*, COUNT(a.id) as candidate_count 
-               FROM jobs j 
-               LEFT JOIN applications a ON j.id = a.job_id 
-               WHERE j.project_id = $1 
-               GROUP BY j.id 
+            : `SELECT j.*, COUNT(a.id) as candidate_count,
+                      COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                      COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as positions_filled
+               FROM jobs j
+               LEFT JOIN applications a ON j.id = a.job_id
+               WHERE j.project_id = $1
+               GROUP BY j.id
                ORDER BY j.created_at DESC`;
 
         const jobsResult = await query(jobsQuery, [id]);
 
         // Get statistics
+        // All counts candidate-centric (COUNT(DISTINCT candidate_id)) so the detail
+        // page agrees with the projects list, control tower, Messages and analytics.
         const statsQuery = isMySQL
-            ? `SELECT 
-                   COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_scheduled,
+            ? `SELECT
+                   COUNT(DISTINCT a.candidate_id) as total_applications,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as placed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.candidate_id END) as rejected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as interview_scheduled,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM applications a
                JOIN jobs j ON a.job_id = j.id
                WHERE j.project_id = ?`
-            : `SELECT 
-                   COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_scheduled,
+            : `SELECT
+                   COUNT(DISTINCT a.candidate_id) as total_applications,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as placed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.candidate_id END) as rejected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as interview_scheduled,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM applications a
                JOIN jobs j ON a.job_id = j.id
@@ -326,7 +350,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 /**
  * Create new project
  */
-router.post('/', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+router.post('/', authenticate, requireSection('projects', 'create'), authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const {
             title,
@@ -345,29 +369,53 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
 
         const normalized = normalizeProjectPayload(req.body);
 
-        if (!title || !client_name || normalized.industry_types.length === 0 || !normalized.countries || normalized.countries.length === 0) {
+        // A "future project" is a pipeline project an agent can park candidates in
+        // before it's officially active (shows in the transfer/assign pickers).
+        // Future projects can be created lightweight (just a name) straight from
+        // the Messages picker — the client/industry/country details get filled in
+        // later when the project goes active, so default them here.
+        const isFuture = req.body.is_future === true;
+        const effClientName = client_name || (isFuture ? 'Pipeline (future)' : null);
+        const effIndustryTypes = normalized.industry_types.length
+            ? normalized.industry_types
+            : (isFuture ? ['general'] : []);
+        const effCountries = (normalized.countries && normalized.countries.length)
+            ? normalized.countries
+            : (isFuture ? ['Unspecified'] : []);
+        const effIndustryType = effIndustryTypes[0] || normalized.industry_type || '';
+
+        if (!title || !effClientName || effIndustryTypes.length === 0 || effCountries.length === 0) {
             return res.status(400).json({ error: 'Title, client name, at least one industry, and at least one country are required' });
         }
 
+        // The create form leaves optional date fields as '' (empty string).
+        // Postgres DATE columns reject '' ("invalid input syntax for type date"),
+        // which would 500 and prevent the project from being created. Coerce to null.
+        const startDate = emptyToNull(start_date);
+        const interviewDate = emptyToNull(interview_date);
+        const endDate = emptyToNull(end_date);
+
         const userId = req.user.id;
-        const industryTypesJson = JSON.stringify(normalized.industry_types);
+        const industryTypesJson = JSON.stringify(effIndustryTypes);
+        const countriesJson = JSON.stringify(effCountries);
 
         if (isMySQL) {
             const id = generateUUID();
             await query(
                 `INSERT INTO projects (id, title, client_name, industry_type, industry_types, description, countries, status, priority,
                  total_positions, start_date, interview_date, end_date, benefits, salary_info, contact_info,
-                 requirements, metadata, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 requirements, metadata, is_future, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
-                    id, title, client_name, normalized.industry_type, industryTypesJson, description,
-                    JSON.stringify(normalized.countries), status, priority, total_positions,
-                    start_date, interview_date, end_date,
+                    id, title, effClientName, effIndustryType, industryTypesJson, description,
+                    countriesJson, status, priority, total_positions,
+                    startDate, interviewDate, endDate,
                     JSON.stringify(benefits || {}),
                     JSON.stringify(normalized.salary_info),
                     JSON.stringify(normalized.contact_info),
                     JSON.stringify(requirements || {}),
                     JSON.stringify(metadata || {}),
+                    isFuture,
                     userId
                 ]
             );
@@ -386,18 +434,19 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
             const result = await query(
                 `INSERT INTO projects (title, client_name, industry_type, industry_types, description, countries, status, priority,
                  total_positions, start_date, interview_date, end_date, benefits, salary_info, contact_info,
-                 requirements, metadata, created_by)
-                 VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18)
+                 requirements, metadata, is_future, created_by)
+                 VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18, $19)
                  RETURNING *`,
                 [
-                    title, client_name, normalized.industry_type, industryTypesJson, description,
-                    JSON.stringify(normalized.countries), status, priority, total_positions,
-                    start_date, interview_date, end_date,
+                    title, effClientName, effIndustryType, industryTypesJson, description,
+                    countriesJson, status, priority, total_positions,
+                    startDate, interviewDate, endDate,
                     JSON.stringify(benefits || {}),
                     JSON.stringify(normalized.salary_info),
                     JSON.stringify(normalized.contact_info),
                     JSON.stringify(requirements || {}),
                     JSON.stringify(metadata || {}),
+                    isFuture,
                     userId
                 ]
             );
@@ -419,7 +468,7 @@ router.post('/', authenticate, authorize('admin', 'sourcing_department', 'projec
 /**
  * Update project
  */
-router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+router.put('/:id', authenticate, requireSection('projects', 'edit'), authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const updates = { ...req.body };
@@ -463,7 +512,7 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
             'title', 'client_name', 'industry_type', 'industry_types', 'description', 'countries',
             'status', 'priority', 'total_positions', 'filled_positions',
             'start_date', 'interview_date', 'end_date', 'benefits',
-            'salary_info', 'contact_info', 'requirements', 'metadata'
+            'salary_info', 'contact_info', 'requirements', 'metadata', 'is_future', 'interview_config'
         ];
 
         const setClause = [];
@@ -479,9 +528,13 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
                     paramCount++;
                 }
 
-                // Stringify JSON fields (industry_types joins this group post-migration).
-                if (['countries', 'industry_types', 'benefits', 'salary_info', 'contact_info', 'requirements', 'metadata'].includes(key)) {
+                // Stringify JSON fields (industry_types joins this group post-migration;
+                // interview_config holds per-project interview details for the invite).
+                if (['countries', 'industry_types', 'benefits', 'salary_info', 'contact_info', 'requirements', 'metadata', 'interview_config'].includes(key)) {
                     values.push(JSON.stringify(updates[key]));
+                } else if (['start_date', 'interview_date', 'end_date'].includes(key)) {
+                    // '' would break the DATE column on update too — see emptyToNull.
+                    values.push(emptyToNull(updates[key]));
                 } else {
                     values.push(updates[key]);
                 }
@@ -541,47 +594,73 @@ router.put('/:id', authenticate, authorize('admin', 'sourcing_department', 'proj
 });
 
 /**
- * Delete project
+ * Delete project — UNLINK its jobs.
+ *
+ * Deleting a project DETACHES its jobs (jobs.project_id → NULL) and removes the
+ * project; the jobs (and their applications / interviews) are preserved, just
+ * unlinked. This needs jobs.project_id to be nullable with an ON DELETE SET NULL
+ * FK (see migration 052) — it used to be NOT NULL + ON DELETE RESTRICT, which
+ * 500'd the `UPDATE jobs SET project_id = NULL` below, so deleting any project
+ * that had jobs always failed. Runs in one transaction so a failure can't leave
+ * jobs half-detached. The frontend confirms "all related jobs will be unlinked".
  */
-router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) => {
+router.delete('/:id', authenticate, requireSection('projects', 'delete'), authorize('admin'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
-        // Snapshot affected jobs so we can re-sync their now-detached state to the bot.
-        const affectedJobs = await query(
+        // Snapshot affected jobs (read-only) so we can re-sync their now-detached
+        // state to the bot AFTER a successful commit — never before (a rollback
+        // must not desync the chatbot).
+        const jobsSnap = await query(
             isMySQL ? 'SELECT id FROM jobs WHERE project_id = ?' : 'SELECT id FROM jobs WHERE project_id = $1',
             [id]
         );
+        const affectedJobIds = (jobsSnap.rows || []).map((r) => r.id);
 
-        // Set project_id to NULL for all related jobs before deleting
-        await query(
-            isMySQL ? 'UPDATE jobs SET project_id = NULL WHERE project_id = ?' : 'UPDATE jobs SET project_id = NULL WHERE project_id = $1',
-            [id]
-        );
+        const runUnlink = async (run) => {
+            // Detach the jobs first (project_id is nullable; the FK is ON DELETE
+            // SET NULL) so the project row can be removed without destroying its
+            // jobs / applications / interviews.
+            await run(
+                isMySQL ? 'UPDATE jobs SET project_id = NULL WHERE project_id = ?' : 'UPDATE jobs SET project_id = NULL WHERE project_id = $1',
+                [id]
+            );
+            // Deleting the project cascades project_assignments + project ad_tracking.
+            return run(
+                isMySQL ? 'DELETE FROM projects WHERE id = ?' : 'DELETE FROM projects WHERE id = $1 RETURNING *',
+                [id]
+            );
+        };
 
-        const result = await query(
-            isMySQL ? 'DELETE FROM projects WHERE id = ?' : 'DELETE FROM projects WHERE id = $1 RETURNING *',
-            [id]
-        );
+        let result;
+        if (typeof withTransaction === 'function') {
+            // One transaction so the job-unlink and the project delete commit or
+            // roll back together (no partial-detach window).
+            result = await withTransaction((conn) => runUnlink((sql, p) => conn.query(sql, p)));
+        } else {
+            // Legacy fallback only if no transaction helper exists at all.
+            result = await runUnlink((sql, p) => query(sql, p));
+        }
 
-        // Push removal to chatbot + re-sync any orphaned jobs so their cached
-        // project metadata is cleared.
+        if (!isMySQL && result.rows.length === 0) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        // After commit: drop the project from the bot and re-sync each now-orphaned
+        // job so its cached project metadata is cleared (the jobs still exist).
         _enqueueProjectDelete(id);
         setImmediate(async () => {
-            for (const job of affectedJobs.rows || []) {
-                await syncJobAsync(job.id).catch(err =>
-                    logger.warn(`Project delete: outbox enqueue failed for orphaned job ${job.id}: ${err.message}`)
+            for (const jobId of affectedJobIds) {
+                await syncJobAsync(jobId).catch(err =>
+                    logger.warn(`Project delete: orphaned-job re-sync failed for ${jobId}: ${err.message}`)
                 );
             }
         });
 
         if (isMySQL) {
-            res.json({ message: 'Project deleted successfully', id });
+            res.json({ message: 'Project deleted successfully', id, unlinked_jobs: affectedJobIds.length });
         } else {
-            if (result.rows.length === 0) {
-                return res.status(404).json({ error: 'Project not found' });
-            }
-            res.json({ message: 'Project deleted successfully', project: result.rows[0] });
+            res.json({ message: 'Project deleted successfully', project: result.rows[0], unlinked_jobs: affectedJobIds.length });
         }
     } catch (error) {
         next(error);
@@ -591,14 +670,14 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res, next) =
 /**
  * Get jobs for a project
  */
-router.get('/:id/jobs', authenticate, async (req, res, next) => {
+router.get('/:id/jobs', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
         const jobsQuery = isMySQL
-            ? `SELECT j.*, 
+            ? `SELECT j.*,
                    COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
@@ -607,7 +686,7 @@ router.get('/:id/jobs', authenticate, async (req, res, next) => {
                ORDER BY j.created_at DESC`
             : `SELECT j.*, 
                    COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as selected_count,
                    COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
@@ -625,7 +704,7 @@ router.get('/:id/jobs', authenticate, async (req, res, next) => {
 /**
  * Get candidates for a project (across all jobs)
  */
-router.get('/:id/candidates', authenticate, async (req, res, next) => {
+router.get('/:id/candidates', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status, job_id } = req.query;
@@ -671,7 +750,7 @@ router.get('/:id/candidates', authenticate, async (req, res, next) => {
 /**
  * Assign team members to project
  */
-router.post('/:id/assign-team', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
+router.post('/:id/assign-team', authenticate, requireSection('projects', 'edit'), authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { user_id, role } = req.body;
@@ -731,7 +810,7 @@ router.post('/:id/assign-team', authenticate, authorize('admin', 'sourcing_depar
 /**
  * Remove team member from project
  */
-router.delete('/:id/team/:userId', authenticate, authorize('admin', 'sourcing_department'), async (req, res, next) => {
+router.delete('/:id/team/:userId', authenticate, requireSection('projects', 'edit'), authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id, userId } = req.params;
 
@@ -762,47 +841,37 @@ router.delete('/:id/team/:userId', authenticate, authorize('admin', 'sourcing_de
  * scheduled / selected / rejected) so the Project Detail progress panel
  * can render real-time numbers without per-status round-trips.
  */
-router.get('/:id/stats', authenticate, async (req, res, next) => {
+router.get('/:id/stats', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
 
-        const statsQuery = isMySQL
-            ? `SELECT
+        // filled_positions is derived LIVE from hired applications (the stale
+        // jobs.positions_filled column is never written). positions_capacity is
+        // the sum of job headcounts; total_positions (the progress denominator)
+        // is the admin-set project target, fetched separately so the detail page
+        // matches the list's "X / target" bar.
+        // Pipeline counts are candidate-centric (COUNT(DISTINCT candidate_id)) so the
+        // detail panel agrees with the projects list, control tower, Messages and
+        // analytics. total_jobs / positions_capacity stay job-level (they ARE jobs).
+        const statsBody = `SELECT
                    COUNT(DISTINCT j.id) as total_jobs,
-                   COALESCE(SUM(j.positions_available), 0) as total_positions,
-                   COALESCE(SUM(j.positions_filled), 0) as filled_positions,
-                   COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'applied' THEN a.id END) as applied_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as screening_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as certified_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'pre_screened' THEN a.id END) as pre_screened_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interviewed' THEN a.id END) as interviewed_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'placed' THEN a.id END) as placed_count,
+                   COALESCE(SUM(j.positions_available), 0) as positions_capacity,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as filled_positions,
+                   COUNT(DISTINCT a.candidate_id) as total_applications,
+                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.candidate_id END) as applied_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.candidate_id END) as screening_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as certified_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.candidate_id END) as pre_screened_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as interview_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as interviewed_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.candidate_id END) as selected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.candidate_id END) as rejected_count,
+                   COUNT(DISTINCT CASE WHEN a.status = 'hired' THEN a.candidate_id END) as placed_count,
                    COUNT(DISTINCT a.candidate_id) as unique_candidates
                FROM jobs j
                LEFT JOIN applications a ON j.id = a.job_id
-               WHERE j.project_id = ?`
-            : `SELECT
-                   COUNT(DISTINCT j.id) as total_jobs,
-                   COALESCE(SUM(j.positions_available), 0) as total_positions,
-                   COALESCE(SUM(j.positions_filled), 0) as filled_positions,
-                   COUNT(DISTINCT a.id) as total_applications,
-                   COUNT(DISTINCT CASE WHEN a.status = 'applied' THEN a.id END) as applied_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'screening' THEN a.id END) as screening_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'certified' THEN a.id END) as certified_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'pre_screened' THEN a.id END) as pre_screened_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interview_scheduled' THEN a.id END) as interview_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'interviewed' THEN a.id END) as interviewed_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'selected' THEN a.id END) as selected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'rejected' THEN a.id END) as rejected_count,
-                   COUNT(DISTINCT CASE WHEN a.status = 'placed' THEN a.id END) as placed_count,
-                   COUNT(DISTINCT a.candidate_id) as unique_candidates
-               FROM jobs j
-               LEFT JOIN applications a ON j.id = a.job_id
-               WHERE j.project_id = $1`;
+               WHERE j.project_id = `;
+        const statsQuery = statsBody + (isMySQL ? '?' : '$1');
 
         // Interview schedules for this project (separate count, not via app.status)
         const interviewsCountQuery = isMySQL
@@ -815,17 +884,25 @@ router.get('/:id/stats', authenticate, async (req, res, next) => {
                JOIN jobs j ON a.job_id = j.id
                WHERE j.project_id = $1`;
 
-        const [statsResult, interviewsResult] = await Promise.all([
+        const targetQuery = isMySQL
+            ? 'SELECT total_positions FROM projects WHERE id = ?'
+            : 'SELECT total_positions FROM projects WHERE id = $1';
+
+        const [statsResult, interviewsResult, targetResult] = await Promise.all([
             query(statsQuery, [id]),
             query(interviewsCountQuery, [id]).catch(() => ({ rows: [{ count: 0 }] })),
+            query(targetQuery, [id]).catch(() => ({ rows: [] })),
         ]);
 
         const row = statsResult.rows[0] || {};
         const interviewsCount = parseInt(interviewsResult.rows[0]?.count, 10) || 0;
+        const target = parseInt(targetResult.rows[0]?.total_positions, 10) || 0;
 
         res.json({
             ...row,
+            total_positions: target,
             interviews_count: interviewsCount,
+            interviews_scheduled: interviewsCount,
         });
     } catch (error) {
         next(error);
@@ -835,7 +912,7 @@ router.get('/:id/stats', authenticate, async (req, res, next) => {
 /**
  * Export project candidates/applications as CSV
  */
-router.get('/:id/export/csv', authenticate, async (req, res, next) => {
+router.get('/:id/export/csv', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status, job_id, date_from, date_to } = req.query;
@@ -974,7 +1051,7 @@ router.get('/:id/export/csv', authenticate, async (req, res, next) => {
 /**
  * Get all jobs for a specific project
  */
-router.get('/:id/jobs', authenticate, async (req, res, next) => {
+router.get('/:id/jobs', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status } = req.query;
@@ -1034,7 +1111,9 @@ router.get('/:id/jobs', authenticate, async (req, res, next) => {
 /**
  * Create a new job for a specific project
  */
-router.post('/:id/jobs', authenticate, authorize('admin', 'sourcing_department', 'project_handler'), async (req, res, next) => {
+// Creating a job under a project is a JOBS create (matrix: jobs are view-only for
+// project_handler), so gate on jobs.create — not projects.edit — to match POST /api/jobs.
+router.post('/:id/jobs', authenticate, requireSection('jobs', 'create'), authorize('admin', 'sourcing_department'), async (req, res, next) => {
     try {
         const { id: project_id } = req.params;
         const {
@@ -1127,7 +1206,7 @@ router.post('/:id/jobs', authenticate, authorize('admin', 'sourcing_department',
 /**
  * Get all candidates assigned to jobs in this project
  */
-router.get('/:id/candidates', authenticate, async (req, res, next) => {
+router.get('/:id/candidates', authenticate, requireSection('projects', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { status } = req.query;

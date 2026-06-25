@@ -6,8 +6,18 @@ const express = require('express');
 const router = express.Router();
 const { pool, withTransaction } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { POSITIONS_FILLED_JOIN, POSITIONS_FILLED_SELECT } = require('../utils/job-queries');
+const { resolveCvAccessUrl } = require('../utils/cv-url');
+const { syncCandidateStage, hasCvSql, emitStageChanged } = require('../services/candidate-stage');
+const notifications = require('../services/notifications');
+const semanticMatch = require('../services/semantic-match');
 const logger = require('../utils/logger');
+
+// CV eligibility test (#5): a candidate has a CV iff cv_uploaded OR a cv_files row.
+function candidateRowHasCv(candidate) {
+    return candidate.cv_uploaded === true || candidate.has_cv_file === true;
+}
 
 /**
  * Skill matching configuration
@@ -48,6 +58,41 @@ function calculateMatchScore(candidate, job) {
     let totalScore = 0;
     let maxScore = 0;
 
+    // ── Hard CV gate (UPGRADES.md #5) ───────────────────────────────────
+    // CV is THE eligibility gate for assignment: a candidate with no CV on
+    // file (cv_uploaded OR a cv_files row) can never score/match/assign — the
+    // old "parsed-signal bypass" (skills/age typed in chat counted as enough)
+    // is removed, so chat-only leads stay New until a real CV arrives.
+    if (!candidateRowHasCv(candidate)) {
+        return {
+            score: 0,
+            factors: [{ factor: 'cv', score: 0, detail: 'No CV on file — not eligible for assignment' }],
+            is_qualified: false,
+            is_excellent: false,
+            no_cv: true,
+        };
+    }
+
+    // ── B013: hard gender filter ────────────────────────────────────────
+    // If the vacancy specifies a gender and the candidate's known gender
+    // differs, they must never match (e.g. a male-tagged candidate must not
+    // surface under a "female" vacancy). Unknown candidate gender is allowed
+    // through but flagged below for manual verification.
+    const reqGender = String(jobRequirements.gender || '').trim().toLowerCase();
+    const candGender = String(candidateMetadata.gender || '').trim().toLowerCase();
+    if (reqGender && candGender && reqGender !== candGender) {
+        return {
+            score: 0,
+            factors: [{ factor: 'gender', score: 0, detail: `Requires ${reqGender}, candidate is ${candGender}` }],
+            is_qualified: false,
+            is_excellent: false,
+            gender_mismatch: true,
+        };
+    }
+    if (reqGender && !candGender) {
+        scoreFactors.push({ factor: 'gender', score: null, detail: 'Gender unknown — verify manually' });
+    }
+
     // 1. Skill matching (40% weight)
     if (requiredSkills.length > 0) {
         maxScore += 40;
@@ -84,19 +129,33 @@ function calculateMatchScore(candidate, job) {
         });
     }
 
-    // 2. Experience matching (20% weight)
+    // 2. Experience matching (20% weight) — only when the job actually
+    //    requires experience. Previously this block always ran and awarded a
+    //    free 20 points for "0 years >= 0 required", which (combined with a
+    //    requirement-less job) produced phantom 100% matches (B012). We also
+    //    distinguish "unknown" experience from a genuine zero.
     const reqMinExp = jobRequirements.min_experience_years || 0;
-    const candidateExp = candidateMetadata.experience_years || 0;
-    maxScore += 20;
+    const rawExp = candidateMetadata.experience_years;
+    const hasExp = rawExp !== undefined && rawExp !== null && rawExp !== '';
+    const candidateExp = hasExp ? (Number(rawExp) || 0) : 0;
 
-    if (candidateExp >= reqMinExp) {
-        totalScore += 20;
-        scoreFactors.push({ factor: 'experience', score: 20, detail: `${candidateExp} years (required: ${reqMinExp})` });
-    } else if (candidateExp >= reqMinExp - 1) {
-        totalScore += 10;
-        scoreFactors.push({ factor: 'experience', score: 10, detail: `${candidateExp} years (slightly below ${reqMinExp})` });
-    } else {
-        scoreFactors.push({ factor: 'experience', score: 0, detail: `${candidateExp} years (required: ${reqMinExp})` });
+    if (reqMinExp > 0) {
+        maxScore += 20;
+        if (!hasExp) {
+            scoreFactors.push({ factor: 'experience', score: 0, detail: `experience unknown (required: ${reqMinExp})` });
+        } else if (candidateExp >= reqMinExp) {
+            totalScore += 20;
+            scoreFactors.push({ factor: 'experience', score: 20, detail: `${candidateExp} years (required: ${reqMinExp})` });
+        } else if (candidateExp >= reqMinExp - 1) {
+            totalScore += 10;
+            scoreFactors.push({ factor: 'experience', score: 10, detail: `${candidateExp} years (slightly below ${reqMinExp})` });
+        } else {
+            scoreFactors.push({ factor: 'experience', score: 0, detail: `${candidateExp} years (required: ${reqMinExp})` });
+        }
+    } else if (hasExp) {
+        // Job has no experience requirement; record the candidate's experience
+        // for transparency without inflating the score.
+        scoreFactors.push({ factor: 'experience', score: 0, detail: `${candidateExp} years (no requirement)` });
     }
 
     // 3. Height matching (15% weight) - if applicable
@@ -152,8 +211,21 @@ function calculateMatchScore(candidate, job) {
         });
     }
 
+    // If the job defines no scorable criteria (no required skills, experience,
+    // height, age or languages), there's nothing to match on — don't report a
+    // misleading score. (B012 guard for requirement-less jobs.)
+    if (maxScore === 0) {
+        return {
+            score: 0,
+            factors: [...scoreFactors, { factor: 'insufficient_criteria', score: 0, detail: 'Job defines no scorable requirements' }],
+            is_qualified: false,
+            is_excellent: false,
+            insufficient_criteria: true,
+        };
+    }
+
     // Calculate final percentage
-    const finalScore = maxScore > 0 ? (totalScore / maxScore) * 100 : 0;
+    const finalScore = (totalScore / maxScore) * 100;
 
     return {
         score: Math.round(finalScore),
@@ -166,14 +238,14 @@ function calculateMatchScore(candidate, job) {
 /**
  * Auto-assign a single candidate to matching jobs
  */
-router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
+router.post('/candidate/:candidateId', authenticate, requireSection('applications', 'create'), async (req, res, next) => {
     try {
         const { candidateId } = req.params;
         const { threshold = 50 } = req.body; // Minimum match score to assign
 
-        // Get candidate
+        // Get candidate (+ CV-presence so the hard CV gate applies, #5)
         const candidateResult = await pool.query(
-            'SELECT * FROM candidates WHERE id = $1',
+            `SELECT c.*, ${hasCvSql('c')} AS has_cv_file FROM candidates c WHERE c.id = $1`,
             [candidateId]
         );
 
@@ -210,13 +282,17 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
             const matchResult = calculateMatchScore(candidate, job);
 
             if (matchResult.score >= threshold) {
-                // Create application
+                // Create application. ON CONFLICT guards against a race/retry
+                // creating a duplicate (candidate_id, job_id) pair — the unique
+                // index already exists, so we just no-op and skip on conflict.
                 const appResult = await pool.query(
                     `INSERT INTO applications (candidate_id, job_id, status, match_score, screening_details)
-                     VALUES ($1, $2, 'auto_assigned', $3, $4)
+                     VALUES ($1, $2, 'screening', $3, $4)
+                     ON CONFLICT (candidate_id, job_id) DO NOTHING
                      RETURNING *`,
                     [candidateId, job.id, matchResult.score / 100, JSON.stringify(matchResult)]
                 );
+                if (appResult.rows.length === 0) continue; // already assigned
 
                 assignments.push({
                     job_id: job.id,
@@ -236,13 +312,16 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
             }
         }
 
-        // If no jobs matched, move to future pool
-        if (assignments.length === 0 && candidate.status !== 'future_pool') {
+        // If no jobs matched, move to future pool — but ONLY if a CV is on file
+        // (#5: future_pool = "has CV but no matching role"; no CV ⇒ stays New).
+        if (assignments.length === 0 && candidateRowHasCv(candidate) && candidate.status !== 'future_pool') {
             await pool.query(
-                `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`,
+                `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW() WHERE id = $1`,
                 [candidateId]
             );
-
+            // Live-update the Conversations badge: this is a direct write that
+            // syncCandidateStage would not re-derive (no forward application).
+            emitStageChanged(candidateId, 'future_pool');
             logger.info(`Candidate ${candidateId} moved to future pool - no matching jobs`);
         }
 
@@ -257,12 +336,30 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
             logger.info(`Candidate ${candidateId} lifted from future_pool → screening (${assignments.length} jobs assigned)`);
         }
 
+        // Keep candidate.status canonical and notify the candidate once for the
+        // best-matching job ("you've been selected"). One message — not one per
+        // job — to avoid spamming when several jobs match.
+        let assignmentNotification = null;
+        if (assignments.length > 0) {
+            syncCandidateStage(candidateId).catch(() => {});
+            const best = assignments.reduce((a, b) => (b.match_score > a.match_score ? b : a));
+            try {
+                assignmentNotification = await notifications.sendJobAssignmentNotification(
+                    candidateId, best.job_title, ['whatsapp']
+                );
+            } catch (notifErr) {
+                logger.warn(`Auto-assign notification failed for ${candidateId}: ${notifErr.message}`);
+                assignmentNotification = { success: [], failed: [{ channel: 'all', error: notifErr.message }] };
+            }
+        }
+
         res.json({
             candidate_id: candidateId,
             candidate_name: candidate.name,
             assignments,
             rejected_jobs: rejectedJobs.slice(0, 5), // Top 5 rejected
             moved_to_pool: assignments.length === 0,
+            assignment_notification: assignmentNotification,
             message: assignments.length > 0
                 ? `Assigned to ${assignments.length} jobs`
                 : 'No matching jobs found - moved to future pool'
@@ -277,13 +374,13 @@ router.post('/candidate/:candidateId', authenticate, async (req, res, next) => {
 /**
  * Auto-assign all new candidates
  */
-router.post('/batch', authenticate, async (req, res, next) => {
+router.post('/batch', authenticate, requireSection('applications', 'create'), async (req, res, next) => {
     try {
         const { threshold = 50, status = 'new' } = req.body;
 
-        // Get candidates to process
+        // Get candidates to process (+ CV-presence for the hard CV gate, #5)
         const candidatesResult = await pool.query(
-            `SELECT * FROM candidates WHERE status = $1 LIMIT 50`,
+            `SELECT c.*, ${hasCvSql('c')} AS has_cv_file FROM candidates c WHERE c.status = $1 LIMIT 50`,
             [status]
         );
 
@@ -312,6 +409,7 @@ router.post('/batch', authenticate, async (req, res, next) => {
             const existingJobIds = existingAppsResult.rows.map(a => a.job_id);
 
             let assignedCount = 0;
+            let bestJob = null; // { title, score } of the highest-scoring assignment
 
             for (const job of jobsResult.rows) {
                 if (existingJobIds.includes(job.id)) continue;
@@ -319,27 +417,47 @@ router.post('/batch', authenticate, async (req, res, next) => {
                 const matchResult = calculateMatchScore(candidate, job);
 
                 if (matchResult.score >= threshold) {
-                    await pool.query(
+                    const ins = await pool.query(
                         `INSERT INTO applications (candidate_id, job_id, status, match_score, screening_details)
-                         VALUES ($1, $2, 'auto_assigned', $3, $4)`,
+                         VALUES ($1, $2, 'screening', $3, $4)
+                         ON CONFLICT (candidate_id, job_id) DO NOTHING`,
                         [candidate.id, job.id, matchResult.score / 100, JSON.stringify(matchResult)]
                     );
-                    assignedCount++;
+                    if (ins.rowCount > 0) {
+                        assignedCount++;
+                        if (!bestJob || matchResult.score > bestJob.score) {
+                            bestJob = { title: job.title, score: matchResult.score };
+                        }
+                    }
                 }
             }
 
             if (assignedCount === 0) {
-                await pool.query(
-                    `UPDATE candidates SET status = 'future_pool', updated_at = NOW() WHERE id = $1`,
-                    [candidate.id]
-                );
-                results.to_pool++;
+                // No match → future_pool ONLY if a CV is on file (#5). A CV-less
+                // candidate stays New (awaiting CV), never dropped into the pool.
+                if (candidateRowHasCv(candidate)) {
+                    await pool.query(
+                        `UPDATE candidates SET status = 'future_pool', conversation_stage = 'future_pool', updated_at = NOW() WHERE id = $1`,
+                        [candidate.id]
+                    );
+                    results.to_pool++;
+                    emitStageChanged(candidate.id, 'future_pool');
+                }
             } else {
                 await pool.query(
                     `UPDATE candidates SET status = 'screening', updated_at = NOW() WHERE id = $1`,
                     [candidate.id]
                 );
                 results.assigned++;
+                syncCandidateStage(candidate.id).catch(() => {});
+                // Notify once for the best-matching job.
+                if (bestJob) {
+                    try {
+                        await notifications.sendJobAssignmentNotification(candidate.id, bestJob.title, ['whatsapp']);
+                    } catch (notifErr) {
+                        logger.warn(`Batch auto-assign notify failed for ${candidate.id}: ${notifErr.message}`);
+                    }
+                }
             }
 
             results.processed++;
@@ -362,7 +480,7 @@ router.post('/batch', authenticate, async (req, res, next) => {
 /**
  * Get candidates assigned to a job with match details
  */
-router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
+router.get('/job/:jobId/candidates', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const { jobId } = req.params;
         const { status } = req.query;
@@ -371,7 +489,14 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
         // before any complex JOINs. Previous order (candidates first, job
         // second) meant a typo in a CV-files column would 500-then-look-like-
         // "job not found", which is exactly the bug we're fixing here.
-        const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+        // positions_filled is derived LIVE from hired applications (the stored
+        // jobs.positions_filled column is no longer trusted — see job-queries.js).
+        const jobResult = await pool.query(
+            `SELECT j.*,
+                    (SELECT COUNT(*)::int FROM applications a WHERE a.job_id = j.id AND a.status = 'hired') AS positions_filled_derived
+             FROM jobs j WHERE j.id = $1`,
+            [jobId]
+        );
         if (jobResult.rows.length === 0) {
             return res.status(404).json({ error: 'Job not found' });
         }
@@ -402,6 +527,7 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                 c.metadata,
                 c.notes as candidate_notes,
                 c.preferred_language,
+                c.cv_uploaded,
                 cv.file_url as cv_url,
                 cv.file_name as cv_filename
             FROM applications a
@@ -414,6 +540,8 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                 LIMIT 1
             ) cv ON true
             WHERE a.job_id = $1
+              AND c.removed_at IS NULL
+              AND ${hasCvSql('c')}
         `;
 
         const params = [jobId];
@@ -453,7 +581,16 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                     metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : (row.metadata || {}),
                     notes: row.candidate_notes,
                     preferred_language: row.preferred_language,
-                    cv_url: row.cv_url,
+                    cv_uploaded: row.cv_uploaded,
+                    // Resolve raw cv_files.file_url to a browser-openable URL
+                    // (http stays as-is; gcs/relative/placeholder paths get
+                    // normalised). Without this the frontend Preview/Download
+                    // opened an unusable raw storage path for non-http values.
+                    cv_url: resolveCvAccessUrl({
+                        file_url: row.cv_url,
+                        file_name: row.cv_filename,
+                        candidate_id: row.candidate_id,
+                    }).url,
                     cv_filename: row.cv_filename
                 }
             };
@@ -466,7 +603,7 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                 category: job.category,
                 status: job.status,
                 positions_available: job.positions_available,
-                positions_filled: job.positions_filled || 0,
+                positions_filled: job.positions_filled_derived ?? job.positions_filled ?? 0,
                 requirements: job.requirements
             },
             total_candidates: candidates.length,
@@ -476,7 +613,7 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
                 good: candidates.filter(c => c.match_score >= 60 && c.match_score < 80).length,
                 fair: candidates.filter(c => c.match_score >= 50 && c.match_score < 60).length,
                 certified: candidates.filter(c => c.application_status === 'certified').length,
-                pending: candidates.filter(c => ['auto_assigned', 'applied', 'reviewing'].includes(c.application_status)).length
+                pending: candidates.filter(c => c.application_status === 'screening').length
             }
         });
 
@@ -489,33 +626,58 @@ router.get('/job/:jobId/candidates', authenticate, async (req, res, next) => {
 /**
  * Get future pool candidates
  */
-router.get('/pool', authenticate, async (req, res, next) => {
+router.get('/pool', authenticate, requireSection('general_pool', 'view'), async (req, res, next) => {
     try {
-        const { page = 1, limit = 20 } = req.query;
+        const { page = 1, limit = 20, has_cv } = req.query;
         const offset = (page - 1) * limit;
 
+        // Future Pool = a flexible backup/talent pool (decided with the user). It
+        // surfaces ALL future_pool candidates regardless of CV — so candidates
+        // parked here without a CV are visible (previously they vanished). Pass
+        // ?has_cv=true to restrict to CV-present rows when needed.
+        const cvFilter = (String(has_cv) === 'true') ? `AND ${hasCvSql('c')}` : '';
         const result = await pool.query(
-            `SELECT c.*, cv.file_url as cv_url
+            `SELECT c.*, cv.file_url as cv_raw_url, cv.file_name as cv_filename
              FROM candidates c
              LEFT JOIN LATERAL (
-                SELECT file_url
+                SELECT file_url, file_name
                 FROM cv_files
                 WHERE candidate_id = c.id
                 ORDER BY is_primary DESC NULLS LAST, uploaded_at DESC
                 LIMIT 1
              ) cv ON true
-             WHERE c.status = 'future_pool'
-             ORDER BY c.updated_at DESC
+             WHERE c.status = 'future_pool' AND c.removed_at IS NULL
+               ${cvFilter}
+             ORDER BY COALESCE(c.whatsapp_unreachable, FALSE) ASC, c.updated_at DESC
              LIMIT $1 OFFSET $2`,
             [limit, offset]
         );
 
         const countResult = await pool.query(
-            `SELECT COUNT(*) FROM candidates WHERE status = 'future_pool'`
+            `SELECT COUNT(*) FROM candidates c WHERE c.status = 'future_pool' AND c.removed_at IS NULL ${cvFilter}`
         );
 
+        // Expose a browser-openable cv_url + cv_filename so the pool modal can
+        // actually preview/download the CV (previously the modal showed a fake
+        // filename with dead buttons).
+        const poolRows = result.rows.map((row) => {
+            const resolved = resolveCvAccessUrl({
+                file_url: row.cv_raw_url,
+                file_name: row.cv_filename,
+                candidate_id: row.id,
+            });
+            return {
+                ...row,
+                cv_url: resolved.url,
+                // Surface the resolver status so the pool modal can tell a CV
+                // that's still syncing from the chatbot ('placeholder_unresolved')
+                // apart from a genuine "no CV" — instead of a dead button (B001/B002).
+                cv_status: resolved.status,
+            };
+        });
+
         res.json({
-            data: result.rows,
+            data: poolRows,
             pagination: {
                 page: parseInt(page),
                 limit: parseInt(limit),
@@ -533,14 +695,20 @@ router.get('/pool', authenticate, async (req, res, next) => {
  * Get alternative jobs for a candidate (excluding current job)
  * GET /api/auto-assign/candidate/:id/alternatives?threshold=40
  */
-router.get('/candidate/:id/alternatives', authenticate, async (req, res, next) => {
+router.get('/candidate/:id/alternatives', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
     try {
         const { id } = req.params;
         const { threshold = 40 } = req.query;
 
-        const candidateResult = await pool.query('SELECT * FROM candidates WHERE id = $1', [id]);
+        const candidateResult = await pool.query(
+            `SELECT c.*, ${hasCvSql('c')} AS has_cv_file FROM candidates c WHERE c.id = $1`,
+            [id]
+        );
         if (candidateResult.rows.length === 0) return res.status(404).json({ error: 'Candidate not found' });
         const candidate = candidateResult.rows[0];
+
+        // No CV ⇒ not eligible for any job match yet (#5) — return no alternatives.
+        if (!candidateRowHasCv(candidate)) return res.json({ alternatives: [] });
 
         // Active jobs the candidate has NOT already applied to
         const existingApps = await pool.query('SELECT job_id FROM applications WHERE candidate_id = $1', [id]);
@@ -586,4 +754,54 @@ router.get('/candidate/:id/alternatives', authenticate, async (req, res, next) =
     }
 });
 
+/**
+ * GET /api/auto-assign/job/:jobId/shortlist  (#4a)
+ * Ranked SEMANTIC shortlist: candidates ordered by embedding similarity to the
+ * job, with a deterministic "why matched". Read-only suggestion surface (the
+ * actual assignment still goes through the CV-gated assign endpoints).
+ */
+router.get('/job/:jobId/shortlist', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
+        const result = await semanticMatch.shortlistForJob(req.params.jobId, { limit });
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * GET /api/auto-assign/candidate/:id/job-matches  (Future-Pool backup)
+ * Ranked SEMANTIC job matches for one candidate across all active jobs — the
+ * "quick backup plan" for pooled candidates. Read-only; assignment still goes
+ * through the CV-gated assign endpoints. Run embed-backfill to populate vectors.
+ */
+router.get('/candidate/:id/job-matches', authenticate, requireSection('candidates', 'view'), async (req, res, next) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
+        const result = await semanticMatch.matchJobsForCandidate(req.params.id, { limit });
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * POST /api/auto-assign/embed-backfill  (#4a, ops)
+ * Generate/refresh embeddings for jobs + CV-present candidates. Admin/sourcing
+ * only (candidates:create) — it spends OpenAI tokens. Idempotent (skips up-to-date
+ * rows by content hash). Run once after deploy, then periodically as CVs change.
+ */
+router.post('/embed-backfill', authenticate, requireSection('candidates', 'create'), async (req, res, next) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.body?.limit, 10) || 1000, 1), 5000);
+        const result = await semanticMatch.backfillEmbeddings({ limit });
+        res.json({ ok: true, ...result });
+    } catch (err) {
+        next(err);
+    }
+});
+
 module.exports = router;
+// Exposed for unit testing the pure scoring logic (B012/B013) without a DB.
+module.exports.calculateMatchScore = calculateMatchScore;

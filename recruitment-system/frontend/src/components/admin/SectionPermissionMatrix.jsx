@@ -34,20 +34,23 @@ const TONES = {
              off: 'bg-white text-rose-600 border-rose-200 hover:bg-rose-50 dark:bg-zinc-900 dark:text-rose-300 dark:border-rose-900/50 dark:hover:bg-rose-950/40' },
 }
 
-function PermChip({ tone, active, onClick, disabled, label, short, Icon }) {
+function PermChip({ tone, active, onClick, disabled, locked, label, short, Icon }) {
   const cls = active ? TONES[tone].on : TONES[tone].off
+  const title = locked ? `${label} — mandatory for this role` : label
   return (
     <motion.button
       type="button"
-      whileTap={disabled ? undefined : { scale: 0.94 }}
+      whileTap={(disabled || locked) ? undefined : { scale: 0.94 }}
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || locked}
       aria-pressed={active}
-      aria-label={label}
-      title={label}
+      aria-label={title}
+      title={title}
       className={`group inline-flex items-center justify-center gap-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-all
         ${cls}
-        ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:-translate-y-px'}`}
+        ${locked ? 'ring-1 ring-inset ring-primary-400/60 cursor-default' : ''}
+        ${disabled && !locked ? 'opacity-50 cursor-not-allowed' : ''}
+        ${!disabled && !locked ? 'cursor-pointer hover:-translate-y-px' : ''}`}
     >
       <Icon size={12} aria-hidden />
       <span>{short}</span>
@@ -66,12 +69,15 @@ function PermChip({ tone, active, onClick, disabled, label, short, Icon }) {
  *  - onChange:  (next) => void  — receives the FULL updated array
  *  - disabled:  boolean — admin users always see the matrix in read-only mode
  *               with a banner explaining that admins implicitly have everything
+ *  - lockedActions: { [section_key]: { can_view?, can_create?, can_edit?, can_delete? } }
+ *               — mandatory role-baseline cells that are forced ON and cannot be
+ *               toggled off (extras stay editable). UPGRADES.md #2.
  *
  * The component loads the sections catalogue once via TanStack Query and merges
  * it with the supplied `value` so missing rows render as all-off (and any
  * server-side row not in the catalogue is silently dropped).
  */
-export default function SectionPermissionMatrix({ value = [], onChange, disabled = false }) {
+export default function SectionPermissionMatrix({ value = [], onChange, disabled = false, lockedActions = {} }) {
   const { data: sections = [], isLoading } = useQuery({
     queryKey: ['admin', 'sections'],
     queryFn: getSections,
@@ -82,6 +88,8 @@ export default function SectionPermissionMatrix({ value = [], onChange, disabled
 
   const handleToggle = (sectionKey, permKey) => {
     if (disabled) return
+    // Mandatory baseline cells can't be toggled off.
+    if (lockedActions[sectionKey]?.[permKey]) return
     const existing = byKey.get(sectionKey) || {
       section_key: sectionKey,
       can_view: false, can_create: false, can_edit: false, can_delete: false,
@@ -101,9 +109,14 @@ export default function SectionPermissionMatrix({ value = [], onChange, disabled
 
   const handleAllForSection = (sectionKey, on) => {
     if (disabled) return
+    const locked = lockedActions[sectionKey] || {}
     const next = {
       section_key: sectionKey,
-      can_view:   on, can_create: on, can_edit: on, can_delete: on,
+      // Revoking never drops a mandatory baseline cell — those stay ON.
+      can_view:   on || !!locked.can_view,
+      can_create: on || !!locked.can_create,
+      can_edit:   on || !!locked.can_edit,
+      can_delete: on || !!locked.can_delete,
     }
     const filtered = (value || []).filter(p => p.section_key !== sectionKey)
     onChange?.([...filtered, next])
@@ -135,7 +148,8 @@ export default function SectionPermissionMatrix({ value = [], onChange, disabled
         {sections.map(s => {
           const Icon = ICONS[s.icon] || ShieldCheck
           const row = byKey.get(s.key) || { can_view: false, can_create: false, can_edit: false, can_delete: false }
-          const allOn = ACTIONS.every(a => row[a.key])
+          const locked = lockedActions[s.key] || {}
+          const allOn = ACTIONS.every(a => row[a.key] || locked[a.key])
           return (
             <motion.div
               key={s.key}
@@ -171,9 +185,10 @@ export default function SectionPermissionMatrix({ value = [], onChange, disabled
                   <PermChip
                     key={a.key}
                     tone={a.tone}
-                    active={!!row[a.key]}
+                    active={!!row[a.key] || !!locked[a.key]}
                     onClick={() => handleToggle(s.key, a.key)}
                     disabled={disabled}
+                    locked={!!locked[a.key]}
                     label={`${a.label} ${s.name}`}
                     short={a.short}
                     Icon={a.icon}

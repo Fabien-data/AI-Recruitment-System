@@ -8,17 +8,11 @@ import { Logo } from '../components/ui/Logo'
 import { AuthHero } from '../components/AuthHero'
 import { notify } from '../components/ui/Toast'
 
-const roleOptions = [
-  { value: 'admin', label: 'Admin' },
-  { value: 'recruiter', label: 'Recruiter' },
-  { value: 'supervisor', label: 'Supervisor' },
-]
-
 export default function Register() {
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
-  const [role, setRole] = useState('admin')
   const [loading, setLoading] = useState(false)
   const register = useAuthStore((state) => state.register)
   const navigate = useNavigate()
@@ -27,9 +21,15 @@ export default function Register() {
     e.preventDefault()
     setLoading(true)
     try {
-      await register({ email, password, full_name: fullName, role })
-      notify.success('Account created')
-      navigate('/')
+      // Role is NOT chosen by the registrant — an admin assigns it on approval.
+      const res = await register({ email, password, full_name: fullName, phone })
+      if (res?.pending) {
+        notify.success(res.message || 'Account created — awaiting admin approval')
+        navigate('/login')
+      } else {
+        notify.success('Account created')
+        navigate('/')
+      }
     } catch (error) {
       notify.error(error.response?.data?.error || 'Registration failed')
     } finally {
@@ -54,10 +54,10 @@ export default function Register() {
             <Logo size={40} />
           </div>
           <h1 className="text-3xl font-bold text-center text-zinc-900 dark:text-zinc-50 tracking-tight">
-            Create Admin Account
+            Create your account
           </h1>
           <p className="text-center text-zinc-500 dark:text-zinc-400 mt-2 mb-8">
-            Set up your first admin user
+            An administrator will review and approve your access before you can sign in.
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -66,7 +66,7 @@ export default function Register() {
               type="text"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              placeholder="Admin User"
+              placeholder="Your name"
               required
             />
             <Input
@@ -74,8 +74,15 @@ export default function Register() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@recruitment.com"
+              placeholder="you@company.com"
               required
+            />
+            <Input
+              label="Phone"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="947XXXXXXXX"
             />
             <Input
               label="Password"
@@ -85,23 +92,6 @@ export default function Register() {
               placeholder="••••••••"
               required
             />
-            <div className="w-full">
-              <label htmlFor="role" className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5 ml-1 tracking-tight">
-                Role
-              </label>
-              <select
-                id="role"
-                className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-              >
-                {roleOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
             <Button
               type="submit"
               variant="primary"

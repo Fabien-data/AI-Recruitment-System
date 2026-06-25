@@ -1,10 +1,14 @@
 import { twMerge } from 'tailwind-merge'
 import { motion } from 'framer-motion'
 
+// Top accent bar. Inset past the card's rounded corners (rounded-3xl ≈ 24px)
+// with fully-rounded ends so the 3px line never overhangs or "misaligns" at the
+// corners — the previous full-bleed `inset-x-0 + rounded-t-3xl` fought the 24px
+// corner radius on a 3px-tall bar and showed colored notches at the corners (B015).
 const accentStripe = {
-  blue: 'before:content-[""] before:absolute before:inset-x-0 before:top-0 before:h-[3px] before:bg-brand-gradient before:rounded-t-3xl',
-  red: 'before:content-[""] before:absolute before:inset-x-0 before:top-0 before:h-[3px] before:bg-accent-gradient before:rounded-t-3xl',
-  mixed: 'before:content-[""] before:absolute before:inset-x-0 before:top-0 before:h-[3px] before:bg-mixed-gradient before:rounded-t-3xl',
+  blue: 'before:content-[""] before:absolute before:top-0 before:inset-x-5 before:h-[3px] before:bg-brand-gradient before:rounded-full',
+  red: 'before:content-[""] before:absolute before:top-0 before:inset-x-5 before:h-[3px] before:bg-accent-gradient before:rounded-full',
+  mixed: 'before:content-[""] before:absolute before:top-0 before:inset-x-5 before:h-[3px] before:bg-mixed-gradient before:rounded-full',
 }
 
 const glowClass = {

@@ -10,6 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
+const { requireSection } = require('../middleware/sections');
 const { pool } = require('../config/database');
 const chatbotOutbox = require('../services/chatbot-outbox');
 const { buildFaqPayload } = require('../services/chatbot-payloads');
@@ -70,7 +71,7 @@ async function _enqueueFaqDelete(entryId) {
  * GET /api/knowledge-base
  * List all knowledge base entries with pagination
  */
-router.get('/', async (req, res) => {
+router.get('/', requireSection('knowledge_base', 'view'), async (req, res) => {
     try {
         const { page = 1, limit = 20, category, search, tenant_id } = req.query;
 
@@ -92,7 +93,7 @@ router.get('/', async (req, res) => {
  * GET /api/knowledge-base/categories
  * Get all categories with counts
  */
-router.get('/categories', async (req, res) => {
+router.get('/categories', requireSection('knowledge_base', 'view'), async (req, res) => {
     try {
         const { tenant_id } = req.query;
         const categories = await getCategories(tenant_id || null);
@@ -107,7 +108,7 @@ router.get('/categories', async (req, res) => {
  * GET /api/knowledge-base/search
  * Search knowledge base (for testing)
  */
-router.get('/search', async (req, res) => {
+router.get('/search', requireSection('knowledge_base', 'view'), async (req, res) => {
     try {
         const { q, language = 'en', tenant_id, limit = 5 } = req.query;
 
@@ -127,7 +128,7 @@ router.get('/search', async (req, res) => {
  * GET /api/knowledge-base/:id
  * Get a single entry by ID
  */
-router.get('/:id', async (req, res) => {
+router.get('/:id', requireSection('knowledge_base', 'view'), async (req, res) => {
     try {
         const { id } = req.params;
         const result = await getAllEntries(null, { id });
@@ -148,7 +149,7 @@ router.get('/:id', async (req, res) => {
  * POST /api/knowledge-base
  * Create a new knowledge base entry
  */
-router.post('/', authorize('admin', 'sourcing_department'), async (req, res) => {
+router.post('/', requireSection('knowledge_base', 'create'), authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const {
             tenant_id,
@@ -198,7 +199,7 @@ router.post('/', authorize('admin', 'sourcing_department'), async (req, res) => 
  * PUT /api/knowledge-base/:id
  * Update an existing entry
  */
-router.put('/:id', authorize('admin', 'sourcing_department'), async (req, res) => {
+router.put('/:id', requireSection('knowledge_base', 'edit'), authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const { id } = req.params;
         const updates = req.body;
@@ -216,7 +217,7 @@ router.put('/:id', authorize('admin', 'sourcing_department'), async (req, res) =
  * DELETE /api/knowledge-base/:id
  * Delete an entry
  */
-router.delete('/:id', authorize('admin', 'sourcing_department'), async (req, res) => {
+router.delete('/:id', requireSection('knowledge_base', 'delete'), authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const { id } = req.params;
         await deleteEntry(id);
@@ -245,7 +246,7 @@ router.delete('/:id', authorize('admin', 'sourcing_department'), async (req, res
  *   ]
  * }
  */
-router.post('/import', authorize('admin', 'sourcing_department'), async (req, res) => {
+router.post('/import', requireSection('knowledge_base', 'create'), authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const { tenant_id, entries } = req.body;
 
@@ -282,7 +283,7 @@ router.post('/import', authorize('admin', 'sourcing_department'), async (req, re
  * POST /api/knowledge-base/test-response
  * Test chatbot response for a given query (for debugging)
  */
-router.post('/test-response', authorize('admin', 'sourcing_department'), async (req, res) => {
+router.post('/test-response', requireSection('knowledge_base', 'create'), authorize('admin', 'sourcing_department'), async (req, res) => {
     try {
         const { message, language = 'en', tenant_id } = req.body;
 

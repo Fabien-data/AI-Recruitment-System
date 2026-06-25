@@ -18,7 +18,7 @@ if ($?) {
     --vpc-connector chatbot-connector `
     --vpc-egress private-ranges-only `
     --min-instances 1 `
-    --max-instances 20 `
+    --max-instances 5 `
     --quiet
 
   Write-Output "Deploying whatsapp-celery-worker..."
@@ -33,7 +33,7 @@ if ($?) {
     --vpc-connector chatbot-connector `
     --vpc-egress private-ranges-only `
     --min-instances 1 `
-    --max-instances 3 `
+    --max-instances 2 `
     --port 8080 `
     --command sh `
     --args /app/scripts/run_worker.sh `

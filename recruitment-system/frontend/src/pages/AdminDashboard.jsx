@@ -3,11 +3,11 @@ import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getAdminStats, getAdminUsers,
-  deleteAdminUser, getAuditLogs,
+  deleteAdminUser, getAuditLogs, updateAdminUser,
 } from '../api'
 import {
   Users, Briefcase, FolderKanban, UserCheck, Bell, ShieldCheck,
-  Plus, Trash2, Edit2, Check, X, Clock, AlertCircle, Activity, BarChart3, KeyRound,
+  Plus, Trash2, Edit2, Check, X, Clock, AlertCircle, Activity, BarChart3, KeyRound, UserPlus,
 } from 'lucide-react'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
@@ -48,6 +48,48 @@ function StatCard({ icon: Icon, label, value, sub, color = 'bg-zinc-900 text-whi
         {sub && <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">{sub}</p>}
       </div>
     </div>
+  )
+}
+
+const APPROVE_ROLES = [
+  { value: 'marketing_agent', label: 'Marketing Agent' },
+  { value: 'project_handler', label: 'Project Handler' },
+  { value: 'sourcing_department', label: 'Sourcing Dept.' },
+  { value: 'admin', label: 'Administrator' },
+]
+
+// One pending registration with an inline role picker + approve/reject.
+function PendingRow({ user, onApprove, onReject, busy }) {
+  const [role, setRole] = useState('marketing_agent')
+  return (
+    <tr className="hover:bg-amber-50/40 dark:hover:bg-amber-950/10 transition-colors">
+      <td className="px-6 py-3 whitespace-nowrap font-semibold text-zinc-900 dark:text-zinc-100">{user.full_name}</td>
+      <td className="px-4 py-3 text-zinc-500 dark:text-zinc-400 whitespace-nowrap">{user.email}</td>
+      <td className="px-4 py-3 text-zinc-500 dark:text-zinc-400 whitespace-nowrap">{user.phone || '—'}</td>
+      <td className="px-4 py-3">
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+          className="px-2 py-1 text-sm bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg"
+        >
+          {APPROVE_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+        </select>
+      </td>
+      <td className="px-4 py-3 text-right">
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => onApprove(user.id, role)}>
+            <Check size={14} /> Approve
+          </Button>
+          <button
+            onClick={() => { if (window.confirm(`Reject ${user.full_name}'s registration?`)) onReject(user.id) }}
+            className="p-1.5 text-zinc-400 hover:text-red-600 dark:hover:text-red-300 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+            title="Reject registration"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      </td>
+    </tr>
   )
 }
 
@@ -95,6 +137,15 @@ export default function AdminDashboard() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-users'] }),
   })
 
+  const approveMutation = useMutation({
+    mutationFn: ({ id, role }) => updateAdminUser(id, { approved: true, is_active: true, role }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-users'] }),
+  })
+
+  // Self-registrations awaiting an admin decision (approved === false).
+  const pendingUsers = users.filter((u) => u.approved === false)
+  const activeUsers = users.filter((u) => u.approved !== false)
+
   return (
     <div className="space-y-8 py-6">
       <PageHeader
@@ -136,6 +187,45 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      {/* Pending registrations — awaiting admin approval */}
+      {pendingUsers.length > 0 && (
+        <section className="bg-white dark:bg-zinc-900 rounded-3xl border border-amber-300/70 dark:border-amber-800/60 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2 px-6 py-5 border-b border-amber-100 dark:border-amber-900/40 bg-amber-50/50 dark:bg-amber-950/10">
+            <UserPlus size={18} className="text-amber-600 dark:text-amber-400" />
+            <div>
+              <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-50">Pending Approvals ({pendingUsers.length})</h2>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                New sign-ups can't log in until you approve them and assign a role.
+              </p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-100 dark:border-zinc-800">
+                  <th className="px-6 py-3">Name</th>
+                  <th className="px-4 py-3">Email</th>
+                  <th className="px-4 py-3">Phone</th>
+                  <th className="px-4 py-3">Assign role</th>
+                  <th className="px-4 py-3 text-right">Decision</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800/70">
+                {pendingUsers.map((u) => (
+                  <PendingRow
+                    key={u.id}
+                    user={u}
+                    busy={approveMutation.isPending}
+                    onApprove={(id, role) => approveMutation.mutate({ id, role })}
+                    onReject={(id) => deleteMutation.mutate(id)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {/* User Management */}
       <section className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200/60 dark:border-zinc-800 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-6 py-5 border-b border-zinc-100 dark:border-zinc-800">
@@ -167,7 +257,7 @@ export default function AdminDashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800/70">
-              {users.map(u => (
+              {activeUsers.map(u => (
                 <tr key={u.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition-colors">
                   <td className="px-6 py-3 whitespace-nowrap">
                     <Link
@@ -218,7 +308,7 @@ export default function AdminDashboard() {
                   </td>
                 </tr>
               ))}
-              {users.length === 0 && (
+              {activeUsers.length === 0 && (
                 <tr><td colSpan={6} className="px-6 py-8 text-center text-zinc-400 dark:text-zinc-500 text-sm">No users found.</td></tr>
               )}
             </tbody>

@@ -194,7 +194,7 @@ async function reconcile() {
             LEFT JOIN LATERAL (
                 SELECT COUNT(*)::int AS positions_filled
                 FROM applications a
-                WHERE a.job_id = j.id AND a.status IN ('selected','placed')
+                WHERE a.job_id = j.id AND a.status = 'hired'
             ) pf ON TRUE
             LEFT JOIN LATERAL (
                 SELECT MAX(synced_at) AS last_synced
@@ -307,7 +307,7 @@ async function fullResync() {
          LEFT JOIN LATERAL (
              SELECT COUNT(*)::int AS positions_filled
              FROM applications a
-             WHERE a.job_id = j.id AND a.status IN ('selected','placed')
+             WHERE a.job_id = j.id AND a.status = 'hired'
          ) pf ON TRUE
          WHERE j.status = 'active'`,
         []

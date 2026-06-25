@@ -44,7 +44,7 @@ function CopyField({ label, value, mono = true }) {
   )
 }
 
-function AdLinkCard({ link }) {
+export function AdLinkCard({ link }) {
   const queryClient = useQueryClient()
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['ad-links'] })
@@ -68,7 +68,10 @@ function AdLinkCard({ link }) {
   })
 
   const active = Boolean(link.is_active)
-  const startMessage = link.start_message || `START:${link.ad_ref}`
+  // The friendly pre-filled message the candidate sends. `message_template`
+  // comes from the list/detail endpoints; `start_message` from generate. Both
+  // carry the hidden [ref:…] token the bot uses to identify the job.
+  const messageTemplate = link.message_template || link.start_message || `START:${link.ad_ref}`
   const waLink = link.whatsapp_link || (link.meta_ad_url || '')
 
   return (
@@ -106,9 +109,9 @@ function AdLinkCard({ link }) {
         </div>
       </div>
 
+      <CopyField label="Message template — paste into your Meta ad" value={messageTemplate} mono={false} />
       <CopyField label="Meta ad destination URL" value={link.meta_ad_url} />
       <CopyField label="WhatsApp / QR link" value={waLink} />
-      <CopyField label="Pre-filled message (do not edit)" value={startMessage} />
 
       <div className="flex items-center justify-between gap-2 pt-1">
         {link.qr_code_url ? (
@@ -186,9 +189,10 @@ export function AdLinkModal({ isOpen, job, onClose }) {
           <div className="text-sm text-blue-900 dark:text-blue-200">
             <p className="font-semibold">{job.title}</p>
             <p className="mt-1 text-blue-800/80 dark:text-blue-300/80">
-              Generate a link, paste the <span className="font-semibold">Meta ad destination URL</span> into your
-              Click-to-WhatsApp ad, and write any headline you like. The bot identifies this exact job from the
-              hidden pre-filled message — never from the headline.
+              Generate a link, then paste the <span className="font-semibold">message template</span> into your
+              Click-to-WhatsApp ad's message field (or use the destination URL), and write any headline you like.
+              The bot identifies this exact job from the hidden <span className="font-mono">[ref:…]</span> token in
+              the message — never from the headline.
             </p>
           </div>
         </div>

@@ -99,6 +99,14 @@ class Candidate(Base):
     )
     is_general_pool = Column(Boolean, default=False, nullable=False)
     cv_sync_status = Column(String(20), default=None, nullable=True)  # pending|synced|failed
+    # ── Proactive follow-up tracking (stuck-candidate re-engagement) ──────────
+    # last_inbound_at drives both the 24h WhatsApp window decision and the
+    # nudge cadence (24h/3d/7d of silence). followup_count counts nudges sent
+    # (capped at 3); followup_stopped is a hard stop (STOP keyword / completed).
+    last_inbound_at = Column(TIMESTAMP, nullable=True, default=func.now())
+    followup_count = Column(Integer, default=0, nullable=False)
+    last_followup_at = Column(TIMESTAMP, nullable=True)
+    followup_stopped = Column(Boolean, default=False, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(
         TIMESTAMP,

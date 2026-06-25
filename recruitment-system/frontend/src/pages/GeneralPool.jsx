@@ -16,6 +16,7 @@ import {
     Filter,
     ChevronDown,
     Calendar,
+    Clock,
     Sparkles,
     CheckCircle,
     Layers,
@@ -30,7 +31,11 @@ import { Card } from '../components/ui/Card'
 import { Table } from '../components/ui/Table'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Pagination } from '../components/ui/Pagination'
-import { apiClient, getJobs, createApplication } from '../api'
+import { apiClient, getJobs, createApplication, getCandidateJobMatches } from '../api'
+import { useSectionAccess } from '../stores/authStore'
+import { resolveDocumentUrl, isImageDocument, PENDING_URL } from '../utils/documents'
+import { formatHeight } from '../utils/height'
+import { DocumentPreview } from '../components/documents/DocumentPreview'
 import toast from 'react-hot-toast'
 
 // API function for general pool
@@ -80,8 +85,8 @@ export default function GeneralPool() {
             <PageHeader
                 icon={Database}
                 tone="mixed"
-                title="General Pool"
-                subtitle="Candidates parked in the future pool — surfaces every lead the chatbot couldn't match to an open role."
+                title="Future Pool"
+                subtitle="One backup talent pool (Future Pool = General Pool) — every candidate parked for later, with their details, CV, and best-fit job matches."
                 actions={
                     <Button variant="secondary" onClick={() => refetch()}>
                         <RefreshCw size={16} />
@@ -296,6 +301,15 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
         ? JSON.parse(candidate.metadata || '{}')
         : (candidate.metadata || {})
 
+    // Resolved, browser-openable CV link (backend already normalises the raw
+    // storage path to an https GCS URL). Null when the CV is missing OR still
+    // syncing from the chatbot — cv_status disambiguates the two (B001/B002).
+    const cvUrl = (() => {
+        const u = resolveDocumentUrl({ file_url: candidate.cv_url, file_name: candidate.cv_filename })
+        return u && u !== PENDING_URL ? u : null
+    })()
+    const cvProcessing = !cvUrl && candidate.cv_status === 'placeholder_unresolved'
+
     // Auto-assign mutation
     const autoAssignMutation = useMutation({
         mutationFn: (threshold) => autoAssignCandidate(candidate.id, threshold),
@@ -376,7 +390,7 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                         </div>
                         <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
                             <p className="text-xs text-zinc-500 dark:text-zinc-400 uppercase">Height</p>
-                            <p className="font-semibold text-zinc-900 dark:text-zinc-50">{metadata.height_cm ? `${metadata.height_cm} cm` : 'N/A'}</p>
+                            <p className="font-semibold text-zinc-900 dark:text-zinc-50">{formatHeight(metadata.height_cm) || 'N/A'}</p>
                         </div>
                         <div className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg">
                             <p className="text-xs text-zinc-500 dark:text-zinc-400 uppercase">Age</p>
@@ -399,28 +413,29 @@ function PoolCandidateModal({ candidate, showAssignTab, onClose }) {
                         </div>
                     </div>
 
-                    {/* CV */}
+                    {/* CV — inline preview so image CVs actually render instead
+                        of a dead "Preview" button popping a blank tab, with an
+                        explicit "processing" state for chatbot uploads still
+                        syncing (B001/B002). */}
                     <div>
                         <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">CV / Documents</h4>
-                        <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <FileText className="text-purple-500" size={24} />
-                                <div>
-                                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{candidate.name}_CV.pdf</span>
-                                    <p className="text-xs text-zinc-500 dark:text-zinc-400">Uploaded via {candidate.source}</p>
-                                </div>
+                        {cvUrl ? (
+                            <DocumentPreview
+                                url={cvUrl}
+                                isImage={isImageDocument({ file_name: candidate.cv_filename })}
+                                fileName={candidate.cv_filename || `${candidate.name}_CV`}
+                                className="h-80"
+                            />
+                        ) : cvProcessing ? (
+                            <div className="p-4 border border-dashed border-amber-300 dark:border-amber-700/60 rounded-lg bg-amber-50/60 dark:bg-amber-900/10 text-sm text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                                <Clock size={16} className="shrink-0" />
+                                CV is still syncing from the chatbot — try again in a moment.
                             </div>
-                            <div className="flex gap-2">
-                                <Button variant="secondary" size="sm" className="gap-1">
-                                    <Eye size={14} />
-                                    Preview
-                                </Button>
-                                <Button variant="secondary" size="sm" className="gap-1">
-                                    <Download size={14} />
-                                    Download
-                                </Button>
+                        ) : (
+                            <div className="p-4 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 text-sm text-zinc-500 dark:text-zinc-400">
+                                No CV uploaded for this candidate.
                             </div>
-                        </div>
+                        )}
                     </div>
 
                     {/* Notes */}
@@ -494,6 +509,10 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
     const [selectedJobId, setSelectedJobId] = useState('')
     const [assignmentThreshold, setAssignmentThreshold] = useState(50)
     const queryClient = useQueryClient()
+    // Auto-assign hits /api/auto-assign which now requires applications.create;
+    // hide the whole auto-assign block for roles (e.g. project_handler) that
+    // would otherwise get a 403. Manual assign below is unaffected.
+    const canAutoAssign = useSectionAccess('applications', 'create')
 
     const { data: jobsData } = useQuery({
         queryKey: ['jobs', { status: 'active' }],
@@ -501,6 +520,16 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
     })
 
     const jobs = jobsData?.data || []
+
+    // Smart backup plan: best-fit jobs for this pooled candidate across the whole
+    // board (semantic match). Read-only suggestion — assignment still uses the
+    // CV-gated path below.
+    const { data: jobMatches } = useQuery({
+        queryKey: ['candidate-job-matches', candidate.id],
+        queryFn: () => getCandidateJobMatches(candidate.id, { limit: 5 }),
+        staleTime: 60_000,
+    })
+    const topMatches = Array.isArray(jobMatches?.jobs) ? jobMatches.jobs : []
 
     const manualAssignMutation = useMutation({
         mutationFn: () => createApplication({ candidate_id: candidate.id, job_id: selectedJobId }),
@@ -518,6 +547,7 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
     return (
         <div className="space-y-6">
             {/* Auto-Assign Option */}
+            {canAutoAssign && (
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5">
                 <div className="flex items-start gap-3">
                     <Sparkles className="text-blue-500 mt-0.5" size={24} />
@@ -552,6 +582,47 @@ function AssignTab({ candidate, onClose, onAutoAssign, isAutoAssigning }) {
                     </div>
                 </div>
             </div>
+            )}
+
+            {/* Smart backup matches — best-fit jobs across the whole board */}
+            {topMatches.length > 0 && (
+                <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/60 dark:bg-emerald-950/20 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                        <Sparkles size={16} className="text-emerald-600" />
+                        <h3 className="font-semibold text-emerald-900 dark:text-emerald-200">Best-fit jobs (smart match)</h3>
+                    </div>
+                    <p className="text-xs text-emerald-700 dark:text-emerald-300 mb-3">
+                        Top matches for this candidate across all open roles — your quick backup plan. Click one to select it below.
+                    </p>
+                    <div className="space-y-2">
+                        {topMatches.map((m) => (
+                            <button
+                                key={m.job_id}
+                                type="button"
+                                onClick={() => setSelectedJobId(m.job_id)}
+                                className={`w-full text-left flex items-center gap-3 p-2.5 rounded-lg border transition-colors ${
+                                    selectedJobId === m.job_id
+                                        ? 'border-emerald-500 bg-emerald-100/70 dark:bg-emerald-900/30'
+                                        : 'border-emerald-200 dark:border-emerald-900/50 bg-white dark:bg-zinc-900 hover:border-emerald-300'
+                                }`}
+                            >
+                                <span className="inline-flex items-center justify-center w-12 h-7 rounded-md bg-emerald-600 text-white text-xs font-bold flex-shrink-0">
+                                    {m.match_percent}%
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                    <span className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 truncate">{m.title}</span>
+                                    {Array.isArray(m.why_matched) && m.why_matched.length > 0 && (
+                                        <span className="block text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+                                            Matches: {m.why_matched.slice(0, 5).join(', ')}
+                                        </span>
+                                    )}
+                                </span>
+                                {selectedJobId === m.job_id && <CheckCircle size={16} className="text-emerald-600 flex-shrink-0" />}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Manual Assignment */}
             <div>

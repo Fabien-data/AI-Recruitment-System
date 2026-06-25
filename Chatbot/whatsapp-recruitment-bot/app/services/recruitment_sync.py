@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -12,11 +13,17 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import PendingSync
+from app.utils.phone import normalize_phone_or_raw
 
 logger = logging.getLogger(__name__)
 
 RECRUITMENT_API_URL = os.getenv("RECRUITMENT_API_URL", settings.recruitment_api_url)
-SYNC_ENDPOINT = os.getenv("RECRUITMENT_SYNC_ENDPOINT", "/api/chatbot-sync/intake")
+# Rich intake endpoint: stores the CV to GCS (saveCVFile), persists parsed_data,
+# merges age/height/skills/licenses/previous_employer into candidates.metadata,
+# and handles additional documents + applications + general pool. The old
+# /api/chatbot-sync/intake path stored non-retrievable local CV paths and dropped
+# most details — see plan Phase A.
+SYNC_ENDPOINT = os.getenv("RECRUITMENT_SYNC_ENDPOINT", "/api/chatbot/intake")
 CHATBOT_API_KEY = os.getenv("CHATBOT_API_KEY", settings.chatbot_api_key or "")
 SYNC_ENABLED = os.getenv(
     "RECRUITMENT_SYNC_ENABLED",
@@ -67,7 +74,7 @@ class RecruitmentSyncService:
                 skills_list = [s.strip() for s in candidate.skills.split(",") if s.strip()]
 
         payload: Dict[str, Any] = {
-            "phone": candidate.phone_number,
+            "phone": normalize_phone_or_raw(candidate.phone_number),
             "name": candidate.name or "Pending AI Extraction",
             # Allow None so backend can distinguish "unknown" from "genuinely 0 years"
             "experience_years": candidate.experience_years,
@@ -98,13 +105,44 @@ class RecruitmentSyncService:
         except (TypeError, ValueError):
             height_val = None
 
-        cv_parsed: Dict[str, Any] = {}
+        # Gender — the backend matcher uses this as a HARD filter so a
+        # gendered vacancy (e.g. "female") never matches the wrong candidate
+        # (B013). Normalise the various spellings to canonical male/female.
+        gender_raw = (
+            getattr(candidate, "gender", None)
+            or collected.get("gender")
+            or extracted.get("gender")
+        )
+        gender_val = None
+        if isinstance(gender_raw, str):
+            g = gender_raw.strip().lower()
+            if g in ("m", "male", "man", "boy"):
+                gender_val = "male"
+            elif g in ("f", "female", "woman", "girl"):
+                gender_val = "female"
+
+        # Seed from the full CV extraction blob (work_history, certifications,
+        # languages, current_company, qualification, ai_insights) so the CV
+        # Manager shows the complete parse. Chat-collected fields overlay below.
+        cv_full = agent_state.get("cv_parsed_data") or extracted.get("cv_parsed_data")
+        cv_parsed: Dict[str, Any] = dict(cv_full) if isinstance(cv_full, dict) else {}
         if age_val is not None:
             payload["age"] = age_val
             cv_parsed["age"] = age_val
         if height_val is not None:
             payload["height_cm"] = height_val
             cv_parsed["height_cm"] = height_val
+        # Fall back to the full CV-parse blob (ExtractedProfile.to_dict carries a
+        # flat `gender`) if chat/collected fields didn't surface gender.
+        if gender_val is None and isinstance(cv_parsed.get("gender"), str):
+            g2 = cv_parsed["gender"].strip().lower()
+            if g2 in ("m", "male", "man", "boy"):
+                gender_val = "male"
+            elif g2 in ("f", "female", "woman", "girl"):
+                gender_val = "female"
+        if gender_val is not None:
+            payload["gender"] = gender_val
+            cv_parsed["gender"] = gender_val
         if candidate.experience_years is not None:
             cv_parsed["total_experience_years"] = candidate.experience_years
         if skills_list:
@@ -220,6 +258,41 @@ class RecruitmentSyncService:
         except Exception as exc:
             return False, str(exc)
 
+    async def push_profile_photo(
+        self,
+        candidate,
+        photo_bytes: bytes,
+        mime_type: str = "image/jpeg",
+        filename: str = "photo.jpg",
+    ) -> bool:
+        """Push a chatbot-detected person-photo to the backend as the candidate's
+        profile picture (#6). The backend uploads it to GCS and sets
+        candidates.photo_url + photo_source='auto', skipping if a recruiter has
+        manually set+locked the avatar. Best-effort: logs and swallows errors so
+        a failed avatar push never breaks the media-handling flow."""
+        if not photo_bytes:
+            return False
+        phone = getattr(candidate, "phone_number", None)
+        if not phone:
+            return False
+        url = f"{RECRUITMENT_API_URL}/api/chatbot/set-profile-photo"
+        payload = {
+            "phone": phone,
+            "base64": base64.b64encode(photo_bytes).decode("ascii"),
+            "mime_type": mime_type,
+            "filename": filename,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(url, json=payload, headers=self._build_headers())
+            if response.status_code in (200, 201):
+                return True
+            logger.warning("profile-photo push: status %s %s", response.status_code, response.text[:160])
+            return False
+        except Exception as exc:
+            logger.warning("profile-photo push failed: %s", exc)
+            return False
+
     def _queue_pending(
         self,
         db: Optional[Session],
@@ -285,10 +358,26 @@ class RecruitmentSyncService:
             )
             return False
 
-        force_general_pool = job_unknown and not is_general_pool and not has_ad_job
+        # CV is the hard gate for general-pool routing: the backend moves
+        # is_general_pool=true leads to status 'future_pool', but a lead with no
+        # CV on file must stay 'New' (it can't satisfy the New→Screening CV gate).
+        # Only force the general pool for a partial/unknown-job lead once a CV
+        # actually exists — via the cv_uploaded signal (state/collected), the
+        # persisted resume_file_path, or the cv_path being uploaded on this push.
+        has_cv = (
+            bool(agent_state.get("cv_uploaded"))
+            or bool(collected.get("cv_uploaded"))
+            or bool(collected.get("cv"))
+            or bool(getattr(candidate, "resume_file_path", None))
+            or bool(cv_path)
+        )
+
+        force_general_pool = (
+            job_unknown and not is_general_pool and not has_ad_job and has_cv
+        )
         if force_general_pool:
             logger.info(
-                "Partial-lead sync for %s — job unknown, saving to general pool",
+                "Partial-lead sync for %s — job unknown, CV on file, saving to general pool",
                 candidate.phone_number,
             )
 

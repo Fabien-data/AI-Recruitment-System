@@ -1,4 +1,6 @@
-﻿"""
+﻿
+"""
+
 WhatsApp Webhook Handlers
 =========================
 Handles incoming webhooks from Meta WhatsApp Business API.
@@ -7,6 +9,7 @@ Processes messages and triggers the chatbot engine.
 FIX: Background tasks now create their OWN database session
      instead of reusing the request's session (which is closed
      by FastAPI before the background task runs).
+     
 """
 
 import asyncio
@@ -24,9 +27,11 @@ from pydantic import BaseModel
 
 from app.database import SessionLocal
 from app import crud
+from app.utils.phone import normalize_phone_or_raw
 from app.utils.meta_client import meta_client
 from app.core.message_router import message_router
 from app.services.voice_service import voice_service
+from app.services.ad_context_service import ad_context_service
 from app.config import settings
 from app.nlp.language_detector import is_greeting
 
@@ -291,6 +296,32 @@ async def _graceful_recovery_message(phone: str, db) -> str:
 
 # ─── Recruitment System Chat Sync ────────────────────────────────────────────
 
+async def _rehost_media(media_bytes: bytes, filename: str, phone: str, mime: str) -> str:
+    """Re-host inbound WhatsApp media (document/image/voice) to GCS so the
+    conversation panel can show/play it. WhatsApp's own media URLs are
+    auth-gated and not browser-accessible. Returns a public URL or ''."""
+    if not media_bytes:
+        return ""
+    try:
+        import base64 as _b64
+        async with httpx.AsyncClient(timeout=10.0) as _mc:
+            _mr = await _mc.post(
+                f"{settings.recruitment_api_url}/api/chatbot/media-upload",
+                headers={"x-chatbot-api-key": settings.chatbot_api_key or ""},
+                json={
+                    "base64": _b64.b64encode(media_bytes).decode("ascii"),
+                    "filename": filename or "file",
+                    "phone": phone,
+                    "mime_type": mime or "application/octet-stream",
+                },
+            )
+            if _mr.status_code == 200:
+                return (_mr.json() or {}).get("url", "") or ""
+    except Exception as exc:    # noqa: BLE001
+        logger.debug(f"media re-host skipped: {exc}")
+    return ""
+
+
 async def _sync_chat_message(
     phone: str,
     direction: str,
@@ -301,6 +332,7 @@ async def _sync_chat_message(
     whatsapp_message_id: str = "",
     message_type: str = "text",
     media_url: str = "",
+    extra_meta: Optional[dict] = None,
 ) -> None:
     """
     Push a single message (inbound customer msg or outbound bot reply)
@@ -333,6 +365,10 @@ async def _sync_chat_message(
             "pipeline_stage": pipeline_stage or "",
             "whatsapp_message_id": whatsapp_message_id or "",
         }
+        if extra_meta and isinstance(extra_meta, dict):
+            # Per-type extras (location lat/lng, reaction emoji, sticker info)
+            # the conversation panel uses to render the full message.
+            payload["extra_meta"] = extra_meta
         async with httpx.AsyncClient(timeout=4.0) as client:
             resp = await client.post(
                 f"{recruitment_url}/api/chatbot/sync-message",
@@ -347,6 +383,33 @@ async def _sync_chat_message(
     except Exception as _sync_err:
         # Non-critical — never block message processing
         logger.debug(f"_sync_chat_message skipped: {_sync_err}")
+
+
+async def _sync_inbound_only(
+    db,
+    phone: str,
+    content: str,
+    message_type: str = "text",
+    media_url: str = "",
+    extra_meta: Optional[dict] = None,
+    whatsapp_message_id: str = "",
+) -> None:
+    """Sync an inbound message to the recruitment transcript when the bot does
+    NOT reply (location / sticker / reaction / unsupported types). Without this,
+    the main reply block (which is gated on `if response_text`) never syncs them,
+    leaving gaps in the conversation. Fire-and-forget."""
+    try:
+        from app import crud as _crud
+        _cand = _crud.get_or_create_candidate(db, phone)
+        _lang = getattr(_cand.language_preference, "value", "en")
+        _state = _cand.conversation_state or ""
+    except Exception:  # noqa: BLE001
+        _lang, _state = "en", ""
+    await _sync_chat_message(
+        phone, "inbound", content, _lang, _state,
+        message_type=message_type, media_url=media_url,
+        whatsapp_message_id=whatsapp_message_id, extra_meta=extra_meta,
+    )
 
 
 async def _sync_delivery_status(status_obj: dict) -> None:
@@ -383,6 +446,146 @@ async def _sync_delivery_status(status_obj: dict) -> None:
                 logger.debug(f"status-sync returned {resp.status_code} for msg_id={msg_id}")
     except Exception as sync_err:
         logger.debug(f"_sync_delivery_status skipped: {sync_err}")
+
+
+def _touch_inbound(db, phone: str) -> None:
+    """Record this inbound message's time and re-arm the follow-up cadence — any
+    reply means the candidate is engaged, so reset the nudge counter. A hard stop
+    (followup_stopped) is preserved. Isolated best-effort write that never affects
+    message processing. CURRENT_TIMESTAMP works on both Postgres and SQLite."""
+    if not phone:
+        return
+    try:
+        from sqlalchemy import text as _text
+        db.execute(
+            _text(
+                "UPDATE candidates SET last_inbound_at = CURRENT_TIMESTAMP, followup_count = 0 "
+                "WHERE phone_number = :p"
+            ),
+            {"p": phone},
+        )
+        db.commit()
+    except Exception as _e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.debug(f"_touch_inbound skipped for {phone}: {_e}")
+
+
+# ── Candidate self-service keyword commands (opt-out + status check) ─────────
+# Exact whole-message matches only, so normal conversation is never hijacked.
+_STOP_WORDS = {"stop", "unsubscribe", "opt out", "optout", "stop messages",
+               "no more messages", "stop messaging me"}
+_STATUS_WORDS = {"status", "my status", "application status", "my application",
+                 "where is my application", "check status"}
+_CHECKLIST_WORDS = {"documents", "document", "docs", "checklist", "what do you need",
+                    "what's left", "whats left", "requirements"}
+
+_CHECKLIST_HEADER = {
+    "en": "📋 Here's your application checklist:",
+    "si": "📋 ඔබේ අයදුම්පත් checklist එක:",
+    "ta": "📋 உங்கள் விண்ணப்ப checklist:",
+    "singlish": "📋 Oyage application checklist eka:",
+    "tanglish": "📋 Unga application checklist:",
+}
+_CHECKLIST_FOOTER = {
+    "en": "Send the missing item(s) here and we'll finish your application. 🙌",
+    "si": "ඉතුරු දේ මෙතනට එවන්න, අපි ඔබේ අයදුම්පත සම්පූර්ණ කරමු. 🙌",
+    "ta": "மீதமுள்ளவற்றை இங்கே அனுப்புங்கள், உங்கள் விண்ணப்பத்தை முடிப்போம். 🙌",
+    "singlish": "Ithuru ewa methanata evanna, api application eka complete karamu. 🙌",
+    "tanglish": "Baaki ulladhai inga anuppunga, naanga application-a finish pannuvom. 🙌",
+}
+_CHECKLIST_DONE = {
+    "en": "🎉 Everything's in! Your application is complete and under review.",
+    "si": "🎉 හැම දෙයක්ම ලැබුණා! ඔබේ අයදුම්පත සම්පූර්ණයි, සමාලෝචනය වෙනවා.",
+    "ta": "🎉 எல்லாம் கிடைத்துவிட்டது! உங்கள் விண்ணப்பம் முழுமையடைந்து மதிப்பாய்வில் உள்ளது.",
+    "singlish": "🎉 Hama deyakma labuna! Oyage application eka complete, review wenawa.",
+    "tanglish": "🎉 Ellam kedaichuthu! Unga application complete, review-la irukku.",
+}
+
+_STOP_CONFIRM = {
+    "en": "👍 Done — you won't receive any more follow-up reminders from us. You can reply here anytime to continue your application.",
+    "si": "👍 හරි — ඔබට තවදුරටත් follow-up reminders ලැබෙන්නේ නැහැ. ඔබේ අයදුම්පත ඉදිරියට ගෙනියන්න ඕනෑම වෙලාවක මෙතනින් reply කරන්න.",
+    "ta": "👍 சரி — இனி உங்களுக்கு follow-up நினைவூட்டல்கள் வராது. உங்கள் விண்ணப்பத்தைத் தொடர எப்போது வேண்டுமானாலும் இங்கே பதிலளியுங்கள்.",
+    "singlish": "👍 Hari — oyata thawa follow-up reminders enne na. Application eka continue karanna onema welavaka methanin reply karanna.",
+    "tanglish": "👍 Okay — ini unga-ku follow-up reminders varadhu. Application-a continue panna eppo venaalum inga reply pannunga.",
+}
+_STATUS_COMPLETE = {
+    "en": "✅ Your application is complete and under review by our team. We'll message you here as soon as there's an update. 🙌",
+    "si": "✅ ඔබේ අයදුම්පත සම්පූර්ණයි, අපේ කණ්ඩායම සමාලෝචනය කරනවා. update එකක් ආ සැණින් මෙතනින් දන්වන්නම්. 🙌",
+    "ta": "✅ உங்கள் விண்ணப்பம் முழுமையடைந்து எங்கள் குழுவால் மதிப்பாய்வு செய்யப்படுகிறது. update கிடைத்தவுடன் இங்கே தெரிவிக்கிறோம். 🙌",
+    "singlish": "✅ Oyage application eka complete, api team eka review karanawa. Update ekak awama methanin kiyannm. 🙌",
+    "tanglish": "✅ Unga application complete, engal team review pannuranga. Update vandha udane inga sollurom. 🙌",
+}
+_STATUS_INCOMPLETE = {
+    "en": "📋 Your application is almost done — there's just one thing left:",
+    "si": "📋 ඔබේ අයදුම්පත අවසන් වෙන්න ආසන්නයි — ඉතුරු වෙලා තියෙන්නේ එක දෙයක් විතරයි:",
+    "ta": "📋 உங்கள் விண்ணப்பம் கிட்டத்தட்ட முடிந்துவிட்டது — இன்னும் ஒரே ஒரு விஷயம் மட்டுமே மீதம்:",
+    "singlish": "📋 Oyage application eka ivara wenna langai — thawa ithuru wela thiyenne eka deyak vitharai:",
+    "tanglish": "📋 Unga application almost ready — innum oru vishayam thaan baaki:",
+}
+
+
+async def _handle_keyword_command(db, phone: str, text: str) -> bool:
+    """Intercept opt-out (STOP) and status-check keywords before orchestration.
+    Returns True if the message was handled (a reply was sent)."""
+    norm = (text or "").strip().lower().rstrip("!.? ")
+    if not norm:
+        return False
+
+    if norm in _STOP_WORDS:
+        try:
+            from sqlalchemy import text as _text
+            db.execute(_text("UPDATE candidates SET followup_stopped = TRUE WHERE phone_number = :p"), {"p": phone})
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        cand = crud.get_candidate_by_phone(db, phone)
+        from app.services.followup_service import candidate_lang
+        lang = candidate_lang(cand) if cand else "en"
+        await meta_client.send_message(phone, _STOP_CONFIRM.get(lang, _STOP_CONFIRM["en"]))
+        logger.info(f"🛑 Opt-out (STOP) honored for {phone}")
+        return True
+
+    if norm in _STATUS_WORDS:
+        cand = crud.get_candidate_by_phone(db, phone)
+        if not cand:
+            return False
+        from app.services.followup_service import candidate_lang, is_complete, next_missing_field
+        from app.agents.intake_agent import intake_agent
+        lang = candidate_lang(cand)
+        if is_complete(cand):
+            msg = _STATUS_COMPLETE.get(lang, _STATUS_COMPLETE["en"])
+        else:
+            field = next_missing_field(cand)
+            intro = _STATUS_INCOMPLETE.get(lang, _STATUS_INCOMPLETE["en"])
+            ask = intake_agent.get_prompt_for_field(field, lang) if field else ""
+            msg = f"{intro}\n\n{ask}" if ask else intro
+        await meta_client.send_message(phone, msg)
+        logger.info(f"ℹ️ Status self-check answered for {phone}")
+        return True
+
+    if norm in _CHECKLIST_WORDS:
+        cand = crud.get_candidate_by_phone(db, phone)
+        if not cand:
+            return False
+        from app.services.followup_service import candidate_lang, checklist, field_label
+        lang = candidate_lang(cand)
+        items = checklist(cand)
+        lines = [f"{'✅' if present else '⬜'} {field_label(field, lang)}" for field, present in items]
+        all_done = all(present for _, present in items)
+        footer = (_CHECKLIST_DONE if all_done else _CHECKLIST_FOOTER).get(lang)
+        footer = footer or (_CHECKLIST_DONE if all_done else _CHECKLIST_FOOTER)["en"]
+        header = _CHECKLIST_HEADER.get(lang, _CHECKLIST_HEADER["en"])
+        await meta_client.send_message(phone, f"{header}\n" + "\n".join(lines) + f"\n\n{footer}")
+        logger.info(f"📋 Checklist answered for {phone}")
+        return True
+
+    return False
 
 
 async def process_single_message(message: dict, contacts: list, db):
@@ -461,7 +664,12 @@ async def process_single_message(message: dict, contacts: list, db):
             return "I’m here to help — could you send that once more? I’ll continue from where we left off."
 
     message_id   = message.get("id")
-    from_number  = message.get("from")
+    # Meta delivers wa_id WITHOUT a leading "+" (e.g. "94775774171"). Normalise to
+    # canonical E.164 ("+94775774171") at the single inbound entry point so every
+    # downstream use — _touch_inbound, keyword commands, get_or_create_candidate,
+    # outbound sends and backend sync — keys on the SAME string the agent-added
+    # candidate was stored with. This is what keeps inbound on the one canonical chat.
+    from_number  = normalize_phone_or_raw(message.get("from"))
     message_type = message.get("type")
 
     # Captured during media branches so the agent panel can show a readable
@@ -475,6 +683,10 @@ async def process_single_message(message: dict, contacts: list, db):
     if not from_number:
         logger.warning("Message missing 'from' field — skipping")
         return
+
+    # Record inbound activity + re-arm the proactive follow-up cadence. Isolated
+    # write, safe to run before the main turn logic.
+    _touch_inbound(db, from_number)
 
     # ── Deduplication: skip if we already processed this message ─────────────
     if message_id and _is_duplicate(message_id):
@@ -518,6 +730,23 @@ async def process_single_message(message: dict, contacts: list, db):
             )
         logger.info(f"💬 Text from {from_number}: {text_body!r}")
 
+        # Self-service keyword commands (opt-out / status check) — exact-match
+        # only, intercepted before any orchestration.
+        try:
+            if await _handle_keyword_command(db, from_number, text_body):
+                return
+        except Exception as kw_err:
+            logger.warning(f"keyword command handling failed for {from_number}: {kw_err}")
+
+        # Bulk-campaign "Suggest to a friend" collection: when the candidate is
+        # mid-referral, parse their reply for the friend's name + number and invite
+        # them — intercepted before any greeting/orchestration logic.
+        try:
+            if await _handle_referral_turn(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
+                return
+        except Exception as ref_err:
+            logger.warning(f"campaign referral turn failed for {from_number}: {ref_err}")
+
         # Fast-path: for simple greetings in early onboarding states, send language selector
         # immediately and skip heavy chatbot orchestration. SKIPPED when:
         #   (a) a CTWA referral is present — needs the orchestrator's headline
@@ -526,10 +755,18 @@ async def process_single_message(message: dict, contacts: list, db):
         #       for this Security Officer position in Dubai") — needs the
         #       orchestrator's body-text matcher to detect the job even when
         #       Meta didn't supply a referral object. The greeting fast-path
-        #       would otherwise hijack the conversation and lose ad context.
+        #       would otherwise hijack the conversation and lose ad context, OR
+        #   (c) the text carries an ad trigger token ("START:<ref>" or a
+        #       friendly message with "[ref:<ref>]") — the orchestrator must
+        #       resolve the exact job from that ref.
         try:
             greet, _ = is_greeting(text_body)
-            if greet and not referral_obj and not _looks_like_ad_intent(text_body):
+            if (
+                greet
+                and not referral_obj
+                and not _looks_like_ad_intent(text_body)
+                and not ad_context_service.is_ad_trigger(text_body)
+            ):
                 candidate = crud.get_or_create_candidate(db, from_number)
                 if candidate.conversation_state in (STATE_INITIAL, STATE_AWAITING_LANGUAGE_SELECTION):
                     sel = await meta_client.send_language_selector(from_number)
@@ -607,6 +844,8 @@ async def process_single_message(message: dict, contacts: list, db):
             if file_content:
                 ack = _cv_processing_ack(_candidate_register(from_number))
                 await meta_client.send_message(from_number, ack)
+                # Re-host so the document is openable in the conversation panel.
+                _media_url_captured = await _rehost_media(file_content, filename, from_number, mime_type)
                 response_text = await _safe_process_message(
                     db=db,
                     phone_number=from_number,
@@ -646,13 +885,16 @@ async def process_single_message(message: dict, contacts: list, db):
         if file_content:
             ack = _cv_processing_ack(_candidate_register(from_number))
             await meta_client.send_message(from_number, ack)
+            # Re-host to GCS (browser-viewable) for the conversation panel; the
+            # WhatsApp media_url is auth-gated and can't be shown directly.
+            _media_url_captured = await _rehost_media(file_content, filename, from_number, mime_type)
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
                 media_content=file_content,
                 media_type="image",
                 media_filename=filename,
-                media_url=media_url,
+                media_url=_media_url_captured or media_url,
                 source_message_type=message_type,
             )
         else:
@@ -738,11 +980,47 @@ async def process_single_message(message: dict, contacts: list, db):
         interactive_type = interactive_data.get("type")
 
         if interactive_type == "button_reply":
-            text_body = interactive_data["button_reply"]["id"] # Extract hidden ID
+            _btn = interactive_data.get("button_reply", {}) or {}
+            text_body = _btn.get("id", "")  # Extract hidden ID
+            _btn_title = _btn.get("title", "")
             logger.info(
-                f"🔘 Button reply from {from_number}: id={text_body!r} "
-                f"→ routing as: {text_body!r}"
+                f"🔘 Button reply from {from_number}: id={text_body!r} title={_btn_title!r}"
             )
+            # Reschedule-slot / can't-make-job picks — self-describing ids, handle first.
+            if text_body.startswith("rs|") or text_body.startswith("cmapply|") or text_body == "cmno":
+                try:
+                    if await _handle_interview_followup(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as fe:
+                    logger.warning(f"interview follow-up handling failed for {from_number}: {fe}")
+            # Campaign walk-in day pick ('cd|<iv>|<dt>').
+            if text_body.startswith("cd|"):
+                try:
+                    if await _handle_campaign_daypick(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as cde:
+                    logger.warning(f"campaign daypick handling failed for {from_number}: {cde}")
+            # Campaign quick-reply (Confirm my slot / Suggest a friend / Not Interested)
+            # — matched BEFORE the interview action ("Confirm my slot" ⊃ "confirm").
+            _camp_action = _title_to_campaign_action(text_body) or _title_to_campaign_action(_btn_title)
+            if _camp_action:
+                try:
+                    if await _handle_campaign_action(db, from_number, _camp_action,
+                                                     inbound_label=_btn_title or text_body,
+                                                     inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as ce:
+                    logger.warning(f"campaign action handling failed for {from_number}: {ce}")
+            # Interview action: in-window button id OR out-of-window template title.
+            _iv_action = _BUTTON_ACTION.get(text_body) or _title_to_interview_action(_btn_title)
+            if _iv_action:
+                try:
+                    if await _handle_interview_action(db, from_number, _iv_action,
+                                                      inbound_label=_btn_title or text_body,
+                                                      inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as ib_err:
+                    logger.warning(f"interview action handling failed for {from_number}: {ib_err}")
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
@@ -755,6 +1033,20 @@ async def process_single_message(message: dict, contacts: list, db):
             logger.info(
                 f"📋 List reply from {from_number}: id={text_body!r}"
             )
+            # Reschedule-slot / can't-make-job picks come back as list selections.
+            if text_body.startswith("rs|") or text_body.startswith("cmapply|") or text_body == "cmno":
+                try:
+                    if await _handle_interview_followup(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as fe:
+                    logger.warning(f"interview follow-up (list) handling failed for {from_number}: {fe}")
+            # Campaign walk-in day pick comes back as a list selection ('cd|<iv>|<dt>').
+            if text_body.startswith("cd|"):
+                try:
+                    if await _handle_campaign_daypick(db, from_number, text_body, inbound_msg_id=message.get("id", "")):
+                        return
+                except Exception as cde:
+                    logger.warning(f"campaign daypick (list) handling failed for {from_number}: {cde}")
             response_text = await _safe_process_message(
                 db=db,
                 phone_number=from_number,
@@ -762,9 +1054,113 @@ async def process_single_message(message: dict, contacts: list, db):
                 source_message_type=message_type,
             )
 
+    # ── Template quick-reply button tap (OUT-of-window) ─────────────────────────
+    # Approved-template quick-reply buttons (the interview invite's Confirm /
+    # Reschedule / Can't-make-it, plus generic ones like "Get started" / "YES")
+    # arrive as a top-level "button" message — NOT interactive.button_reply (that
+    # is in-window only). Map the text/payload to the interview action; otherwise
+    # feed it into the normal flow so generic template buttons still drive the chat.
+    elif message_type == "button":
+        _b = message.get("button", {}) or {}
+        _btn_text = (_b.get("text") or "").strip()
+        _btn_payload = (_b.get("payload") or "").strip()
+        text_body = _btn_text or _btn_payload
+        logger.info(f"🔘 Template button tap from {from_number}: text={_btn_text!r} payload={_btn_payload!r}")
+        # Campaign quick-reply (out-of-window template tap) — before the interview
+        # matcher, since "Confirm my slot" contains "confirm".
+        _camp_action = _title_to_campaign_action(_btn_text) or _title_to_campaign_action(_btn_payload)
+        if _camp_action:
+            try:
+                if await _handle_campaign_action(db, from_number, _camp_action,
+                                                 inbound_label=text_body,
+                                                 inbound_msg_id=message.get("id", "")):
+                    return
+            except Exception as ce:
+                logger.warning(f"template campaign action failed for {from_number}: {ce}")
+        _iv_action = _title_to_interview_action(_btn_text) or _title_to_interview_action(_btn_payload)
+        if _iv_action:
+            try:
+                if await _handle_interview_action(db, from_number, _iv_action,
+                                                  inbound_label=text_body,
+                                                  inbound_msg_id=message.get("id", "")):
+                    return
+            except Exception as tb_err:
+                logger.warning(f"template button interview action failed for {from_number}: {tb_err}")
+        response_text = await _safe_process_message(
+            db=db,
+            phone_number=from_number,
+            message_text=text_body,
+            source_message_type=message_type,
+        )
+
+    # ── Location ──────────────────────────────────────────────────────────────
+    # Capture the pin so the agent transcript is complete. We don't drive the
+    # conversation off a location, so no bot reply — just sync it inbound.
+    elif message_type == "location":
+        _loc = message.get("location", {}) or {}
+        _lat = _loc.get("latitude")
+        _lng = _loc.get("longitude")
+        _lname = _loc.get("name") or _loc.get("address") or ""
+        _maps = (
+            f"https://www.google.com/maps?q={_lat},{_lng}"
+            if (_lat is not None and _lng is not None) else ""
+        )
+        _label = _lname or (f"{_lat}, {_lng}" if _maps else "shared location")
+        logger.info(f"📍 Location from {from_number}: {_label}")
+        await _sync_inbound_only(
+            db, from_number, f"📍 Location: {_label}",
+            message_type="location",
+            extra_meta={"latitude": _lat, "longitude": _lng, "name": _lname, "maps_url": _maps},
+            whatsapp_message_id=message.get("id", ""),
+        )
+        response_text = None
+
+    # ── Sticker — re-host so the panel can show it, sync inbound, no reply ─────
+    elif message_type == "sticker":
+        _sticker_url = ""
+        try:
+            _sid = message.get("sticker", {}).get("id")
+            if _sid:
+                _media = await meta_client.download_media(_sid)
+                if _media:
+                    _sticker_url = await _rehost_media(_media, "sticker.webp", from_number, "image/webp")
+        except Exception as _stk_err:  # noqa: BLE001
+            logger.debug(f"sticker download skipped: {_stk_err}")
+        logger.info(f"🌟 Sticker from {from_number}")
+        await _sync_inbound_only(
+            db, from_number, "🌟 Sticker",
+            message_type="sticker", media_url=_sticker_url,
+            whatsapp_message_id=message.get("id", ""),
+        )
+        response_text = None
+
+    # ── Reaction / system signals — acknowledge silently, never reply ─────────
+    # A reaction is just an emoji on a previous message; system/ephemeral are
+    # non-conversational. Replying with the capability blurb confused real
+    # candidates (they reacted 👍 and got "I can receive text messages…").
+    # We still sync the reaction inbound so the transcript shows it.
+    elif message_type in ("reaction", "system", "ephemeral"):
+        if message_type == "reaction":
+            _react = message.get("reaction", {}) or {}
+            _emoji = _react.get("emoji") or "👍"
+            await _sync_inbound_only(
+                db, from_number, f"{_emoji} (reaction)",
+                message_type="reaction",
+                extra_meta={"emoji": _emoji, "reacted_to": _react.get("message_id")},
+                whatsapp_message_id=message.get("id", ""),
+            )
+        logger.info(f"Ignoring non-conversational message type '{message_type}' from {from_number}")
+        response_text = None
+
     # ── Unsupported type ──────────────────────────────────────────────────────
     else:
         logger.info(f"Unsupported message type '{message_type}' from {from_number}")
+        # Still capture it in the transcript so agents see the full conversation.
+        await _sync_inbound_only(
+            db, from_number, f"[{message_type} message]",
+            message_type=message_type,
+            whatsapp_message_id=message.get("id", ""),
+        )
         response_text = (
             "I can receive text messages, voice messages, and document uploads (PDF/Word). "
             "How can I assist you?"
@@ -889,6 +1285,8 @@ async def process_single_message(message: dict, contacts: list, db):
                 _inbound_text = message.get("document", {}).get("filename") or "📄 Document"
             elif message_type == "image":
                 _inbound_text = "🖼️ Image"
+            elif message_type == "button":
+                _inbound_text = (message.get("button", {}) or {}).get("text") or "[button reply]"
             else:
                 _inbound_text = message.get("text", {}).get("body") or f"[{message_type} message]"
 
@@ -907,6 +1305,34 @@ async def process_single_message(message: dict, contacts: list, db):
                     whatsapp_message_id=_outbound_msg_id,
                 ),
             )
+            # Persist the turn to the chatbot's own conversations table so
+            # conversation_agent._build_history() can replay prior turns. The
+            # AI-driven path (the only live path) does not otherwise write here,
+            # which left the LLM with no verbatim memory across turns.
+            try:
+                from app.models import Conversation as _ConvModel, MessageType as _MT
+                _persist_lang = _lang if _lang in ("si", "ta", "en") else None
+                db.add(_ConvModel(
+                    candidate_id=_cand.id,
+                    message_type=_MT.USER,
+                    message_text=_inbound_text,
+                    detected_language=_persist_lang,
+                    media_type=(_inbound_type if _inbound_type != "text" else None),
+                    media_url=_media_url_captured or None,
+                ))
+                db.add(_ConvModel(
+                    candidate_id=_cand.id,
+                    message_type=_MT.BOT,
+                    message_text=_outbound_text,
+                    detected_language=_persist_lang,
+                ))
+                db.commit()
+            except Exception as _persist_err:
+                logger.warning(f"Local conversation persistence failed: {_persist_err}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
         except Exception as _sc_err:
             logger.debug(f"Chat sync gather error: {_sc_err}")
     else:
@@ -923,10 +1349,18 @@ class CandidateStatusPayload(BaseModel):
     candidate_phone: str
     candidate_name: str
     status: str  # shortlisted | interview_scheduled | hired | rejected_with_alternatives
-                 # | certified | prescreening_certified | general_pool | transferred | interview_reminder
+                 # | certified | prescreening_certified | general_pool | transferred
+                 # | interview_reminder | interview_day_reminder | job_now_available
+    # CRM-side preferred language (en/si/ta) — used to localise messages for
+    # candidates the chatbot auto-creates (agency imports who never messaged in).
+    language: Optional[str] = None
     job_title: str
     interview_date: Optional[str] = None
     interview_location: Optional[str] = None
+    interview_notes: Optional[str] = None  # recruiter instructions (dress code, docs to bring, …)
+    what_to_bring: Optional[str] = None  # per-day "what to bring" → out-of-window invite template param 5
+    dress_code: Optional[str] = None  # per-day dress code → out-of-window invite template param 6
+    translate_notes: bool = False  # translate interview_notes into the candidate's language (uses AI). Off = send verbatim, no API cost.
     alternative_jobs: Optional[list] = None
     prescreening_datetime: Optional[str] = None
     prescreening_location: Optional[str] = None
@@ -960,6 +1394,572 @@ def _require_api_key_webhook(api_key: Optional[str]) -> None:
     )
 
 
+# Proactive statuses that may target candidates OUTSIDE the 24h WhatsApp window
+# (interview reminders, job re-engagement). For these, an approved Meta template
+# is used when out-of-window; otherwise free-form text (Meta-dropped out of
+# window, same as before templates existed).
+_PROACTIVE_TEMPLATE_LANG = {"en": "en", "si": "si", "ta": "ta", "singlish": "en", "tanglish": "en"}
+
+
+def _sanitize_template_param(text, max_len: int = 300) -> str:
+    """Make a value safe as a Meta template body parameter: Meta rejects params
+    containing newlines, tabs, or 4+ consecutive spaces (error 132000/132012),
+    so collapse all whitespace runs to single spaces and cap the length."""
+    import re as _re
+    cleaned = _re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 1].rstrip() + "…"
+    return cleaned
+
+
+def _out_of_window_template(status_key: str, payload, lang: str):
+    """Return (template_name, language_code, components) when an approved template
+    is configured for this proactive status, else (None, None, None).
+
+    Resolution order: a status-specific template (welcome / interview_* /
+    job_now_available) wins; otherwise the GENERIC status template
+    (TEMPLATE_STATUS_UPDATE: [first_name, one_line_summary]) covers every other
+    status, so no proactive notification is ever silently dropped out-of-window
+    once that one template is approved."""
+    first_name = (payload.candidate_name or "").strip().split(" ")[0] or "there"
+    job = payload.job_title or ""
+    when = payload.interview_date or ""
+    lang_code = _PROACTIVE_TEMPLATE_LANG.get(lang, "en")
+    # Prefer the rich INVITE template (with Confirm/Reschedule/Can't-make-it
+    # quick-reply buttons that work out-of-window). Its 6 params are non-empty by
+    # construction (Meta rejects empty samples). Falls back to the buttonless
+    # interview_scheduled template when the invite isn't configured yet.
+    if settings.template_interview_invite:
+        _loc = (getattr(payload, "interview_location", None) or "as advised")
+        _bring = (getattr(payload, "what_to_bring", None) or "your original documents")
+        _dress = (getattr(payload, "dress_code", None) or "smart casual")
+        _interview_entry = (settings.template_interview_invite, [first_name, job, when, _loc, _bring, _dress])
+    else:
+        _interview_entry = (settings.template_interview_scheduled, [first_name, job, when])
+    mapping = {
+        # Interview invite to a candidate outside the 24h window: only an approved
+        # template can reach them (free-form is dropped by Meta). The template body
+        # carries name/job/date; full venue details follow in-window once they reply.
+        "interview_scheduled": _interview_entry,
+        "interview_reminder": (settings.template_interview_reminder, [first_name, job, when]),
+        "interview_day_reminder": (settings.template_interview_day_reminder, [first_name, job, when]),
+        "job_now_available": (settings.template_job_now_available, [first_name, job]),
+        # Agent-added candidate (never messaged in → out of window). Body: [first_name].
+        "welcome": (settings.template_welcome, [first_name]),
+        # Manual re-engagement nudge for a dormant chat. Body: [first_name].
+        "reengage": (settings.template_reengage, [first_name]),
+    }
+    tmpl, params = mapping.get(status_key, (None, None))
+
+    if not tmpl and settings.template_status_update:
+        # Generic fallback: "update on your application: <one-line summary>".
+        from app.llm.prompt_templates import PromptTemplates
+        summary = PromptTemplates.get_status_param_summary(
+            status_key,
+            lang_code,
+            job_title=job,
+            interview_date=payload.interview_date,
+            prescreening_datetime=payload.prescreening_datetime,
+            old_job_title=payload.old_job_title,
+            new_job_title=payload.new_job_title,
+        )
+        if summary:
+            tmpl, params = settings.template_status_update, [first_name, summary]
+
+    if not tmpl:
+        return None, None, None
+    components = [{
+        "type": "body",
+        "parameters": [{"type": "text", "text": _sanitize_template_param(p)} for p in params],
+    }]
+    return tmpl, lang_code, components
+
+
+# Interview action buttons (attached to in-window interview_scheduled messages).
+_INTERVIEW_BUTTON_IDS = {"iv_confirm", "iv_reschedule", "iv_cantmake"}
+_BUTTON_ACTION = {"iv_confirm": "confirm", "iv_reschedule": "reschedule", "iv_cantmake": "cant_make"}
+
+
+def _title_to_interview_action(title: str):
+    """Map an inbound quick-reply button TITLE to confirm/reschedule/cant_make.
+
+    Template quick-reply taps return the button TEXT (not our iv_* ids), and a
+    si/ta variant may fall back to the EN template — so we keyword-match across
+    en/si/ta. Resilient to emoji prefixes and wording variations.
+    """
+    t = (title or "").strip().lower()
+    if not t:
+        return None
+    if "reschedul" in t or "වෙනස" in t or "மாற்ற" in t or "மாற்று" in t:
+        return "reschedule"
+    if ("can't" in t or "cant" in t or "cannot" in t or "can not" in t
+            or "බැහැ" in t or "முடியா" in t):
+        return "cant_make"
+    if "confirm" in t or "තහවුර" in t or "உறுதி" in t:
+        return "confirm"
+    return None
+
+
+async def _post_recruitment_api(path: str, body: dict) -> dict:
+    """POST JSON to the recruitment backend (chatbot-authenticated). Returns the
+    parsed JSON dict, or {} on any failure (never raises)."""
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(
+                f"{settings.recruitment_api_url}{path}",
+                headers={"x-chatbot-api-key": settings.chatbot_api_key or ""},
+                json=body,
+            )
+            try:
+                return resp.json() or {}
+            except Exception:
+                return {}
+    except Exception as e:
+        logger.warning(f"recruitment API POST {path} failed: {e}")
+        return {}
+
+
+# Localized copy for the bot-driven reschedule / can't-make flows.
+_RESCHEDULE_INTRO = {
+    "en": "No problem 🔁 — here are the next available interview times. Tap one to rebook:",
+    "si": "කරදරයක් නෑ 🔁 — මෙන්න ඊළඟට තිබෙන සම්මුඛ පරීක්ෂණ වේලාවන්. නැවත වෙන්කරවා ගැනීමට එකක් තෝරන්න:",
+    "ta": "பரவாயில்லை 🔁 — அடுத்த நேர்காணல் நேரங்கள் இதோ. மீண்டும் பதிவு செய்ய ஒன்றைத் தட்டவும்:",
+}
+_RESCHEDULE_DONE = {
+    "en": "Done ✅ — your interview is rebooked to {when}. See you there!",
+    "si": "හරි ✅ — ඔබේ සම්මුඛ පරීක්ෂණය {when} දිනට නැවත වෙන්කර ඇත. එතන හමුවෙමු!",
+    "ta": "முடிந்தது ✅ — உங்கள் நேர்காணல் {when}-க்கு மீண்டும் பதிவு செய்யப்பட்டது. அங்கே சந்திப்போம்!",
+}
+_RESCHEDULE_TAKEN = {
+    "en": "Sorry, that time was just taken. Please reply 'reschedule' to see fresh times.",
+    "si": "සමාවන්න, ඒ වේලාව දැන් වෙන් වී ඇත. නව වේලාවන් බැලීමට 'reschedule' කියා පිළිතුරු දෙන්න.",
+    "ta": "மன்னிக்கவும், அந்த நேரம் இப்போது எடுக்கப்பட்டது. புதிய நேரங்களைப் பார்க்க 'reschedule' என பதிலளியுங்கள்.",
+}
+_CANTMAKE_INTRO = {
+    "en": "No problem 🙏 — here are other openings that may suit you. Tap to apply, or choose 'Not interested':",
+    "si": "කරදරයක් නෑ 🙏 — ඔබට ගැලපෙන වෙනත් රැකියා මෙන්න. අයදුම් කිරීමට තෝරන්න, නැතහොත් 'Not interested' තෝරන්න:",
+    "ta": "பரவாயில்லை 🙏 — உங்களுக்கு பொருந்தும் வேறு வேலைகள் இதோ. விண்ணப்பிக்க தட்டவும், அல்லது 'Not interested' தேர்வு செய்யவும்:",
+}
+_CANTMAKE_APPLIED = {
+    "en": "Great ✅ — we've started your application. Our team will be in touch!",
+    "si": "හොඳයි ✅ — ඔබේ අයදුම්පත අපි ආරම්භ කළා. අපේ කණ්ඩායම සම්බන්ධ වෙයි!",
+    "ta": "நன்று ✅ — உங்கள் விண்ணப்பத்தைத் தொடங்கிவிட்டோம். எங்கள் குழு தொடர்பு கொள்ளும்!",
+}
+_CANTMAKE_NOTED = {
+    "en": "Thanks for letting us know 🙏 — we'll keep you in mind for future roles.",
+    "si": "දැනුම් දීමට ස්තුතියි 🙏 — අනාගත රැකියා සඳහා ඔබව මතක තබා ගනිමු.",
+    "ta": "தெரிவித்ததற்கு நன்றி 🙏 — எதிர்கால வேலைகளுக்கு உங்களை மனதில் வைத்திருப்போம்.",
+}
+_NOT_INTERESTED_ROW = {"en": "Not interested", "si": "කැමති නැහැ", "ta": "ஆர்வம் இல்லை"}
+_INTERVIEW_BUTTONS = {
+    "en": [{"id": "iv_confirm", "title": "✅ Confirm"}, {"id": "iv_reschedule", "title": "🔁 Reschedule"}, {"id": "iv_cantmake", "title": "❌ Can't make it"}],
+    "si": [{"id": "iv_confirm", "title": "✅ තහවුරුයි"}, {"id": "iv_reschedule", "title": "🔁 වෙනස් කරන්න"}, {"id": "iv_cantmake", "title": "❌ බැහැ"}],
+    "ta": [{"id": "iv_confirm", "title": "✅ உறுதி"}, {"id": "iv_reschedule", "title": "🔁 மாற்று"}, {"id": "iv_cantmake", "title": "❌ முடியாது"}],
+    "singlish": [{"id": "iv_confirm", "title": "✅ Confirm"}, {"id": "iv_reschedule", "title": "🔁 Reschedule"}, {"id": "iv_cantmake", "title": "❌ Ba"}],
+    "tanglish": [{"id": "iv_confirm", "title": "✅ Confirm"}, {"id": "iv_reschedule", "title": "🔁 Reschedule"}, {"id": "iv_cantmake", "title": "❌ Mudiyadhu"}],
+}
+_INTERVIEW_ACK = {
+    "confirm": {
+        "en": "Great — your interview is *confirmed*! ✅ See you there. Good luck! 🍀",
+        "si": "හොඳයි — ඔබේ සම්මුඛ පරීක්ෂණය *තහවුරුයි*! ✅ එතන හමුවෙමු. සුභ පැතුම්! 🍀",
+        "ta": "நன்று — உங்கள் நேர்காணல் *உறுதி* செய்யப்பட்டது! ✅ அங்கே சந்திப்போம். வாழ்த்துக்கள்! 🍀",
+        "singlish": "Hodai — oyage interview eka *confirm*! ✅ Ethana hamuwemu. Good luck! 🍀",
+        "tanglish": "Super — unga interview *confirm* aagiduchu! ✅ Anga paapom. Good luck! 🍀",
+    },
+    "reschedule": {
+        "en": "No problem 🔁 — our team will contact you shortly to arrange a new time.",
+        "si": "කරදරයක් නෑ 🔁 — නව වේලාවක් සකස් කරන්න අපේ කණ්ඩායම ඉක්මනින් සම්බන්ධ වෙයි.",
+        "ta": "பரவாயில்லை 🔁 — புதிய நேரத்தை ஏற்பாடு செய்ய எங்கள் குழு விரைவில் தொடர்பு கொள்ளும்.",
+        "singlish": "Prashnayak na 🔁 — aluth welawak adjust karanna api team eka ikmanin contact karanawa.",
+        "tanglish": "Prachanai illa 🔁 — pudhu time arrange panna engal team soon contact pannuvanga.",
+    },
+    "cant_make": {
+        "en": "Thanks for letting us know 🙏 — our team will reach out about the next steps.",
+        "si": "දැනුම් දීමට ස්තුතියි 🙏 — ඊළඟ පියවර ගැන අපේ කණ්ඩායම සම්බන්ධ වෙයි.",
+        "ta": "தெரிவித்ததற்கு நன்றி 🙏 — அடுத்த படிகள் குறித்து எங்கள் குழு தொடர்பு கொள்ளும்.",
+        "singlish": "Kiyala dunnata thanks 🙏 — next steps gana api team eka contact karanawa.",
+        "tanglish": "Sonnathukku nandri 🙏 — next steps pathi engal team contact pannuvanga.",
+    },
+}
+
+
+async def _handle_interview_action(db, phone: str, action: str,
+                                   inbound_label: str = "", inbound_msg_id: str = "") -> bool:
+    """Handle an interview action (confirm / reschedule / cant_make), whether the
+    candidate tapped an in-window interactive button OR an out-of-window template
+    quick-reply. confirm just acks; reschedule offers bookable slots; cant_make
+    offers alternative jobs. Returns True when handled (skip orchestration).
+
+    Because the caller `return`s immediately on True (skipping the main reply
+    block's sync), this function self-syncs the inbound tap + every outbound reply
+    into the recruitment `communications` table — otherwise the candidate's tap and
+    the bot's replies never appear in the agent Messages panel (they happen on
+    WhatsApp but were invisible to agents). _sync_chat_message is fire-and-forget.
+
+    NOTE: the main reply block's local Conversation (LLM-memory) write is
+    intentionally skipped here — these are transactional taps, not chat turns."""
+    if action not in ("confirm", "reschedule", "cant_make"):
+        return False
+    cand = crud.get_candidate_by_phone(db, phone)
+    from app.services.followup_service import candidate_lang
+    lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+
+    # Mirror the candidate's tap into the agent transcript.
+    _ACTION_LABEL = {"confirm": "Confirm", "reschedule": "Reschedule", "cant_make": "Can't make it"}
+    await _sync_chat_message(
+        phone, "inbound", inbound_label or _ACTION_LABEL.get(action, action),
+        lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id,
+    )
+
+    # Always record the action on the backend (sets status=confirmed for confirm;
+    # creates the agent task + alert for reschedule/cant_make as a safety net).
+    await _post_recruitment_api("/api/chatbot/interview-response", {"phone": phone, "action": action})
+
+    if action == "confirm":
+        ack = _INTERVIEW_ACK["confirm"].get(lang) or _INTERVIEW_ACK["confirm"]["en"]
+        await meta_client.send_message(phone, ack)
+        await _sync_chat_message(phone, "outbound", ack, lang, _state)
+        logger.info(f"🎬 Interview confirm handled for {phone}")
+        return True
+
+    if action == "reschedule":
+        slotres = await _post_recruitment_api("/api/chatbot/interview-slots", {"phone": phone})
+        slots = (slotres or {}).get("slots") or []
+        if slots:
+            rows = []
+            for s in slots[:10]:
+                rows.append({
+                    "id": str(s.get("slot_id", ""))[:200],
+                    "title": _compact_slot_title(s.get("datetime", "")) or (s.get("label", "")[:24]),
+                    "description": str(s.get("label", ""))[:72],
+                })
+            intro = _RESCHEDULE_INTRO.get(lang) or _RESCHEDULE_INTRO["en"]
+            await meta_client.send_interactive_list(
+                phone, text=intro, button_text="Pick a time",
+                sections=[{"title": "Available times", "rows": rows}],
+            )
+            _out = (intro + "\nOptions: " + " / ".join([r["title"] for r in rows if r.get("title")])).strip()
+        else:
+            _out = _INTERVIEW_ACK["reschedule"].get(lang) or _INTERVIEW_ACK["reschedule"]["en"]
+            await meta_client.send_message(phone, _out)
+        await _sync_chat_message(phone, "outbound", _out, lang, _state)
+        logger.info(f"🎬 Interview reschedule handled for {phone} ({len(slots)} slots)")
+        return True
+
+    # cant_make → offer alternative open jobs.
+    jobres = await _post_recruitment_api("/api/chatbot/interview-cant-make-jobs", {"phone": phone})
+    jobs = (jobres or {}).get("jobs") or []
+    if jobs:
+        rows = [{"id": f"cmapply|{j.get('job_id')}", "title": str(j.get("label", j.get("title", "")))[:24],
+                 "description": str(j.get("label", ""))[:72]} for j in jobs[:9]]
+        rows.append({"id": "cmno", "title": (_NOT_INTERESTED_ROW.get(lang) or _NOT_INTERESTED_ROW["en"])[:24]})
+        intro = _CANTMAKE_INTRO.get(lang) or _CANTMAKE_INTRO["en"]
+        await meta_client.send_interactive_list(
+            phone, text=intro, button_text="View jobs",
+            sections=[{"title": "Open roles", "rows": rows}],
+        )
+        _out = (intro + "\nOptions: " + " / ".join([r["title"] for r in rows if r.get("title")])).strip()
+    else:
+        _out = _INTERVIEW_ACK["cant_make"].get(lang) or _INTERVIEW_ACK["cant_make"]["en"]
+        await meta_client.send_message(phone, _out)
+    await _sync_chat_message(phone, "outbound", _out, lang, _state)
+    logger.info(f"🎬 Interview cant_make handled for {phone} ({len(jobs)} jobs)")
+    return True
+
+
+def _compact_slot_title(dt: str) -> str:
+    """'2026-06-15T10:00' → 'Mon 15 Jun 10:00' (≤24 chars for list rows)."""
+    try:
+        from datetime import datetime
+        d = datetime.strptime(str(dt), "%Y-%m-%dT%H:%M")
+        return d.strftime("%a %d %b %H:%M")
+    except Exception:
+        return ""
+
+
+async def _handle_interview_followup(db, phone: str, reply_id: str, inbound_msg_id: str = "") -> bool:
+    """Route a reschedule-slot pick ('rs|<iv>|<dt>') or a can't-make choice
+    ('cmapply|<job_id>' / 'cmno') to the backend. Self-describing ids, so no stored
+    state needed. Returns True when handled (skip orchestration).
+
+    Self-syncs the inbound pick + the bot's reply into the agent transcript — the
+    caller `return`s on True and skips the main sync block, so without this the
+    rebook/apply messages never reach the Messages panel."""
+    rid = reply_id or ""
+    cand = crud.get_candidate_by_phone(db, phone)
+    from app.services.followup_service import candidate_lang
+    lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+
+    if rid.startswith("rs|"):
+        parts = rid.split("|", 2)
+        if len(parts) == 3:
+            interview_id, datetime_str = parts[1], parts[2]
+            await _sync_chat_message(
+                phone, "inbound", f"Picked: {_compact_slot_title(datetime_str) or datetime_str}",
+                lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id,
+            )
+            res = await _post_recruitment_api(
+                "/api/chatbot/interview-reschedule-pick",
+                {"phone": phone, "interview_id": interview_id, "datetime": datetime_str},
+            )
+            if res.get("ok"):
+                when = res.get("label") or datetime_str
+                msg = (_RESCHEDULE_DONE.get(lang) or _RESCHEDULE_DONE["en"]).format(when=when)
+            else:
+                msg = _RESCHEDULE_TAKEN.get(lang) or _RESCHEDULE_TAKEN["en"]
+            await meta_client.send_message(phone, msg)
+            await _sync_chat_message(phone, "outbound", msg, lang, _state)
+            return True
+        return False
+
+    if rid.startswith("cmapply|") or rid == "cmno":
+        if rid == "cmno":
+            _in_label = _NOT_INTERESTED_ROW.get(lang) or _NOT_INTERESTED_ROW["en"]
+            await _sync_chat_message(phone, "inbound", _in_label, lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id)
+            await _post_recruitment_api("/api/chatbot/interview-cant-make-apply", {"phone": phone, "action": "not_interested"})
+            _out = _CANTMAKE_NOTED.get(lang) or _CANTMAKE_NOTED["en"]
+            await meta_client.send_message(phone, _out)
+        else:
+            job_id = rid.split("|", 1)[1]
+            await _sync_chat_message(phone, "inbound", "Applied to alternative role", lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id)
+            await _post_recruitment_api(
+                "/api/chatbot/interview-cant-make-apply",
+                {"phone": phone, "action": "apply", "job_id": job_id},
+            )
+            _out = _CANTMAKE_APPLIED.get(lang) or _CANTMAKE_APPLIED["en"]
+            await meta_client.send_message(phone, _out)
+        await _sync_chat_message(phone, "outbound", _out, lang, _state)
+        return True
+
+    return False
+
+
+# ── Bulk-campaign quick-reply handlers ───────────────────────────────────────
+# The UAE walk-in campaign template carries three quick-reply buttons:
+#   "Confirm my slot"  → create the application + interview under the campaign's
+#                         target (AMAYA) job, then ask which walk-in day.
+#   "Suggest to a friend" → collect the friend's name + WhatsApp number and invite
+#                         them with the same template (friend uploads CV later).
+#   "Not Interested"   → no change.
+# Matched by title (works for in-window button_reply taps and out-of-window
+# template `button` taps) and routed BEFORE the interview matcher — because
+# "Confirm my slot" contains the word "confirm" and would otherwise be hijacked.
+
+_CAMPAIGN_CONFIRM_INTRO = "You're in! ✅ Which walk-in day works best for you? Tap one below:"
+_CAMPAIGN_CONFIRM_NODAYS = "You're in! ✅ Our team will confirm your interview details shortly. Please keep your *CV* ready. 🍀"
+_CAMPAIGN_CONFIRM_FAIL = "Thanks for your interest! ✅ Our team will reach out with the next steps shortly."
+_CAMPAIGN_DAYPICK_DONE = "Locked in ✅ — see you on {when}. Please bring your *CV*. Good luck! 🍀"
+_CAMPAIGN_DAYPICK_TAKEN = "Sorry, that day just filled up. Reply *Confirm my slot* to see the remaining days."
+_CAMPAIGN_REFER_ASK = ("Love it! 🙌 Share your friend's *name* and *WhatsApp number* in one message "
+                       "(e.g. _Nimal 0771234567_) and we'll send them the invite.")
+_CAMPAIGN_REFER_RETRY = ("I just need your friend's *name* and a valid *WhatsApp number* together "
+                         "(e.g. _Nimal 0771234567_).")
+_CAMPAIGN_REFER_SELF = "That looks like your own number 😊 Please share a *friend's* name and WhatsApp number."
+_CAMPAIGN_REFER_DONE = "Done 🎉 We've sent {name} the invite. Thanks for spreading the word!"
+_CAMPAIGN_REFER_SOFTDONE = "Thanks! 🙏 Our team will reach out to your friend shortly."
+_CAMPAIGN_REFER_CANCEL = "No problem 🙏 Cancelled. Tap *Suggest to a friend* again whenever you like."
+_CAMPAIGN_NOT_INTERESTED = "No worries 🙏 Thanks for letting us know. If you change your mind, just reply here."
+
+_REFERRAL_PHONE_RE = re.compile(r"(\+?\d[\d\s\-]{7,}\d)")
+
+
+def _title_to_campaign_action(title: str):
+    """Map a campaign quick-reply button title/payload to its action. Keyed on
+    campaign-specific words ('slot' / 'friend'/'suggest' / 'not interested') so it
+    never collides with the interview invite's plain 'Confirm' button."""
+    t = (title or "").strip().lower()
+    if not t:
+        return None
+    if "not interested" in t or "not intrested" in t:
+        return "not_interested"
+    if "friend" in t or "suggest" in t:
+        return "refer_friend"
+    if "slot" in t:  # "Confirm my slot"
+        return "confirm_slot"
+    return None
+
+
+async def _handle_campaign_action(db, phone: str, action: str,
+                                  inbound_label: str = "", inbound_msg_id: str = "") -> bool:
+    """Handle a campaign quick-reply tap. Self-syncs the tap + replies into the
+    agent transcript (the caller returns on True, skipping the main sync block).
+    Returns True when handled."""
+    if action not in ("confirm_slot", "refer_friend", "not_interested"):
+        return False
+    # get_or_create: many campaign recipients (agency imports) never messaged the
+    # bot, so they have no chatbot-DB row yet — needed to persist the referral step.
+    cand = crud.get_or_create_candidate(db, phone)
+    from app.services.followup_service import candidate_lang
+    lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+    _default_label = {"confirm_slot": "Confirm my slot", "refer_friend": "Suggest to a friend",
+                      "not_interested": "Not Interested"}.get(action, action)
+    await _sync_chat_message(
+        phone, "inbound", inbound_label or _default_label,
+        lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id,
+    )
+
+    if action == "not_interested":
+        await meta_client.send_message(phone, _CAMPAIGN_NOT_INTERESTED)
+        await _sync_chat_message(phone, "outbound", _CAMPAIGN_NOT_INTERESTED, lang, _state)
+        return True
+
+    if action == "confirm_slot":
+        res = await _post_recruitment_api("/api/chatbot/campaign-confirm", {"phone": phone})
+        slots = (res or {}).get("slots") or []
+        if res.get("ok") and slots:
+            rows = []
+            for s in slots[:10]:
+                rows.append({
+                    "id": str(s.get("slot_id", ""))[:200],
+                    "title": _compact_slot_title(s.get("datetime", "")) or (str(s.get("label", ""))[:24]),
+                    "description": str(s.get("label", ""))[:72],
+                })
+            await meta_client.send_interactive_list(
+                phone, text=_CAMPAIGN_CONFIRM_INTRO, button_text="Pick a day",
+                sections=[{"title": "Walk-in days", "rows": rows}],
+            )
+            _out = (_CAMPAIGN_CONFIRM_INTRO + "\nOptions: " + " / ".join([r["title"] for r in rows if r.get("title")])).strip()
+        elif res.get("ok"):
+            _out = _CAMPAIGN_CONFIRM_NODAYS
+            await meta_client.send_message(phone, _out)
+        else:
+            _out = _CAMPAIGN_CONFIRM_FAIL
+            await meta_client.send_message(phone, _out)
+        await _sync_chat_message(phone, "outbound", _out, lang, _state)
+        logger.info(f"📣 Campaign confirm handled for {phone} ({len(slots)} days)")
+        return True
+
+    # refer_friend → start a deterministic name+number collection sub-flow.
+    if cand is not None:
+        try:
+            st = dict(getattr(cand, "agent_state", None) or {})
+            st["campaign_referral"] = {"step": "collect"}
+            cand.agent_state = st
+            db.commit()
+        except Exception as e:
+            logger.warning(f"campaign referral state set failed for {phone}: {e}")
+    await meta_client.send_message(phone, _CAMPAIGN_REFER_ASK)
+    await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_ASK, lang, _state)
+    logger.info(f"📣 Campaign referral started for {phone}")
+    return True
+
+
+async def _handle_campaign_daypick(db, phone: str, reply_id: str, inbound_msg_id: str = "") -> bool:
+    """Route a campaign day pick ('cd|<interview_id>|<datetime>') to the backend,
+    which moves the interview to that day + venue (keeping it confirmed). Returns
+    True when handled."""
+    rid = reply_id or ""
+    if not rid.startswith("cd|"):
+        return False
+    parts = rid.split("|", 2)
+    if len(parts) != 3:
+        return False
+    interview_id, datetime_str = parts[1], parts[2]
+    cand = crud.get_candidate_by_phone(db, phone)
+    from app.services.followup_service import candidate_lang
+    lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+    await _sync_chat_message(
+        phone, "inbound", f"Picked: {_compact_slot_title(datetime_str) or datetime_str}",
+        lang, _state, message_type="button", whatsapp_message_id=inbound_msg_id,
+    )
+    res = await _post_recruitment_api(
+        "/api/chatbot/campaign-daypick",
+        {"phone": phone, "interview_id": interview_id, "datetime": datetime_str},
+    )
+    if res.get("ok"):
+        msg = _CAMPAIGN_DAYPICK_DONE.format(when=res.get("label") or datetime_str)
+    else:
+        msg = _CAMPAIGN_DAYPICK_TAKEN
+    await meta_client.send_message(phone, msg)
+    await _sync_chat_message(phone, "outbound", msg, lang, _state)
+    return True
+
+
+async def _handle_referral_turn(db, phone: str, text: str, inbound_msg_id: str = "") -> bool:
+    """When the candidate is mid 'Suggest to a friend' flow, parse their reply for
+    the friend's name + WhatsApp number, create the friend + invite them. Returns
+    True when handled (skip the normal LLM orchestration)."""
+    cand = crud.get_candidate_by_phone(db, phone)
+    if not cand:
+        return False
+    st = dict(getattr(cand, "agent_state", None) or {})
+    ref = st.get("campaign_referral")
+    if not isinstance(ref, dict) or ref.get("step") != "collect":
+        return False
+
+    from app.services.followup_service import candidate_lang
+    from app.utils.phone import normalize_phone
+    lang = candidate_lang(cand) if cand else "en"
+    _state = (getattr(cand, "conversation_state", "") or "") if cand else ""
+    await _sync_chat_message(phone, "inbound", text, lang, _state, whatsapp_message_id=inbound_msg_id)
+
+    def _clear_referral():
+        st.pop("campaign_referral", None)
+        try:
+            cand.agent_state = st
+            db.commit()
+        except Exception as e:
+            logger.warning(f"campaign referral clear failed for {phone}: {e}")
+
+    low = (text or "").strip().lower()
+    if low in ("cancel", "stop", "no", "nevermind", "never mind", "exit"):
+        _clear_referral()
+        await meta_client.send_message(phone, _CAMPAIGN_REFER_CANCEL)
+        await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_CANCEL, lang, _state)
+        return True
+
+    m = _REFERRAL_PHONE_RE.search(text or "")
+    friend_phone = normalize_phone(m.group(1)) if m else None
+    friend_name = ""
+    if m:
+        friend_name = (text[:m.start()] + " " + text[m.end():])
+    friend_name = re.sub(r"\s+", " ", friend_name).strip(" ,.–—-\n\t")[:80]
+
+    if not friend_phone:
+        await meta_client.send_message(phone, _CAMPAIGN_REFER_RETRY)
+        await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_RETRY, lang, _state)
+        return True  # stay in collect
+
+    res = await _post_recruitment_api("/api/chatbot/campaign-refer", {
+        "referrer_phone": phone, "friend_phone": friend_phone, "friend_name": friend_name,
+    })
+    if not res.get("ok"):
+        reason = res.get("reason")
+        if reason == "invalid_phone":
+            await meta_client.send_message(phone, _CAMPAIGN_REFER_RETRY)
+            await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_RETRY, lang, _state)
+            return True
+        if reason == "self_referral":
+            await meta_client.send_message(phone, _CAMPAIGN_REFER_SELF)
+            await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_SELF, lang, _state)
+            return True
+        _clear_referral()
+        await meta_client.send_message(phone, _CAMPAIGN_REFER_SOFTDONE)
+        await _sync_chat_message(phone, "outbound", _CAMPAIGN_REFER_SOFTDONE, lang, _state)
+        return True
+
+    # Success → invite the friend with the campaign template, then thank the referrer.
+    tmpl = res.get("template_name") or settings.template_campaign_walkin
+    flang = res.get("language") or "en"
+    if tmpl:
+        try:
+            await meta_client.send_template_message(friend_phone, tmpl, language_code=flang)
+        except Exception as e:
+            logger.warning(f"referral invite send failed to {friend_phone}: {e}")
+    else:
+        logger.warning(f"referral: no campaign template configured — friend {friend_phone} not invited")
+    _clear_referral()
+    done = _CAMPAIGN_REFER_DONE.format(name=friend_name or "your friend")
+    await meta_client.send_message(phone, done)
+    await _sync_chat_message(phone, "outbound", done, lang, _state)
+    logger.info(f"📣 Campaign referral completed: {phone} → {friend_phone}")
+    return True
+
+
 @router.post("/candidate-status")
 async def candidate_status_webhook(
     payload: CandidateStatusPayload,
@@ -972,31 +1972,66 @@ async def candidate_status_webhook(
     """
     _require_api_key_webhook(x_chatbot_api_key)
 
-    phone = payload.candidate_phone
+    # Normalise so the lookup/auto-create keys on the same canonical form the
+    # inbound path uses — otherwise a "+94..." from the backend forks a second row.
+    phone = normalize_phone_or_raw(payload.candidate_phone)
     status_key = payload.status.lower().strip()
 
-    # Look up the candidate's preferred language
+    # Look up the candidate's preferred language + last inbound time (for the
+    # 24h-window decision below). Candidates missing from the chatbot DB are
+    # auto-created for EVERY status — agency-imported / CRM-only candidates never
+    # messaged the bot, and aborting here used to drop all their certification
+    # and interview notifications (reason=candidate_not_found). They stay
+    # out-of-window (last_inbound_at NULL) → the approved-template path is used,
+    # and their first reply runs the normal intake/conversation flow.
+    last_inbound_at = None
     try:
         db = SessionLocal()
-        from app.models import Candidate
-        candidate = db.query(Candidate).filter(
-            Candidate.phone_number == phone
-        ).first()
+        candidate = crud.get_candidate_by_phone(db, phone)
         if not candidate:
-            logger.warning(
-                "Status webhook: no candidate found for phone %s — aborting", phone
-            )
-            db.close()
-            return {"ok": False, "reason": "candidate_not_found"}
+            candidate = crud.get_or_create_candidate(db, phone)
+            if payload.candidate_name and not (candidate.name or "").strip():
+                candidate.name = payload.candidate_name
+            # Carry the CRM's preferred language onto the new record so the
+            # template variant (en/si/ta) matches what the agent selected.
+            if payload.language:
+                try:
+                    from app.models import LanguagePreference
+                    candidate.language_preference = LanguagePreference(payload.language)
+                except Exception:
+                    pass
+            # CRITICAL: a proactively-created candidate has NEVER messaged in, so
+            # they are OUTSIDE the 24h window. The Candidate model defaults
+            # last_inbound_at to now() on insert — clear it so the window check
+            # below picks the approved-template path (not free-form, which Meta
+            # drops). It's re-stamped to now() by _touch_inbound on their reply.
+            candidate.last_inbound_at = None
+            db.commit()
         lang = "en"
         extracted = candidate.extracted_data or {}
         lang = extracted.get("language_register") or getattr(
-            candidate.language_preference, "value", "en"
-        )
+            candidate.language_preference, "value", None
+        ) or payload.language or "en"
+        last_inbound_at = getattr(candidate, "last_inbound_at", None)
         db.close()
     except Exception as e:
         logger.warning(f"Could not look up language for {phone}: {e}")
-        lang = "en"
+        lang = payload.language or "en"
+
+    # Translate recruiter-authored interview instructions into the candidate's
+    # language so the whole invite reads in one language. Degrades to the
+    # original text if translation is unavailable.
+    interview_notes = payload.interview_notes
+    # Translate only when explicitly requested (saves API cost: default is to send
+    # the recruiter's text exactly as typed). English candidates never need it.
+    if interview_notes and interview_notes.strip() and payload.translate_notes and lang != "en":
+        # Link-safe + cached: preserves map URLs/addresses verbatim and only
+        # translates the same block once per language across a bulk batch.
+        from app.services.translation_service import translate_interview_notes
+        try:
+            interview_notes = await translate_interview_notes(interview_notes, lang)
+        except Exception as e:
+            logger.warning(f"Interview notes translation failed for {phone}: {e}")
 
     # Build status message from templates
     from app.llm.prompt_templates import PromptTemplates
@@ -1007,6 +2042,7 @@ async def candidate_status_webhook(
         job_title=payload.job_title,
         interview_date=payload.interview_date,
         interview_location=payload.interview_location,
+        interview_notes=interview_notes,
         alternative_jobs=payload.alternative_jobs,
         prescreening_datetime=payload.prescreening_datetime,
         prescreening_location=payload.prescreening_location,
@@ -1019,20 +2055,340 @@ async def candidate_status_webhook(
         logger.warning(f"No status template for status={status_key}, lang={lang}")
         return {"status": "skipped", "reason": f"Unknown status: {status_key}"}
 
-    # Send the WhatsApp message
+    # Send the WhatsApp message. In-window → rich free-form text. Out-of-window
+    # (>24h since the candidate last messaged) → an approved Meta template if one
+    # is configured for this status; otherwise free-form (which Meta drops out of
+    # window — same as before templates were wired, so no regression).
     try:
-        result = await meta_client.send_message(phone, message)
+        # last_inbound_at is None ⇒ the candidate has NEVER messaged in ⇒ OUTSIDE
+        # the 24h window ⇒ template path. (Defaulting to in-window here was the
+        # bug that sent free-form to agent-added candidates, which Meta drops.)
+        in_window = False
+        if last_inbound_at is not None:
+            try:
+                from datetime import datetime as _dt, timedelta as _td
+                in_window = (_dt.utcnow() - last_inbound_at) < _td(hours=24)
+            except Exception:
+                in_window = False
+
+        tmpl = None
+        if not in_window:
+            tmpl, lang_code, components = _out_of_window_template(status_key, payload, lang)
+        if tmpl:
+            logger.info(f"Status update OUT-of-window for {phone}: sending template {tmpl} ({status_key})")
+            result = await meta_client.send_template_message(phone, tmpl, language_code=lang_code, components=components)
+        elif status_key == "interview_scheduled" and in_window:
+            # In-window interview invite → attach Confirm / Reschedule / Can't-make-it
+            # buttons so the candidate can respond in one tap (reduces no-shows).
+            buttons = _INTERVIEW_BUTTONS.get(lang, _INTERVIEW_BUTTONS["en"])
+            result = await meta_client.send_interactive_buttons(phone, text=message, buttons=buttons)
+        else:
+            result = await meta_client.send_message(phone, message)
+
         if "error" in result:
             logger.error(f"Failed to send status update to {phone}: {result}")
-            return {"status": "error", "detail": str(result.get("error"))}
+            return {
+                "status": "error",
+                "reason": result.get("reason") or "other",
+                "code": result.get("code"),
+                "detail": str(result.get("error")),
+            }
 
         logger.info(
-            f"Status update sent to {phone}: status={status_key}, lang={lang}"
+            f"Status update sent to {phone}: status={status_key}, lang={lang}, "
+            f"window={'in' if in_window else 'out'}, via={'template:' + tmpl if tmpl else 'freeform'}"
         )
-        return {"status": "sent", "message_id": result.get("messages", [{}])[0].get("id")}
+        response = {"status": "sent", "message_id": result.get("messages", [{}])[0].get("id")}
+        if tmpl:
+            # Template (short teaser) went out instead of the rich free-form text.
+            # Hand the rendered full text back so the backend can queue it to
+            # auto-deliver when the candidate replies and the window opens.
+            response.update({"via": "template", "template": tmpl, "full_text": message})
+        return response
     except Exception as e:
         logger.error(f"Error sending status update to {phone}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send message: {e}")
+
+
+class CampaignSendPayload(BaseModel):
+    """One bulk-campaign template send, driven by the backend campaign runner.
+    Always delivered as a TEMPLATE (the campaign body carries the quick-reply
+    buttons, so it must be a template even for in-window recipients)."""
+    candidate_phone: str
+    template_name: str
+    language: Optional[str] = "en"
+    components: Optional[list] = None
+
+
+@router.post("/campaign-send")
+async def campaign_send_webhook(
+    payload: CampaignSendPayload,
+    x_chatbot_api_key: Optional[str] = Header(None),
+):
+    """
+    POST /webhook/campaign-send
+    Send one approved campaign template to a candidate and mirror it into the
+    agent transcript. Returns {status: 'sent'|'failed', reason?, message_id?} so
+    the backend runner can record a per-recipient delivery result.
+    """
+    _require_api_key_webhook(x_chatbot_api_key)
+    phone = normalize_phone_or_raw(payload.candidate_phone)
+    if not phone:
+        return {"status": "failed", "reason": "no_phone"}
+    if not payload.template_name:
+        return {"status": "failed", "reason": "config"}
+    lang = (payload.language or "en").strip() or "en"
+    try:
+        result = await meta_client.send_template_message(
+            phone, payload.template_name, language_code=lang,
+            components=payload.components or None,
+        )
+        if isinstance(result, dict) and result.get("messages"):
+            msg_id = result.get("messages", [{}])[0].get("id")
+            try:
+                await _sync_chat_message(
+                    phone, "outbound", f"📣 Campaign invite sent ({payload.template_name})",
+                    lang, "", message_type="template", whatsapp_message_id=msg_id or "",
+                )
+            except Exception:
+                pass
+            return {"status": "sent", "message_id": msg_id}
+        reason = (result or {}).get("reason") or "other"
+        return {
+            "status": "failed",
+            "reason": reason,
+            "code": (result or {}).get("code"),
+            "detail": (result or {}).get("error"),
+        }
+    except Exception as e:
+        logger.error(f"campaign-send to {phone} failed: {e}")
+        return {"status": "failed", "reason": "other", "detail": str(e)}
+
+
+@router.get("/templates")
+async def list_templates_webhook(x_chatbot_api_key: Optional[str] = Header(None)):
+    """
+    GET /webhook/templates
+    List this WhatsApp Business Account's message templates for the campaign / CSV
+    blast template picker. Each entry carries name/status/category/language plus a
+    `variable_count` (the BODY component's highest {{n}}) so the backend can offer
+    only zero-variable templates for a static blast. Api-key gated.
+    """
+    _require_api_key_webhook(x_chatbot_api_key)
+    raw = await meta_client.list_message_templates()
+    out = []
+    for t in (raw.get("data") or []):
+        var_count = 0
+        for comp in (t.get("components") or []):
+            if str(comp.get("type", "")).upper() == "BODY":
+                nums = re.findall(r"\{\{\s*(\d+)\s*\}\}", comp.get("text", "") or "")
+                var_count = max([int(n) for n in nums], default=0)
+        out.append({
+            "name": t.get("name"),
+            "status": t.get("status"),
+            "category": t.get("category"),
+            "language": t.get("language"),
+            "variable_count": var_count,
+        })
+    return {"templates": out}
+
+
+class AgentMessagePayload(BaseModel):
+    """An agent's free-form reply (typed in the recruitment dashboard), to be sent
+    on the chatbot's WhatsApp identity — the working token. The backend used to
+    send these on its OWN (frequently-expired) Meta token, so takeover replies
+    silently never reached the candidate."""
+    candidate_phone: str
+    message: str = ""
+    message_type: str = "text"          # text | image | document | audio | video
+    media_url: Optional[str] = None
+    filename: Optional[str] = None
+
+
+# Transcript copy for the re-engagement template (mirrors the approved
+# `dewan_reengage` body) so the agent sees what the candidate received.
+_REENGAGE_TRANSCRIPT = {
+    "en": "Hi {name}, our recruitment team has an update about your job application and a message waiting for you. Please reply to this message to receive it.",
+    "si": "ආයුබෝවන් {name}, ඔබේ රැකියා අයදුම්පත ගැන යාවත්කාලීනයක් සහ ඔබ වෙනුවෙන් පණිවිඩයක් අපේ කණ්ඩායම සතුව ඇත. එය ලබා ගැනීමට මෙම පණිවිඩයට පිළිතුරු දෙන්න.",
+    "ta": "வணக்கம் {name}, உங்கள் வேலை விண்ணப்பம் குறித்த புதுப்பிப்பும் உங்களுக்காக ஒரு செய்தியும் எங்கள் குழுவிடம் உள்ளது. அதைப் பெற இந்த செய்திக்கு பதிலளியுங்கள்.",
+}
+
+
+@router.post("/agent-message")
+async def agent_message_webhook(
+    payload: AgentMessagePayload,
+    x_chatbot_api_key: Optional[str] = Header(None),
+):
+    """
+    POST /webhook/agent-message
+    Send an agent-authored free-form message (text or media) to a candidate on the
+    chatbot's WhatsApp number. Returns {status:'sent', message_id},
+    {status:'queued', reason:'out_of_window', reengage_message_id} or
+    {status:'error', reason, code, detail} — the backend records that as the
+    message's delivery_status so the dashboard shows whether it actually went out.
+
+    24h window: free-form messages to a candidate outside WhatsApp's customer-
+    service window are dropped by Meta. Instead of failing, we (optionally) send
+    the approved re-engagement template (TEMPLATE_REENGAGE) and return 'queued' —
+    the backend parks the actual message in pending_messages and auto-delivers it
+    the moment the candidate replies.
+    """
+    _require_api_key_webhook(x_chatbot_api_key)
+
+    phone = (payload.candidate_phone or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="candidate_phone is required")
+
+    # 24h-window pre-check from our own inbound history. A candidate missing
+    # from the chatbot DB has never messaged in → definitively out-of-window.
+    # If the lookup itself fails, fail OPEN (attempt the send, as before).
+    in_window = False
+    lang = "en"
+    first_name = "there"
+    try:
+        db = SessionLocal()
+        cand = crud.get_candidate_by_phone(db, phone)
+        if cand:
+            from app.services.followup_service import candidate_lang
+            lang = candidate_lang(cand)
+            if (cand.name or "").strip():
+                first_name = cand.name.strip().split(" ")[0]
+            last_inbound = getattr(cand, "last_inbound_at", None)
+            if last_inbound is not None:
+                from datetime import datetime as _dt, timedelta as _td
+                in_window = (_dt.utcnow() - last_inbound) < _td(hours=24)
+        db.close()
+    except Exception as e:
+        logger.warning(f"agent-message window lookup failed for {phone}: {e}")
+        in_window = True
+
+    mtype = (payload.message_type or "text").lower()
+
+    async def _send_freeform():
+        if mtype != "text" and payload.media_url:
+            return await meta_client.send_media_by_link(
+                phone, mtype, payload.media_url,
+                caption=(payload.message or None), filename=payload.filename,
+            )
+        return await meta_client.send_message(phone, payload.message or "")
+
+    try:
+        if not in_window:
+            reengage_id = None
+            if settings.template_reengage:
+                lang_code = _PROACTIVE_TEMPLATE_LANG.get(lang, "en")
+                components = [{
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": _sanitize_template_param(first_name)}],
+                }]
+                tres = await meta_client.send_template_message(
+                    phone, settings.template_reengage, language_code=lang_code, components=components
+                )
+                if "error" in tres:
+                    reason = tres.get("reason")
+                    if reason in ("no_whatsapp", "token_expired"):
+                        # Queueing is pointless when the number can never receive —
+                        # surface the hard failure to the agent.
+                        return {"status": "error", "reason": reason, "code": tres.get("code"), "detail": str(tres.get("error"))}
+                    logger.warning(f"Re-engage template send failed for {phone}: {tres} — queueing the message anyway")
+                else:
+                    reengage_id = tres.get("messages", [{}])[0].get("id")
+                    # Show the re-engage teaser in the transcript with its own ticks.
+                    body = (_REENGAGE_TRANSCRIPT.get(lang_code) or _REENGAGE_TRANSCRIPT["en"]).format(name=first_name)
+                    await _sync_chat_message(
+                        phone, "outbound", body,
+                        language=lang_code, chatbot_state="agent_reengage",
+                        whatsapp_message_id=reengage_id or "",
+                    )
+            else:
+                # No re-engage template approved yet: attempt free-form anyway
+                # (our window data could be stale); queue only when Meta itself
+                # confirms the window is closed.
+                result = await _send_freeform()
+                if "error" not in result:
+                    return {"status": "sent", "message_id": result.get("messages", [{}])[0].get("id")}
+                if result.get("reason") != "out_of_window":
+                    logger.warning(f"Agent message to {phone} not sent: {result.get('reason')} / {result.get('error')}")
+                    return {
+                        "status": "error",
+                        "reason": result.get("reason") or "other",
+                        "code": result.get("code"),
+                        "detail": str(result.get("error")),
+                    }
+            logger.info(f"Agent message for {phone} queued (out-of-window){' — re-engagement template sent' if reengage_id else ''}")
+            return {"status": "queued", "reason": "out_of_window", "reengage_message_id": reengage_id}
+
+        result = await _send_freeform()
+        if "error" in result:
+            if result.get("reason") == "out_of_window":
+                # Our window data said open but Meta disagreed (clock edge) —
+                # queue rather than fail; it flushes on the next reply.
+                logger.info(f"Agent message for {phone} queued (Meta reported out_of_window)")
+                return {"status": "queued", "reason": "out_of_window", "reengage_message_id": None}
+            logger.warning(f"Agent message to {phone} not sent: {result.get('reason')} / {result.get('error')}")
+            return {
+                "status": "error",
+                "reason": result.get("reason") or "other",
+                "code": result.get("code"),
+                "detail": str(result.get("error")),
+            }
+        return {"status": "sent", "message_id": result.get("messages", [{}])[0].get("id")}
+    except Exception as e:
+        logger.error(f"Error sending agent message to {phone}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send agent message: {e}")
+
+
+# ─── Proactive Follow-up Sweep (Cloud Scheduler) ─────────────────────────────
+# Cloud Scheduler POSTs here on a recurring schedule (~every 30 min). The sweep
+# finds candidates stuck mid-application and fans each out to the Celery worker
+# to send a nudge. Mirrors the recruitment backend's /api/internal/process-queue.
+# No-op unless settings.enable_followup_nudges is True (dark-launch flag).
+
+@router.post("/internal/run-followups")
+async def run_followups_endpoint(x_chatbot_api_key: Optional[str] = Header(None)):
+    """Trigger the stuck-candidate follow-up sweep. Protected by the shared
+    chatbot API key (same key the recruitment backend uses)."""
+    _require_api_key_webhook(x_chatbot_api_key)
+    from app.services.followup_service import run_followup_sweep
+    try:
+        return await run_followup_sweep()
+    except Exception as e:
+        logger.error(f"run-followups sweep error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BulkNudgePayload(BaseModel):
+    """Agent-initiated bulk re-engagement: nudge a specific cohort of candidates
+    by phone (used by the backend's /api/engagement/bulk-nudge)."""
+    phones: list = []
+
+
+@router.post("/internal/nudge-candidates")
+async def nudge_candidates_endpoint(
+    payload: BulkNudgePayload,
+    x_chatbot_api_key: Optional[str] = Header(None),
+):
+    """Manually nudge a cohort of candidates now (bulk re-engagement campaign).
+    Each goes through the same send path as the cadence (respects opt-out,
+    completion, handoff, quiet hours, and the 3-nudge cap)."""
+    _require_api_key_webhook(x_chatbot_api_key)
+    from app.services.followup_service import send_followup_for_candidate
+    phones = [p for p in (payload.phones or []) if p][:500]
+    dispatched = 0
+    db = SessionLocal()
+    try:
+        for phone in phones:
+            cand = crud.get_candidate_by_phone(db, phone)
+            if not cand:
+                continue
+            try:
+                if await send_followup_for_candidate(cand.id):
+                    dispatched += 1
+            except Exception as e:
+                logger.warning(f"bulk nudge failed for {phone}: {e}")
+    finally:
+        db.close()
+    return {"requested": len(phones), "dispatched": dispatched}
 
 
 # ─── Agent Handoff Endpoint ───────────────────────────────────────────────────

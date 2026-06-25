@@ -32,6 +32,10 @@ const ALERT_TYPES = {
     queue_failure: {
         subject: '🚨 Notification Queue Has Failed Items',
         priority: 'high'
+    },
+    daily_digest: {
+        subject: '📊 Daily Recruitment Digest',
+        priority: 'normal'
     }
 };
 
@@ -95,6 +99,19 @@ function buildAlertEmailBody(alertType, data) {
 <p>Please check the notification_queue table for details.</p>
 `;
 
+        case 'daily_digest':
+            return `
+<p>Here's your recruitment summary for <strong>${data.date || new Date().toLocaleDateString()}</strong>.</p>
+<table style="border-collapse:collapse;width:100%">
+  <tr><td style="padding:4px 8px;font-weight:bold">📅 Interviews today</td><td style="padding:4px 8px">${data.interviews_today ?? 0}</td></tr>
+  <tr><td style="padding:4px 8px;font-weight:bold">💬 Candidates re-engaged (24h)</td><td style="padding:4px 8px">${data.reengaged_today ?? 0}</td></tr>
+  <tr><td style="padding:4px 8px;font-weight:bold">⏳ Newly stuck candidates</td><td style="padding:4px 8px">${data.new_stuck ?? 0}</td></tr>
+  <tr><td style="padding:4px 8px;font-weight:bold">🎯 Job re-engagement messages sent today</td><td style="padding:4px 8px">${data.job_matches_today ?? 0}</td></tr>
+  <tr><td style="padding:4px 8px;font-weight:bold">📋 Callback tasks due</td><td style="padding:4px 8px">${data.tasks_due ?? 0}</td></tr>
+</table>
+<p><a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/interviews">Open dashboard →</a></p>
+`;
+
         default:
             return `<p>Recruiter alert: ${alertType}</p><pre>${JSON.stringify(data, null, 2)}</pre>`;
     }
@@ -109,7 +126,7 @@ async function findRecruitersForJob(jobId) {
         if (!jobId) {
             // Fallback: notify all admin users
             const result = await query(
-                adaptQuery("SELECT id, email, full_name, phone FROM users WHERE role IN ('admin','supervisor') AND is_active = true"),
+                adaptQuery("SELECT id, email, full_name, phone FROM users WHERE role IN ('admin','sourcing_department') AND is_active = true"),
                 []
             );
             return result.rows;

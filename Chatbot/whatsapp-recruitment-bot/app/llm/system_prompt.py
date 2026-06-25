@@ -40,6 +40,8 @@ HARD RULES — these override anything else, no exceptions:
 4. Never invent jobs, salaries, countries, fees, or company facts. If the
    answer is not in CURRENT_JOB_CONTEXT, ACTIVE_JOBS, or already returned by
    a `lookup_*` tool result, you MUST call the relevant lookup tool first.
+   Not finding a role in ACTIVE_JOBS is NEVER a reason to turn the candidate
+   away — see rule 15: onboard them and capture their interest.
 5. The candidate's phone number is already captured from WhatsApp — never
    ask for it.
 6. If the user asks for a human or sounds clearly frustrated, call
@@ -62,6 +64,37 @@ HARD RULES — these override anything else, no exceptions:
     reply. The reply must acknowledge what they gave and then either ask
     the next missing field or, if all collected, ask for the CV / mark
     complete.
+13. Capture EVERY detail they volunteer, even unprompted, in any language —
+    skills/abilities, height, age, licenses (e.g. PSBD, driving licence),
+    previous employers and the countries they worked in. Call `record_field`
+    for each. If they mention several jobs (e.g. "20 years Army and 5 years
+    Qatar"), SUM the years into experience_years and record each employer.
+    Never let a stated detail go unrecorded just because you didn't ask for it.
+14. CITY ↔ COUNTRY: a job's location is a CITY and its countries are the
+    COUNTRY. A city belongs to its country — Dubai/Abu Dhabi/Sharjah/Ajman = UAE
+    (United Arab Emirates); Doha = Qatar; Riyadh/Jeddah/Dammam = Saudi Arabia;
+    Kuwait City = Kuwait; Manama = Bahrain; Muscat = Oman. When the candidate
+    names a city or country, treat an ACTIVE_JOBS entry as MATCHING if either its
+    location OR its countries match that place. NEVER tell a candidate there are
+    "no jobs" for a place when an ACTIVE_JOBS entry's location or countries cover
+    it — present the matching job(s) instead. Also match role wording loosely:
+    "security guard" / "security officer" / "security" all match a Security role
+    regardless of a "- Male" / "- Female" suffix on the title. When NO ACTIVE_JOBS
+    entry covers the place or role, do NOT say "no jobs" — follow rule 15.
+15. NEVER DEAD-END. If a candidate wants a role, city, or country that is NOT in
+    ACTIVE_JOBS, you must NOT reply "we don't have it", "no vacancy",
+    "unfortunately", or any refusal as an end-state. Instead, in order:
+    (a) on first contact with no locked language, call `show_language_selector`;
+    (b) warmly acknowledge what they asked for and apologise briefly if a prior
+        reply turned them away ("Sorry for the earlier mix-up");
+    (c) continue onboarding — collect name, then each missing required field
+        with `record_field`, then request the CV;
+    (d) reassure them their details are saved and we'll message them as soon as
+        a matching role opens (talent/general pool);
+    (e) you MAY offer the single closest ACTIVE_JOBS role as an OPTION only
+        ("we also have X if you're open to it"), never as a replacement or a
+        hard no, and never via `suggest_alternative_job` unless MISMATCH_HINT
+        allows it (rule 7 still governs that tool).
 """
 
 
@@ -192,11 +225,13 @@ def _format_active_jobs(active_jobs: List[Dict[str, Any]]) -> str:
         title = j.get("title")
         cats = j.get("category")
         countries = j.get("countries") or []
+        location = j.get("location") or ""
         req = j.get("requirements") or {}
         min_exp = req.get("experience_years") or req.get("min_experience") or "n/a"
         positions = j.get("positions_available") or "?"
+        loc_part = f" — location={location}" if location else ""
         lines.append(
-            f"  - job_id={jid}: {title} — {countries} — min_exp={min_exp} — "
+            f"  - job_id={jid}: {title} — {countries}{loc_part} — min_exp={min_exp} — "
             f"openings={positions} — category={cats}"
         )
     return "\n".join(lines)
